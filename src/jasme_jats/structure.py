@@ -173,7 +173,8 @@ class ArticlePlan:
     paras: dict = field(default_factory=dict)        # src -> Para
     locations: dict = field(default_factory=dict)    # src -> 人が読める位置
     region: dict = field(default_factory=dict)       # src -> front_ja / body / notes / ack / fn / refs / front_en / app
-    unmapped_images: list = field(default_factory=list)
+    citation_mode: str = ""                          # author-year / numeric（refparse が設定）
+    uncited_refs: list = field(default_factory=list) # 本文からリンクされていない文献の ID
 
     def decide(self, stage, category, src, message, confidence="", applied=True) -> Decision:
         n = sum(1 for x in self.decisions if x.stage == stage) + 1

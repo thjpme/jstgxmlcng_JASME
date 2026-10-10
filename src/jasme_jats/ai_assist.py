@@ -99,7 +99,7 @@ Python のプログラムがすでに機械的な変換を済ませています�
 3. set_role: スタイルが正しく設定されておらず、役割を機械的に決められなかった段落の役割を指定する。role には次のいずれかを書く:
    {roles}
 4. formula_image: 画像として貼り付けられた数式を MathML（MathML 2.0、<math xmlns="http://www.w3.org/1998/Math/MathML"> を根要素とする）に書き起こす。元の画像は残したまま、読み取った数式を併記します。数式でない画像には提案しないでください。
-5. split_name: 姓と名の間に空白がない著者名について、姓と名の境目を指定する（surname + given が氏名の文字列と完全に一致すること）。
+5. split_name: 姓と名の間に空白がない和文の著者名について、姓と名の境目を指定する（surname + given が氏名の文字列と完全に一致すること）。
 
 reason には、人が後で確認できるように、判断の根拠を日本語で具体的に書いてください（例: 「第3章第2段落の『その後の論考（2001）』は、直前の主語『国宗は』から国宗（2001）と判断」）。
 confidence は 高・中・低 のいずれか。自信がないものは提案しないか、「低」としてください。
@@ -210,7 +210,7 @@ def build_request(plan: ArticlePlan, linker, build_exclusions=(), unsplit_names=
     for p in plan.paras.values():
         if p.note == "style_unknown":
             lines.append(f"- [{p.src}] スタイル「{p.style_name}」は想定外のため本文段落として扱った: 「{_para_text(p)[:40]}」")
-    unc = getattr(plan, "uncited_refs", [])
+    unc = plan.uncited_refs
     if unc:
         lines.append(f"- 本文でリンクされていない文献: {', '.join(unc)}（本文中に引用があれば link_citation を提案）")
     for e in list(plan.exclusions) + list(build_exclusions):
@@ -263,12 +263,12 @@ def call_api(request_text, images, model=DEFAULT_MODEL, api_key=None, effort="hi
                   output_config={"effort": effort, "format": {"type": "json_schema", "schema": RESPONSE_SCHEMA}})
     try:
         try:
+            # 安全上の判定で断られた場合に、サーバー側で別のモデルに切り替えて続ける（fallbacks）
             with client.beta.messages.stream(betas=["server-side-fallback-2026-07-01"], fallbacks="default",
                                              **kwargs) as stream:
                 msg = stream.get_final_message()
-        except anthropic.BadRequestError as e:
-            if "fallback" not in str(e).lower():
-                raise
+        except anthropic.BadRequestError:
+            # ベータ機能が使えない環境では通常の呼び出しでやり直す
             with client.messages.stream(**kwargs) as stream:
                 msg = stream.get_final_message()
     except anthropic.AuthenticationError:
@@ -452,6 +452,9 @@ def apply_ops(ops, plan: ArticlePlan, doc, outcome: AIOutcome):
                 outcome.rejected.append((op, f"段落 {src} は著者名ではない"))
                 continue
             a, lang = author_paras[src]
+            if lang != "ja":
+                outcome.rejected.append((op, "英文氏名は空白の位置で姓と名を分けるため、分割の指定は和文氏名だけに使える"))
+                continue
             p = plan.paras[src]
             text = p.plain()
             sur, giv = op["surname"], op["given"]
@@ -460,11 +463,7 @@ def apply_ops(ops, plan: ArticlePlan, doc, outcome: AIOutcome):
             if not sur or not giv or core != sur + giv:
                 outcome.rejected.append((op, f"姓「{sur}」と名「{giv}」をつなげても氏名「{core}」にならない"))
                 continue
-            k = lead + (len(sur) if lang == "ja" else len(sur))
-            if lang == "ja":
-                a.split_ja = k
-            else:
-                a.split_en = k
+            a.split_ja = lead + len(sur)
             d = plan.decide("ai", "name", src, f"氏名「{core}」を姓「{sur}」・名「{giv}」に分けた。{op['reason']}",
                             op["confidence"])
             outcome.accepted.append((op, d))
