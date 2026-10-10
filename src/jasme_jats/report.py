@@ -86,7 +86,7 @@ def render(r) -> str:
             order = {"低": 0, "中": 1, "高": 2}
             rows = []
             for d in sorted(ai_acc, key=lambda d: (order.get(d.confidence, 3), d.did)):
-                rows.append((d.did, d.confidence, CAT_JA.get(d.category, d.category), d.location or d.src, d.message))
+                rows.append((d.did, d.confidence, CAT_JA.get(d.category, d.category), d.location or r.plan.locations.get(d.src, d.src), d.message))
             L.append(table(["番号", "確度", "種類", "場所", "内容と根拠"], rows))
         else:
             L.append("採用された提案はありません。")
@@ -116,7 +116,7 @@ def render(r) -> str:
         L.append(table(["種類", "場所", "本文の表記", "理由"], rows))
     else:
         L.append("ありません。")
-    unc = getattr(plan, "uncited_refs", [])
+    unc = plan.uncited_refs
     if unc:
         L.append("")
         L.append("本文中のどこからもリンクされていない文献: " + "、".join(
@@ -128,7 +128,7 @@ def render(r) -> str:
     L.append("")
     mech = [d for d in plan.decisions if d.stage == "mechanical"] + r.build_notes
     if mech:
-        rows = [(d.did, CAT_JA.get(d.category, d.category), d.location or d.src, d.message) for d in mech]
+        rows = [(d.did, CAT_JA.get(d.category, d.category), d.location or r.plan.locations.get(d.src, d.src), d.message) for d in mech]
         L.append(table(["番号", "種類", "場所", "内容"], rows))
     else:
         L.append("ありません（すべての段落にテンプレートのスタイルが正しく設定されていました）。")
@@ -284,7 +284,7 @@ def render_ai_only(r) -> str:
         L.append("AI の判断はありません。")
     order = {"低": 0, "中": 1, "高": 2}
     for d in sorted(acc, key=lambda d: (order.get(d.confidence, 3), d.did)):
-        L.append(f"- **{d.did}（確度 {d.confidence}）** {d.location or d.src}: {esc(d.message)}")
+        L.append(f"- **{d.did}（確度 {d.confidence}）** {d.location or r.plan.locations.get(d.src, d.src)}: {esc(d.message)}")
     if ai.rejected:
         L += ["", "## 検証で採用しなかった提案", ""]
         for op, why in ai.rejected:
