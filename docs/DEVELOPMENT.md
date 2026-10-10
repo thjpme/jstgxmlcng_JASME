@@ -73,6 +73,16 @@ python -m jasme_jats tests/private/論文.docx --meta examples/meta_example.toml
 `notebooks/JASME_docx_to_JSTAGE_XML.ipynb` は `tools/make_notebook.py` で生成している。ノートブックを直すときはこのスクリプトを直して
 `python tools/make_notebook.py` を実行する。ノートブックは実行のたびに GitHub の `main` ブランチ（手順 1 の `BRANCH`）からツールを入れる。
 
+- 手順 1 はツール本体を毎回入れ直す（同じ版番号でもコードが新しくなるように）。同じランタイムで前の版を読み込んだ後だと
+  入れ直しが反映されないため、その場合はセッションの再起動を求めて止まる。
+- Colab ではどのセルも押せてしまうため、各手順の最初で前の手順が済んでいるかを確かめる（変数 `DONE`）。
+  ある手順をやり直すと、それより後の手順は未実行に戻る。
+
 ## バージョン
 
-`src/jasme_jats/__init__.py` と `pyproject.toml` の version を上げる。レポートにはバージョンと git のコミット ID が記録される。
+`src/jasme_jats/__init__.py` と `pyproject.toml` の version を上げ、`python tools/make_notebook.py` でノートブックを作り直す
+（ノートブックの冒頭に版が表示される。作り直し忘れは `tests/test_notebook.py` で検出される）。
+レポートにはバージョンとコミット ID が記録される（Colab では pip が記録したコミット ID）。
+
+- 0.x: 試用版。出力の形が変わる修正は 0.x の 2 桁目、それ以外は 3 桁目を上げる。
+- 1.0.0: 正式リリース。

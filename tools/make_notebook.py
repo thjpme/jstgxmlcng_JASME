@@ -5,14 +5,35 @@
 ノートブックを Colab 上で直接編集して GitHub に保存してもよいが、その場合はこのスクリプトにも同じ変更を反映すること。
 """
 import json
+import re
 from pathlib import Path
 
 REPO = "thjpme/jstgxmlcng_JASME"
-OUT = Path(__file__).resolve().parent.parent / "notebooks" / "JASME_docx_to_JSTAGE_XML.ipynb"
+ROOT = Path(__file__).resolve().parent.parent
+OUT = ROOT / "notebooks" / "JASME_docx_to_JSTAGE_XML.ipynb"
+VERSION = re.search(r'__version__ = "([^"]+)"', (ROOT / "src" / "jasme_jats" / "__init__.py").read_text()).group(1)
+VERSION_NOTE = "（試用版。正式版は 1.0 から）" if VERSION.startswith("0.") else ""
 
 
 def md(text):
     return {"cell_type": "markdown", "metadata": {}, "source": text.strip("\n").splitlines(keepends=True)}
+
+
+# Colab ではどのセルの ▶ も押せてしまうので、各手順の最初で前の手順が済んでいるかを確かめる。
+# 済んだ手順は変数 DONE に記録し、ある手順をやり直したら、それより後の手順は「未実行」に戻す。
+GUARD = """_need = [n for n in (NEED) if n not in globals().get("DONE", set())]
+if _need:
+    raise SystemExit("先に手順 " + "・".join(map(str, _need)) + " を実行してください（上から順に ▶ を押します。"
+                     "前の手順をやり直したときは、その後の手順もやり直してください）。")
+"""
+
+
+def guard(*steps):
+    return GUARD.replace("NEED", ", ".join(map(str, steps)) + ",")
+
+
+def mark(step):
+    return f'DONE = {{n for n in globals().get("DONE", set()) if n < {step}}} | {{{step}}}\n'
 
 
 def code(text, form=True):
@@ -25,13 +46,16 @@ cells = [
     md(f"""
 # 論文 docx → J-STAGE 全文 XML 変換（全国数学教育学会誌『数学教育学研究』）
 
+**ツールの版: {VERSION}**{VERSION_NOTE}　… 手順 1 を実行すると、実際に読み込まれた版（とコミット ID）も表示されます。
+
 このノートブックは、テンプレートで作成された論文の Word ファイル（.docx）を、J-STAGE の全文 XML（JATS 1.1）に変換します。
 パソコンに何かをインストールする必要はありません。**上から順に、各セルの左の ▶ ボタンを押して実行してください。**
+前の手順を実行せずに後の手順の ▶ を押すと、「先に手順 ○ を実行してください」と表示されて止まります。
 
 | 手順 | 内容 |
 |---|---|
 | 1 | 準備（最初に 1 回だけ） |
-| 2 | 論文の docx（と PDF）をアップロード |
+| 2 | 論文の docx と PDF をアップロード（ボタンが別々に出ます） |
 | 3 | 書誌情報（巻・号・ページ・日付）を入力 |
 | 4 | AI による補完の方法を選ぶ |
 | 5 | 変換を実行（結果のレポートが表示されます） |
@@ -52,39 +76,71 @@ CONVERT_EMF = True  #@param {{type:"boolean"}}
 BRANCH = "main"  #@param {{type:"string"}}
 
 import subprocess, sys
-r = subprocess.run([sys.executable, "-m", "pip", "install", "-q",
-                    f"jasme-jats[ai,images] @ git+https://github.com/{REPO}.git@{{BRANCH}}"],
-                   capture_output=True, text=True)
-if r.returncode != 0:
-    print(r.stderr[-2000:])
-    raise SystemExit("ツールのインストールに失敗しました。BRANCH の値を確認してください。")
+# このランタイムで一度ツールを使っていると、古い版がメモリに残ったままになる（入れ直しても反映されない）
+loaded_before = "jasme_jats" in sys.modules
+url = f"git+https://github.com/{REPO}.git@{{BRANCH}}"
+for args in (["jasme-jats[ai,images] @ " + url],                          # ツールと必要なライブラリ
+             ["--force-reinstall", "--no-deps", "jasme-jats @ " + url]):  # ツール本体は毎回最新に入れ直す
+    r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", *args], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(r.stderr[-2000:])
+        raise SystemExit("ツールのインストールに失敗しました。BRANCH の値を確認してください。")
+if loaded_before:
+    raise SystemExit("ツールを最新の版に入れ替えましたが、このランタイムには前の版が読み込まれたままです。"
+                     "メニューの「ランタイム」→「セッションを再起動」（表示によっては「ランタイムを再起動」）を選んでから、"
+                     "手順 1 からもう一度実行してください。")
 if CONVERT_EMF:
     subprocess.run("apt-get -qq update > /dev/null && (apt-get -qq install -y --no-install-recommends "
                    "libreoffice-draw-nogui > /dev/null || apt-get -qq install -y libreoffice-draw > /dev/null)",
                    shell=True)
-import jasme_jats
-print("準備ができました（jasme-jats", jasme_jats.__version__, "）")
-"""),
+# 版の表示は別のプロセスで行う（ここで読み込むと、次に手順 1 を実行したときに「前の版が残っている」扱いになるため）
+ver = subprocess.run([sys.executable, "-c", "from jasme_jats.pipeline import tool_version; print(tool_version())"],
+                     capture_output=True, text=True).stdout.strip()
+print("準備ができました。ツールの版:", ver)
+if ver and not ver.startswith("{VERSION}"):
+    print("※ このノートブックの説明は版 {VERSION} のものです（BRANCH を変えた場合などは版が異なることがあります）")
+""" + "DONE = {1}\n"),
     code("""
-#@title 2. 論文の docx（と PDF）をアップロード
-#@markdown 実行すると「ファイル選択」ボタンが出ます。docx を選んでください。J-STAGE に登載する PDF があれば、同時に選ぶと ZIP に同梱します。
+#@title 2. 論文の docx と PDF をアップロード
+#@markdown 実行すると、まず **docx 用**の「ファイル選択」ボタンが出ます。docx を選ぶと、続けて **PDF 用**の「ファイル選択」ボタンが出ます。
+#@markdown J-STAGE に登載する PDF がまだなければ、下のチェックを外してから実行してください（PDF 用のボタンは出ません。後で jasme.zip に入れることもできます）。
+UPLOAD_PDF = True  #@param {type:"boolean"}
+""" + guard(1) + """
 from pathlib import Path
 from google.colab import files
 
 WORK = Path("/content/jasme_work")
-(WORK / "input").mkdir(parents=True, exist_ok=True)
-uploaded = files.upload()
-for name, data in uploaded.items():
-    (WORK / "input" / name).write_bytes(data)
-docx_files = [WORK / "input" / n for n in uploaded if n.lower().endswith(".docx")]
-pdf_files = [WORK / "input" / n for n in uploaded if n.lower().endswith(".pdf")]
+INPUT = WORK / "input"
+INPUT.mkdir(parents=True, exist_ok=True)
+
+
+def upload(what, ext):
+    print(f"▼ {what}（{ext}）を選んでください")
+    paths = []
+    for name, data in files.upload().items():
+        if not name.lower().endswith(ext):
+            print(f"  「{name}」は {ext} ではないので使いません")
+            continue
+        (INPUT / name).write_bytes(data)
+        paths.append(INPUT / name)
+    return paths
+
+
+docx_files = upload("論文の Word ファイル", ".docx")
 if not docx_files:
-    raise SystemExit("docx ファイルが選ばれていません。もう一度実行してください。")
+    raise SystemExit("docx ファイルが選ばれていません。もう一度この手順を実行してください。")
+if len(docx_files) > 1:
+    print("  docx が複数選ばれたため、最初の 1 つだけを使います")
 docx_path = docx_files[0]
-pdf_path = pdf_files[0] if pdf_files else None
+pdf_path = None
+if UPLOAD_PDF:
+    print()
+    pdf_files = upload("J-STAGE に登載する PDF", ".pdf")
+    pdf_path = pdf_files[0] if pdf_files else None
+print()
 print("論文:", docx_path.name)
 print("PDF :", pdf_path.name if pdf_path else "（なし。J-STAGE への登載には PDF が必要です）")
-"""),
+""" + mark(2)),
     code("""
 #@title 3. 書誌情報を入力
 #@markdown **巻・号・ページ**（J-STAGE のフォルダ名・ファイル名と DOI に使います）
@@ -102,11 +158,11 @@ doi = ""  #@param {type:"string"}
 subject = "論文"  #@param {type:"string"}
 corresponding_author = ""  #@param {type:"string"}
 #@markdown corresponding_author: 責任著者が何番目の著者か（例: 1）。複数なら「1,2」。
-meta_input = {"volume": volume, "issue": issue, "fpage": first_page, "lpage": last_page,
+""" + guard(1, 2) + """meta_input = {"volume": volume, "issue": issue, "fpage": first_page, "lpage": last_page,
               "pub_date": pub_date, "epub_date": jstage_release_date, "received": received,
               "accepted": accepted, "doi": doi, "subject_ja": subject, "corresp": corresponding_author}
 print("入力しました。未入力の項目はレポートに表示されます。")
-"""),
+""" + mark(3)),
     code("""
 #@title 4. AI による補完の方法を選ぶ
 #@markdown - **使わない**: 機械的な変換だけを行います。
@@ -116,12 +172,12 @@ AI_MODE = "使わない"  #@param ["使わない", "API で自動実行", "手�
 MODEL = "claude-opus-5-5"  #@param {type:"string"}
 #@markdown 図表番号（「図1」）を J-STAGE の <label> 要素に分けるか（分けると番号とタイトルの間の空白 1 文字を落とします。既定は分けない）
 SPLIT_LABELS = False  #@param {type:"boolean"}
-AI = {"使わない": "none", "API で自動実行": "api", "手動（チャットに貼り付け）": "manual"}[AI_MODE]
+""" + guard(1, 2, 3) + """AI = {"使わない": "none", "API で自動実行": "api", "手動（チャットに貼り付け）": "manual"}[AI_MODE]
 print("AI による補完:", AI_MODE)
-"""),
+""" + mark(4)),
     code("""
 #@title 5. 変換を実行
-import shutil
+""" + guard(1, 2, 3, 4) + """import shutil
 from IPython.display import Markdown, display
 from jasme_jats.config import ArticleMeta, JournalConfig
 from jasme_jats.pipeline import Options, convert
@@ -161,7 +217,7 @@ if AI == "manual" and res.prompt_path:
     display(widgets.Textarea(value=res.prompt_path.read_text(encoding="utf-8"),
                              layout=widgets.Layout(width="100%", height="300px")))
 display(Markdown(res.report_path.read_text(encoding="utf-8")))
-"""),
+""" + mark(5)),
     md("""
 ### 6.（手動モードのときだけ）AI の回答を貼り付けて再変換
 
@@ -177,6 +233,10 @@ AI_RESPONSE = r'''
 ここに AI の回答を貼り付ける
 '''
 
+""" + guard(1, 2, 3, 4, 5) + """if AI != "manual":
+    raise SystemExit("この手順は手動モードのときだけ使います。手順 4 で「手動（チャットに貼り付け）」を選び、手順 5 からやり直してください。")
+if not AI_RESPONSE.strip() or "ここに AI の回答を貼り付ける" in AI_RESPONSE:
+    raise SystemExit("AI の回答が貼り付けられていません。上の r''' と ''' の間に貼り付けてから実行してください。")
 res = convert(docx_path, meta, journal, Options(out_dir=OUT, ai_mode="manual", ai_response=AI_RESPONSE,
                                               pdf_path=pdf_path, split_labels=SPLIT_LABELS))
 fid = res.fidelity
@@ -190,17 +250,24 @@ display(Markdown(res.report_path.read_text(encoding="utf-8")))
     code("""
 #@title 7. 結果をダウンロード
 #@markdown 「変換結果.zip」の中に、J-STAGE にアップロードする jasme.zip、XML、変換レポートが入っています。
-archive = shutil.make_archive(str(WORK / "変換結果"), "zip", OUT)
+""" + guard(1, 2, 3, 4, 5) + """archive = shutil.make_archive(str(WORK / "変換結果"), "zip", OUT)
 files.download(archive)
 """),
 ]
 
-nb = {
-    "nbformat": 4, "nbformat_minor": 0,
-    "metadata": {"colab": {"provenance": [], "toc_visible": True},
-                 "kernelspec": {"name": "python3", "display_name": "Python 3"}, "language_info": {"name": "python"}},
-    "cells": cells,
-}
-OUT.parent.mkdir(parents=True, exist_ok=True)
-OUT.write_text(json.dumps(nb, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
-print("written:", OUT)
+
+
+def render() -> str:
+    nb = {
+        "nbformat": 4, "nbformat_minor": 0,
+        "metadata": {"colab": {"provenance": [], "toc_visible": True},
+                     "kernelspec": {"name": "python3", "display_name": "Python 3"}, "language_info": {"name": "python"}},
+        "cells": cells,
+    }
+    return json.dumps(nb, ensure_ascii=False, indent=1) + "\n"
+
+
+if __name__ == "__main__":
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(render(), encoding="utf-8")
+    print("written:", OUT)
