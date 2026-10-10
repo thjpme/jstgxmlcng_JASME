@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jasme-jats"
+version = "0.1.0"
+description = "Word（docx）の論文を J-STAGE 全文 XML（JATS 1.1）に変換する。『全国数学教育学会誌 数学教育学研究』用"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "lxml>=4.9",
+    "Pillow>=9",
+    "tomli>=2; python_version<'3.11'",
+]
+
+[project.optional-dependencies]
+ai = ["anthropic>=1.0"]
+images = ["pypdfium2>=4"]
+dev = ["pytest>=7", "anthropic>=1.0", "pypdfium2>=4"]
+
+[project.scripts]
+jasme-jats = "jasme_jats.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+jasme_jats = ["data/*.toml", "dtd/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]

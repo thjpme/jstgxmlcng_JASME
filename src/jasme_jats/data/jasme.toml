@@ -1,0 +1,68 @@
+# 『全国数学教育学会誌 数学教育学研究』（J-STAGE 資料コード jasme）の設定
+#
+# 雑誌に固有の値はすべてこのファイルに置く。別の雑誌に使う場合は、このファイルを複製して書き換える。
+# 値の出典: J-STAGE の資料トップ https://www.jstage.jst.go.jp/browse/jasme/-char/ja （2026-10 確認）
+
+[journal]
+journal_id = "jasme"                       # J-STAGE の資料コード（<journal-id journal-id-type="j-stage">）
+title_ja = "数学教育学研究 : 全国数学教育学会誌"
+title_en = "Journal of JASME : research in mathematics education"
+abbrev = "数学教育学研究"
+issn_print = "1341-2620"
+issn_online = "2433-3034"
+publisher_ja = "全国数学教育学会"
+publisher_en = "Japan Academic Society of Mathematics Education"
+
+# DOI の形式（J-STAGE 上の既存記事: 10.24529/jasme.30.2_59 = 30巻2号59頁）
+doi_pattern = "10.24529/jasme.{volume}.{issue}_{fpage}"
+# 記事識別子（J-STAGE のフォルダ名・ファイル名。{巻}_{開始ページ}）
+article_id_pattern = "{volume}_{fpage}"
+# 画像ファイル名（Graphics/ に入れる。記事識別子. で始まる名前は J-STAGE で使えない）
+image_name_pattern = "{article_id}_{n:02d}"
+
+[defaults]
+article_type = "research-article"   # <article article-type>
+subject_ja = "論文"                  # 原稿種別 <subject>
+lang = "ja"                          # 本文の言語
+# 抄録の二次利用（J-STAGE では必須属性）。学会の方針を確認して設定すること。
+#   "secondary-allow" = 二次利用可 / "secondary-disallow" = 二次利用不可
+abstract_specific_use = "secondary-disallow"
+# 図表番号とタイトルを <label> と <caption> に分けるか。
+#   false: 「図1　三角形ABC」をそのまま 1 つの要素に入れる（docx の文字を 1 文字も落とさない）
+#   true : <label>図1</label> と <caption> に分け、間の空白だけを落とす（レポートに全件記録する）
+split_labels = false
+
+# テンプレートのスタイル名 → 役割
+# 役割の意味は docs/STYLE_MAPPING.md を参照
+[styles]
+"題目（日）" = "title"
+"副題（日）" = "subtitle"
+"所属（日）" = "aff_ja"
+"著者名（日）" = "author_ja"
+"題目（英）" = "title_en"
+"副題（英）" = "subtitle_en"
+"著者名（英）" = "author_en"
+"所属（英）" = "aff_en"
+"英文要旨見出し" = "abstract_heading"
+"英文要旨" = "abstract"
+"章見出し" = "sec1"
+"節見出し" = "sec2"
+"項見出し" = "sec3"
+"本文" = "p"
+"Body Text" = "p"
+"図キャプション" = "fig_caption"
+"表キャプション" = "table_caption"
+"ブロック引用" = "quote"
+"付記見出し" = "notes_heading"
+"謝辞見出し" = "ack_heading"
+"注見出し" = "fn_heading"
+"注本文" = "fn"
+"参考文献見出し" = "ref_heading"
+"参考文献" = "ref"
+"heading 1" = "sec1"
+"heading 2" = "sec2"
+"heading 3" = "sec3"
+"Title" = "title"
+"Subtitle" = "subtitle"
+"Normal" = "normal"
+"List Paragraph" = "p"
