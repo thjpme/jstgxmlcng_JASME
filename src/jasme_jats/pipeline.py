@@ -83,7 +83,21 @@ class Result:
         return bool(self.fidelity.ok and self.fidelity.final_ok and self.dtd_valid)
 
 
+def installed_commit() -> str:
+    """pip で GitHub から入れた場合、そのときのコミット ID（pip が direct_url.json に記録する）。"""
+    try:
+        import json
+        from importlib.metadata import distribution
+        info = json.loads(distribution("jasme-jats").read_text("direct_url.json") or "{}")
+        return (info.get("vcs_info") or {}).get("commit_id", "")[:7]
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def tool_version() -> str:
+    commit = installed_commit()
+    if commit:
+        return f"{__version__}（コミット {commit}）"
     try:
         here = Path(__file__).resolve().parent
         rev = subprocess.run(["git", "-C", str(here), "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
