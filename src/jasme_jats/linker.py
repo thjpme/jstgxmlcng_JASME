@@ -154,7 +154,7 @@ class Linker:
         self.label_formulas()
         paras = list(body_paragraphs(plan))
         for p, where in paras:
-            self.word_hyperlinks(p)
+            self.word_hyperlinks(p, where)
         for p, where in paras:
             self.urls(p, where)
         fig_ids = {f.number: f.fid for f in plan.figures if f.number is not None and f.fid}
@@ -185,8 +185,13 @@ class Linker:
             if f.label_range and not range_linked(f.para, *f.label_range):
                 apply_span(f.para, f.label_range[0], f.label_range[1], LinkSpec(kind="label"))
 
-    def word_hyperlinks(self, p: Para):
-        """docx のハイパーリンク（href 付きの文字）を uri リンクにする。"""
+    def word_hyperlinks(self, p: Para, where: str = "body"):
+        """docx のハイパーリンク（href 付きの文字）を uri リンクにする。
+
+        引用文献の中で、表示されている文字が URL そのもの（または DOI を含む doi.org のリンク）であるものは、
+        Word のリンクとしては扱わず、後の urls() に任せる。ハイパーリンクの有無で文献ごとに形が変わらないよう、
+        DOI は一律に「https://doi.org/ の文字 + <pub-id>」にするため（リンク先は同じ）。
+        """
         i = 0
         atoms = p.atoms
         while i < len(atoms):
@@ -196,6 +201,11 @@ class Linker:
                 while j + 1 < len(atoms) and atoms[j + 1].kind == "text" and atoms[j + 1].href == a.href \
                         and atoms[j + 1].link is None:
                     j += 1
+                if where == "ref" and _same_as_text(a.href, "".join(atoms[k].text for k in range(i, j + 1))):
+                    for k in range(i, j + 1):
+                        atoms[k].href = None
+                    i = j + 1
+                    continue
                 spec = LinkSpec(kind="uri", attrs={"href": a.href}, origin="word")
                 for k in range(i, j + 1):
                     atoms[k].link = spec
@@ -313,6 +323,15 @@ class Linker:
                 i += 1
 
 
+def _same_as_text(href: str, text: str) -> bool:
+    """ハイパーリンクの href が、表示されている文字から機械的に作るリンクと同じ先を指すか。"""
+    h, t = href.strip(), text.strip()
+    if h.rstrip("/").lower() == t.rstrip("/").lower():
+        return True
+    m = re.match(r"https?://(?:dx\.)?doi\.org/(10\.\d{4,9}/\S+)$", h, re.I)
+    return bool(m) and m.group(1).lower() in t.lower()
+
+
 def _trim(url: str) -> str:
     """URL の末尾から、文の句読点や対応しない閉じ括弧を除く。"""
     while url and url[-1] in ".,;:!?。、，．)]）」』>":
@@ -326,13 +345,18 @@ def link(plan: ArticlePlan) -> Linker:
     return Linker(plan).run()
 
 
-def cited_refs(plan: ArticlePlan) -> set:
-    """本文からリンクされている文献の ID。"""
+def linked_ids(plan: ArticlePlan, ref_type: str) -> set:
+    """本文（引用文献リスト以外）からリンクされている、指定した種類（bibr / fig / table など）の ID。"""
     out = set()
     for p, where in body_paragraphs(plan):
         if where == "ref":
             continue
         for a in p.atoms:
-            if a.link is not None and a.link.kind == "xref" and a.link.attrs.get("ref-type") == "bibr":
+            if a.link is not None and a.link.kind == "xref" and a.link.attrs.get("ref-type") == ref_type:
                 out.add(a.link.attrs.get("rid"))
     return out
+
+
+def cited_refs(plan: ArticlePlan) -> set:
+    """本文からリンクされている文献の ID。"""
+    return linked_ids(plan, "bibr")

@@ -41,6 +41,30 @@ def test_manual_mode_without_response_writes_prompt(journal, meta, tmp_path):
     assert "[d18]" in prompt and "link_citation" in prompt
     assert (tmp_path / "AI添付画像" / "img3.png").exists()
     assert res.fidelity.ok
+    # チャットの AI が JSON を崩さないよう、回答の書き方（コードブロック 1 つ・半角の引用符）と見本を示す
+    assert "## 回答の書き方" in prompt and "```json" in prompt
+    assert parse_response(ai_assist.MANUAL_EXAMPLE)["operations"]
+
+
+def test_parse_response_does_not_guess_on_curly_quotes():
+    # 文字列が飾りの引用符で囲まれた回答は推測で直さず、どこが読めないかと対処を示す
+    bad = '{\n  “operations”: [],\n  “notes”: [“注の (n.d.) は引用ではない”]\n}'
+    try:
+        parse_response(bad)
+    except ValueError as e:
+        msg = str(e)
+    else:
+        raise AssertionError("読めてしまった")
+    assert "2 行目" in msg and "飾りの引用符" in msg and "コピーボタン" in msg
+
+
+def test_parse_response_reports_missing_json():
+    try:
+        parse_response("提案はありません。")
+    except ValueError as e:
+        assert "コードブロック" in str(e)
+    else:
+        raise AssertionError("読めてしまった")
 
 
 def test_parse_response_accepts_code_fence():

@@ -359,6 +359,9 @@ class Classifier:
                     paras = [blk] if isinstance(blk, Para) else list(blk.paragraphs())
                     for p in paras:
                         r = self.role_of(p)
+                        # AI への依頼文にも載せる（確認のため。役割の変更は受け付けない）
+                        self.plan.region[p.src] = "authors"
+                        p.role = p.role or r
                         if p.is_blank:
                             if p.plain():
                                 self.plan.exclude(p, "空白のみの段落")
@@ -732,7 +735,8 @@ class Classifier:
                 if troles & {"author_en", "aff_en"} and app is None:
                     for p in b.paragraphs():
                         r = self.role_of(p)
-                        plan.region[p.src] = "front_en"
+                        plan.region[p.src] = "authors"
+                        p.role = p.role or r
                         if p.is_blank:
                             if p.plain():
                                 plan.exclude(p, "空白のみの段落")

@@ -81,11 +81,14 @@
 | 項目 | 判断 | 理由 |
 |---|---|---|
 | DOCTYPE・ルート要素 | J-STAGE マニュアルの固定値 | マニュアル 3.3.3 |
-| 英文要旨 | `<abstract xml:lang="en">` | 本誌には和文要旨がない。J-STAGE は xml:lang で言語を判定する |
-| 抄録の `specific-use` | 設定ファイルの値（既定 `secondary-disallow`） | J-STAGE で必須の属性。学会の方針で決める |
+| 題目 | 本文の言語の題目を `<article-title xml:lang>`、もう一方を `<trans-title-group xml:lang><trans-title>` | J-STAGE は article-title を「タイトル」、trans-title を「翻訳タイトル」として、xml:lang で日・英を判定する |
+| 英文要旨 | 和文の論文では `<trans-abstract xml:lang="en">`、英文の論文では `<abstract xml:lang="en">` | J-STAGE では「抄録(英)」（abstract）には「タイトル(英)」（article-title）、「翻訳抄録(英)」（trans-abstract）には「翻訳タイトル(英)」（trans-title）が必要（アップロードメッセージ EMSGM102E/104E）。和文の論文で英文要旨を abstract にすると「英語タイトルがない」エラーになる。ガイドライン 3.1.23 の例も和文論文の英文抄録は trans-abstract。本誌には和文要旨がない |
+| 抄録の `specific-use` | 設定ファイルの値（既定 `secondary-disallow`） | 抄録ライセンスフラグ。DTD・ガイドライン上 `<abstract>` にだけ付けられ、`<trans-abstract>` には付けられない（和文の論文では出力されない）。学会の方針で決める |
+| 引用文献の `xml:lang` | かな・漢字を含む文献は `ja`、それ以外は `en` | J-STAGE の「引用文献（記述言語）」（未設定だと EMSGM247E） |
+| 登載時チェックの再現 | `jstage_rules.py` で、アップロードメッセージ一覧のうち XML だけで判定できるもの（題目と抄録の言語の対応、日付の前後、所属番号の連番、DOI の文字、画像ファイル名など）を確かめ、レポート 12 章に出す | DTD に合っていても J-STAGE で弾かれる条件があるため |
 | 図表番号 | 既定は caption の中に番号ごと入れる | 文字を落とさないため（`split_labels` で切替） |
 | 引用文献 | `<mixed-citation>` に原文をそのまま入れ、年・論文名・誌名・DOI・URL にだけタグを付ける | J-STAGE は mixed-citation の文字をそのまま表示する。タグは文字を変えない |
-| 文献中の DOI | `https://doi.org/` の部分は文字のまま、`10.…` の部分を `<pub-id pub-id-type="doi">` | J-STAGE ガイドライン（DOI 形式で記述すると引用文献リンクの反映率が上がる） |
+| 文献中の DOI | `https://doi.org/` の部分は文字のまま、`10.…` の部分を `<pub-id pub-id-type="doi">`。Word のハイパーリンクが付いていても、表示文字が URL そのもの（または同じ DOI）なら同じ形にする | J-STAGE ガイドライン（DOI 形式で記述すると引用文献リンクの反映率が上がる）。ハイパーリンクの有無で文献ごとに形が変わらないように |
 | 本文中の URL | `<uri xlink:href>`（注・付記・資料では `<ext-link>`） | J-STAGE マニュアルの子要素構成 |
 | 注 | `<fn-group>`。本文の上付き「1)」を `<xref ref-type="fn">` | テンプレートの注の書き方 |
 | 付記 | `<notes>` | J-STAGE の「注釈」 |

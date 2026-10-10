@@ -27,6 +27,7 @@ XML_LANG = "{http://www.w3.org/XML/1998/namespace}lang"
 DOCTYPE = ('<!DOCTYPE article PUBLIC "-//NLM//DTD JATS (Z39.96) Journal Publishing DTD v1.1 20151215//EN" '
            '"https://www.jstage.jst.go.jp/dtds/1.1/JATS-journalpublishing1.dtd">')
 
+RE_JA_CHARS = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff々]")
 RE_LABEL_SPLIT = re.compile(r"^([\s\u3000]*)((?:図|表|Figure|Fig\.?|Table)[\s\u3000]*[0-9０-９]+(?:[.．\-－][0-9０-９]+)?)"
                             r"([\s\u3000:：.．]*)")
 RE_HEAD_SPLIT = re.compile(r"^([\s\u3000]*)([0-9０-９]{1,2}[．.]|[(（][0-9０-９]{1,2}[)）]|[①-⑳])([\s\u3000]*)(?=\S)")
@@ -160,6 +161,8 @@ class Builder:
         _sub(am, "issue", meta.issue or "")
         if not meta.volume or not meta.issue:
             self.info.warnings.append("巻・号が未入力")
+        if not meta.fpage:
+            self.info.warnings.append("開始ページが未入力（J-STAGE の通常公開記事では開始ページか論文番号が必須）")
         if meta.fpage:
             _sub(am, "fpage", meta.fpage)
             if meta.lpage:
@@ -174,38 +177,68 @@ class Builder:
                     _sub(dt, "month", f"{d.month:02d}")
                     _sub(dt, "year", str(d.year))
         if plan.abstract or plan.abstract_heading:
+            # 英文要旨。J-STAGE では「抄録(英)」には「タイトル(英)」（article-title）、「翻訳抄録(英)」には
+            # 「翻訳タイトル(英)」（trans-title）が対応していなければならない（記事アップロードメッセージ EMSGM102E/104E）。
+            # 和文の論文では英語の題目が trans-title なので、英文要旨は trans-abstract にする。
             lang_abs = "en"
-            ab = _lang(_sub(am, "abstract"), lang_abs)
-            if j.abstract_specific_use:
-                ab.set("specific-use", j.abstract_specific_use)
+            if self.article_lang() == lang_abs:
+                ab = _lang(_sub(am, "abstract"), lang_abs)
+                if j.abstract_specific_use:
+                    ab.set("specific-use", j.abstract_specific_use)
+            else:
+                ab = _lang(_sub(am, "trans-abstract"), lang_abs)
             if plan.abstract_heading:
                 t = _sub(ab, "title")
                 self.em.span(t, plan.abstract_heading, E.SECTITLE)
             for p in plan.abstract:
                 self.paragraph_or_formula(ab, p, E.ABSTRACT)
+            n = sum(len("".join(pe.itertext())) for pe in ab.findall("p"))
+            if n > 4000:
+                self.info.warnings.append(f"英文要旨が {n} 文字あり、J-STAGE の上限（4000 文字）を超えている")
         for lang, kws in (("ja", meta.keywords_ja), ("en", meta.keywords_en)):
             if kws:
                 kg = _lang(_sub(am, "kwd-group", kwd_group_type="author"), lang)
                 for k in kws:
                     _sub(kg, "kwd", k)
 
+    def article_lang(self) -> str:
+        return self.meta.lang or self.plan.lang or self.j.lang
+
     def title_group(self, am):
+        """題目。本文の言語の題目を article-title、もう一方の言語の題目を trans-title にする。
+
+        J-STAGE では article-title が「タイトル（本文の言語）」、trans-title が「翻訳タイトル」として登録される。
+        """
         plan = self.plan
+        lang = self.article_lang()
+        if lang == "en" and plan.title_en:
+            main, main_sub, other, other_sub, other_lang = plan.title_en, plan.subtitle_en, plan.title, plan.subtitle, "ja"
+        else:
+            main, main_sub, other, other_sub, other_lang = plan.title, plan.subtitle, plan.title_en, plan.subtitle_en, "en"
         tg = _sub(am, "title-group")
-        at = _sub(tg, "article-title")
-        self.multi(at, plan.title, E.TITLE)
-        if not plan.title:
+        at = _lang(_sub(tg, "article-title"), lang)
+        self.multi(at, main, E.TITLE)
+        if not main:
             self.info.warnings.append("題目（スタイル「題目（日）」）が見つからない")
-        if plan.subtitle:
-            st = _sub(tg, "subtitle")
-            self.multi(st, plan.subtitle, E.TITLE)
-        if plan.title_en:
-            ttg = _lang(_sub(tg, "trans-title-group"), "en")
+        self.check_length(at, 2000, "題目")
+        if main_sub:
+            st = _lang(_sub(tg, "subtitle"), lang)
+            self.multi(st, main_sub, E.TITLE)
+        if other:
+            ttg = _lang(_sub(tg, "trans-title-group"), other_lang)
             tt = _sub(ttg, "trans-title")
-            self.multi(tt, plan.title_en, E.TITLE)
-            if plan.subtitle_en:
+            self.multi(tt, other, E.TITLE)
+            self.check_length(tt, 2000, "翻訳題目")
+            if other_sub:
                 ts = _sub(ttg, "trans-subtitle")
-                self.multi(ts, plan.subtitle_en, E.TITLE)
+                self.multi(ts, other_sub, E.TITLE)
+        elif other_sub:
+            self.info.warnings.append("副題（翻訳）があるが題目（翻訳）がない（J-STAGE ではエラーになる）")
+
+    def check_length(self, el, limit, what):
+        n = len("".join(el.itertext()))
+        if n > limit:
+            self.info.warnings.append(f"{what}が {n} 文字あり、J-STAGE の上限（{limit} 文字）を超えている")
 
     def multi(self, parent, paras, ctx):
         for p in paras:
@@ -594,6 +627,8 @@ class Builder:
 
     def ref(self, rl, r: RefNode):
         ref = _sub(rl, "ref", id=r.rid)
+        # 引用文献の記述言語（J-STAGE の「引用文献（記述言語）」）。かな・漢字を含む文献は ja、それ以外は en
+        _lang(ref, "ja" if RE_JA_CHARS.search(r.para.plain()) else "en")
         mc = _sub(ref, "mixed-citation")
         typ = (r.parsed or {}).get("publication_type")
         if typ:
@@ -603,6 +638,7 @@ class Builder:
             self.em.gen(lab, r.para.autonum, "autonum")
             ref.insert(0, lab)
         self.em.span(mc, r.para, E.REF)
+        self.check_length(mc, 4000, f"引用文献 {r.rid}")
 
     def fn(self, fg, fn: FnNode):
         el = _sub(fg, "fn", id=fn.fid)
