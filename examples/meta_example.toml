@@ -1,0 +1,16 @@
+# 記事ごとの書誌情報（docx には書かれていない情報）
+# python -m jasme_jats 論文.docx --meta examples/meta_example.toml --out output
+
+[article]
+volume = "31"            # 巻
+issue = "1"              # 号
+fpage = "1"              # 開始ページ
+lpage = "12"             # 終了ページ
+pub_date = "2026-03-31"  # 発行日
+# epub_date = "2026-04-24" # J-STAGE 公開日（分かれば）
+received = "2025-06-01"  # 受付日
+accepted = "2025-11-20"  # 受理日
+# doi = ""               # 空なら 10.24529/jasme.{巻}.{号}_{開始ページ} を使う
+# subject_ja = "論文"     # 原稿種別
+# corresp = [1]          # 責任著者（著者の順番、1 始まり）
+# keywords_en = ["equity", "gender"]

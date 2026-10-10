@@ -1,0 +1,14 @@
+{
+  "operations": [
+    {"op": "link_citation", "src": "d18", "text": "2001", "occurrence": 1, "target": "B2", "role": "", "image": "", "mathml": "", "surname": "", "given": "", "reason": "第1章第3段落の「その後の論考（2001）」は、文の主語「国宗は」から国宗（2001）と判断", "confidence": "高"},
+    {"op": "link_citation", "src": "d18", "text": "2025", "occurrence": 1, "target": "B7", "role": "", "image": "", "mathml": "", "surname": "", "given": "", "reason": "「Claudeの2025年の報告」は文献リストの Claude, A. (2025) を指すと判断", "confidence": "中"},
+    {"op": "link_citation", "src": "d18", "text": "2016", "occurrence": 1, "target": "B4", "role": "", "image": "", "mathml": "", "surname": "", "given": "", "reason": "「濱中（2016）」は第2著者 濵中裕明 を含む宮川ほか（2016）を指すと判断（異体字・第一著者でない）", "confidence": "中"},
+    {"op": "link_citation", "src": "d18", "text": "1977", "occurrence": 1, "target": "B10", "role": "", "image": "", "mathml": "", "surname": "", "given": "", "reason": "Lakatos の文献は 1976 年のもののみ。本文の 1977 は誤記の可能性があるが同一文献と判断", "confidence": "低"},
+    {"op": "link_citation", "src": "d18", "text": "Claude", "occurrence": 1, "target": "B7", "role": "", "image": "", "mathml": "", "surname": "", "given": "", "reason": "（規則違反の例: 著者名をリンクしようとしている）", "confidence": "高"},
+    {"op": "link_figure", "src": "d20", "text": "図9", "occurrence": 1, "target": "F9", "role": "", "image": "", "mathml": "", "surname": "", "given": "", "reason": "（存在しない図の例）", "confidence": "高"},
+    {"op": "set_role", "src": "d46", "text": "", "occurrence": 1, "target": "", "role": "sec1", "image": "", "mathml": "", "surname": "", "given": "", "reason": "「２．考察」は章番号の形式で太字。前後の章見出しと同じ形式", "confidence": "高"},
+    {"op": "formula_image", "src": "", "text": "", "occurrence": 1, "target": "", "role": "", "image": "img3", "mathml": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\"><msup><mi>a</mi><mn>2</mn></msup><mo>+</mo><msup><mi>b</mi><mn>2</mn></msup><mo>=</mo><msup><mi>c</mi><mn>2</mn></msup></math>", "surname": "", "given": "", "reason": "画像には a^2 + b^2 = c^2 と書かれている", "confidence": "高"},
+    {"op": "split_name", "src": "d11", "text": "", "occurrence": 1, "target": "", "role": "", "image": "", "mathml": "", "surname": "研究", "given": "次郎", "reason": "英文表記 Jiro KENKYU から姓「研究」・名「次郎」と判断", "confidence": "高"}
+  ],
+  "notes": ["本文中の「Lakatos（1977）」は文献リストでは 1976 年になっている。誤記の可能性がある。"]
+}

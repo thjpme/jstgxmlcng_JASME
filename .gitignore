@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+output/
+# 実際の論文など、公開リポジトリに入れてはいけないテスト用ファイルはここに置く
+tests/private/

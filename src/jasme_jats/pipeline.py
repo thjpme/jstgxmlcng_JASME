@@ -1,0 +1,211 @@
+"""変換の全体の流れ。
+
+  1. docx を読み取る（docx_reader）
+  2. 段落の役割を決め、論文の構造を組み立てる（structure）
+  3. 機械的にリンクを付ける（linker, refparse）
+  4. （任意）AI による補完: AI が返した操作を検証し、構造の組み直し・リンクの追加として適用する（ai_assist）
+  5. XML を組み立てる（builder）
+  6. 文字の不変性チェック（fidelity）… AI 補完を行った場合も、必ずこの最終段階で行う
+  7. 目印を取り除いた最終出力を作り、もう一度文字列を照合する（fidelity.final_check）
+  8. J-STAGE 指定 DTD で検証する（validate）
+  9. 画像の書き出し、J-STAGE のフォルダ構成と ZIP、レポート（images, package, report）
+"""
+from __future__ import annotations
+
+import datetime as _dt
+import subprocess
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+from . import __version__
+from .ai_assist import (AIOutcome, apply_ops, build_request, call_api, image_blocks, manual_prompt, parse_response,
+                        role_overrides, split_ops)
+from .builder import build, finalize, serialize
+from .config import ArticleMeta, JournalConfig
+from .docx_reader import read_docx
+from .fidelity import final_check, verify
+from .images import export_images
+from .linker import cited_refs, link
+from .model import Decision
+from .package import article_dir, write_package
+from .report import render, render_ai_only
+from .structure import classify
+from .validate import validate
+
+
+@dataclass
+class Options:
+    out_dir: Path
+    split_labels: Optional[bool] = None       # None なら雑誌の設定に従う
+    ai_mode: str = "none"                     # none / api / manual
+    ai_model: str = "claude-opus-5-5"
+    ai_api_key: Optional[str] = None
+    ai_response: Optional[str] = None         # 手動モード: AI の回答（JSON）
+    pdf_path: Optional[Path] = None
+    convert_metafiles: bool = True
+
+
+@dataclass
+class Result:
+    docx_name: str
+    created: str
+    tool_version: str
+    split_labels: bool
+    meta: ArticleMeta
+    journal: JournalConfig
+    plan: object
+    fidelity: object
+    dtd_valid: bool
+    dtd_errors: list
+    link_counts: dict
+    unresolved_after: list
+    images: list
+    warnings: list
+    ai: AIOutcome
+    build_notes: list = field(default_factory=list)
+    hidden_text: list = field(default_factory=list)
+    tracked_changes: int = 0
+    comments: int = 0
+    has_pdf: bool = False
+    output_note: str = ""
+    xml_path: Optional[Path] = None
+    zip_path: Optional[Path] = None
+    report_path: Optional[Path] = None
+    prompt_path: Optional[Path] = None
+    ai_report_path: Optional[Path] = None
+
+    @property
+    def ok(self) -> bool:
+        return bool(self.fidelity.ok and self.fidelity.final_ok and self.dtd_valid)
+
+
+def tool_version() -> str:
+    try:
+        here = Path(__file__).resolve().parent
+        rev = subprocess.run(["git", "-C", str(here), "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
+                             timeout=5)
+        if rev.returncode == 0 and rev.stdout.strip():
+            return f"{__version__}（コミット {rev.stdout.strip()}）"
+    except Exception:  # noqa: BLE001
+        pass
+    return __version__
+
+
+def _mechanical(docx_path, journal, overrides=None):
+    doc = read_docx(docx_path)
+    plan = classify(doc, journal, overrides)
+    linker = link(plan)
+    return doc, plan, linker
+
+
+def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options) -> Result:
+    docx_path = Path(docx_path)
+    out_dir = Path(opts.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    split = journal.split_labels if opts.split_labels is None else opts.split_labels
+
+    doc, plan, linker = _mechanical(docx_path, journal)
+    root, info = build(plan, meta, journal, split)
+    outcome = AIOutcome(mode=opts.ai_mode, model=opts.ai_model if opts.ai_mode == "api" else "")
+    prompt_path = None
+    output_note = ""
+
+    # ---------------------------------------------------------------- AI 補完
+    if opts.ai_mode in ("api", "manual"):
+        unsplit = [(src, msg.split("「", 1)[-1].split("」", 1)[0]) for cat, src, msg in info.notes if cat == "name"]
+        req_text, req_images = build_request(plan, linker, info.exclusions, unsplit)
+        blocks = image_blocks(doc, req_images)
+        data = None
+        if opts.ai_mode == "api":
+            outcome = call_api(req_text, blocks, model=opts.ai_model, api_key=opts.ai_api_key)
+            if outcome.raw and not outcome.error:
+                try:
+                    data = parse_response(outcome.raw)
+                except Exception as e:  # noqa: BLE001
+                    outcome.error = f"AI の回答を JSON として読めませんでした: {e}"
+        else:
+            prompt_path = out_dir / "AI依頼文.txt"
+            prompt_path.write_text(manual_prompt(req_text, blocks), encoding="utf-8")
+            if blocks:
+                img_dir = out_dir / "AI添付画像"
+                img_dir.mkdir(exist_ok=True)
+                for image_id, mt, data_ in blocks:
+                    (img_dir / f"{image_id}.{mt.split('/')[-1].replace('jpeg', 'jpg')}").write_bytes(data_)
+            if opts.ai_response and opts.ai_response.strip():
+                outcome.raw = opts.ai_response
+                try:
+                    data = parse_response(opts.ai_response)
+                except Exception as e:  # noqa: BLE001
+                    outcome.error = f"貼り付けられた回答を JSON として読めませんでした: {e}"
+            else:
+                output_note = ("> 手動モード: 「AI依頼文.txt」をチャット（claude.ai など）に貼り付け、返ってきた JSON を"
+                               "ツールに貼り戻して再実行すると、AI による補完が反映されます。この出力は AI 補完の前の状態です。")
+        if data is not None:
+            ops = split_ops(data)
+            outcome.notes = [str(n) for n in data.get("notes", []) if str(n).strip()]
+            overrides = role_overrides(ops, plan, outcome)
+            # 構造を最初から組み直し（docx を読み直す）、AI の操作を適用する
+            doc, plan, linker = _mechanical(docx_path, journal, overrides)
+            apply_ops(ops, plan, doc, outcome)
+            cited = cited_refs(plan)
+            plan.uncited_refs = [r.rid for r in plan.refs if r.rid not in cited]
+            root, info = build(plan, meta, journal, split)
+
+    # ---------------------------------------------------------------- 検証（最終段階）
+    fid = verify(docx_path, root, plan.exclusions + info.exclusions)
+    final_root = finalize(root)
+    xml_bytes = serialize(final_root)
+    final_check(root, xml_bytes, fid)
+    valid, errors = validate(xml_bytes)
+    if not valid and any(getattr(f, "formula", None) is not None for f in plan.figures):
+        # AI が書き起こした MathML が DTD に合わない場合は取り消して作り直す
+        for f in plan.figures:
+            f.formula = None
+        for _, d in outcome.accepted:
+            if d.category == "formula":
+                d.applied = False
+                d.message += "（※ DTD 検証で不適合だったため取り消し、画像のみ出力した）"
+        root, info = build(plan, meta, journal, split)
+        fid = verify(docx_path, root, plan.exclusions + info.exclusions)
+        final_root = finalize(root)
+        xml_bytes = serialize(final_root)
+        final_check(root, xml_bytes, fid)
+        valid, errors = validate(xml_bytes)
+
+    # ---------------------------------------------------------------- 出力
+    adir = article_dir(out_dir, journal, meta)
+    images = export_images(doc, info.images, adir / "Graphics", convert_metafiles=opts.convert_metafiles)
+    zip_path, adir, has_pdf = write_package(out_dir, journal, meta, xml_bytes, opts.pdf_path)
+    aid = meta.article_id(journal)
+    flat_xml = out_dir / f"{aid}.xml"
+    flat_xml.write_bytes(xml_bytes)
+
+    # AI が解決した箇所は「未解決」から除く
+    import unicodedata
+    ai_links = [(op["src"], unicodedata.normalize("NFKC", op["text"])) for op, _ in outcome.accepted
+                if op["op"].startswith("link_")]
+    unresolved_after = []
+    for u in linker.unresolved:
+        src, raw = u[1], unicodedata.normalize("NFKC", u[2])
+        year = unicodedata.normalize("NFKC", u[5]) if len(u) > 5 else None
+        if any(s == src and (t == year or (t and t in raw)) for s, t in ai_links):
+            continue
+        unresolved_after.append(u)
+    warnings = list(dict.fromkeys(doc.warnings + info.warnings))
+    build_notes = [Decision(did=f"M-B{i}", stage="mechanical", category=c, src=s, message=m,
+                            location=plan.locations.get(s, "")) for i, (c, s, m) in enumerate(info.notes, 1)]
+    res = Result(
+        docx_name=docx_path.name, created=_dt.datetime.now().strftime("%Y-%m-%d %H:%M"), tool_version=tool_version(),
+        split_labels=split, meta=meta, journal=journal, plan=plan, fidelity=fid, dtd_valid=valid, dtd_errors=errors,
+        link_counts=linker.count, unresolved_after=unresolved_after, images=images, warnings=warnings, ai=outcome,
+        build_notes=build_notes, hidden_text=doc.hidden_text, tracked_changes=doc.tracked_changes,
+        comments=doc.comments, has_pdf=has_pdf, output_note=output_note, xml_path=flat_xml, zip_path=zip_path,
+        prompt_path=prompt_path)
+    report_path = out_dir / f"{aid}_変換レポート.md"
+    report_path.write_text(render(res), encoding="utf-8")
+    res.report_path = report_path
+    if outcome.mode != "none" and (outcome.accepted or outcome.rejected or outcome.error):
+        res.ai_report_path = out_dir / f"{aid}_AI判断一覧.md"
+        res.ai_report_path.write_text(render_ai_only(res), encoding="utf-8")
+    return res
