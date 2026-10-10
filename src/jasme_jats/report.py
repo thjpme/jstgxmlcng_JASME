@@ -1,11 +1,13 @@
 """変換レポート（Markdown）。
 
 冒頭に結果の要約、続いて AI による補完（不確実性のある箇所）、機械処理で解決できなかった箇所、
-機械的な推定、出力しなかった文字の全件、落とした空白の全件、生成文字、画像、書誌情報、DTD 検証の順に並べる。
+機械的な推定、出力しなかった文字の全件、落とした空白の全件、生成文字、画像、書誌情報、DTD 検証と J-STAGE の登載時チェックの順に並べる。
 """
 from __future__ import annotations
 
 from collections import Counter
+
+from .linker import linked_ids
 
 
 def esc(s, n=None) -> str:
@@ -26,6 +28,28 @@ def table(headers, rows) -> str:
 CAT_JA = {"style": "段落の役割（スタイル）", "citation": "引用文献へのリンク", "xref": "図表・注・数式へのリンク",
           "formula": "数式", "name": "著者名", "figure": "図", "table": "表", "url": "URL", "note": "注"}
 UNRES_JA = {"bibr": "引用文献", "fig": "図の参照", "table": "表の参照", "fn": "注の参照"}
+
+
+def float_notes(plan):
+    """本文から参照されていない図・表と、キャプションのない表（PDF と照らして確認するためのもの）。"""
+    out = []
+    figs, tabs = linked_ids(plan, "fig"), linked_ids(plan, "table")
+    nf = [f"{f.fid}（{esc(f.caption.plain()[:20])}）" for f in plan.figures
+          if f.fid and f.caption is not None and f.fid not in figs]
+    if nf:
+        out.append("本文中のどこからも参照（リンク）されていない図: " + "、".join(nf))
+    nt = [f"{t.tid}（{esc(t.caption.plain()[:20])}）" for t in plan.tables
+          if t.tid and t.caption is not None and t.tid not in tabs]
+    if nt:
+        out.append("本文中のどこからも参照（リンク）されていない表: " + "、".join(nt))
+    nc = []
+    for t in plan.tables:
+        if t.caption is None:
+            first = next((p.plain().strip() for p in (t.table.paragraphs() if t.table else []) if p.plain().strip()), "")
+            nc.append(f"{t.tid or '-'}（最初のセル「{esc(first[:15])}」）")
+    if nc:
+        out.append("キャプションのない表（表番号がないため本文からリンクできない。表として出力した）: " + "、".join(nc))
+    return out
 
 
 def render(r) -> str:
@@ -55,6 +79,8 @@ def render(r) -> str:
         ("本文の文字の不変性チェック（AI 補完の後に実施）", fid_line),
         ("最終出力（目印を取り除いた XML）の再チェック", final_line),
         ("J-STAGE 指定 DTD（JATS 1.1）による検証", "合格" if r.dtd_valid else f"不合格（{len(r.dtd_errors)} 件、12 章）"),
+        ("J-STAGE のアップロード時チェック（XML で判定できるもの）",
+         "問題なし" if not r.jstage_issues else f"要対応 {len(r.jstage_issues)} 件（12 章）"),
         ("機械的に付けたリンク", links),
         ("AI が付けたリンク・判断（2 章）", f"採用 {len(ai_acc)} 件 / 不採用 {len(ai.rejected)} 件" if ai.mode != "none" else "AI 補完なし"),
         ("機械処理で解決できなかった箇所（3 章）", f"{len(r.unresolved_after)} 件"),
@@ -121,6 +147,9 @@ def render(r) -> str:
         L.append("")
         L.append("本文中のどこからもリンクされていない文献: " + "、".join(
             f"{rid}（{esc(next((x.para.plain()[:30] for x in plan.refs if x.rid == rid), ''))}）" for rid in unc))
+    for line in float_notes(plan):
+        L.append("")
+        L.append(line)
     L.append("")
 
     # ------------------------------------------------------------------ 4. 機械的な推定
@@ -245,18 +274,31 @@ def render(r) -> str:
             ("発行日", m.pub_date or "（未入力）"), ("J-STAGE 公開日", m.epub_date or "（未入力）"),
             ("受付日", m.received or "（未入力）"), ("受理日", m.accepted or "（未入力）"),
             ("原稿種別", m.subject_ja or j.subject_ja), ("論文種別（article-type）", m.article_type or j.article_type),
-            ("抄録の二次利用（specific-use）", f"{j.abstract_specific_use}（学会の方針を確認すること）")]
+            ("抄録の二次利用（specific-use）",
+             f"{j.abstract_specific_use}（英文の論文で英文要旨を <abstract> に入れるときだけ使う。学会の方針を確認すること）")]
     L.append(table(["項目", "値"], rows))
     L.append("")
 
-    # ------------------------------------------------------------------ 12. DTD
-    L.append("## 12. DTD 検証の詳細")
+    # ------------------------------------------------------------------ 12. DTD・J-STAGE のチェック
+    L.append("## 12. DTD 検証と J-STAGE のアップロード時チェックの詳細")
+    L.append("")
+    L.append("### DTD 検証")
     L.append("")
     if r.dtd_valid:
         L.append("J-STAGE 指定の DTD（https://www.jstage.jst.go.jp/dtds/1.1/JATS-journalpublishing1.dtd と同一の同梱版）で検証し、エラーはありませんでした。")
     else:
         for e in r.dtd_errors[:100]:
             L.append(f"- {esc(e)}")
+    L.append("")
+    L.append("### J-STAGE のアップロード時チェック")
+    L.append("")
+    L.append("DTD に合っていても J-STAGE のアップロードで弾かれる条件（題目と抄録の言語の対応、日付の前後、所属番号など）のうち、"
+             "XML だけで判定できるものを『記事アップロードメッセージ一覧』に沿って確かめた結果です。")
+    L.append("")
+    if r.jstage_issues:
+        L.append(table(["メッセージ ID", "内容"], r.jstage_issues))
+    else:
+        L.append("該当するエラーはありませんでした（J-STAGE 側でしか判定できない項目は、アップロード時に確認してください）。")
     L.append("")
 
     # ------------------------------------------------------------------ 13. チェックリスト

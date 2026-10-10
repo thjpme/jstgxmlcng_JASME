@@ -5,12 +5,12 @@
 
 | スタイル | 役割 | JATS |
 |---|---|---|
-| 題目（日） | title | `article-meta/title-group/article-title` |
-| 副題（日） | subtitle | `title-group/subtitle` |
+| 題目（日） | title | `article-meta/title-group/article-title[@xml:lang="ja"]` |
+| 副題（日） | subtitle | `title-group/subtitle[@xml:lang="ja"]` |
 | 所属（日）/ 著者名（日） | aff_ja / author_ja | `contrib-group/contrib/name-alternatives/name[@name-style="eastern"]`, `aff-alternatives/aff[@xml:lang="ja"]` |
 | 題目（英）/ 副題（英） | title_en / subtitle_en | `title-group/trans-title-group[@xml:lang="en"]/trans-title`, `trans-subtitle` |
 | 著者名（英）/ 所属（英） | author_en / aff_en | `name[@name-style="western"]`, `aff[@xml:lang="en"]`（和文の著者・所属と順番で対応付け） |
-| 英文要旨見出し / 英文要旨 | abstract_heading / abstract | `abstract[@xml:lang="en"]/title`, `p` |
+| 英文要旨見出し / 英文要旨 | abstract_heading / abstract | `trans-abstract[@xml:lang="en"]/title`, `p`（英文の論文では `abstract[@xml:lang="en"]`） |
 | 章見出し / 節見出し / 項見出し | sec1 / sec2 / sec3 | 入れ子の `sec/title` |
 | 本文（Body Text） | p | `p` |
 | 図キャプション | fig_caption | `fig/caption/p`（直前の画像段落と組にする。2 段落目以降は caption の中の追加の p） |

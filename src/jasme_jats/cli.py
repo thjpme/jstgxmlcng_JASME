@@ -40,6 +40,9 @@ def main(argv=None):
     print(f"文字の不変性チェック: {fid.summary()}（段落 {fid.units} 件中 {fid.mapped} 件を出力、{len(fid.excluded)} 件は除外）")
     print(f"最終出力の再チェック: {'合格' if fid.final_ok else '不合格'}")
     print(f"DTD 検証: {'合格' if res.dtd_valid else '不合格'}")
+    print(f"J-STAGE のアップロード時チェック: {'問題なし' if not res.jstage_issues else f'要対応 {len(res.jstage_issues)} 件'}")
+    for mid, msg in res.jstage_issues:
+        print(f"  {mid}: {msg}")
     print(f"XML: {res.xml_path}")
     print(f"ZIP: {res.zip_path}")
     print(f"レポート: {res.report_path}")

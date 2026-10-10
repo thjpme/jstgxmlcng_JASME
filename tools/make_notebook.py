@@ -144,6 +144,9 @@ fid = res.fidelity
 print("文字の不変性チェック:", fid.summary(), f"（段落 {fid.units} 件中 {fid.mapped} 件を出力、{len(fid.excluded)} 件は除外）")
 print("最終出力の再チェック:", "合格" if fid.final_ok else "不合格")
 print("DTD 検証:", "合格" if res.dtd_valid else "不合格")
+print("J-STAGE のアップロード時チェック:", "問題なし" if not res.jstage_issues else f"要対応 {len(res.jstage_issues)} 件")
+for mid, msg in res.jstage_issues:
+    print("  ", mid, msg)
 if res.ai.error:
     print("AI:", res.ai.error)
 if AI == "manual" and res.prompt_path:
@@ -162,7 +165,12 @@ display(Markdown(res.report_path.read_text(encoding="utf-8")))
     md("""
 ### 6.（手動モードのときだけ）AI の回答を貼り付けて再変換
 
-チャットから返ってきた回答（`{"operations": [...` で始まる JSON）を、下のセルの `r'''` と `'''` の間に貼り付けてから ▶ を押してください。
+チャットから返ってきた回答は、`json` と書かれたコードブロック（灰色の枠）1 つのはずです。枠の右上の**コピーボタン**でコピーし、
+下のセルの `r'''` と `'''` の間に貼り付けてから ▶ を押してください（コードブロックの外の文章が混じらず、中身がそのままコピーされます）。
+
+- 回答がコードブロックになっていない、またはアーティファクト（別の画面）として返ってきたときは、チャットで
+  「回答の書き方に従って、```json のコードブロック 1 つで出し直してください」と頼んでください。
+- 読めなかったときは、何行目のどこが読めないかが表示されます。
 """),
     code("""
 AI_RESPONSE = r'''
@@ -173,7 +181,8 @@ res = convert(docx_path, meta, journal, Options(out_dir=OUT, ai_mode="manual", a
                                               pdf_path=pdf_path, split_labels=SPLIT_LABELS))
 fid = res.fidelity
 print("文字の不変性チェック:", fid.summary(), "/ 最終出力の再チェック:", "合格" if fid.final_ok else "不合格",
-      "/ DTD 検証:", "合格" if res.dtd_valid else "不合格")
+      "/ DTD 検証:", "合格" if res.dtd_valid else "不合格",
+      "/ J-STAGE のアップロード時チェック:", "問題なし" if not res.jstage_issues else f"要対応 {len(res.jstage_issues)} 件")
 if res.ai.error:
     print("AI:", res.ai.error)
 display(Markdown(res.report_path.read_text(encoding="utf-8")))

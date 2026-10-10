@@ -8,6 +8,7 @@ from conftest import ALL_DOCS, FULL, TEMPLATE
 from jasme_jats.pipeline import Options, convert
 
 XLINK = "http://www.w3.org/1999/xlink"
+XML_LANG = "{http://www.w3.org/XML/1998/namespace}lang"
 
 
 @pytest.mark.parametrize("split", [False, True], ids=["strict", "split"])
@@ -18,6 +19,7 @@ def test_fidelity_and_dtd(path, split, journal, meta, tmp_path):
     assert fid.ok, (fid.mismatches, fid.missing, fid.stray[:3])
     assert fid.final_ok, fid.final_detail
     assert res.dtd_valid, res.dtd_errors[:5]
+    assert res.jstage_issues == [], res.jstage_issues
     if not split:
         assert all(reason == "姓と名の間の空白" for _, _, reason in fid.drops)
 
@@ -43,6 +45,9 @@ def test_links_in_full_sample(journal, meta, tmp_path):
     assert "https://www.mext.go.jp/" in uris
     dois = [p.text for p in root.iter("pub-id")]
     assert "10.1023/A:1012737223465" in dois and "10.1234/jt.2025.001" in dois
+    # Word のハイパーリンクが付いた文献中の DOI も、他の文献と同じ形（https://doi.org/ の文字 + pub-id）
+    assert "10.1017/CBO9781139171472" in dois
+    assert not any("CBO9781139171472" in (u.get(f"{{{XLINK}}}href") or "") for u in root.iter("uri"))
     ext = [e.get(f"{{{XLINK}}}href") for e in root.iter("ext-link")]
     assert "https://example.org/srp-notes" in ext
     # スタイル違反の見出しは機械的に章として推定される
@@ -50,7 +55,15 @@ def test_links_in_full_sample(journal, meta, tmp_path):
     assert "２．考察" in titles
     # 書誌情報
     assert root.find(".//article-id").text == "10.24529/jasme.31.1_1"
-    assert root.find(".//abstract").get("{http://www.w3.org/XML/1998/namespace}lang") == "en"
+    # 和文の論文: 題目（日）が article-title、英語の題目が trans-title、英文要旨は trans-abstract
+    # （abstract[@xml:lang="en"] にすると J-STAGE で「タイトル(英)がない」エラー EMSGM102E になる）
+    assert root.find(".//title-group/article-title").get(XML_LANG) == "ja"
+    assert root.find(".//title-group/trans-title-group").get(XML_LANG) == "en"
+    assert root.find(".//article-meta/abstract") is None
+    assert root.find(".//article-meta/trans-abstract").get(XML_LANG) == "en"
+    langs = {r.get("id"): r.get(XML_LANG) for r in root.iter("ref")}
+    assert set(langs.values()) == {"ja", "en"}
+    assert res.jstage_issues == []
 
 
 def test_package_layout(journal, meta, tmp_path):
@@ -82,3 +95,19 @@ def test_template_emf_conversion(journal, meta, tmp_path):
         assert (tmp_path / "jasme/31/1/31_1/Graphics" / img.name).exists()
     else:
         assert img.status == "failed"
+
+
+def test_float_notes_list_unreferenced_and_uncaptioned(journal):
+    from jasme_jats.linker import body_paragraphs
+    from jasme_jats.pipeline import _mechanical
+    from jasme_jats.report import float_notes
+    doc, plan, linker = _mechanical(FULL, journal)
+    assert float_notes(plan) == []
+    for p, _ in body_paragraphs(plan):          # 図2 への参照を外す
+        for a in p.atoms:
+            if a.link is not None and a.link.attrs.get("rid") == "F2":
+                a.link = None
+    plan.tables[0].caption = None
+    notes = float_notes(plan)
+    assert any(n.startswith("本文中のどこからも参照（リンク）されていない図: F2") for n in notes)
+    assert any(n.startswith("キャプションのない表") and "T1" in n for n in notes)

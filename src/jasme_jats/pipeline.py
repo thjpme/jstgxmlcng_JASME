@@ -8,7 +8,8 @@
   6. 文字の不変性チェック（fidelity）… AI 補完を行った場合も、必ずこの最終段階で行う
   7. 目印を取り除いた最終出力を作り、もう一度文字列を照合する（fidelity.final_check）
   8. J-STAGE 指定 DTD で検証する（validate）
-  9. 画像の書き出し、J-STAGE のフォルダ構成と ZIP、レポート（images, package, report）
+  9. J-STAGE のアップロード時のチェックのうち XML だけで判定できるものを再現する（jstage_rules）
+ 10. 画像の書き出し、J-STAGE のフォルダ構成と ZIP、レポート（images, package, report）
 """
 from __future__ import annotations
 
@@ -26,6 +27,7 @@ from .config import ArticleMeta, JournalConfig
 from .docx_reader import read_docx
 from .fidelity import final_check, verify
 from .images import export_images
+from .jstage_rules import check as jstage_check
 from .linker import cited_refs, link
 from .model import Decision
 from .package import article_dir, write_package
@@ -58,6 +60,7 @@ class Result:
     fidelity: object
     dtd_valid: bool
     dtd_errors: list
+    jstage_issues: list
     link_counts: dict
     unresolved_after: list
     images: list
@@ -176,8 +179,9 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     # ---------------------------------------------------------------- 出力
     adir = article_dir(out_dir, journal, meta)
     images = export_images(doc, info.images, adir / "Graphics", convert_metafiles=opts.convert_metafiles)
-    zip_path, adir, has_pdf = write_package(out_dir, journal, meta, xml_bytes, opts.pdf_path)
     aid = meta.article_id(journal)
+    jstage_issues = jstage_check(final_root, aid, [i.name for i in images if i.name])
+    zip_path, adir, has_pdf = write_package(out_dir, journal, meta, xml_bytes, opts.pdf_path)
     flat_xml = out_dir / f"{aid}.xml"
     flat_xml.write_bytes(xml_bytes)
 
@@ -198,6 +202,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     res = Result(
         docx_name=docx_path.name, created=_dt.datetime.now().strftime("%Y-%m-%d %H:%M"), tool_version=tool_version(),
         split_labels=split, meta=meta, journal=journal, plan=plan, fidelity=fid, dtd_valid=valid, dtd_errors=errors,
+        jstage_issues=jstage_issues,
         link_counts=linker.count, unresolved_after=unresolved_after, images=images, warnings=warnings, ai=outcome,
         build_notes=build_notes, hidden_text=doc.hidden_text, tracked_changes=doc.tracked_changes,
         comments=doc.comments, has_pdf=has_pdf, output_note=output_note, xml_path=flat_xml, zip_path=zip_path,

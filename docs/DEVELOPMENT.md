@@ -28,6 +28,7 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
 | `tracking.py` | 変換途中の目印の定義 |
 | `fidelity.py` | 文字の不変性チェック |
 | `validate.py` | DTD 検証（`dtd/` に J-STAGE 指定 DTD を同梱） |
+| `jstage_rules.py` | J-STAGE のアップロード時チェック（記事アップロードメッセージ一覧）のうち XML だけで判定できるものの再現 |
 | `images.py` / `package.py` / `report.py` | 画像の書き出し、ZIP、レポート |
 | `pipeline.py` / `cli.py` | 全体の流れとコマンドライン |
 | `data/jasme.toml` | 本誌の設定（誌名・ISSN・DOI 形式・スタイル名の対応表など） |

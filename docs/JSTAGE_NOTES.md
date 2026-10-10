@@ -12,6 +12,10 @@
   https://www.jstage.jst.go.jp/static/files/ja/jstage-xml_jats1_1_attachment1.pdf
 - 別紙 2（記事アップロードフォルダ構成）
   https://www.jstage.jst.go.jp/static/files/ja/UM-01-004_sousa(henshu)_append2.pdf
+- 別紙 3（記事アップロードメッセージ一覧）… `jstage_rules.py` のチェックの出典
+  https://www.jstage.jst.go.jp/static/files/ja/UM-01-004_sousa(henshu)_append3.pdf
+- XML 項目一覧（メタデータ項目と文字数の上限）
+  https://www.jstage.jst.go.jp/static/files/ja/jstage-xml_jats1_1-metadata_item_list.pdf
 - FULL-J XML サンプル
   https://www.jstage.jst.go.jp/html/files/GuidelineAndManuals/TAB2/20190529/ja/full-j_johokanri.zip
 - J-STAGE 指定 DTD: https://www.jstage.jst.go.jp/dtds/1.1/JATS-journalpublishing1.dtd
@@ -24,7 +28,14 @@
 - XML は JATS 1.1 の DTD で妥当である必要がある（ガイドライン 1 章）。
 - `<journal-id journal-id-type="j-stage">` と `<issn>` は必須。雑誌名などは J-STAGE 側で上書きされる。
 - 著者は `<name-alternatives>` に和英の `<name>`。所属は `<aff-alternatives id="aff1">` に和英の `<aff>`、著者からは `<xref ref-type="aff" rid="aff1">`。
-- `<abstract>` の `specific-use`（二次利用可否）は必須。`xml:lang` で言語を指定。
+- 題目: `<article-title>` が「タイトル」、`<trans-title>` が「翻訳タイトル」。日・英は xml:lang で判定される。
+- 抄録: `<abstract>` が「抄録」、`<trans-abstract>` が「翻訳抄録」。それぞれ 1 つまで（ガイドライン 3.1.23）。
+  **「抄録(英)」には「タイトル(英)」、「翻訳抄録(英)」には「翻訳タイトル(英)」が必要**（アップロードメッセージ EMSGM102E〜105E）。
+  和文の論文では英語の題目が翻訳タイトルなので、英文要旨は `<trans-abstract xml:lang="en">` にする
+  （`<abstract xml:lang="en">` にすると「抄録(英)が設定されていますが、タイトル(英)が設定されていません」で弾かれる）。
+- `<abstract>` の `specific-use` は抄録ライセンスフラグ（secondary-allow / secondary-disallow）。`<trans-abstract>` には付けられない。
+- 引用文献 `<ref>` の `xml:lang`（記述言語）がないと EMSGM247E。
+- 文字数の上限: 抄録・翻訳抄録 4000（p の合計）、記事表題 2000、引用文献（mixed-citation）4000。
 - `<label>` の自動付番は行われない。番号を表示したい場合は label か本文に書く。
 - `<mixed-citation>` の中の文字・空白・句読点はそのまま表示される。引用文献原文は「label + 半角空白 + mixed-citation の文字」で登録される。
   → 本ツールは mixed-citation の中で改行や字下げを入れない（入れると文字が変わる）。

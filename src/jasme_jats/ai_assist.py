@@ -40,6 +40,7 @@ REGION_ROLES = {
     "notes": {"p", "exclude"} | _HEADINGS, "ack": {"p", "exclude"} | _HEADINGS,
     "fn": {"p", "exclude"} | _HEADINGS, "refs": {"ref", "exclude"} | _HEADINGS, "back": {"p", "exclude"} | _HEADINGS,
     "front_en": {"abstract", "exclude"}, "app": {"p", "exclude"},
+    "authors": set(),   # 著者表の中の著者名・所属（確認のために見せるだけで、役割は変えさせない）
 }
 TARGET_PREFIX = {"link_citation": "B", "link_figure": "F", "link_table": "T", "link_note": "fn", "link_formula": "FD"}
 REF_TYPE = {"link_citation": "bibr", "link_figure": "fig", "link_table": "table", "link_note": "fn",
@@ -98,6 +99,7 @@ Python のプログラムがすでに機械的な変換を済ませています�
 2. link_figure / link_table / link_note / link_formula: 「図3」「表2」「注4」「式(2)」などの参照を、対応する図・表・注・数式にリンクする（text は「図3」のように参照の表記全体）。
 3. set_role: スタイルが正しく設定されておらず、役割を機械的に決められなかった段落の役割を指定する。role には次のいずれかを書く:
    {roles}
+   著者表の中の段落（役割 author_ja / aff_ja / author_en / aff_en）は確認のために載せているもので、役割は変えられません。
 4. formula_image: 画像として貼り付けられた数式を MathML（MathML 2.0、<math xmlns="http://www.w3.org/1998/Math/MathML"> を根要素とする）に書き起こす。元の画像は残したまま、読み取った数式を併記します。数式でない画像には提案しないでください。
 5. split_name: 姓と名の間に空白がない和文の著者名について、姓と名の境目を指定する（surname + given が氏名の文字列と完全に一致すること）。
 
@@ -297,33 +299,88 @@ def call_api(request_text, images, model=DEFAULT_MODEL, api_key=None, effort="hi
     return out
 
 
+MANUAL_EXAMPLE = """```json
+{
+  "operations": [
+    {"op": "link_citation", "src": "d18", "text": "2001", "occurrence": 1, "target": "B2", "role": "", "image": "",
+     "mathml": "", "surname": "", "given": "", "reason": "第1章第3段落の「その後の論考（2001）」は、主語「国宗は」から国宗（2001）と判断", "confidence": "高"},
+    {"op": "set_role", "src": "d46", "text": "", "occurrence": 1, "target": "", "role": "sec1", "image": "",
+     "mathml": "", "surname": "", "given": "", "reason": "「２．考察」は章番号の形式で、前後の章見出しと同じ書き方", "confidence": "中"}
+  ],
+  "notes": ["本文の「Lakatos（1977）」は文献リストでは 1976 年になっている"]
+}
+```"""
+
+FIELD_GUIDE = """各項目の意味（すべての操作に 12 項目すべてを書き、使わない項目は空文字 "" にする。occurrence は数値）:
+- op: 操作の種類（link_citation / link_figure / link_table / link_note / link_formula / set_role / formula_image / split_name）
+- src: 対象の段落 ID（d18 など。formula_image では ""）
+- text: リンクにする文字列（段落中のとおりに完全一致。引用文献なら年の部分だけ）
+- occurrence: その段落で text が何回目に現れる箇所か（1 から数える）
+- target: リンク先の ID（B3, F1, T2, fn1, FD1 など）
+- role: set_role で指定する役割
+- image: formula_image の画像 ID（img3 など）
+- mathml: formula_image で読み取った数式（<math xmlns="http://www.w3.org/1998/Math/MathML"> から </math> まで）
+- surname, given: split_name の姓と名
+- reason: 判断の根拠（日本語で具体的に）
+- confidence: 高 / 中 / 低"""
+
+
 def manual_prompt(request_text, images) -> str:
-    """手動モード: チャットに貼り付ける依頼文。"""
+    """手動モード: チャットに貼り付ける依頼文。
+
+    チャットの AI は、回答を地の文で書くと引用符を飾り文字（“ ”）に変えることがあり、JSON として読めなくなる。
+    そのため、回答をコードブロック 1 つにまとめるよう求め、形式の見本を示す。
+    """
     system = SYSTEM_PROMPT.replace("{roles}", " / ".join(f"{k}（{v}）" for k, v in ROLES.items()))
     img_note = ""
     if images:
         names = "、".join(f"{i}.{mt.split('/')[-1].replace('jpeg', 'jpg')}" for i, mt, _ in images)
         img_note = (f"\n\n（この依頼には画像が {len(images)} 枚あります。出力フォルダの「AI添付画像」にある {names} を"
                     "このメッセージに添付してください。ファイル名が画像 ID です。）")
-    schema = json.dumps(RESPONSE_SCHEMA, ensure_ascii=False, indent=1)
     return (f"{system}{img_note}\n\n"
-            "回答は、次の JSON スキーマに従う JSON だけを書いてください（説明文や ``` は不要）。\n"
-            f"{schema}\n\n"
+            "## 回答の書き方（必ず守ってください）\n"
+            "- 回答は、```json で始まり ``` で終わるコードブロック 1 つだけにしてください。コードブロックの前後には何も書かないでください。\n"
+            "- アーティファクトやファイルにはせず、この会話の中にコードブロックとして書いてください。\n"
+            "- 文字列はすべて半角の二重引用符（\"）で囲んでください。飾りの引用符（“ ” ‘ ’）は使わないでください。\n"
+            "- 提案する操作がなければ \"operations\": [] とし、気づいたことだけを notes に書いてください。\n\n"
+            "回答の見本（形式の見本です。内容はこの論文とは関係ありません）:\n"
+            f"{MANUAL_EXAMPLE}\n\n"
+            f"{FIELD_GUIDE}\n\n"
             "---\n"
             f"{request_text}\n")
 
 
+SMART_QUOTES = "“”„‟‘’‚‛＂"
+
+
 def parse_response(text: str) -> dict:
-    """AI の回答（JSON）を取り出す。コードブロックで囲まれていても受け付ける。"""
+    """AI の回答（JSON）を読む。```json のコードブロックがあればその中身を使う。
+
+    書式の崩れた回答を推測で直すことはしない。読めないときは、どこが・なぜ読めないかを示す。
+    """
     t = text.strip()
-    m = re.search(r"```(?:json)?\s*(.*?)```", t, re.S)
+    m = re.search(r"```(?:json)?[ \t]*\n?(.*?)```", t, re.S)
     if m:
         t = m.group(1).strip()
-    if not t.startswith("{"):
+    elif not t.startswith("{"):
         i, j = t.find("{"), t.rfind("}")
-        if i >= 0 and j > i:
-            t = t[i:j + 1]
-    data = json.loads(t)
+        if i < 0 or j <= i:
+            raise ValueError("回答の中に JSON（{ で始まり } で終わる部分）が見つかりません。"
+                             "AI に「回答の書き方」に従ってコードブロックで出し直すよう頼んでください")
+        t = t[i:j + 1]
+    try:
+        data = json.loads(t)
+    except json.JSONDecodeError as e:
+        line = t.splitlines()[e.lineno - 1] if 0 < e.lineno <= len(t.splitlines()) else ""
+        hint = ""
+        if any(q in line for q in SMART_QUOTES):
+            hint = ("回答の中で、文字列が半角の \" ではなく飾りの引用符（“ ” など）で囲まれています。"
+                    "AI に「文字列は半角の二重引用符で、```json のコードブロックで出し直してください」と頼み、"
+                    "コードブロック右上のコピーボタンでコピーしてください。")
+        elif e.msg.startswith("Expecting") and e.pos >= len(t) - 2:
+            hint = "回答が途中で切れている可能性があります。AI に続きを出力してもらうか、出し直してもらってください。"
+        raise ValueError(f"{e.lineno} 行目 {e.colno} 文字目で JSON として読めません（{e.msg}）。"
+                         f"該当行: {line[:80]!r}。{hint}") from None
     if not isinstance(data, dict) or not isinstance(data.get("operations", []), list):
         raise ValueError("JSON に operations の一覧がありません")
     return data

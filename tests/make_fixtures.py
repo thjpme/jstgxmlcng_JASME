@@ -395,12 +395,18 @@ def make_full(path):
         "de Villiers, M. (1990). The role and function of proof in mathematics. Pythagoras, 24, 17-24.",
         "Hanna, G. (2000). Proof, explanation and exploration: An overview. Educational Studies in Mathematics, "
         "44(1), 5-23. https://doi.org/10.1023/A:1012737223465",
-        "Lakatos, I. (1976). Proofs and refutations. Cambridge University Press.",
+        "Lakatos, I. (1976). Proofs and refutations. Cambridge University Press. ",
         "Polya, G. (1945). How to solve it. Princeton University Press.",
         "Polya, G. (1954). Mathematics and plausible reasoning. Princeton University Press.",
     ]
+    # Word のハイパーリンクが付いた DOI（他の文献と同じく https://doi.org/ の文字 + pub-id になること）
+    lakatos = b.add_hyperlink("https://doi.org/10.1017/CBO9781139171472")
     for r in refs:
-        body.append(para(S["ref"], r))
+        if r.startswith("Lakatos"):
+            body.append(para(S["ref"], r, f'<w:hyperlink r:id="{lakatos}">'
+                                          f'{run("https://doi.org/10.1017/CBO9781139171472", u=True)}</w:hyperlink>'))
+        else:
+            body.append(para(S["ref"], r))
 
     body += front_en(b, "A Study on the Process of Constructing Proofs in Mathematical Inquiry",
                      "Focusing on Congruence of Triangles in the Second Grade of Lower Secondary School",
