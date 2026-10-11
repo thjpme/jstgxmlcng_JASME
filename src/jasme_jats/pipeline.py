@@ -83,21 +83,23 @@ class Result:
         return bool(self.fidelity.ok and self.fidelity.final_ok and self.dtd_valid)
 
 
-def installed_commit() -> str:
-    """pip で GitHub から入れた場合、そのときのコミット ID（pip が direct_url.json に記録する）。"""
+def installed_from_git() -> tuple:
+    """pip で GitHub から入れた場合の (ブランチ名, コミット ID)。pip が direct_url.json に記録したもの。"""
     try:
         import json
         from importlib.metadata import distribution
         info = json.loads(distribution("jasme-jats").read_text("direct_url.json") or "{}")
-        return (info.get("vcs_info") or {}).get("commit_id", "")[:7]
+        vcs = info.get("vcs_info") or {}
+        return vcs.get("requested_revision", ""), vcs.get("commit_id", "")[:7]
     except Exception:  # noqa: BLE001
-        return ""
+        return "", ""
 
 
 def tool_version() -> str:
-    commit = installed_commit()
+    branch, commit = installed_from_git()
     if commit:
-        return f"{__version__}（コミット {commit}）"
+        dev = f"開発版: ブランチ {branch}、" if branch and branch != "main" else ""
+        return f"{__version__}（{dev}コミット {commit}）"
     try:
         here = Path(__file__).resolve().parent
         rev = subprocess.run(["git", "-C", str(here), "rev-parse", "--short", "HEAD"], capture_output=True, text=True,

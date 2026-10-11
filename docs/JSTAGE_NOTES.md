@@ -14,6 +14,8 @@
   https://www.jstage.jst.go.jp/static/files/ja/UM-01-004_sousa(henshu)_append2.pdf
 - 別紙 3（記事アップロードメッセージ一覧）… `jstage_rules.py` のチェックの出典
   https://www.jstage.jst.go.jp/static/files/ja/UM-01-004_sousa(henshu)_append3.pdf
+- J-STAGE 操作マニュアル 編集登載編（巻号・セクションの作成、記事アップロード）
+  https://www.jstage.jst.go.jp/static/files/ja/UM-01-004_sousa(henshu).pdf
 - XML 項目一覧（メタデータ項目と文字数の上限）
   https://www.jstage.jst.go.jp/static/files/ja/jstage-xml_jats1_1-metadata_item_list.pdf
 - FULL-J XML サンプル
@@ -41,6 +43,10 @@
   → 本ツールは mixed-citation の中で改行や字下げを入れない（入れると文字が変わる）。
 - 引用文献の DOI は `https://doi.org/` 形式ではなく `10.` から始まる形式で `<pub-id pub-id-type="doi">` に書くと、引用文献リンクの反映率が上がる。
 - 画像は jpg / gif / png（mp4 も可）。`Graphics/` に置き、XML ではファイル名だけを書く。ファイル名を「記事識別子.」で始めてはいけない。
+- アップロードの前に、編集登載システムで巻・号と、その号のセクション（目次の見出し。例: 論文）を作成しておく
+  （操作マニュアル 編集登載編のフロー A-2・A-3）。ないと EMSGM181E「巻号が学会誌別巻号の設定に存在しません」、
+  EMSGM182E「学会誌別セクションが存在しません」。アップロード後、記事をセクションに振り分ける（A-6 記事移動）。
+  これは J-STAGE 側の設定で、XML では指定できない。
 - フォルダ構成: `{資料コード}/{巻}/{号}/{記事識別子}/`。記事識別子は `{巻}_{開始ページ}`（論文番号がない場合）。ZIP 名は `{資料コード}.zip`。PDF は必須。
 
 ## 本誌の値（設定ファイル `src/jasme_jats/data/jasme.toml`）

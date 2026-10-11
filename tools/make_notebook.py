@@ -54,7 +54,7 @@ cells = [
 
 | 手順 | 内容 |
 |---|---|
-| 1 | 準備（最初に 1 回だけ） |
+| 1 | 準備（最初に 1 回だけ。▶ を押したら、終わるのを待たずに手順 2 の ▶ を押しておくと、準備の後に続けて実行されます） |
 | 2 | 論文の docx と PDF をアップロード（ボタンが別々に出ます） |
 | 3 | 書誌情報（巻・号・ページ・日付）を入力 |
 | 4 | AI による補完の方法を選ぶ |
@@ -69,36 +69,49 @@ cells = [
 ソースコードと説明書: https://github.com/{REPO}
 """),
     code(f"""
-#@title 1. 準備（最初に 1 回だけ。1〜3 分かかります）
-#@markdown 図が Word の図形（EMF/WMF 形式）で貼られている論文では、画像の変換に LibreOffice を使います。チェックを入れると追加でインストールします（数分かかります）。
+#@title 1. 準備（最初に 1 回だけ。1 分ほどかかります）
+#@markdown 図が Word の図形（EMF/WMF 形式）で貼られている論文では、画像の変換に LibreOffice を使います。チェックを入れると LibreOffice を**裏で**インストールします（数分かかりますが、終わるのを待たずに手順 2 以降へ進めます。手順 5 の変換は、インストールが終わってから始まります）。
 CONVERT_EMF = True  #@param {{type:"boolean"}}
-#@markdown 通常は変更不要です（開発中の版を試すときだけ、ブランチ名を書き換えます）。
-BRANCH = "main"  #@param {{type:"string"}}
+#@markdown 開発者向け: 開発中の版を試すときだけチェックを入れます（実行するとブランチ名の入力欄が出ます）。
+USE_DEV_VERSION = False  #@param {{type:"boolean"}}
 
-import subprocess, sys
+import shutil, subprocess, sys
 # このランタイムで一度ツールを使っていると、古い版がメモリに残ったままになる（入れ直しても反映されない）
 loaded_before = "jasme_jats" in sys.modules
+BRANCH = "main"
+if USE_DEV_VERSION:
+    BRANCH = input("開発版のブランチ名を入力して Enter を押してください: ").strip()
+    if not BRANCH:
+        raise SystemExit("ブランチ名が入力されていません。開発版を使わないときは、チェックを外して実行してください。")
 url = f"git+https://github.com/{REPO}.git@{{BRANCH}}"
 for args in (["jasme-jats[ai,images] @ " + url],                          # ツールと必要なライブラリ
              ["--force-reinstall", "--no-deps", "jasme-jats @ " + url]):  # ツール本体は毎回最新に入れ直す
     r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", *args], capture_output=True, text=True)
     if r.returncode != 0:
         print(r.stderr[-2000:])
-        raise SystemExit("ツールのインストールに失敗しました。BRANCH の値を確認してください。")
+        raise SystemExit("ツールのインストールに失敗しました。" + ("ブランチ名を確認してください。" if USE_DEV_VERSION else
+                                                                  "しばらくしてからもう一度実行してください。"))
 if loaded_before:
     raise SystemExit("ツールを最新の版に入れ替えましたが、このランタイムには前の版が読み込まれたままです。"
                      "メニューの「ランタイム」→「セッションを再起動」（表示によっては「ランタイムを再起動」）を選んでから、"
                      "手順 1 からもう一度実行してください。")
-if CONVERT_EMF:
-    subprocess.run("apt-get -qq update > /dev/null && (apt-get -qq install -y --no-install-recommends "
-                   "libreoffice-draw-nogui > /dev/null || apt-get -qq install -y libreoffice-draw > /dev/null)",
-                   shell=True)
+# LibreOffice はインストールに数分かかるので裏で入れる（手順 5 で終わるのを待つ）
+LO_LOG = "/content/libreoffice_install.log"
+if CONVERT_EMF and not (shutil.which("soffice") or shutil.which("libreoffice")):
+    if globals().get("LO_PROC") is None or LO_PROC.poll() is not None:
+        LO_PROC = subprocess.Popen("apt-get -qq update && (apt-get -qq install -y --no-install-recommends "
+                                   "libreoffice-draw-nogui || apt-get -qq install -y libreoffice-draw)",
+                                   shell=True, stdout=open(LO_LOG, "w"), stderr=subprocess.STDOUT)
 # 版の表示は別のプロセスで行う（ここで読み込むと、次に手順 1 を実行したときに「前の版が残っている」扱いになるため）
 ver = subprocess.run([sys.executable, "-c", "from jasme_jats.pipeline import tool_version; print(tool_version())"],
                      capture_output=True, text=True).stdout.strip()
 print("準備ができました。ツールの版:", ver)
-if ver and not ver.startswith("{VERSION}"):
-    print("※ このノートブックの説明は版 {VERSION} のものです（BRANCH を変えた場合などは版が異なることがあります）")
+if USE_DEV_VERSION:
+    print("※ 開発版（ブランチ", BRANCH, "）を使っています。")
+elif ver and not ver.startswith("{VERSION}"):
+    print("※ このノートブックの説明は版 {VERSION} のものです。ノートブックを開き直してください。")
+if globals().get("LO_PROC") is not None and LO_PROC.poll() is None:
+    print("LibreOffice を裏でインストールしています（数分）。終わるのを待たずに手順 2 へ進んでください。")
 """ + "DONE = {1}\n"),
     code("""
 #@title 2. 論文の docx と PDF をアップロード
@@ -178,7 +191,8 @@ print("AI による補完:", AI_MODE)
     code("""
 #@title 5. 変換を実行
 """ + guard(1, 2, 3, 4) + """import shutil
-from IPython.display import Markdown, display
+from IPython.display import HTML, Markdown, display
+from jasme_jats.colab import error_box, prompt_box
 from jasme_jats.config import ArticleMeta, JournalConfig
 from jasme_jats.pipeline import Options, convert
 
@@ -189,6 +203,13 @@ if AI == "api":
         api_key = userdata.get("ANTHROPIC_API_KEY")
     except Exception as e:
         raise SystemExit(f"シークレット ANTHROPIC_API_KEY を読めませんでした: {e}")
+
+if CONVERT_EMF and globals().get("LO_PROC") is not None:
+    if LO_PROC.poll() is None:
+        print("LibreOffice のインストールが終わるのを待っています（EMF/WMF の図の変換に使います）…", flush=True)
+        LO_PROC.wait()
+    if not (shutil.which("soffice") or shutil.which("libreoffice")):
+        print("※ LibreOffice をインストールできませんでした。EMF/WMF の図は変換されません（レポート 9 章）。記録:", LO_LOG)
 
 OUT = WORK / "output"
 shutil.rmtree(OUT, ignore_errors=True)
@@ -203,20 +224,20 @@ print("DTD 検証:", "合格" if res.dtd_valid else "不合格")
 print("J-STAGE のアップロード時チェック:", "問題なし" if not res.jstage_issues else f"要対応 {len(res.jstage_issues)} 件")
 for mid, msg in res.jstage_issues:
     print("  ", mid, msg)
-if res.ai.error:
-    print("AI:", res.ai.error)
+manual_prompt = None
 if AI == "manual" and res.prompt_path:
-    print()
-    print("【手動モード】下の依頼文をすべてコピーして claude.ai などのチャットに貼り付けてください。")
+    # 依頼文は、レポートの前に目立つ枠で出し、レポートの後ろにも同じものをコピーできる枠を出す
     attach = OUT / "AI添付画像"
-    if attach.exists():
-        print("画像も添付してください（次のファイルをダウンロードします）:", ", ".join(p.name for p in attach.iterdir()))
-        for p in attach.iterdir():
-            files.download(str(p))
-    import ipywidgets as widgets
-    display(widgets.Textarea(value=res.prompt_path.read_text(encoding="utf-8"),
-                             layout=widgets.Layout(width="100%", height="300px")))
+    image_names = sorted(p.name for p in attach.iterdir()) if attach.exists() else []
+    for n in image_names:
+        files.download(str(attach / n))
+    manual_prompt = res.prompt_path.read_text(encoding="utf-8")
+    display(HTML(prompt_box(manual_prompt, image_names)))
+if res.ai.error:
+    display(HTML(error_box("AI による補完ができませんでした", res.ai.error)))
 display(Markdown(res.report_path.read_text(encoding="utf-8")))
+if manual_prompt:
+    display(HTML(prompt_box(manual_prompt, compact=True)))
 """ + mark(5)),
     md("""
 ### 6.（手動モードのときだけ）AI の回答を貼り付けて再変換
@@ -244,7 +265,7 @@ print("文字の不変性チェック:", fid.summary(), "/ 最終出力の再チ
       "/ DTD 検証:", "合格" if res.dtd_valid else "不合格",
       "/ J-STAGE のアップロード時チェック:", "問題なし" if not res.jstage_issues else f"要対応 {len(res.jstage_issues)} 件")
 if res.ai.error:
-    print("AI:", res.ai.error)
+    display(HTML(error_box("貼り付けた回答を読み込めませんでした（AI による補完は反映されていません）", res.ai.error)))
 display(Markdown(res.report_path.read_text(encoding="utf-8")))
 """, form=False),
     code("""

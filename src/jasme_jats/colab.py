@@ -1,0 +1,76 @@
+"""Colab ノートブックで使う表示部品（HTML）。
+
+ノートブックのセルを短く保ち、テストできるようにするため、表示用の HTML はここで作る。
+Colab の出力欄は暗い配色のこともあるので、枠の中の文字色・背景色は明示する。
+"""
+from __future__ import annotations
+
+import html
+import uuid
+
+_COPY_JS = """
+<script>
+function jasmeCopy(id) {
+  const ta = document.getElementById(id);
+  const msg = document.getElementById(id + "-msg");
+  const done = (ok) => {
+    msg.textContent = ok ? "コピーしました。チャットに貼り付けてください。"
+                         : "自動でコピーできませんでした。枠の中をクリックし、Ctrl+A（Mac は ⌘+A）→ Ctrl+C（⌘+C）でコピーしてください。";
+  };
+  const fallback = () => { ta.focus(); ta.select(); let ok = false; try { ok = document.execCommand("copy"); } catch (e) {} done(ok); };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(ta.value).then(() => done(true), fallback);
+  } else {
+    fallback();
+  }
+}
+</script>
+"""
+
+_BOX = ("border:3px solid #d97706;border-radius:8px;padding:12px 16px;margin:12px 0;background:#fffbeb;"
+        "color:#1f2937;font-size:14px;line-height:1.6")
+_BUTTON = ("background:#d97706;color:#ffffff;border:none;border-radius:6px;padding:8px 16px;font-size:15px;"
+           "font-weight:bold;cursor:pointer")
+_TEXTAREA = ("width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;color:#111827;background:#ffffff;"
+             "border:1px solid #9ca3af;border-radius:4px;padding:6px;margin-top:8px")
+
+
+def prompt_box(prompt: str, image_names=(), compact: bool = False) -> str:
+    """手動モードの依頼文を、コピーボタン付きの目立つ枠で表示する HTML。
+
+    compact=True はレポートの後ろに出す短い版（同じ依頼文をコピーできる）。
+    """
+    tid = "jasme-prompt-" + uuid.uuid4().hex[:8]
+    imgs = ""
+    if image_names:
+        names = "、".join(html.escape(n) for n in image_names)
+        imgs = (f"<li>画像 {len(image_names)} 枚（{names}）も同じメッセージに添付します。"
+                "画像はブラウザのダウンロードフォルダに保存されています。</li>")
+    if compact:
+        head = "↑ 上は AI 補完の前のレポートです。手動モードの依頼文は、ここからもコピーできます"
+        steps = ""
+        height = 90
+    else:
+        head = "手動モード: 次の依頼文を AI（claude.ai などのチャット）に渡してください"
+        steps = ("<ol style='margin:6px 0 10px 20px;padding:0'>"
+                 "<li>「依頼文をコピー」を押し、<b>新しいチャット</b>に貼り付けて送信します。</li>"
+                 f"{imgs}"
+                 "<li>返ってきた回答（<code>json</code> と書かれたコードブロック）を、コードブロック右上のコピーボタンでコピーします。</li>"
+                 "<li>この下の<b>手順 6</b> のセルに貼り付けて ▶ を押します。</li>"
+                 "</ol>")
+        height = 220
+    return (f"{_COPY_JS}<div style=\"{_BOX}\">"
+            f"<div style='font-size:18px;font-weight:bold;margin-bottom:4px'>{html.escape(head)}</div>"
+            f"{steps}"
+            f"<button style=\"{_BUTTON}\" onclick=\"jasmeCopy('{tid}')\">依頼文をコピー</button>"
+            f"<span id='{tid}-msg' style='margin-left:12px;font-weight:bold'></span>"
+            f"<textarea id='{tid}' readonly style=\"{_TEXTAREA};height:{height}px\">{html.escape(prompt)}</textarea>"
+            "</div>")
+
+
+def error_box(title: str, detail: str) -> str:
+    """読み込めなかった AI の回答など、見落とされると困るエラーを赤い枠で表示する HTML。"""
+    return ("<div style='border:3px solid #dc2626;border-radius:8px;padding:12px 16px;margin:12px 0;background:#fef2f2;"
+            "color:#1f2937;font-size:14px;line-height:1.6'>"
+            f"<div style='font-size:17px;font-weight:bold;color:#b91c1c'>{html.escape(title)}</div>"
+            f"<div style='white-space:pre-wrap'>{html.escape(detail)}</div></div>")

@@ -47,6 +47,10 @@ def test_links_in_full_sample(journal, meta, tmp_path):
     assert "10.1023/A:1012737223465" in dois and "10.1234/jt.2025.001" in dois
     # Word のハイパーリンクが付いた文献中の DOI も、他の文献と同じ形（https://doi.org/ の文字 + pub-id）
     assert "10.1017/CBO9781139171472" in dois
+    # DOI の pub-id にはリンク先（https://doi.org/…）も入れる
+    hrefs = {p.text: p.get(f"{{{XLINK}}}href") for p in root.iter("pub-id")}
+    assert hrefs["10.1234/jt.2025.001"] == "https://doi.org/10.1234/jt.2025.001"
+    assert hrefs["10.1023/A:1012737223465"] == "https://doi.org/10.1023/A:1012737223465"
     assert not any("CBO9781139171472" in (u.get(f"{{{XLINK}}}href") or "") for u in root.iter("uri"))
     ext = [e.get(f"{{{XLINK}}}href") for e in root.iter("ext-link")]
     assert "https://example.org/srp-notes" in ext

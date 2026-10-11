@@ -1,0 +1,16 @@
+"""Colab ノートブックの表示部品（colab.py）。"""
+from jasme_jats.colab import error_box, prompt_box
+
+
+def test_prompt_box_escapes_text_and_has_copy_button():
+    html = prompt_box('依頼文 <b>&"', ["img3.png"])
+    assert "依頼文 &lt;b&gt;&amp;&quot;" in html          # 依頼文はエスケープして textarea に入れる
+    assert "依頼文をコピー" in html and "jasmeCopy(" in html
+    assert "img3.png" in html and "手順 6" in html
+
+
+def test_compact_box_and_error_box():
+    html = prompt_box("x", compact=True)
+    assert "依頼文をコピー" in html and "手順 6" not in html
+    assert prompt_box("x").count("jasme-prompt-") != 0
+    assert "&lt;x&gt;" in error_box("読めません", "<x>")

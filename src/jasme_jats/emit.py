@@ -157,8 +157,12 @@ class Emitter:
             if mode is None:
                 return parent, False
             if k == "pub-id" and ctx.ref_tags and only_text:
+                # J-STAGE の引用文献では DOI を pub-id で書く（mixed-citation の子に ext-link は使えない）。
+                # リンク先も xlink:href に入れておく（DTD 上 pub-id に付けられる）
                 el = etree.SubElement(parent, "pub-id")
                 el.set("pub-id-type", spec.attrs.get("pub-id-type", "doi"))
+                if href:
+                    el.set(xl("href"), href)
                 return el, True
             if mode in ("uri", "ref") and only_text:
                 el = etree.SubElement(parent, "uri")
