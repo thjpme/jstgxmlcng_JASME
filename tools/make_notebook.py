@@ -13,6 +13,15 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "notebooks" / "JASME_docx_to_JSTAGE_XML.ipynb"
 VERSION = re.search(r'__version__ = "([^"]+)"', (ROOT / "src" / "jasme_jats" / "__init__.py").read_text()).group(1)
 VERSION_NOTE = "（試用版。正式版は 1.0 から）" if VERSION.startswith("0.") else ""
+try:
+    import tomllib
+except ModuleNotFoundError:   # Python 3.10
+    import tomli as tomllib
+with open(ROOT / "src" / "jasme_jats" / "data" / "jasme.toml", "rb") as _f:
+    MANUSCRIPT_TYPES = tomllib.load(_f).get("manuscript_types", {})
+TYPE_CHOICES = [f"{ja} / {en}" for ja, en in MANUSCRIPT_TYPES.items()] + ["その他"]
+TYPE_PARAM = (f'manuscript_type = {json.dumps(TYPE_CHOICES[0], ensure_ascii=False)}  '
+              f'#@param {json.dumps(TYPE_CHOICES, ensure_ascii=False)}\n')
 
 
 def md(text):
@@ -188,21 +197,30 @@ accepted = ""  #@param {type:"string"}
 #@markdown ---
 #@markdown **DOI（doi）**（空欄なら 10.24529/jasme.巻.号_開始ページ を使います）
 doi = ""  #@param {type:"string"}
-#@markdown **原稿種別（日本語）（subject）**（通常は変更不要）
-subject = "論文"  #@param {type:"string"}
-#@markdown **原稿種別（英語）（subject_en）**（通常は変更不要）
-subject_en = "Article"  #@param {type:"string"}
+#@markdown **原稿種別（manuscript_type）**
+""" + TYPE_PARAM + """#@markdown **原稿種別（日本語）（subject_other）**・**原稿種別（英語）（subject_other_en）**: 原稿種別で「その他」を選んだときだけ入力します
+subject_other = ""  #@param {type:"string"}
+subject_other_en = ""  #@param {type:"string"}
 #@markdown **責任著者が何番目の著者か（corresponding_author）**（例: 1。複数なら「1,2」）
 corresponding_author = ""  #@param {type:"string"}
 """ + guard(1, 2) + """if peer_review not in ("査読あり", "査読なし"):
     raise SystemExit("査読の有無（peer_review）を選んでください。")
 if peer_review == "査読なし" and last_review_date.strip():
     raise SystemExit("査読なしのときは、最終査読日（last_review_date）を空欄にしてください。")
+if manuscript_type == "その他":
+    if not subject_other.strip() or not subject_other_en.strip():
+        raise SystemExit("原稿種別で「その他」を選んだときは、原稿種別（日本語）（subject_other）と（英語）（subject_other_en）を入力してください。")
+    subject_ja, subject_en = subject_other.strip(), subject_other_en.strip()
+else:
+    subject_ja, subject_en = manuscript_type.split(" / ", 1)
+    if subject_other.strip() or subject_other_en.strip():
+        print("※ 原稿種別は「" + manuscript_type + "」を使います（subject_other の入力は使いません）")
 meta_input = {"volume": volume, "issue": issue, "fpage": first_page, "lpage": last_page,
               "peer_review": peer_review, "approved": last_review_date,
               "keywords_ja": keywords_ja, "keywords_en": keywords_en,
               "pub_date": pub_date, "epub_date": jstage_release_date, "received": received,
-              "accepted": accepted, "doi": doi, "subject_ja": subject, "subject_en": subject_en,
+              "accepted": accepted, "doi": doi,
+              "subject_ja": subject_ja, "subject_en": subject_en,
               "corresp": corresponding_author}
 from jasme_jats.config import ArticleMeta, keyword_language_mismatch, keyword_problem
 try:
@@ -211,7 +229,7 @@ except ValueError as e:
     raise SystemExit(f"入力を確認してください: {e}")
 if keyword_problem(_meta):
     raise SystemExit(keyword_problem(_meta) + "。")
-print("入力しました（" + peer_review + "）。未入力の項目はレポートに表示されます。")
+print("入力しました（原稿種別: " + subject_ja + " / " + subject_en + "、" + peer_review + "）。未入力の項目はレポートに表示されます。")
 print("キーワード（日本語）:", "；".join(_meta.keywords_ja) or "（なし）")
 print("キーワード（英語）  :", "; ".join(_meta.keywords_en) or "（なし）")
 if keyword_language_mismatch(_meta):

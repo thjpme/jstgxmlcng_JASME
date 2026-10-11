@@ -39,6 +39,13 @@ split_labels = false
 #             編集登載システムで手入力すれば登録できる）
 ref_doi = "pub-id"
 
+# 原稿種別の選択肢（日本語 = 英語）。Colab の手順 3 の選択肢になる（このほかに「その他」= 自由入力）。
+# 変えたら python tools/make_notebook.py を実行する
+[manuscript_types]
+"論文" = "Article"
+"共同研究" = "Collaborative Research Report"
+"講演記事" = "oration"
+
 # テンプレートのスタイル名 → 役割
 # 役割の意味は docs/STYLE_MAPPING.md を参照
 [styles]

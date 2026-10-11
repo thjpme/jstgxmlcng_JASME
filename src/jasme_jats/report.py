@@ -303,7 +303,7 @@ def render(r) -> str:
             ("査読の有無", {"yes": "査読あり", "no": "査読なし"}.get(m.peer_review,
                                                                 "（未入力。J-STAGE の資料の設定が引き継がれる）")),
             ("最終査読日", m.approved or ("（未入力）" if m.peer_review == "yes" else "―")),
-            ("原稿種別（日）", m.subject_ja or j.subject_ja), ("原稿種別（英）", m.subject_en or j.subject_en),
+            ("原稿種別（日）", j.subjects(m)[0]), ("原稿種別（英）", j.subjects(m)[1] or "（不明）"),
             ("記事種別（article-type）", m.article_type or j.article_type),
             ("キーワード（日）", "；".join(m.keywords_ja) or "（なし）"),
             ("キーワード（英）", "; ".join(m.keywords_en) or "（なし）"),

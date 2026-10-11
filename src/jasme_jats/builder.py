@@ -139,7 +139,10 @@ class Builder:
         doi = meta.doi_value(j)
         if doi:
             _sub(am, "article-id", doi, pub_id_type="doi")
-        subjects = [("ja", meta.subject_ja or j.subject_ja), ("en", meta.subject_en or j.subject_en)]
+        subj_ja, subj_en = j.subjects(meta)
+        if subj_ja and not subj_en:
+            self.info.warnings.append(f"原稿種別（英）が分からない（原稿種別（日）は「{subj_ja}」）")
+        subjects = [("ja", subj_ja), ("en", subj_en)]
         if any(s for _, s in subjects):
             cats = _sub(am, "article-categories")
             for lang, subject in subjects:

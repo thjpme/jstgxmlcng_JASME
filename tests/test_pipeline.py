@@ -195,3 +195,17 @@ def test_keyword_parsing_and_count():
     assert "上限は 100 個" in keyword_problem(ArticleMeta.from_dict({"keywords_en": ";".join(map(str, range(101)))}))
     # 入力欄の取り違えの確認
     assert keyword_language_mismatch(ArticleMeta.from_dict({"keywords_ja": "equity", "keywords_en": "数学"})) == ["equity", "数学"]
+
+def test_manuscript_type_choices(journal, tmp_path):
+    from jasme_jats.config import ArticleMeta
+    # 原稿種別（日）だけ指定すれば、英語は設定ファイルの選択肢から決まる
+    assert journal.subjects(ArticleMeta.from_dict({"subject_ja": "共同研究"})) == ("共同研究", "Collaborative Research Report")
+    assert journal.subjects(ArticleMeta.from_dict({"subject_ja": "講演記事"})) == ("講演記事", "oration")
+    assert journal.subjects(ArticleMeta.from_dict({})) == ("論文", "Article")
+    # 「その他」（自由入力）
+    meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "なし",
+                                  "subject_ja": "資料", "subject_en": "Material"})
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    subjects = [(g.get(XML_LANG), g.findtext("subject")) for g in load(res).iter("subj-group")]
+    assert subjects == [("ja", "資料"), ("en", "Material")]
+    assert not any("原稿種別" in w for w in res.warnings)
