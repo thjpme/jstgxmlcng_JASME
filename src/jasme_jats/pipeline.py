@@ -21,7 +21,7 @@ from typing import Optional
 
 from . import __version__
 from .ai_assist import (AIOutcome, apply_ops, build_request, call_api, float_placements, image_blocks, manual_prompt,
-                        parse_response, role_overrides, split_ops)
+                        parse_response, retarget_ops, role_overrides, split_ops, target_keys)
 from .builder import build, finalize, serialize
 from .config import ArticleMeta, JournalConfig
 from .docx_reader import read_docx
@@ -210,8 +210,10 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
             outcome.notes = [str(n) for n in data.get("notes", []) if str(n).strip()]
             overrides = role_overrides(ops, plan, outcome)
             placements = float_placements(data, plan, outcome)
-            # 構造を最初から組み直し（docx を読み直す）、AI の操作を適用する
+            keys = target_keys(plan)
+            # 構造を最初から組み直し（docx を読み直す）、AI の操作を適用する。リンク先は組み直した後の ID に読み替える
             doc, plan, linker = _mechanical(docx_path, journal, overrides, placements)
+            retarget_ops(ops, keys, plan)
             for sid, spec in placements.items():
                 if sid in plan.float_decisions:
                     outcome.accepted.append((spec["op"], plan.float_decisions[sid]))

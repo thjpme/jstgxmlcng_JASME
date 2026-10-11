@@ -100,6 +100,21 @@ def test_ai_placements_are_validated_and_applied(journal, meta, tmp_path):
     assert "図表の位置と組み合わせ" in report
 
 
+def test_link_targets_follow_figures_after_rebuild(journal, meta, tmp_path):
+    # AI は 1 回目の組み立ての ID（依頼文の [F3] = 図5）でリンク先を指定する。配置を反映して組み直すと図5 は F5 になるので、
+    # リンク先を組み直した後の ID に読み替える（読み替えないと F3 = 図3 にリンクしてしまう）
+    data = json.loads(RESPONSE)
+    data["operations"].append({"op": "link_figure", "src": "d32", "text": "位置が決まる図", "occurrence": 1, "target": "F3",
+                               "role": "", "image": "", "mathml": "", "surname": "", "given": "",
+                               "reason": "前掲の「位置が決まる図」は図5", "confidence": "中"})
+    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=json.dumps(data),
+                                                convert_metafiles=False))
+    assert res.fidelity.ok and res.dtd_valid
+    root = load(res)
+    x = next(x for x in root.iter("xref") if x.text == "位置が決まる図")
+    assert x.get("rid") == "F5" and "".join(root.find(".//fig[@id='F5']/caption").itertext()).startswith("図5")
+
+
 def test_missing_placement_is_reported_after_ai(journal, meta, tmp_path):
     data = json.loads(RESPONSE)
     data["placements"] = [p for p in data["placements"] if p["float"] != "s2"]

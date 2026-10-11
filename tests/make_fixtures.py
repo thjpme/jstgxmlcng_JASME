@@ -550,6 +550,7 @@ def make_float(path):
         cx=8 * cm, cy=4 * cm, wrap="wrapTopAndBottom")))
     body.append(para(S["sec1"], "２．おわりに"))
     body.append(para(S["body"], "図1から図5を本文の適切な位置に置く。"))
+    body.append(para(S["body"], "位置が決まる図（前掲）は，ここでは扱わない。"))   # 番号のない参照（AI がリンクする例）
     body.append(para(S["ref_head"], "引用および参考文献"))
     body.append(para(S["ref"], "試験花子（2021）．「浮動配置」．『架空誌』，第2巻，pp.3-4．"))
     body += front_en(b, "Floating Figures", "Text Boxes and Groups", [("Hanako SHIKEN", "Fictional University")],
