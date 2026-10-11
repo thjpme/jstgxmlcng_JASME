@@ -1,0 +1,150 @@
+# 開発の引き継ぎ（新しく担当する人へ）
+
+これまでの開発に関わっていない人が、GitHub 上のソースだけから開発環境を作り、Claude Code を使って開発を続けるための手順です。
+コードの構成・守るべき原則・反映の流れは [DEVELOPMENT.md](DEVELOPMENT.md)、設計の考え方は [DESIGN.md](DESIGN.md) にあります。
+
+## 0. 最初に知っておくこと
+
+- このツールは、『全国数学教育学会誌 数学教育学研究』の論文（Word の docx）を J-STAGE の全文 XML に変換します。
+  利用者（学会の編集担当者）は Google Colab のノートブックから使います（[README.md](../README.md)）。
+- **最優先の原則は「docx の本文の文字を 1 文字も変えない」**（誤字脱字も直さない）ことです。変換の最後に docx と XML の文字を
+  1 文字ずつ照合して確かめ、テスト（`tests/test_fidelity.py` など）でもこの仕組みが働くことを確かめています。
+  文字列を書き換えるコードは書きません（具体的な決まりは DEVELOPMENT.md の「守るべき原則」）。
+- **正本は GitHub の `main` ブランチです。** 利用者のノートブックは、実行のたびに `main` からツールを入れます。
+  つまり **`main` に入れた変更は、その時点で利用者に届きます。** テストを通してから反映してください。
+- 読む順番: README.md → DESIGN.md → DEVELOPMENT.md →（必要に応じて）JSTAGE_NOTES.md・STYLE_MAPPING.md。
+  Claude Code に頼めば、要点をまとめて説明してくれます（下の 4.）。
+
+## 1. 必要なもの
+
+| もの | 使いみち |
+|---|---|
+| GitHub のアカウント | ソースの取得と変更の反映 |
+| Claude のアカウント（Claude Code を使える有料プラン。対象のプランは Anthropic の案内で確認） | Claude Code での開発 |
+| Google のアカウント | Colab のノートブックでの動作確認 |
+| （手元のパソコンで開発するときだけ）Python 3.10 以上、Git、LibreOffice（任意） | 手元での実行とテスト |
+
+## 2. リポジトリの権限を引き継ぐ
+
+今のリポジトリは `thjpme/jstgxmlcng_JASME`（公開）です。読むだけなら誰でもできますが、`main` に反映するには書き込みの権限が要ります。
+前任者（リポジトリの所有者）と相談して、次のどれかにします。
+
+| 方法 | 手順 | 注意 |
+|---|---|---|
+| **A. 共同作業者に加えてもらう（いちばん簡単）** | 所有者が GitHub のリポジトリの Settings → Collaborators → Add people で招待し、新しい担当者が招待を受ける | URL が変わらないので、ノートブックや説明書を直す必要がない |
+| B. リポジトリを譲り受ける | 所有者が Settings → General の一番下（Danger Zone）→ Transfer ownership で、新しい担当者（または学会の組織アカウント）に譲る | URL が変わる。下の「URL が変わるとき」の作業が要る |
+| C. フォークして別のリポジトリで続ける | 新しい担当者が Fork する | 元のリポジトリが残る。利用者のノートブックは元のリポジトリから入れ続けるので、下の「URL が変わるとき」の作業をして、利用者に新しい Colab のリンクを知らせる |
+
+長く運用するなら、個人ではなく学会の GitHub 組織（Organization）に置き、担当者を組織のメンバーにしておくと、次の引き継ぎが楽になります。
+
+### URL が変わるとき（B・C）
+
+リポジトリ名は次の場所に書かれています。`git grep -n "thjpme/jstgxmlcng_JASME"` で一覧を出し、新しい名前に直します。
+
+- `tools/make_notebook.py` の `REPO`（ノートブックがツールを入れる先）→ 直したら `python tools/make_notebook.py` でノートブックを作り直す
+- `README.md`（Colab のボタンのリンクと、pip で入れるときの URL）
+- `docs/DEVELOPMENT.md`、この文書
+
+GitHub は譲渡の後しばらく古い URL から転送しますが、転送に頼らず直してください（古い名前で別のリポジトリが作られると転送が切れます）。
+直したら版を上げて `main` に反映し、利用者に新しい Colab のリンクを知らせます。
+
+### コード以外に引き継ぐもの
+
+- **開発用資料**（実際の論文の docx・PDF など。公開リポジトリには入れていない）: 前任者の Google Drive の開発用資料フォルダを共有してもらう。
+- **J-STAGE の編集登載システム**での試験登載の方法と担当者（学会の担当者に確認）。
+- 利用者（学会の編集担当者）の連絡先と、ノートブックのリンクの案内方法。
+- API キーは引き継ぎません（利用者・開発者がそれぞれ自分のものを使います）。
+
+## 3. Claude Code の準備
+
+ブラウザだけで開発する方法（claude.ai/code。パソコンへのインストール不要）と、手元のパソコンで開発する方法があります。どちらでも同じように進められます。
+
+### 3.1 ブラウザで開発する（claude.ai/code）
+
+1. **GitHub と接続する**: https://claude.ai/connect-github で GitHub のアカウントを接続し、Claude の GitHub アプリをこのリポジトリに
+   インストールします（リポジトリの所有者でなければ、所有者にインストールを頼みます）。これで Claude Code がリポジトリを読み、ブランチを作り、
+   `main` に反映できるようになります（書き込みには 2. の権限が要ります）。
+2. **クラウド環境を用意する**: claude.ai/code で新しいセッションを始めるときに、使う環境（クラウド環境）を選びます。
+   環境の設定は、セッションの画面上部の環境のメニュー → Edit で変えられます（説明: https://code.claude.com/docs/en/claude-code-on-the-web ）。
+   - **ネットワーク**: pip で Python のライブラリを入れられる必要があります。既定の設定（パッケージマネージャーを許可）のままで使えます。
+     詳しくは https://code.claude.com/docs/en/cloud-environments#network-access 。
+   - **セットアップスクリプト**（任意）: セッションを始めるたびに実行されるコマンドです。書かなくても、Claude Code が作業の最初に
+     `pip install -e ".[dev]"` を実行します（リポジトリ直下の `CLAUDE.md` にそう書いてあります）。毎回の待ち時間を減らしたいときは、
+     依存ライブラリを入れるコマンドを書いておきます（ライブラリの一覧は `pyproject.toml` の `dependencies` と `dev`）。
+   - **秘密情報**: 実際の API（Claude・ChatGPT・Gemini）を呼んで試すときだけ、環境の設定に `ANTHROPIC_API_KEY` などを登録します。
+     **API キーをチャットに貼り付けたり、リポジトリに書いたりしないでください。** テスト（`python -m pytest`）は実際の API を呼びません。
+   - LibreOffice（EMF/WMF の図の変換）は、環境に入っていなくてもテストは通ります（該当するテストは「変換失敗」を期待して通る）。
+3. **セッションを始める**: リポジトリに `thjpme/jstgxmlcng_JASME`（または引き継いだ後のリポジトリ）を選び、最初の依頼を書きます（4.）。
+   Claude Code は、作業用のブランチ（`claude/…`）で変更し、頼めば `main` に反映します。
+
+### 3.2 手元のパソコンで開発する（Claude Code の CLI）
+
+1. Claude Code をインストールします（手順は https://code.claude.com/docs を参照。インストールの方法は変わることがあるので、最新の案内に従う）。
+2. ソースを取得して、環境を作ります。
+
+   ```bash
+   git clone https://github.com/thjpme/jstgxmlcng_JASME.git
+   cd jstgxmlcng_JASME
+   python -m venv .venv && . .venv/bin/activate      # Windows: .venv\Scripts\activate
+   pip install -e ".[dev]"
+   python -m pytest -q
+   ```
+
+   EMF/WMF の図の変換も試すなら LibreOffice を入れます（`soffice` が使えれば自動で使われます）。
+3. そのフォルダで `claude` を実行し、最初の依頼を書きます（4.）。
+
+## 4. 最初の依頼の例
+
+リポジトリ直下の `CLAUDE.md` は Claude Code が自動で読むので、原則は毎回伝わります。それでも、最初は次のように頼むと確実です。
+
+> `docs/DEVELOPMENT.md` と `docs/DESIGN.md` を読んで、このツールの仕組みと守るべき原則（docx の本文は 1 文字も変えない）を
+> 把握してから、〇〇を直して。修正後はテストを通し、`main` に反映して。
+
+「〇〇」の部分の例:
+
+- 不具合: 「この論文（`tests/private/論文.docx`）で、表 2 のキャプションが本文の段落として出力される問題」
+- 改善: 「変換レポートの 3 章に、未リンクの引用の前後の文も表示する」
+- 調査だけ: 「直さずに、〇〇がどう処理されているかを説明して」（このときは「main に反映して」は書かない）
+
+慣れないうちは、「`main` に反映する前に、変更点を説明して確認を求めて」と付け加えると安全です。
+
+### 実際の論文を使うとき
+
+- 未公開の原稿は**公開リポジトリに入れません**。作業環境の `tests/private/`（`.gitignore` 済み）に置いて試します。
+- ブラウザの Claude Code に渡すときは、claude.ai の設定でコネクタ（Google Drive）を接続しておき、
+  開発用資料フォルダのファイル名を指定して「`tests/private/` に置いて試して」と頼むのが簡単です。
+- 原稿を Claude Code に渡すことは、原稿を Anthropic のサービスに送ることになります。学会の方針（著者の了解など）を確認してください。
+
+## 5. 環境ができたことの確かめ方
+
+```bash
+python -m pytest -q
+python -m jasme_jats tests/fixtures/sample_full.docx --meta examples/meta_example.toml --out output
+```
+
+- 1 行目: すべてのテストが通る（`passed` だけが表示される）。
+- 2 行目: 「文字の不変性チェック: 合格」「最終出力の再チェック: 合格」「DTD 検証: 合格」と表示され、`output/` に XML・ZIP・レポートができる
+  （サンプルの docx は架空の内容）。
+- Colab での確認: 作業用のブランチを GitHub に push してから、ノートブックの手順 1 で「USE_DEV_VERSION」にチェックを入れ、
+  そのブランチ名を入力して実行する（`main` に反映する前に、利用者と同じ画面で試せる）。
+
+## 6. 反映の流れ（要点）
+
+詳しくは DEVELOPMENT.md の「変更から反映までの流れ」と「バージョン」。
+
+1. コードを直す（ノートブックは `tools/make_notebook.py` を直して `python tools/make_notebook.py` で作り直す。ipynb を直接直さない）
+2. `python -m pytest` がすべて通ることを確かめる（GitHub Actions でも Python 3.10 / 3.12 で実行される）
+3. 版を上げる（`src/jasme_jats/__init__.py` と `pyproject.toml`。ノートブックも作り直す）
+4. コミットして `main` に反映する → 利用者の次の実行から新しい版になる
+5. Colab でノートブックを開き直し、「ランタイム」→「セッションを再起動」してから手順 1 を実行し、版の表示を確かめる
+
+## 7. 引き継ぎのチェックリスト
+
+- [ ] リポジトリの権限（2. の A・B・C のどれか）。B・C なら URL を直してノートブックを作り直した
+- [ ] Claude Code から GitHub のリポジトリを読み書きできる（GitHub と接続し、Claude の GitHub アプリを入れた）
+- [ ] `python -m pytest` がすべて通る
+- [ ] サンプルの docx を変換でき、3 つのチェックが合格になる
+- [ ] Colab のノートブックで、開発版（USE_DEV_VERSION）と `main` の版が動く
+- [ ] 開発用資料フォルダ（実際の論文）を共有してもらった
+- [ ] DEVELOPMENT.md の「残っている課題」を確認した
+- [ ] 利用者（学会の編集担当者）と J-STAGE の担当者の連絡先を確認した

@@ -172,3 +172,138 @@ def test_api_model_auto_and_retired_fallback(journal, meta, tmp_path, monkeypatc
     res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_model="claude-typo",
                                                ai_api_key="t", convert_metafiles=False))
     assert "claude-typo が見つかりません" in res.ai.error and res.fidelity.ok
+
+
+# ---------------------------------------------------------------------------- ChatGPT・Gemini の API モード
+def _fake_openai(monkeypatch, calls, error=None, status="completed", content_type="output_text"):
+    """偽の OpenAI クライアント（Responses API）。error に例外を渡すと、呼び出し時にそれを送出する。"""
+    import openai
+
+    def create(**kw):
+        calls.append(kw)
+        if error is not None:
+            raise error
+        item = types.SimpleNamespace(type="message", content=[types.SimpleNamespace(type=content_type, text=RESPONSE)])
+        return types.SimpleNamespace(output=[item], status=status, output_text=RESPONSE,
+                                     incomplete_details=types.SimpleNamespace(reason="max_output_tokens"),
+                                     usage=types.SimpleNamespace(input_tokens=120, output_tokens=60))
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            self.responses = types.SimpleNamespace(create=create)
+
+    monkeypatch.setattr(openai, "OpenAI", FakeClient)
+
+
+def test_openai_api_mode_with_fake_client(journal, meta, tmp_path, monkeypatch):
+    calls = []
+    _fake_openai(monkeypatch, calls)
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_provider="openai",
+                                               ai_model="gpt-test", ai_api_key="t", convert_metafiles=False))
+    kw = calls[0]
+    assert kw["model"] == "gpt-test"
+    fmt = kw["text"]["format"]
+    assert fmt["type"] == "json_schema" and fmt["strict"] is True and fmt["schema"] is ai_assist.RESPONSE_SCHEMA
+    content = kw["input"][0]["content"]
+    assert any(c["type"] == "input_image" and c["image_url"].startswith("data:image/png;base64,") for c in content)
+    assert "link_citation" in kw["instructions"]
+    assert not res.ai.error and res.ai.provider == "openai"
+    assert len(res.ai.accepted) == 7 and res.fidelity.ok and res.fidelity.final_ok
+    report = res.report_path.read_text(encoding="utf-8")
+    assert "API（ChatGPT: gpt-test）" in report and "入力 120 トークン" in report
+
+
+def test_openai_errors_are_reported(journal, meta, tmp_path, monkeypatch):
+    import httpx2
+    import openai
+    req = httpx2.Request("POST", "https://api.openai.com/v1/responses")
+    err = openai.AuthenticationError("bad key", response=httpx2.Response(401, request=req), body=None)
+    _fake_openai(monkeypatch, [], error=err)
+    out = ai_assist.call_provider("openai", "x", [], model="gpt-test", api_key="t")
+    assert "OPENAI_API_KEY" in out.error
+    _fake_openai(monkeypatch, [], content_type="refusal")
+    assert "断りました" in ai_assist.call_provider("openai", "x", [], model="gpt-test", api_key="t").error
+    _fake_openai(monkeypatch, [], status="incomplete")
+    assert "途中で切れました" in ai_assist.call_provider("openai", "x", [], model="gpt-test", api_key="t").error
+    # API キーが見つからない（クライアントを作れない）ときも、止まらずにエラーとして記録する
+    def no_key(*a, **k):
+        raise openai.OpenAIError("The api_key client option must be set")
+    monkeypatch.setattr(openai, "OpenAI", no_key)
+    assert "OPENAI_API_KEY を確認" in ai_assist.call_provider("openai", "x", [], model="gpt-test").error
+
+
+def _fake_gemini(monkeypatch, calls, error=None, finish="STOP"):
+    from google import genai
+    from google.genai import types as gtypes
+
+    def generate_content(**kw):
+        calls.append(kw)
+        if error is not None:
+            raise error
+        return types.SimpleNamespace(prompt_feedback=None, text=RESPONSE,
+                                     candidates=[types.SimpleNamespace(finish_reason=gtypes.FinishReason(finish))],
+                                     usage_metadata=types.SimpleNamespace(prompt_token_count=130, candidates_token_count=40,
+                                                                          thoughts_token_count=30))
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            self.models = types.SimpleNamespace(generate_content=generate_content)
+
+    monkeypatch.setattr(genai, "Client", FakeClient)
+
+
+def test_gemini_api_mode_with_fake_client(journal, meta, tmp_path, monkeypatch):
+    calls = []
+    _fake_gemini(monkeypatch, calls)
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_provider="gemini",
+                                               ai_model="gemini-test", ai_api_key="t", convert_metafiles=False))
+    kw = calls[0]
+    assert kw["model"] == "gemini-test"
+    assert kw["config"].response_mime_type == "application/json"
+    assert kw["config"].response_json_schema == ai_assist.RESPONSE_SCHEMA
+    parts = kw["contents"][0].parts
+    assert any(p.inline_data is not None and p.inline_data.mime_type == "image/png" for p in parts)
+    assert not res.ai.error and res.ai.provider == "gemini"
+    assert len(res.ai.accepted) == 7 and res.fidelity.ok and res.fidelity.final_ok
+    report = res.report_path.read_text(encoding="utf-8")
+    assert "API（Gemini: gemini-test）" in report and "出力 70 トークン" in report   # 思考のトークンも出力に数える
+
+
+def test_gemini_errors_are_reported(monkeypatch):
+    from google.genai import errors
+    bad_key = errors.ClientError(400, {"error": {"code": 400, "message": "API key not valid. Please pass a valid API key.",
+                                                 "status": "INVALID_ARGUMENT"}})
+    _fake_gemini(monkeypatch, [], error=bad_key)
+    out = ai_assist.call_provider("gemini", "x", [], model="gemini-test", api_key="t")
+    assert "GEMINI_API_KEY" in out.error
+    not_found = errors.ClientError(404, {"error": {"code": 404, "message": "not found", "status": "NOT_FOUND"}})
+    _fake_gemini(monkeypatch, [], error=not_found)
+    assert "gemini-test が見つかりません" in ai_assist.call_provider("gemini", "x", [], model="gemini-test").error
+    _fake_gemini(monkeypatch, [], finish="MAX_TOKENS")
+    assert "途中で切れました" in ai_assist.call_provider("gemini", "x", [], model="gemini-test").error
+    _fake_gemini(monkeypatch, [], finish="SAFETY")
+    assert "SAFETY" in ai_assist.call_provider("gemini", "x", [], model="gemini-test").error
+    from google import genai
+
+    def no_key(*a, **k):
+        raise ValueError("Missing key inputs argument!")
+    monkeypatch.setattr(genai, "Client", no_key)
+    assert "GEMINI_API_KEY または GOOGLE_API_KEY を確認" in ai_assist.call_provider("gemini", "x", [], model="g").error
+
+
+def test_other_providers_require_a_model_name(journal, meta, tmp_path):
+    # ChatGPT・Gemini ではモデル名を利用者が指定する（Claude のモデル名・「自動」・空欄は受け付けない）
+    for model in ("", "auto", "claude-opus-5-5"):
+        out = ai_assist.call_provider("openai", "x", [], model=model)
+        assert "モデルの名前を指定" in out.error and "Opus と同等以上" in out.error
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_provider="gemini", ai_model="",
+                                               convert_metafiles=False))
+    assert "Gemini の API を使うときは" in res.ai.error and res.fidelity.ok
+
+
+def test_cli_requires_model_for_other_providers(capsys):
+    import pytest
+    from jasme_jats.cli import main
+    with pytest.raises(SystemExit):
+        main([str(FULL), "--ai", "api", "--ai-provider", "openai"])
+    assert "--ai-model" in capsys.readouterr().err

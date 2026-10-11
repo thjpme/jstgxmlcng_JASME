@@ -74,9 +74,16 @@
 - 数式画像は、元の画像を残したまま AI が読み取った MathML を `<alternatives>` で併記する。これは docx の文字ではないため `<jx:ai>` で囲み、
   不変性チェックでは「追加」と扱わず、レポートに別枠で一覧を出す。DTD に合わない場合は自動で取り消す。
 - API モードと手動モードは、依頼文の作り方と回答の受け取り方が違うだけで、検証・適用・最終チェックは同じ。
-- API の呼び出し: 既定モデル `claude-opus-5-5`、構造化出力（JSON スキーマ）、`effort: high`、ストリーミング、拒否時のサーバー側フォールバック（`fallbacks: "default"`）。
+- API の呼び出し（Claude）: 既定モデル `claude-opus-5-5`、構造化出力（JSON スキーマ）、`effort: high`、ストリーミング、拒否時のサーバー側フォールバック（`fallbacks: "default"`）。
 - モデル: 既定は動作確認済みの `claude-opus-5-5`（提供終了は 2027-09-22 以降の予定）。指定したモデルが見つからない（提供終了など）ときは、Models API の一覧から最新の Opus を選んで 1 回だけやり直し、レポートに記録する。`auto`（Colab の「自動（最新の Opus）」）では、はじめから最新の Opus を使う。
-- API モードは Claude 専用（Anthropic SDK）。他社の AI は手動モードで使える。API モードを他社に広げる場合は、`ai_assist.call_api()` と同じ形（依頼文と画像 → JSON の文字列）を返す関数を追加すれば、検証・適用・最終チェックはそのまま使える。
+- API モードの入口は `ai_assist.call_provider()`。Claude（推奨・`call_api()`）のほか、ChatGPT（`call_openai()`。OpenAI の Responses API）と
+  Gemini（`call_gemini()`。Google の Gemini API）に対応する。どれも依頼文と画像を渡して JSON の文字列（`AIOutcome.raw`）を受け取るだけで、
+  検証・適用・最終チェックは共通。回答は同じ JSON スキーマ（`RESPONSE_SCHEMA`）で受け取る（OpenAI は strict の json_schema、
+  Gemini は `response_json_schema`）。
+- ChatGPT・Gemini では、モデルを利用者が指定する（既定値を持たない。モデルの入れ替わりが速く、動作確認もしていないため）。
+  Claude Opus と同等以上の性能のモデルを推奨する。API キーの作り方などは利用者が各社の案内で調べる（ノートブックでは説明しない）。
+- 推奨を Claude とする理由: 依頼文（`SYSTEM_PROMPT`）と回答の検証を Claude で試して調整しているため。他社のモデルでも、誤った提案は
+  検証で捨てられるので本文の文字は変わらないが、補完の効果は下がりうる。
 
 ## 6. J-STAGE に合わせた主な判断
 
