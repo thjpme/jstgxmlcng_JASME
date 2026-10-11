@@ -30,6 +30,21 @@ CAT_JA = {"style": "段落の役割（スタイル）", "citation": "引用文�
 UNRES_JA = {"bibr": "引用文献", "fig": "図の参照", "table": "表の参照", "fn": "注の参照"}
 
 
+def style_unknown_rows(plan):
+    """本文のスタイルでない（標準など）ために本文の段落として扱った段落を、スタイル名ごとに 1 行にまとめる。"""
+    groups = {}
+    for p in plan.paras.values():
+        if p.note == "style_unknown":
+            groups.setdefault(p.style_name or "（なし）", []).append(p)
+    rows = []
+    for name, ps in groups.items():
+        sample = "、".join(f"{p.src}「{esc(p.plain(), 15)}」" for p in ps[:5]) + ("ほか" if len(ps) > 5 else "")
+        loc = plan.locations.get(ps[0].src, ps[0].src) + ("ほか" if len(ps) > 1 else "")
+        rows.append(("-", CAT_JA["style"], loc,
+                     f"本文のスタイルでない段落（スタイル「{name}」）{len(ps)} 件を本文の段落として扱った: {sample}"))
+    return rows
+
+
 def float_notes(plan):
     """本文から参照されていない図・表と、キャプションのない表（PDF と照らして確認するためのもの）。"""
     out = []
@@ -185,11 +200,12 @@ def render(r) -> str:
     L.append("## 4. 機械処理による推定（生成 AI は使っていない）")
     L.append("")
     mech = [d for d in plan.decisions if d.stage == "mechanical"] + r.build_notes
-    if mech:
-        rows = [(d.did, CAT_JA.get(d.category, d.category), d.location or r.plan.locations.get(d.src, d.src), d.message) for d in mech]
+    rows = [(d.did, CAT_JA.get(d.category, d.category), d.location or r.plan.locations.get(d.src, d.src), d.message) for d in mech]
+    rows += style_unknown_rows(plan)
+    if rows:
         L.append(table(["番号", "種類", "場所", "内容"], rows))
     else:
-        L.append("ありません（すべての段落にテンプレートのスタイルが正しく設定されていました）。")
+        L.append("ありません（想定外のスタイルの段落も、番号の形式などから推定した箇所もありませんでした）。")
     L.append("")
 
     # ------------------------------------------------------------------ 5. 不変性チェックの詳細

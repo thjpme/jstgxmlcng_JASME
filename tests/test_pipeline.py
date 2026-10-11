@@ -209,3 +209,77 @@ def test_manuscript_type_choices(journal, tmp_path):
     subjects = [(g.get(XML_LANG), g.findtext("subject")) for g in load(res).iter("subj-group")]
     assert subjects == [("ja", "資料"), ("en", "Material")]
     assert not any("原稿種別" in w for w in res.warnings)
+
+
+def test_textbox_figures_and_captions(journal, meta, tmp_path):
+    # テキストボックスの中の表・画像を読み、本文スタイルの「図N」「表N」の段落をキャプションと推定する
+    from conftest import EDGE
+    res = convert(EDGE, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    assert res.fidelity.ok and res.dtd_valid
+    root = load(res)
+    caps = {el.get("id"): ("".join(el.find("caption").itertext()) if el.find("caption") is not None else None,
+                           len(list(el.iter("graphic"))), el.find("table") is not None)
+            for el in root.iter("fig", "table-wrap")}
+    assert caps["F2"] == ("図2　テキストボックス内の表で組んだ問題", 0, False)
+    assert caps["F3"] == ("図3　テキストボックス内の画像", 1, False)        # 前の図のキャプションに画像を取られない
+    assert ("表1　テキストボックス内の表", 0, True) in caps.values()
+    assert "問1　架空の問題文である。" in "".join(root.itertext())
+    mech = [d.message for d in res.plan.decisions if d.stage == "mechanical"]
+    assert any("「図3　テキストボックス内の画像」を図キャプションと推定" in m for m in mech)
+    assert any("「表1　テキストボックス内の表」を表キャプションと推定" in m for m in mech)
+
+
+def test_textbox_caption_pattern():
+    from jasme_jats.model import Atom, Para
+    from jasme_jats.structure import Classifier
+
+    def cap(text):
+        return Classifier.textbox_caption(Para(src="d1", atoms=[Atom(kind="text", text=text)]))
+    assert cap("図１　開発した問題") == "fig_caption"
+    assert cap("Figure 2. A model") == "fig_caption"
+    assert cap("表3「解答類型」") == "table_caption"
+    # 本文の文はキャプションにしない
+    assert cap("図1は，教科書の見開きページである") is None
+    assert cap("図1，図2を参照") is None
+    assert cap("図1〜3に示す") is None
+    assert cap("図1に示すとおりである。") is None
+
+
+def _img_para(src):
+    from jasme_jats.model import Atom, ImageRef, Para
+    return Para(src=src, atoms=[Atom(kind="image", image=ImageRef(rel_id="r", target=f"word/media/{src}.png", source="drawing"))])
+
+
+def _text_para(src, text):
+    from jasme_jats.model import Atom, Para
+    return Para(src=src, atoms=[Atom(kind="text", text=text)])
+
+
+def test_figure_pairing_caption_above_and_below(journal):
+    from jasme_jats.structure import Classifier, FigNode
+    cl = Classifier(None, journal)
+    # キャプションが画像の上にある原稿（図が続く）
+    c1, i1, c2, i2 = _text_para("c1", "図1 上"), _img_para("i1"), _text_para("c2", "図2 上"), _img_para("i2")
+    figs = [n for n in cl.assemble_floats([("fig_caption", c1), ("p", i1), ("fig_caption", c2), ("p", i2)])
+            if isinstance(n, FigNode)]
+    assert [(f.caption.src, [p.src for p in f.image_paras]) for f in figs] == [("c1", ["i1"]), ("c2", ["i2"])]
+    # キャプションが画像の下にある原稿: 画像のない図（表で組んだ図など）のキャプションが、次の図の画像を取らない
+    ca, t, i, cb = _text_para("ca", "図1 表の図"), _text_para("t", "本文。"), _img_para("i"), _text_para("cb", "図2 下")
+    figs = [n for n in cl.assemble_floats([("fig_caption", ca), ("p", t), ("p", i), ("fig_caption", cb)])
+            if isinstance(n, FigNode)]
+    assert [(f.caption.src, [p.src for p in f.image_paras]) for f in figs] == [("ca", []), ("cb", ["i"])]
+
+
+def test_report_lists_paragraphs_with_unknown_style():
+    from jasme_jats.report import style_unknown_rows
+    from jasme_jats.structure import ArticlePlan
+    plan = ArticlePlan(lang="ja")
+    for k in range(7):
+        p = _text_para(f"d{k}", f"標準スタイルの本文{k}")
+        p.style_name, p.note = "Normal", "style_unknown"
+        plan.paras[p.src] = p
+    plan.locations["d0"] = "１．はじめに / 第1要素"
+    rows = style_unknown_rows(plan)
+    assert len(rows) == 1
+    assert rows[0][2] == "１．はじめに / 第1要素ほか"
+    assert "スタイル「Normal」）7 件を本文の段落として扱った" in rows[0][3] and rows[0][3].endswith("ほか")
