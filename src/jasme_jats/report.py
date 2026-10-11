@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections import Counter
 
+from .ai_assist import PROVIDERS
 from .linker import body_paragraphs, linked_ids
 
 
@@ -103,7 +104,8 @@ def render(r) -> str:
     L.append(f"- ツール: jasme-jats {r.tool_version}")
     L.append(f"- 図表番号の扱い: {'<label> とタイトルに分ける（間の空白のみ落とす）' if r.split_labels else '番号もタイトルと一緒に 1 つの要素に入れる（文字を落とさない）'}")
     ai = r.ai
-    ai_mode = {"none": "使用しない", "api": f"API（{ai.model}）", "manual": "手動（チャットに貼り付け）"}.get(ai.mode, ai.mode)
+    api = f"API（{PROVIDERS.get(ai.provider, ai.provider)}: {ai.model}）"
+    ai_mode = {"none": "使用しない", "api": api, "manual": "手動（チャットに貼り付け）"}.get(ai.mode, ai.mode)
     L.append(f"- AI による補完: {ai_mode}")
     L.append("")
 

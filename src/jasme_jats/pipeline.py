@@ -20,8 +20,8 @@ from pathlib import Path
 from typing import Optional
 
 from . import __version__
-from .ai_assist import (AIOutcome, apply_ops, build_request, call_api, float_placements, image_blocks, manual_prompt,
-                        parse_response, retarget_ops, role_overrides, split_ops, target_keys)
+from .ai_assist import (AIOutcome, apply_ops, build_request, call_provider, float_placements, image_blocks,
+                        manual_prompt, parse_response, retarget_ops, role_overrides, split_ops, target_keys)
 from .builder import build, finalize, serialize
 from .config import ArticleMeta, JournalConfig
 from .docx_reader import read_docx
@@ -81,7 +81,8 @@ class Options:
     out_dir: Path
     split_labels: Optional[bool] = None       # None なら雑誌の設定に従う
     ai_mode: str = "none"                     # none / api / manual
-    ai_model: str = "claude-opus-5-5"
+    ai_provider: str = "claude"               # API モードで使う AI: claude（推奨）/ openai（ChatGPT）/ gemini
+    ai_model: str = "claude-opus-5-5"         # claude 以外では利用者が指定する
     ai_api_key: Optional[str] = None
     ai_response: Optional[str] = None         # 手動モード: AI の回答（JSON）
     pdf_path: Optional[Path] = None
@@ -169,7 +170,8 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     if plan.unplaced_floats and opts.ai_mode == "none":
         raise AIRequiredError(plan)
     root, info = build(plan, meta, journal, split)
-    outcome = AIOutcome(mode=opts.ai_mode, model=opts.ai_model if opts.ai_mode == "api" else "")
+    outcome = AIOutcome(mode=opts.ai_mode, model=opts.ai_model if opts.ai_mode == "api" else "",
+                        provider=opts.ai_provider)
     prompt_path = None
     output_note = ""
     data = None                 # AI の回答（読めたもの）
@@ -180,7 +182,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         req_text, req_images = build_request(plan, linker, info.exclusions, unsplit)
         blocks = image_blocks(doc, req_images)
         if opts.ai_mode == "api":
-            outcome = call_api(req_text, blocks, model=opts.ai_model, api_key=opts.ai_api_key)
+            outcome = call_provider(opts.ai_provider, req_text, blocks, model=opts.ai_model, api_key=opts.ai_api_key)
             if outcome.raw and not outcome.error:
                 try:
                     data = parse_response(outcome.raw)
