@@ -89,6 +89,12 @@ def check(root, article_id: str = "", image_names=()):
 
     # 日付の前後関係
     hist = {d.get("date-type"): _date(d) for d in am.findall("history/date")}
+    for d in am.findall("history/date"):
+        filled = [bool(_text(d.find(x))) for x in ("day", "month", "year")]
+        if any(filled) and not all(filled):
+            out.append(("-", f"日付（{d.get('date-type')}）の年・月・日の一部だけが入っている（すべて入れるか、すべて空にする）"))
+    if "approved" in hist and "accepted as received" in hist:
+        out.append(("-", "最終査読日（査読あり）と査読なし受付日（査読なし）の両方がある"))
     pub = next((_date(p) for p in am.findall("pub-date") if p.get("pub-type") == "ppub"), None)
     rec, acc = hist.get("received"), hist.get("accepted")
     if rec and acc and rec > acc:

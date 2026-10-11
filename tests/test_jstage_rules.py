@@ -57,3 +57,14 @@ def test_reference_language_is_inherited():
     assert ids(xml) == []                                               # article の xml:lang="ja" を継ぐ
     xml = xml.replace(' xml:lang="ja" article-type', ' article-type')
     assert ids(xml) == ["EMSGM247E"]
+
+
+def test_peer_review_dates():
+    ok = XML.replace("{abstract}", "").replace(
+        "</history>", '<date date-type="approved"><day></day><month></month><year></year></date></history>')
+    assert ids(ok) == []
+    partial = ok.replace('<date date-type="approved"><day></day>', '<date date-type="approved"><day>1</day>')
+    assert ids(partial) == ["-"]
+    both = ok.replace("</history>", '<date date-type="accepted as received"><day></day><month></month>'
+                                    "<year></year></date></history>")
+    assert ids(both) == ["-"]

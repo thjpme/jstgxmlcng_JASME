@@ -53,9 +53,30 @@ def _date(v) -> Optional[_dt.date]:
     if isinstance(v, _dt.date):
         return v
     s = str(v).strip().replace("/", "-").replace(".", "-")
+    if not s:
+        return None
     if len(s) == 8 and s.isdigit():
         s = f"{s[:4]}-{s[4:6]}-{s[6:]}"
-    return _dt.date.fromisoformat(s)
+    try:
+        return _dt.date.fromisoformat(s)
+    except ValueError:
+        raise ValueError(f"日付「{v}」を読めません（YYYY-MM-DD の形で入力してください）") from None
+
+
+_PEER_REVIEW = {"yes": "yes", "true": "yes", "あり": "yes", "査読あり": "yes", "有": "yes", "有り": "yes",
+                "no": "no", "false": "no", "なし": "no", "査読なし": "no", "無": "no", "無し": "no"}
+
+
+def _peer_review(v) -> str:
+    """査読の有無を "yes" / "no" / ""（未入力）にそろえる。"""
+    if isinstance(v, bool):
+        return "yes" if v else "no"
+    s = str(v or "").strip()
+    if s in ("", "（選んでください）"):
+        return ""
+    if s.lower() in _PEER_REVIEW:
+        return _PEER_REVIEW[s.lower()]
+    raise ValueError(f"査読の有無「{v}」を読めません（「あり」か「なし」で指定してください）")
 
 
 @dataclass
@@ -70,6 +91,8 @@ class ArticleMeta:
     received: Optional[_dt.date] = None
     revised: Optional[_dt.date] = None
     accepted: Optional[_dt.date] = None
+    peer_review: str = ""                       # 査読の有無: "yes" / "no" / ""（未入力）
+    approved: Optional[_dt.date] = None        # 最終査読日（査読ありのとき。分からなければ空）
     doi: str = ""                               # 空なら doi_pattern から作る
     article_type: str = ""
     subject_ja: str = ""
@@ -81,8 +104,9 @@ class ArticleMeta:
     @classmethod
     def from_dict(cls, d: dict) -> "ArticleMeta":
         d = dict(d or {})
-        for k in ("pub_date", "epub_date", "received", "revised", "accepted"):
+        for k in ("pub_date", "epub_date", "received", "revised", "accepted", "approved"):
             d[k] = _date(d.get(k))
+        d["peer_review"] = _peer_review(d.get("peer_review"))
         for k in ("volume", "issue", "fpage", "lpage", "doi"):
             if k in d and d[k] is not None:
                 d[k] = str(d[k]).strip()

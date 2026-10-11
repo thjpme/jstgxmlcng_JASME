@@ -37,6 +37,7 @@
   （`<abstract xml:lang="en">` にすると「抄録(英)が設定されていますが、タイトル(英)が設定されていません」で弾かれる）。
 - `<abstract>` の `specific-use` は抄録ライセンスフラグ（secondary-allow / secondary-disallow）。`<trans-abstract>` には付けられない。
 - 引用文献 `<ref>` の `xml:lang`（記述言語）がないと EMSGM247E。
+- 査読の有無（ガイドライン 3.1.30）: `<history>` に、査読ありなら `<date date-type="approved">`（最終査読日。不明なら年月日を空に）、査読なしなら `<date date-type="accepted as received">`（年月日を空に）。どちらもなければ資料の設定が引き継がれる。年・月・日は、1 つでも入れるならすべて入れる。
 - 文字数の上限: 抄録・翻訳抄録 4000（p の合計）、記事表題 2000、引用文献（mixed-citation）4000。
 - `<label>` の自動付番は行われない。番号を表示したい場合は label か本文に書く。
 - `<mixed-citation>` の中の文字・空白・句読点はそのまま表示される。引用文献原文は「label + 半角空白 + mixed-citation の文字」で登録される。

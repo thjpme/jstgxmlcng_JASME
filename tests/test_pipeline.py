@@ -141,3 +141,32 @@ def test_note_notes_detect_unreferenced_and_out_of_order(journal):
     p = next(p for p, w in body_paragraphs(plan) if w == "body" and p.plain().strip())
     assert apply_span(p, 0, 1, LinkSpec(kind="xref", attrs={"ref-type": "fn", "rid": "fn2"}))
     assert note_notes(plan) == ["本文で注が番号順に参照されていない（本文での初出の順: 注2 → 注1）"]
+
+
+@pytest.mark.parametrize("peer_review, approved, expect", [
+    ("あり", "", ("approved", "", "")),
+    ("査読あり", "2025-11-10", ("approved", "10", "2025")),
+    ("なし", "", ("accepted as received", "", "")),
+])
+def test_peer_review_in_history(journal, tmp_path, peer_review, approved, expect):
+    from jasme_jats.config import ArticleMeta
+    meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "pub_date": "2026-03-31",
+                                  "peer_review": peer_review, "approved": approved})
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    assert res.dtd_valid and res.jstage_issues == []
+    root = load(res)
+    dates = root.findall(".//article-meta/history/date")
+    assert [(d.get("date-type"), d.findtext("day"), d.findtext("year")) for d in dates] == [expect]
+    assert not any("査読の有無" in w for w in res.warnings)
+
+
+def test_peer_review_missing_or_invalid(journal, tmp_path):
+    from jasme_jats.config import ArticleMeta
+    meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1"})
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    assert any("査読の有無が未入力" in w for w in res.warnings)
+    assert load(res).find(".//history") is None
+    with pytest.raises(ValueError, match="査読の有無"):
+        ArticleMeta.from_dict({"peer_review": "たぶん"})
+    with pytest.raises(ValueError, match="YYYY-MM-DD"):
+        ArticleMeta.from_dict({"approved": "2025/13/40"})
