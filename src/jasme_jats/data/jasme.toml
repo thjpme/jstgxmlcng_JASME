@@ -31,6 +31,11 @@ abstract_specific_use = "secondary-disallow"
 #   false: 「図1　三角形ABC」をそのまま 1 つの要素に入れる（docx の文字を 1 文字も落とさない）
 #   true : <label>図1</label> と <caption> に分け、間の空白だけを落とす（レポートに全件記録する）
 split_labels = false
+# 引用文献中の DOI の書き方。
+#   "uri"   : 「https://doi.org/10.…」の文字全体を <uri> にする（J-STAGE の画面でリンクとして表示される）
+#   "pub-id": 「10.…」の部分を <pub-id pub-id-type="doi"> にする（J-STAGE に DOI として登録され、引用文献リンクの
+#             反映率が上がるとされるが、試験登載では画面上リンクにならなかった）
+ref_doi = "uri"
 
 # テンプレートのスタイル名 → 役割
 # 役割の意味は docs/STYLE_MAPPING.md を参照

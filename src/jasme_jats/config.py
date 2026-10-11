@@ -34,6 +34,7 @@ class JournalConfig:
     lang: str = "ja"
     abstract_specific_use: str = "secondary-disallow"
     split_labels: bool = False
+    ref_doi: str = "uri"
     styles: dict = field(default_factory=dict)
 
     @classmethod

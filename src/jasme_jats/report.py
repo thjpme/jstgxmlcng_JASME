@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from .linker import linked_ids
+from .linker import body_paragraphs, linked_ids
 
 
 def esc(s, n=None) -> str:
@@ -49,6 +49,33 @@ def float_notes(plan):
             nc.append(f"{t.tid or '-'}（最初のセル「{esc(first[:15])}」）")
     if nc:
         out.append("キャプションのない表（表番号がないため本文からリンクできない。表として出力した）: " + "、".join(nc))
+    return out
+
+
+def note_notes(plan):
+    """注（Word の脚注機能を使わずに書かれたもの）の番号と、本文での参照の対応。PDF と照らして確認するためのもの。"""
+    out = []
+    fns = [fn for fn in plan.fns if not fn.word_note]
+    if not fns:
+        return out
+    order = []   # 本文で初めて参照された順
+    for p, where in body_paragraphs(plan):
+        if where in ("ref", "fn"):
+            continue
+        for a in p.atoms:
+            if a.link is not None and a.link.kind == "xref" and a.link.attrs.get("ref-type") == "fn":
+                if a.link.attrs.get("rid") not in order:
+                    order.append(a.link.attrs.get("rid"))
+    nums = [fn.number for fn in fns]
+    if nums != list(range(1, len(nums) + 1)):
+        out.append("注の番号が 1 からの連番になっていない: " + "、".join("（番号なし）" if n is None else str(n) for n in nums))
+    unref = [f"{fn.fid}（{esc(fn.paras[0].plain()[:20])}）" for fn in fns if fn.fid not in order]
+    if unref:
+        out.append("本文中のどこからも参照（リンク）されていない注: " + "、".join(unref))
+    by_id = {fn.fid: fn.number for fn in fns}
+    seq = [by_id[r] for r in order if by_id.get(r) is not None]
+    if seq != sorted(seq):
+        out.append("本文で注が番号順に参照されていない（本文での初出の順: " + " → ".join(f"注{n}" for n in seq) + "）")
     return out
 
 
@@ -147,7 +174,7 @@ def render(r) -> str:
         L.append("")
         L.append("本文中のどこからもリンクされていない文献: " + "、".join(
             f"{rid}（{esc(next((x.para.plain()[:30] for x in plan.refs if x.rid == rid), ''))}）" for rid in unc))
-    for line in float_notes(plan):
+    for line in float_notes(plan) + note_notes(plan):
         L.append("")
         L.append(line)
     L.append("")
