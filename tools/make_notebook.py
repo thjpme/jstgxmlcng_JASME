@@ -223,7 +223,7 @@ print("PDF :", pdf_path.name if pdf_path else "（なし。J-STAGE への登載�
     code("""
 #@title 3. 書誌情報を入力
 #@markdown 各欄の上の説明（日本語）に対応する欄に入力します。日付は YYYY-MM-DD の形で、分からなければ空欄にします。
-#@markdown ---
+#@markdown ***
 #@markdown **巻（volume）**（J-STAGE のフォルダ名・ファイル名と DOI に使います）
 volume = ""  #@param {type:"string"}
 #@markdown **号（issue）**
@@ -232,17 +232,17 @@ issue = ""  #@param {type:"string"}
 first_page = ""  #@param {type:"string"}
 #@markdown **最後のページ（last_page）**
 last_page = ""  #@param {type:"string"}
-#@markdown ---
+#@markdown ***
 #@markdown **査読の有無（peer_review）**（必須。必ず選んでください）
 peer_review = "（選んでください）"  #@param ["（選んでください）", "査読あり", "査読なし"]
 #@markdown **最終査読日（last_review_date）**（査読ありで、分かれば）
 last_review_date = ""  #@param {type:"string"}
-#@markdown ---
+#@markdown ***
 #@markdown **キーワード（日本語）（keywords_ja）**（任意。「；」または「;」で区切る。例: `数学教育；ジェンダー`）
 keywords_ja = ""  #@param {type:"string"}
 #@markdown **キーワード（英語）（keywords_en）**（任意。「;」または「；」で区切る。例: `equity; gender`）。日・英あわせて 100 個まで
 keywords_en = ""  #@param {type:"string"}
-#@markdown ---
+#@markdown ***
 #@markdown **発行日（pub_date）**
 pub_date = ""  #@param {type:"string"}
 #@markdown **J-STAGE 公開日（jstage_release_date）**
@@ -251,7 +251,7 @@ jstage_release_date = ""  #@param {type:"string"}
 received = ""  #@param {type:"string"}
 #@markdown **受理日（accepted）**
 accepted = ""  #@param {type:"string"}
-#@markdown ---
+#@markdown ***
 #@markdown **DOI（doi）**（空欄なら 10.24529/jasme.巻.号_開始ページ を使います）
 doi = ""  #@param {type:"string"}
 #@markdown **原稿種別（manuscript_type）**
@@ -297,6 +297,7 @@ if keyword_language_mismatch(_meta):
 #@markdown - **使わない**: 機械的な変換だけを行います。
 #@markdown - **API で自動実行**: Claude API を呼び出して、機械処理で取りこぼした引用・スタイルの誤り・画像の数式などを補完します。左の 🔑（シークレット）に名前 `ANTHROPIC_API_KEY` で API キーを登録し、「ノートブックからのアクセス」をオンにしてください（API の利用料がかかります）。キーの作り方と登録の手順は、このセルのすぐ下の「**API キーについての詳細**」を開いてください。
 #@markdown - **手動**: AI への依頼文を作ります。claude.ai などのチャットに貼り付け、返ってきた回答を手順 6 で貼り戻します（API キー不要）。
+#@markdown ***
 #@markdown **AI による補完の方法（AI_MODE）**
 AI_MODE = "使わない"  #@param ["使わない", "API で自動実行", "手動（チャットに貼り付け）"]
 #@markdown **API で使うモデル（MODEL）**（通常は変更不要。「API キーについての詳細」の 5. を参照）
