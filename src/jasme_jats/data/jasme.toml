@@ -44,7 +44,7 @@ ref_doi = "pub-id"
 [manuscript_types]
 "論文" = "Article"
 "共同研究" = "Collaborative Research Report"
-"講演記事" = "oration"
+"講演記事" = "Oration"
 
 # テンプレートのスタイル名 → 役割
 # 役割の意味は docs/STYLE_MAPPING.md を参照

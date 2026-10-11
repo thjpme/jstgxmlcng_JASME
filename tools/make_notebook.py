@@ -51,6 +51,47 @@ def code(text, form=True):
             "source": text.strip("\n").splitlines(keepends=True)}
 
 
+# 手順 4 の直後に出す、API キーの詳しい説明（Colab のテキストセルで開閉できる）
+API_HELP = '''<details>
+<summary><b>API キーについての詳細（クリックで開きます）</b></summary>
+
+<p>「API で自動実行」を使うときだけ必要です。手動モード（チャットに貼り付け）なら API キーは要りません。</p>
+
+<h4>1. API キーを作る（最初に 1 回だけ）</h4>
+<ol>
+<li>Claude Console（<a href="https://platform.claude.com/" target="_blank">https://platform.claude.com/</a>）にログインします。アカウントがなければ作成します。
+API の料金は、claude.ai の有料プラン（Pro など）とは別にかかります。</li>
+<li>「Settings → Billing」（<a href="https://platform.claude.com/settings/billing" target="_blank">https://platform.claude.com/settings/billing</a>）で、利用料（クレジット）を購入します。
+同じ画面で、1 か月に使う金額の上限を設定できます。使いすぎを防ぐため、上限を設定しておくことをお勧めします。</li>
+<li>「Settings → API keys」（<a href="https://platform.claude.com/settings/keys" target="_blank">https://platform.claude.com/settings/keys</a>）で <b>Create key</b> を押し、名前（例: <code>jasme-colab</code>）を付けて作成します。</li>
+<li>表示されたキー（<code>sk-ant-</code> で始まる長い文字列）をコピーします。<b>キーが表示されるのはこのときだけです。</b>
+控えずに閉じてしまったら、新しいキーを作り直してください。</li>
+</ol>
+
+<h4>2. Colab にキーを登録する（Google アカウントごとに 1 回）</h4>
+<ol>
+<li>画面左端の 🔑（シークレット）アイコンを押します。</li>
+<li>「新しいシークレットを追加」を押し、名前に <code>ANTHROPIC_API_KEY</code>、値にコピーしたキーを貼り付けます。</li>
+<li>その行の「ノートブックからのアクセス」をオンにします。</li>
+<li>上の手順 4 で「API で自動実行」を選び、手順 5 を実行します。シークレットへのアクセスを許可するか聞かれたら、許可します。</li>
+</ol>
+<p>手順 5 で「シークレット ANTHROPIC_API_KEY を読めませんでした」と出たときは、名前の綴りと「ノートブックからのアクセス」を確認してください。
+キーが間違っている・無効になっているときは、変換レポートの「AI による補完」の章にエラーが表示されます。</p>
+
+<h4>3. キーを安全に扱う</h4>
+<ul>
+<li>キーをノートブックのセルやメール・チャットに直接書かないでください。シークレットに登録したキーは自分の Google アカウントに保存され、ノートブックを他の人と共有しても見えません。</li>
+<li>キーが漏れたおそれがあるときは、Claude Console の「Settings → API keys」でそのキーを削除し、新しく作り直してください。</li>
+</ul>
+
+<h4>4. 料金の目安</h4>
+<ul>
+<li>「API で自動実行」で手順 5 を実行するたびに料金がかかります（既定のモデル <code>claude-opus-5-5</code> は、入力 100 万トークンあたり 4 ドル、出力 100 万トークンあたり 20 ドル）。</li>
+<li>試験に使った論文（AI への依頼文が約 4 万字）では、1 回あたりおおむね 0.3〜1 ドル程度と見込まれます（論文の長さ・図の数で変わります）。</li>
+<li>実際に使ったトークン数は、変換レポートの「AI による補完」の章の最後に表示されます。</li>
+</ul>
+</details>'''
+
 cells = [
     md(f"""
 # 論文 docx → J-STAGE 全文 XML 変換（全国数学教育学会誌『数学教育学研究』）
@@ -238,7 +279,7 @@ if keyword_language_mismatch(_meta):
     code("""
 #@title 4. AI による補完の方法を選ぶ
 #@markdown - **使わない**: 機械的な変換だけを行います。
-#@markdown - **API で自動実行**: Claude API を呼び出して、機械処理で取りこぼした引用・スタイルの誤り・画像の数式などを補完します。左の 🔑（シークレット）に名前 `ANTHROPIC_API_KEY` で API キーを登録し、「ノートブックからのアクセス」をオンにしてください（API の利用料がかかります）。
+#@markdown - **API で自動実行**: Claude API を呼び出して、機械処理で取りこぼした引用・スタイルの誤り・画像の数式などを補完します。左の 🔑（シークレット）に名前 `ANTHROPIC_API_KEY` で API キーを登録し、「ノートブックからのアクセス」をオンにしてください（API の利用料がかかります）。キーの作り方と登録の手順は、このセルのすぐ下の「**API キーについての詳細**」を開いてください。
 #@markdown - **手動**: AI への依頼文を作ります。claude.ai などのチャットに貼り付け、返ってきた回答を手順 6 で貼り戻します（API キー不要）。
 #@markdown **AI による補完の方法（AI_MODE）**
 AI_MODE = "使わない"  #@param ["使わない", "API で自動実行", "手動（チャットに貼り付け）"]
@@ -249,6 +290,7 @@ SPLIT_LABELS = False  #@param {type:"boolean"}
 """ + guard(1, 2, 3) + """AI = {"使わない": "none", "API で自動実行": "api", "手動（チャットに貼り付け）": "manual"}[AI_MODE]
 print("AI による補完:", AI_MODE)
 """ + mark(4)),
+    md(API_HELP),
     code("""
 #@title 5. 変換を実行
 """ + guard(1, 2, 3, 4) + """import shutil

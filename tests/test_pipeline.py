@@ -200,7 +200,7 @@ def test_manuscript_type_choices(journal, tmp_path):
     from jasme_jats.config import ArticleMeta
     # 原稿種別（日）だけ指定すれば、英語は設定ファイルの選択肢から決まる
     assert journal.subjects(ArticleMeta.from_dict({"subject_ja": "共同研究"})) == ("共同研究", "Collaborative Research Report")
-    assert journal.subjects(ArticleMeta.from_dict({"subject_ja": "講演記事"})) == ("講演記事", "oration")
+    assert journal.subjects(ArticleMeta.from_dict({"subject_ja": "講演記事"})) == ("講演記事", "Oration")
     assert journal.subjects(ArticleMeta.from_dict({})) == ("論文", "Article")
     # 「その他」（自由入力）
     meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "なし",
