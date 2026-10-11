@@ -95,6 +95,17 @@ API の料金は、claude.ai の有料プラン（Pro など）とは別にか�
 <li>試験に使った論文（AI への依頼文が約 4 万字）では、1 回あたりおおむね 0.3〜1 ドル程度と見込まれます（論文の長さ・図の数で変わります）。</li>
 <li>実際に使ったトークン数は、変換レポートの「AI による補完」の章の最後に表示されます。</li>
 </ul>
+
+<h4>5. API で使うモデルについて</h4>
+<ul>
+<li>手順 4 の「API で使うモデル（MODEL）」の既定は、このツールで動作を確かめた <code>claude-opus-5-5</code>（Claude Opus 5.5）です。
+Anthropic の発表では、このモデルの提供終了は 2027 年 9 月 22 日より前にはならない予定です（<a href="https://platform.claude.com/docs/en/about-claude/model-deprecations" target="_blank">モデルの提供終了の予定</a>）。</li>
+<li>将来このモデルが使えなくなった場合は、ツールが Anthropic のモデル一覧から使える最新の Opus を自動で選んでやり直し、変換レポートの「AI による補完」の章にその旨を表示します。</li>
+<li>はじめから最新の Opus を使いたいときは、「自動（最新の Opus）」を選びます。ただし、動作を確かめていない新しいモデルが選ばれることがあります。</li>
+<li>モデル名を自分で入力することもできます。使えるモデルの名前（Claude API ID）は、Anthropic のモデル一覧（<a href="https://platform.claude.com/docs/en/models/overview" target="_blank">Models overview</a>）で確認できます。</li>
+<li>この「API で自動実行」は Claude（Anthropic）専用です。ChatGPT や Gemini の API キーは使えません。
+ChatGPT や Gemini を使いたいときは「手動（チャットに貼り付け）」を選び、それぞれのチャット画面に依頼文を貼り付けてください（API キーは要りません）。</li>
+</ul>
 </details>'''
 
 cells = [
@@ -288,8 +299,8 @@ if keyword_language_mismatch(_meta):
 #@markdown - **手動**: AI への依頼文を作ります。claude.ai などのチャットに貼り付け、返ってきた回答を手順 6 で貼り戻します（API キー不要）。
 #@markdown **AI による補完の方法（AI_MODE）**
 AI_MODE = "使わない"  #@param ["使わない", "API で自動実行", "手動（チャットに貼り付け）"]
-#@markdown **API で使うモデル（MODEL）**（通常は変更不要）
-MODEL = "claude-opus-5-5"  #@param {type:"string"}
+#@markdown **API で使うモデル（MODEL）**（通常は変更不要。「API キーについての詳細」の 5. を参照）
+MODEL = "claude-opus-5-5"  #@param ["claude-opus-5-5", "自動（最新の Opus）"] {allow-input: true}
 #@markdown **図表番号を分ける（SPLIT_LABELS）**: 図表番号（「図1」）を J-STAGE の <label> 要素に分けるか（分けると番号とタイトルの間の空白 1 文字を落とします。既定は分けない）
 SPLIT_LABELS = False  #@param {type:"boolean"}
 """ + guard(1, 2, 3) + """AI = {"使わない": "none", "API で自動実行": "api", "手動（チャットに貼り付け）": "manual"}[AI_MODE]
@@ -323,7 +334,7 @@ OUT = WORK / "output"
 shutil.rmtree(OUT, ignore_errors=True)
 journal = JournalConfig.load()
 meta = ArticleMeta.from_dict(meta_input)
-res = convert(docx_path, meta, journal, Options(out_dir=OUT, ai_mode=AI, ai_model=MODEL, ai_api_key=api_key,
+res = convert(docx_path, meta, journal, Options(out_dir=OUT, ai_mode=AI, ai_model="auto" if MODEL.startswith("自動") else MODEL.strip(), ai_api_key=api_key,
                                               pdf_path=pdf_path, split_labels=SPLIT_LABELS))
 fid = res.fidelity
 print("文字の不変性チェック:", fid.summary(), f"（段落 {fid.units} 件中 {fid.mapped} 件を出力、{len(fid.excluded)} 件は除外）")

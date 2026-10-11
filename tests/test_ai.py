@@ -118,3 +118,57 @@ def test_response_schema_is_strict():
     assert op["additionalProperties"] is False
     assert set(op["required"]) == set(op["properties"])
     json.dumps(ai_assist.RESPONSE_SCHEMA)
+
+
+def _fake_anthropic(monkeypatch, calls, available=("claude-opus-5-5",), listed=()):
+    """偽の Anthropic クライアント。available にないモデルを指定すると NotFoundError、listed は Models API の一覧。"""
+    import anthropic
+    import httpx2
+
+    class FakeStream:
+        def __init__(self, kwargs):
+            calls.append(kwargs["model"])
+            if kwargs["model"] not in available:
+                req = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+                raise anthropic.NotFoundError("model not found", response=httpx2.Response(404, request=req), body=None)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get_final_message(self):
+            return types.SimpleNamespace(stop_reason="end_turn", content=[types.SimpleNamespace(type="text", text=RESPONSE)],
+                                         usage=types.SimpleNamespace(input_tokens=100, output_tokens=50))
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            self.beta = types.SimpleNamespace(messages=types.SimpleNamespace(stream=lambda **kw: FakeStream(kw)))
+            self.messages = self.beta.messages
+            self.models = types.SimpleNamespace(list=lambda: [types.SimpleNamespace(id=i, created_at=c) for i, c in listed])
+
+    monkeypatch.setattr(anthropic, "Anthropic", FakeClient)
+
+
+def test_api_model_auto_and_retired_fallback(journal, meta, tmp_path, monkeypatch):
+    listed = [("claude-opus-5", "2026-01-01"), ("claude-opus-6", "2027-10-01"), ("claude-sonnet-6", "2027-12-01")]
+    # 既定のモデルが提供終了（見つからない）→ 使える最新の Opus に切り替えてやり直す
+    calls = []
+    _fake_anthropic(monkeypatch, calls, available=("claude-opus-6",), listed=listed)
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_api_key="t", convert_metafiles=False))
+    assert calls == ["claude-opus-5-5", "claude-opus-6"] and res.ai.model == "claude-opus-6"
+    assert "切り替えた" in res.ai.model_note and not res.ai.error
+    assert "使用したモデル: claude-opus-6" in res.report_path.read_text(encoding="utf-8")
+    # 「自動」→ はじめから最新の Opus
+    calls = []
+    _fake_anthropic(monkeypatch, calls, available=("claude-opus-6",), listed=listed)
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_model="auto", ai_api_key="t",
+                                               convert_metafiles=False))
+    assert calls == ["claude-opus-6"] and "自動" in res.ai.model_note
+    # 指定したモデルがなく、一覧からも見つからない → 分かりやすいエラー
+    calls = []
+    _fake_anthropic(monkeypatch, calls, available=(), listed=[])
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_model="claude-typo",
+                                               ai_api_key="t", convert_metafiles=False))
+    assert "claude-typo が見つかりません" in res.ai.error and res.fidelity.ok
