@@ -1,4 +1,4 @@
-"""生成 AI による補完（推奨は Claude。API モードでは ChatGPT・Gemini も使える）。
+"""生成 AI による補完（推奨は Claude。API モードでは ChatGPT・Gemini・Sakana AI も使える）。
 
 AI には XML も docx も直接編集させない。AI が返すのは「操作」の一覧（JSON）だけで、
 Python が 1 件ずつ検証してから、文字列を変えない操作（リンクを付ける・段落の役割を変える・
@@ -7,8 +7,8 @@ Python が 1 件ずつ検証してから、文字列を変えない操作（リ�
 
 使い方は 2 通り:
   API モード : AI の API を直接呼ぶ（call_provider）。Claude（ANTHROPIC_API_KEY）、ChatGPT（OPENAI_API_KEY）、
-               Gemini（GEMINI_API_KEY または GOOGLE_API_KEY）。どれも依頼文と画像を渡し、回答の JSON の文字列を受け取るだけで、
-               検証・適用は共通。
+               Gemini（GEMINI_API_KEY または GOOGLE_API_KEY）、Sakana AI（SAKANA_API_KEY）。どれも依頼文と画像を渡し、
+               回答の JSON の文字列を受け取るだけで、検証・適用は共通。
   手動モード : 依頼文（プロンプト）を書き出し、利用者が claude.ai などのチャットに貼り付ける。
                返ってきた JSON を貼り戻すと、API モードと同じ検証・適用を行う。
 """
@@ -260,9 +260,10 @@ def image_blocks(doc, images):
 # ---------------------------------------------------------------------------- API / 手動
 AUTO_MODEL = "auto"     # 「自動」: 使える最新の Opus を Models API で調べて使う
 MODELS_PAGE = "https://platform.claude.com/docs/en/models/overview"
-PROVIDERS = {"claude": "Claude", "openai": "ChatGPT", "gemini": "Gemini"}
+PROVIDERS = {"claude": "Claude", "openai": "ChatGPT", "gemini": "Gemini", "sakana": "Sakana AI"}
 API_KEY_NAMES = {"claude": ("ANTHROPIC_API_KEY",), "openai": ("OPENAI_API_KEY",),
-                 "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY")}
+                 "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"), "sakana": ("SAKANA_API_KEY",)}
+SAKANA_BASE_URL = "https://api.sakana.ai/v1"   # Sakana AI（Namazu・Fugu）の OpenAI 互換 API
 
 
 def system_prompt() -> str:
@@ -356,7 +357,7 @@ def call_api(request_text, images, model=DEFAULT_MODEL, api_key=None, effort="hi
 def call_provider(provider, request_text, images, model=None, api_key=None) -> AIOutcome:
     """API モードの入口。どの AI でも、依頼文と画像を渡して回答の JSON の文字列（AIOutcome.raw）を受け取るだけ。
 
-    推奨は Claude（依頼文と動作確認は Claude で行っている）。ChatGPT・Gemini ではモデルを利用者が指定する
+    推奨は Claude（依頼文と動作確認は Claude で行っている）。Claude 以外ではモデルを利用者が指定する
     （Claude Opus と同等以上のモデルを推奨）。
     """
     if provider == "claude":
@@ -368,7 +369,7 @@ def call_provider(provider, request_text, images, model=None, api_key=None) -> A
         out.error = (f"{PROVIDERS[provider]} の API を使うときは、使うモデルの名前を指定してください"
                      "（Claude Opus と同等以上の性能のモデルを推奨します）")
         return out
-    call = call_openai if provider == "openai" else call_gemini
+    call = {"openai": call_openai, "gemini": call_gemini, "sakana": call_sakana}[provider]
     return call(request_text, images, out, api_key)
 
 
@@ -377,17 +378,45 @@ def _key_error(provider) -> str:
             f"{PROVIDERS[provider]} の API キーを登録してください）")
 
 
-def call_openai(request_text, images, out: AIOutcome, api_key=None) -> AIOutcome:
-    """ChatGPT（OpenAI の Responses API）を呼ぶ。回答は Claude と同じ JSON スキーマで受け取る（構造化出力）。"""
+def _openai_client(provider, out: AIOutcome, api_key=None, base_url=None):
+    """openai ライブラリのクライアントを作る（ChatGPT と、OpenAI 互換の API）。作れなければ out.error に理由を入れて None。"""
     try:
         import openai
     except ImportError:
-        out.error = "ChatGPT の API を使うためのライブラリ openai がインストールされていません（pip install openai）"
-        return out
+        out.error = f"{PROVIDERS[provider]} の API を使うためのライブラリ openai がインストールされていません（pip install openai）"
+        return None, None
+    names = " または ".join(API_KEY_NAMES[provider])
+    if base_url and not api_key:
+        # 接続先が OpenAI でないときは、環境変数 OPENAI_API_KEY（別の会社のキー）を送らないように、キーを必ず明示する
+        out.error = f"{PROVIDERS[provider]} の API キーが指定されていません（{names} を確認してください）"
+        return openai, None
+    kwargs = {"timeout": 1800, "base_url": base_url} if base_url else {"timeout": 1800}
     try:
-        client = openai.OpenAI(api_key=api_key, timeout=1800) if api_key else openai.OpenAI(timeout=1800)
+        return openai, (openai.OpenAI(api_key=api_key, **kwargs) if api_key else openai.OpenAI(**kwargs))
     except openai.OpenAIError as e:   # API キーが見つからないときなど
-        out.error = f"ChatGPT の API を使う準備ができませんでした（{' または '.join(API_KEY_NAMES['openai'])} を確認してください）: {e}"
+        out.error = f"{PROVIDERS[provider]} の API を使う準備ができませんでした（{names} を確認してください）: {e}"
+        return openai, None
+
+
+def _openai_error(openai, e, provider, model) -> str:
+    """openai ライブラリの例外を、利用者向けの説明にする。"""
+    if isinstance(e, openai.AuthenticationError):
+        return _key_error(provider)
+    if isinstance(e, openai.NotFoundError):
+        return f"モデル {model} が見つかりません（または使う権限がありません）。モデル名を確認してください"
+    if isinstance(e, openai.RateLimitError):
+        return "API の利用制限に達しました（または利用料の残高が足りません）。確認してから再実行してください"
+    if isinstance(e, openai.APIStatusError):
+        return f"API エラー（{e.status_code}）: {e.message}"
+    if isinstance(e, openai.APIConnectionError):
+        return "API に接続できませんでした（ネットワークを確認してください）"
+    return f"API エラー: {e}"
+
+
+def call_openai(request_text, images, out: AIOutcome, api_key=None) -> AIOutcome:
+    """ChatGPT（OpenAI の Responses API）を呼ぶ。回答は Claude と同じ JSON スキーマで受け取る（構造化出力）。"""
+    openai, client = _openai_client("openai", out, api_key)
+    if client is None:
         return out
     content = []
     for image_id, mt, data in images:
@@ -400,20 +429,8 @@ def call_openai(request_text, images, out: AIOutcome, api_key=None) -> AIOutcome
             model=out.model, instructions=system_prompt(), input=[{"role": "user", "content": content}],
             text={"format": {"type": "json_schema", "name": "jasme_operations", "schema": RESPONSE_SCHEMA,
                              "strict": True}})
-    except openai.AuthenticationError:
-        out.error = _key_error("openai")
-        return out
-    except openai.NotFoundError:
-        out.error = f"モデル {out.model} が見つかりません（または使う権限がありません）。モデル名を確認してください"
-        return out
-    except openai.RateLimitError:
-        out.error = "API の利用制限に達しました（または利用料の残高が足りません）。確認してから再実行してください"
-        return out
-    except openai.APIStatusError as e:
-        out.error = f"API エラー（{e.status_code}）: {e.message}"
-        return out
-    except openai.APIConnectionError:
-        out.error = "API に接続できませんでした（ネットワークを確認してください）"
+    except openai.OpenAIError as e:
+        out.error = _openai_error(openai, e, "openai", out.model)
         return out
     for item in getattr(resp, "output", None) or []:
         for c in getattr(item, "content", None) or []:
@@ -431,6 +448,53 @@ def call_openai(request_text, images, out: AIOutcome, api_key=None) -> AIOutcome
     u = getattr(resp, "usage", None)
     if u is not None:
         out.usage = {"input_tokens": getattr(u, "input_tokens", None), "output_tokens": getattr(u, "output_tokens", None)}
+    return out
+
+
+def call_sakana(request_text, images, out: AIOutcome, api_key=None) -> AIOutcome:
+    """Sakana AI（Sakana Namazu・Sakana Fugu）を呼ぶ。OpenAI 互換の Chat Completions API で、接続先だけが違う。
+
+    JSON スキーマの指定（構造化出力）は、受け付けられなければ指定なしで 1 回だけやり直す。
+    どちらでも答えられるように、依頼文に回答の形式（見本と項目の説明）を入れておく。
+    """
+    openai, client = _openai_client("sakana", out, api_key, base_url=SAKANA_BASE_URL)
+    if client is None:
+        return out
+    content = []
+    for image_id, mt, data in images:
+        content.append({"type": "text", "text": f"画像 {image_id}:"})
+        content.append({"type": "image_url",
+                        "image_url": {"url": f"data:{mt};base64,{base64.standard_b64encode(data).decode('ascii')}"}})
+    content.append({"type": "text", "text": request_text})
+    system = (f"{system_prompt()}\n\n## 回答の書き方\n"
+              "- 回答は次の見本の形の JSON だけにしてください（前後に説明を書かない）。文字列は半角の二重引用符（\"）で囲んでください。\n"
+              f"- 提案する操作がなければ \"operations\": [] とし、気づいたことだけを notes に書いてください。\n\n"
+              f"{MANUAL_EXAMPLE}\n\n{FIELD_GUIDE}")
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": content}]
+    schema = {"type": "json_schema", "json_schema": {"name": "jasme_operations", "schema": RESPONSE_SCHEMA, "strict": True}}
+    try:
+        try:
+            resp = client.chat.completions.create(model=out.model, messages=messages, response_format=schema)
+        except openai.BadRequestError:
+            resp = client.chat.completions.create(model=out.model, messages=messages)
+            out.model_note = "JSON スキーマの指定（構造化出力）を受け付けなかったため、指定なしでやり直した"
+    except openai.OpenAIError as e:
+        out.error = _openai_error(openai, e, "sakana", out.model)
+        return out
+    choice = (getattr(resp, "choices", None) or [None])[0]
+    msg = getattr(choice, "message", None)
+    if getattr(msg, "refusal", None) or getattr(choice, "finish_reason", "") == "content_filter":
+        out.error = "AI が回答を断りました（安全上の判定）。手動モードで再試行してください"
+        return out
+    if getattr(choice, "finish_reason", "") == "length":
+        out.error = "AI の回答が長すぎて途中で切れました"
+        return out
+    out.raw = getattr(msg, "content", None) or ""
+    if not out.raw:
+        out.error = "AI から回答が返ってきませんでした"
+    u = getattr(resp, "usage", None)
+    if u is not None:
+        out.usage = {"input_tokens": getattr(u, "prompt_tokens", None), "output_tokens": getattr(u, "completion_tokens", None)}
     return out
 
 

@@ -15,19 +15,21 @@ J-STAGE の全文 XML（JATS 1.1、FULL-J）に変換します。
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/thjpme/jstgxmlcng_JASME/blob/main/notebooks/JASME_docx_to_JSTAGE_XML.ipynb)
 
 1. 上のボタンからノートブックを開きます（Google アカウントが必要）。
-2. 上から順に、各セルの ▶ を押します（前の手順を飛ばすと「先に手順 ○ を実行してください」と表示されて止まります）。
-   1. 準備（最初に 1 回。1 分ほど）。ツールの版が表示されます。LibreOffice（EMF/WMF の図の変換用）は裏でインストールされるので、
-      終わるのを待たずに次へ進めます。準備の ▶ を押した後に手順 2 の ▶ も押しておくと、準備が終わりしだい続けて実行されます
+2. 上から順に、各セルの ▶ を押します。**前の手順の実行が終わってから、次の手順の ▶ を押してください**
+   （前の手順を飛ばすと「先に手順 ○ を実行してください」と表示されて止まります）。
+   1. 準備（最初に 1 回。1 分ほど）。「準備ができました」とツールの版が表示されたら、手順 2 に進みます。
+      LibreOffice（EMF/WMF の図の変換用）のインストールは裏で続き、手順 5 の変換はそれが終わってから始まります
    2. 論文の docx と PDF をアップロード（docx 用・PDF 用のボタンが順に出ます）
    3. 巻・号・ページ・査読の有無（必須）・キーワード（任意。日本語・英語を別の欄に「;」区切り）・日付・原稿種別（選択）を入力
-   4. AI による補完の方法を選ぶ（使わない / API で自動実行（Claude・推奨 / ChatGPT / Gemini） / 手動。初期値は手動）
+   4. AI による補完の方法を選ぶ（使わない / API で自動実行（Claude・推奨 / ChatGPT / Gemini / Sakana AI） / 手動。初期値は手動）
    5. 変換を実行 → 画面に変換レポートが表示されます
    6. （手動モードのときだけ）AI の回答を貼り付けて再変換
    7. 結果（`変換結果_巻_開始ページ.zip`）をダウンロード
    8. （続けて他の論文を変換するときだけ）▶ を押してから手順 2 に戻る（下の「複数の論文を続けて変換するとき」）
 3. J-STAGE の編集登載システムで、その号の巻・号と**セクション**（目次の見出し。例: 論文）を作成しておきます
    （ないとアップロード時に「学会誌別セクションが存在しません」というエラーになります）。
-4. ダウンロードした中の `jasme.zip` を編集登載システムにアップロードし、記事をセクションに振り分けて、プレビューで確認します。
+4. ダウンロードした中の `jasme_巻_開始ページ.zip`（例: `jasme_31_1.zip`）を編集登載システムにアップロードし、記事をセクションに振り分けて、
+   プレビューで確認します。
    **J-STAGE では PDF が必須です。** 手順 2 で PDF をアップロードすると ZIP に入ります。
 
 ### 複数の論文を続けて変換するとき
@@ -45,7 +47,7 @@ J-STAGE の全文 XML（JATS 1.1、FULL-J）に変換します。
 5. 手順 4（方法を変えないなら、そのまま ▶）、手順 5、（手動モードなら）手順 6、手順 7 を実行します。
    手動モードでは、手順 6 の欄に前の論文の AI の回答が残っています。今回の論文の依頼文を AI に渡し、返ってきた回答に貼り替えてください
    （前の論文の回答のままだと止まります）。添付する画像も、今回の論文のもの（手順 5 でダウンロードされたもの）を使ってください。
-6. J-STAGE には、論文ごとの `jasme.zip` を 1 つずつアップロードします。
+6. J-STAGE には、論文ごとの `jasme_巻_開始ページ.zip` を 1 つずつアップロードします。
 
 入力欄の書き換え漏れが心配なときは、手順 8 を使わずに、ノートブックを開き直して（上の「Open in Colab」のボタンから）手順 1 からやり直すほうが確実です。
 GitHub のノートブックを開き直すと、入力欄は初期の値に戻ります。
@@ -63,14 +65,16 @@ GitHub のノートブックを開き直すと、入力欄は初期の値に戻�
 |---|---|---|---|
 | 使わない | なし | どこにも送らない | テンプレートどおりに書かれた論文 |
 | API で自動実行（Claude・推奨） | Claude API キー（Colab の「シークレット」に `ANTHROPIC_API_KEY` として登録。作り方はノートブック手順 4 の下の「API キーについての詳細」） | Anthropic（Claude API） | 毎号まとめて処理するとき |
-| API で自動実行（ChatGPT / Gemini） | 各社の API キー（シークレットに `OPENAI_API_KEY` / `GEMINI_API_KEY` として登録）と、使うモデルの名前 | OpenAI / Google | Claude の API を使えないとき |
+| API で自動実行（ChatGPT / Gemini / Sakana AI） | 各社の API キー（シークレットに `OPENAI_API_KEY` / `GEMINI_API_KEY` / `SAKANA_API_KEY` として登録）と、使うモデルの名前 | OpenAI / Google / Sakana AI | Claude の API を使えないとき |
 | 手動 | claude.ai などのチャット（API キー不要） | 利用者が貼り付けたチャット | API キーがないとき、AI に渡す内容を自分で確認したいとき |
 
-「API で自動実行」は ChatGPT（OpenAI）と Gemini（Google）の API にも対応していますが、**推奨は Claude です**
-（AI への依頼文と動作の確認は Claude で行っています）。ChatGPT・Gemini の API キーの作り方・料金・利用規約（送信した内容の扱い）は、
+「API で自動実行」は ChatGPT（OpenAI）、Gemini（Google）、Sakana AI（Sakana Namazu・Sakana Fugu）の API にも対応していますが、**推奨は Claude です**
+（AI への依頼文と動作の確認は Claude で行っています）。Claude 以外の API キーの作り方・料金・利用規約（送信した内容の扱い）は、
 各社の案内を自分で調べて確かめてください。使うモデルの名前は手順 4 で自分で入力します。**Claude Opus と同等以上の性能のモデル
 （各社の最上位クラスのモデル）を推奨します。** 性能の低いモデルでは、取りこぼしや誤った提案が増えます
 （誤った提案はプログラムの検証で採用されませんが、補完の効果が下がります）。
+**Sakana AI は、既定で送信した内容をモデルの学習に使う設定です。** 未公開の原稿を送るので、使う前に Sakana AI の管理画面（Console）の
+設定で、学習への利用を止めて（オプトアウトして）ください。
 
 手動モードでは、ツールが「AI依頼文.txt」を作ります。手順 5 の結果の先頭（とレポートの後ろ）に、依頼文が「依頼文をコピー」ボタン付きの
 枠で表示されるので、チャットに貼り付け（画像があれば「AI添付画像」の画像も添付）、
@@ -83,7 +87,7 @@ GitHub のノートブックを開き直すと、入力欄は初期の値に戻�
 
 | ファイル | 内容 |
 |---|---|
-| `jasme.zip` | J-STAGE にアップロードするもの（`jasme/巻/号/巻_開始ページ/` の下に XML・PDF・`Graphics/` の画像） |
+| `jasme_巻_開始ページ.zip` | J-STAGE にアップロードするもの（`jasme/巻/号/巻_開始ページ/` の下に XML・PDF・`Graphics/` の画像）。論文ごとに名前が違います |
 | `巻_開始ページ.xml` | 同じ XML（確認用） |
 | `巻_開始ページ_変換レポート.md` | 変換レポート（下記） |
 | `巻_開始ページ_AI判断一覧.md` | AI が判断した箇所だけの一覧（AI を使ったとき） |
@@ -139,6 +143,7 @@ python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai manu
 ANTHROPIC_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai api
 OPENAI_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai api --ai-provider openai --ai-model モデル名
 GEMINI_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai api --ai-provider gemini --ai-model モデル名
+SAKANA_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai api --ai-provider sakana --ai-model モデル名
 ```
 
 書誌情報ファイルの例: [examples/meta_example.toml](examples/meta_example.toml)

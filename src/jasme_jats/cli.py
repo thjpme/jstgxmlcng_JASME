@@ -1,7 +1,7 @@
 """コマンドラインの入口。
 
   python -m jasme_jats 論文.docx --meta 書誌情報.toml --out 出力フォルダ [--ai api|manual|none]
-                       [--ai-provider claude|openai|gemini] [--ai-model モデル名]
+                       [--ai-provider claude|openai|gemini|sakana] [--ai-model モデル名]
 
 書誌情報ファイル（TOML）の例は examples/meta_example.toml を参照。
 """
@@ -25,12 +25,13 @@ def main(argv=None):
     ap.add_argument("--config", type=Path, help="雑誌の設定ファイル（既定: 同梱の jasme.toml）")
     ap.add_argument("--split-labels", choices=["yes", "no"], help="図表番号を <label> に分けるか（既定: 設定ファイルに従う）")
     ap.add_argument("--ai", choices=["none", "api", "manual"], default="none", help="AI による補完の方法")
-    ap.add_argument("--ai-provider", choices=["claude", "openai", "gemini"], default="claude",
-                    help="API モードで使う AI（既定・推奨: claude。openai は ChatGPT、gemini は Gemini）。API キーは環境変数 "
-                         "ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY（または GOOGLE_API_KEY）")
+    ap.add_argument("--ai-provider", choices=["claude", "openai", "gemini", "sakana"], default="claude",
+                    help="API モードで使う AI（既定・推奨: claude。openai は ChatGPT、gemini は Gemini、sakana は Sakana AI）。"
+                         "API キーは環境変数 ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY（または GOOGLE_API_KEY）/ "
+                         "SAKANA_API_KEY")
     ap.add_argument("--ai-model",
                     help=f"API モードで使うモデル。claude の既定は {DEFAULT_MODEL}（auto で使える最新の Opus。指定したモデルが"
-                         "使えなければ最新の Opus に切り替える）。openai・gemini では必ず指定する（Claude Opus と同等以上のモデルを推奨）")
+                         "使えなければ最新の Opus に切り替える）。claude 以外では必ず指定する（Claude Opus と同等以上のモデルを推奨）")
     ap.add_argument("--ai-response", type=Path, help="手動モード: AI の回答（JSON）を保存したファイル")
     ap.add_argument("--pdf", type=Path, help="記事の PDF（J-STAGE への登載に必須。指定すると ZIP に入れる）")
     ap.add_argument("--no-metafile-conversion", action="store_true", help="EMF/WMF 画像の変換を行わない")

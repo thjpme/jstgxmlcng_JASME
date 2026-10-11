@@ -23,7 +23,7 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
 | `structure.py` | 段落の役割の決定と論文の構造（`ArticlePlan`）の組み立て |
 | `linker.py` | 図・表・数式・注・URL・DOI の機械的リンク、アトムにリンクを付ける共通関数 `apply_span()` |
 | `refparse.py` | 引用文献の解析と著者・年方式の引用の抽出・照合（先行ツール「文献チェック」refcheck.py から移植） |
-| `ai_assist.py` | AI 補完（依頼文の作成、API 呼び出し（Claude・ChatGPT・Gemini）、回答の検証と適用） |
+| `ai_assist.py` | AI 補完（依頼文の作成、API 呼び出し（Claude・ChatGPT・Gemini・Sakana AI）、回答の検証と適用） |
 | `emit.py` / `builder.py` | XML の組み立て（文字は必ず `jx:span` の中に書く） |
 | `tracking.py` | 変換途中の目印の定義 |
 | `fidelity.py` | 文字の不変性チェック |
@@ -49,7 +49,7 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
   変更したら `python tests/make_fixtures.py` で作り直してコミットする。
 - `tests/test_fidelity.py`: 不変性チェックがわざと壊した XML を確実に検出することのテスト。チェックの処理を変えたら必ず通すこと。
 - `tests/test_ai.py`: AI の回答の検証と適用（実際の API は呼ばない。`tests/data/ai_response_sample_full.json` が模擬回答。
-  Claude・ChatGPT・Gemini の呼び出しは、それぞれ偽のクライアントに置き換えて確かめる）。
+  Claude・ChatGPT・Gemini・Sakana AI の呼び出しは、それぞれ偽のクライアントに置き換えて確かめる）。
 - GitHub Actions（`.github/workflows/test.yml`）で push のたびに実行される。
 
 `tests/fixtures/JASME_template_20261009.docx` は学会のテンプレートから、`tools/sanitize_docx.py` でコメントと作成者情報を
@@ -68,8 +68,8 @@ python -m jasme_jats tests/private/論文.docx --meta examples/meta_example.toml
 - **別の雑誌に使う**: `src/jasme_jats/data/jasme.toml` を複製して書き換え、`--config` で指定する（Colab では `JournalConfig.load(パス)`）。
 - **スタイル名の追加**（著者が独自のスタイル名を使った等）: 設定ファイルの `[styles]` に「スタイル名 = 役割」を足す。
 - **AI の依頼内容を変える**: `ai_assist.py` の `SYSTEM_PROMPT`。操作の種類を増やすときは `OP_SCHEMA` と `apply_ops()` に検証を加える。
-- **モデルを変える**: ノートブックの `MODEL`（Claude）・`OTHER_MODEL`（ChatGPT・Gemini）、コマンドラインの `--ai-model`。
-- **API モードの AI を増やす**: `ai_assist.call_openai()` などと同じ形（依頼文と画像 → `AIOutcome.raw` に JSON の文字列）の関数を足し、
+- **モデルを変える**: ノートブックの `MODEL`（Claude）・`OTHER_MODEL`（Claude 以外）、コマンドラインの `--ai-model`。
+- **API モードの AI を増やす**: OpenAI 互換の API なら `call_sakana()` と同じく `_openai_client()` に接続先を渡す。それ以外は `ai_assist.call_openai()` などと同じ形（依頼文と画像 → `AIOutcome.raw` に JSON の文字列）の関数を足し、
   `PROVIDERS`・`API_KEY_NAMES`・`call_provider()`、CLI の `--ai-provider`、ノートブックの手順 4 の選択肢に加える。テストは偽のクライアントで書く。
 
 ## Colab ノートブック
@@ -141,7 +141,8 @@ Claude Code の環境の作り方）を読む。
 
 | 課題 | 状況 |
 |---|---|
-| ChatGPT・Gemini の API モード | 0.12.0 で対応（推奨は Claude）。偽のクライアントでのテストのみで、実際の API ではまだ試していない。試験運用で一度ずつ確かめる |
+| ChatGPT・Gemini・Sakana AI の API モード | 0.12.0（ChatGPT・Gemini）・0.13.0（Sakana AI）で対応（推奨は Claude）。偽のクライアントでのテストのみで、実際の API ではまだ試していない（Sakana Fugu のチャットでは、手動モードの依頼文に正しい JSON が返ることを利用者が確認）。試験運用で一度ずつ確かめる |
 | 注の番号から本文へ戻るリンク | J-STAGE の仕様上できない（`<xref>` に付けられるのは ref-type と rid だけで、戻り先の目印を付けられない。注の中は `<p>` だけ）。ブラウザの「戻る」で戻れる |
 | 引用文献の DOI のリンク | 今は J-STAGE に DOI として登録する `<pub-id>`。公開後に J-STAGE の引用文献リンクが付くかを確認し、画面上のリンクを優先するなら `ref_doi = "uri"` にする |
+| アップロード用 ZIP の名前 | 0.13.0 から `jasme_巻_開始ページ.zip`（仕様書の例は `jasme.zip`）。次の試験登載で、この名前のまま受け付けられることを確かめる。万一弾かれたら `package.py` の名前を `{資料コード}.zip` に戻す |
 | 正式リリース | 試験運用で問題がなければ、版を 1.0.0 にする |

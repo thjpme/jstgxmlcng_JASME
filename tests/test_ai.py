@@ -307,3 +307,64 @@ def test_cli_requires_model_for_other_providers(capsys):
     with pytest.raises(SystemExit):
         main([str(FULL), "--ai", "api", "--ai-provider", "openai"])
     assert "--ai-model" in capsys.readouterr().err
+
+
+def _fake_sakana(monkeypatch, calls, reject_schema=False, finish="stop"):
+    """偽の OpenAI 互換クライアント（Chat Completions）。reject_schema なら response_format 付きの呼び出しを 400 で断る。"""
+    import httpx2
+    import openai
+
+    def create(**kw):
+        calls.append(kw)
+        if reject_schema and "response_format" in kw:
+            req = httpx2.Request("POST", "https://api.sakana.ai/v1/chat/completions")
+            raise openai.BadRequestError("response_format is not supported", response=httpx2.Response(400, request=req),
+                                         body=None)
+        msg = types.SimpleNamespace(content="```json\n" + RESPONSE + "\n```", refusal=None)
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg, finish_reason=finish)],
+                                     usage=types.SimpleNamespace(prompt_tokens=90, completion_tokens=45))
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            calls.append({"client": k})
+            self.chat = types.SimpleNamespace(completions=types.SimpleNamespace(create=create))
+
+    monkeypatch.setattr(openai, "OpenAI", FakeClient)
+
+
+def test_sakana_api_mode_with_fake_client(journal, meta, tmp_path, monkeypatch):
+    calls = []
+    _fake_sakana(monkeypatch, calls)
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_provider="sakana",
+                                               ai_model="sakana-namazu", ai_api_key="sk-sakana", convert_metafiles=False))
+    client, kw = calls[0]["client"], calls[1]
+    assert client["base_url"] == "https://api.sakana.ai/v1" and client["api_key"] == "sk-sakana"
+    assert kw["model"] == "sakana-namazu"
+    assert kw["response_format"]["type"] == "json_schema"
+    assert kw["response_format"]["json_schema"]["schema"] is ai_assist.RESPONSE_SCHEMA
+    system, user = kw["messages"]
+    assert "## 回答の書き方" in system["content"] and "link_citation" in system["content"]
+    assert any(c["type"] == "image_url" and c["image_url"]["url"].startswith("data:image/png;base64,")
+               for c in user["content"])
+    assert not res.ai.error and res.ai.provider == "sakana"
+    assert len(res.ai.accepted) == 7 and res.fidelity.ok and res.fidelity.final_ok
+    report = res.report_path.read_text(encoding="utf-8")
+    assert "API（Sakana AI: sakana-namazu）" in report and "入力 90 トークン" in report
+
+
+def test_sakana_retries_without_schema_and_never_sends_openai_key(monkeypatch):
+    # JSON スキーマの指定を断られたら、指定なしで 1 回だけやり直す（依頼文に回答の形式があるので JSON で返る）
+    calls = []
+    _fake_sakana(monkeypatch, calls, reject_schema=True)
+    out = ai_assist.call_provider("sakana", "x", [], model="fugu", api_key="sk-sakana")
+    creates = [c for c in calls if "messages" in c]
+    assert len(creates) == 2 and "response_format" not in creates[1]
+    assert not out.error and parse_response(out.raw)["operations"] and "指定なしでやり直した" in out.model_note
+    _fake_sakana(monkeypatch, [], finish="length")
+    assert "途中で切れました" in ai_assist.call_provider("sakana", "x", [], model="fugu", api_key="k").error
+    # Sakana のキーがないときに、環境変数の OpenAI のキーを Sakana に送らない
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-should-not-be-sent")
+    calls = []
+    _fake_sakana(monkeypatch, calls)
+    out = ai_assist.call_provider("sakana", "x", [], model="fugu")
+    assert "SAKANA_API_KEY" in out.error and calls == []
