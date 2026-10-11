@@ -23,7 +23,8 @@ def main(argv=None):
     ap.add_argument("--config", type=Path, help="雑誌の設定ファイル（既定: 同梱の jasme.toml）")
     ap.add_argument("--split-labels", choices=["yes", "no"], help="図表番号を <label> に分けるか（既定: 設定ファイルに従う）")
     ap.add_argument("--ai", choices=["none", "api", "manual"], default="none", help="AI による補完の方法")
-    ap.add_argument("--ai-model", default="claude-opus-5-5", help="API モードで使うモデル")
+    ap.add_argument("--ai-model", default="claude-opus-5-5",
+                    help="API モードで使うモデル（auto で使える最新の Opus。指定したモデルが使えなければ最新の Opus に切り替える）")
     ap.add_argument("--ai-response", type=Path, help="手動モード: AI の回答（JSON）を保存したファイル")
     ap.add_argument("--pdf", type=Path, help="記事の PDF（J-STAGE への登載に必須。指定すると ZIP に入れる）")
     ap.add_argument("--no-metafile-conversion", action="store_true", help="EMF/WMF 画像の変換を行わない")

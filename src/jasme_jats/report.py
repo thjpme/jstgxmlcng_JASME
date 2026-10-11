@@ -157,6 +157,8 @@ def render(r) -> str:
             for n in ai.notes:
                 L.append(f"- {esc(n)}")
             L.append("")
+        if ai.model_note:
+            L.append(f"（使用したモデル: {ai.model}。{ai.model_note}）")
         if ai.usage:
             L.append(f"（API 使用量: 入力 {ai.usage.get('input_tokens')} トークン / 出力 {ai.usage.get('output_tokens')} トークン）")
     L.append("")

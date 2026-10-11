@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jasme-jats"
-version = "0.10.1"
+version = "0.11.0"
 description = "Word（docx）の論文を J-STAGE 全文 XML（JATS 1.1）に変換する。『全国数学教育学会誌 数学教育学研究』用"
 readme = "README.md"
 requires-python = ">=3.10"

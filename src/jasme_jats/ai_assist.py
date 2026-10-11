@@ -122,6 +122,7 @@ class AIOutcome:
     error: str = ""
     usage: dict = field(default_factory=dict)
     raw: str = ""
+    model_note: str = ""              # 指定と違うモデルを使った場合の説明
 
 
 # ---------------------------------------------------------------------------- AI に渡す資料
@@ -254,7 +255,26 @@ def image_blocks(doc, images):
 
 
 # ---------------------------------------------------------------------------- API / 手動
+AUTO_MODEL = "auto"     # 「自動」: 使える最新の Opus を Models API で調べて使う
+MODELS_PAGE = "https://platform.claude.com/docs/en/models/overview"
+
+
+def latest_opus(client) -> str:
+    """Models API（使えるモデルの一覧）から、いちばん新しい Opus のモデル ID を返す。調べられなければ空文字。"""
+    try:
+        models = [m for m in client.models.list() if str(m.id).startswith("claude-opus-")]
+    except Exception:  # noqa: BLE001
+        return ""
+    models.sort(key=lambda m: str(getattr(m, "created_at", "")), reverse=True)
+    return models[0].id if models else ""
+
+
 def call_api(request_text, images, model=DEFAULT_MODEL, api_key=None, effort="high") -> AIOutcome:
+    """Claude API を呼ぶ。
+
+    モデルは既定で動作確認済みの DEFAULT_MODEL。"auto" なら使える最新の Opus を調べて使う。
+    指定したモデルが見つからない（提供終了など）ときは、最新の Opus に切り替えて 1 回だけやり直し、その旨を残す。
+    """
     import anthropic
     out = AIOutcome(mode="api", model=model)
     client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
@@ -265,20 +285,40 @@ def call_api(request_text, images, model=DEFAULT_MODEL, api_key=None, effort="hi
                                                    "data": base64.standard_b64encode(data).decode("ascii")}})
     content.append({"type": "text", "text": request_text})
     system = SYSTEM_PROMPT.replace("{roles}", " / ".join(f"{k}（{v}）" for k, v in ROLES.items()))
-    kwargs = dict(model=model, max_tokens=64000, system=system, messages=[{"role": "user", "content": content}],
-                  output_config={"effort": effort, "format": {"type": "json_schema", "schema": RESPONSE_SCHEMA}})
-    try:
+
+    def send(model_id):
+        kwargs = dict(model=model_id, max_tokens=64000, system=system, messages=[{"role": "user", "content": content}],
+                      output_config={"effort": effort, "format": {"type": "json_schema", "schema": RESPONSE_SCHEMA}})
         try:
             # 安全上の判定で断られた場合に、サーバー側で別のモデルに切り替えて続ける（fallbacks）
             with client.beta.messages.stream(betas=["server-side-fallback-2026-07-01"], fallbacks="default",
                                              **kwargs) as stream:
-                msg = stream.get_final_message()
+                return stream.get_final_message()
         except anthropic.BadRequestError:
-            # ベータ機能が使えない環境では通常の呼び出しでやり直す
+            # ベータ機能が使えない環境・モデルでは通常の呼び出しでやり直す
             with client.messages.stream(**kwargs) as stream:
-                msg = stream.get_final_message()
+                return stream.get_final_message()
+
+    try:
+        if model == AUTO_MODEL:
+            model = latest_opus(client) or DEFAULT_MODEL
+            out.model = model
+            out.model_note = f"「自動」を選んだため、使える最新の Opus（{model}）を使った"
+        try:
+            msg = send(model)
+        except anthropic.NotFoundError:
+            alt = latest_opus(client)
+            if not alt or alt == model:
+                raise
+            out.model_note = (f"指定したモデル {model} が使えなかった（提供終了など）ため、使える最新の Opus（{alt}）に"
+                              "切り替えた")
+            out.model = model = alt
+            msg = send(model)
     except anthropic.AuthenticationError:
         out.error = "API キーが無効です（Colab では「シークレット」に ANTHROPIC_API_KEY を登録してください）"
+        return out
+    except anthropic.NotFoundError:
+        out.error = f"モデル {model} が見つかりません。モデル名を確認してください（一覧: {MODELS_PAGE}）"
         return out
     except anthropic.RateLimitError:
         out.error = "API の利用制限に達しました。しばらく待ってから再実行してください"
