@@ -72,6 +72,8 @@ def test_links_in_full_sample(journal, meta, tmp_path):
 
 def test_package_layout(journal, meta, tmp_path):
     res = convert(FULL, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    assert res.zip_path.name == "jasme_31_1.zip"     # 論文ごとに名前が違う（{資料コード}_{記事識別子}.zip）
+    assert res.zip_path.name.isascii()               # 日本語のファイル名は J-STAGE で弾かれる（EMSGM034E）
     with zipfile.ZipFile(res.zip_path) as z:
         names = set(z.namelist())
     assert "jasme/31/1/31_1/31_1.xml" in names

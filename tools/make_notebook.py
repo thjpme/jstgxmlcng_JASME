@@ -56,7 +56,7 @@ API_HELP = '''<details>
 <summary><b>API キーについての詳細（クリックで開きます）</b></summary>
 
 <p>「API で自動実行」を使うときだけ必要です。手動モード（チャットに貼り付け）なら API キーは要りません。</p>
-<p>1.〜5. は Claude（推奨）の場合の説明です。ChatGPT・Gemini を使うときは 6. を見てください。</p>
+<p>1.〜5. は Claude（推奨）の場合の説明です。ChatGPT・Gemini・Sakana AI を使うときは 6. を見てください。</p>
 
 <h4>1. API キーを作る（最初に 1 回だけ）</h4>
 <ol>
@@ -104,22 +104,23 @@ Anthropic の発表では、このモデルの提供終了は 2027 年 9 月 22 
 <li>将来このモデルが使えなくなった場合は、ツールが Anthropic のモデル一覧から使える最新の Opus を自動で選んでやり直し、変換レポートの「AI による補完」の章にその旨を表示します。</li>
 <li>はじめから最新の Opus を使いたいときは、「自動（最新の Opus）」を選びます。ただし、動作を確かめていない新しいモデルが選ばれることがあります。</li>
 <li>モデル名を自分で入力することもできます。使えるモデルの名前（Claude API ID）は、Anthropic のモデル一覧（<a href="https://platform.claude.com/docs/en/models/overview" target="_blank">Models overview</a>）で確認できます。</li>
-<li>ChatGPT・Gemini の API を使うときは、次の 6. を見てください。API キーがなくても、「手動（チャットに貼り付け）」を選べば、
-ChatGPT や Gemini のチャット画面に依頼文を貼り付けて使えます。</li>
+<li>ChatGPT・Gemini・Sakana AI の API を使うときは、次の 6. を見てください。API キーがなくても、「手動（チャットに貼り付け）」を選べば、
+それぞれのチャット画面に依頼文を貼り付けて使えます。</li>
 </ul>
 
-<h4>6. ChatGPT・Gemini の API を使うとき</h4>
+<h4>6. ChatGPT・Gemini・Sakana AI の API を使うとき</h4>
 <ul>
-<li>「API で自動実行」は、ChatGPT（OpenAI）と Gemini（Google）の API にも対応しています。ただし、<b>推奨は Claude です</b>
+<li>「API で自動実行」は、ChatGPT（OpenAI）、Gemini（Google）、Sakana AI（Sakana Namazu・Sakana Fugu）の API にも対応しています。ただし、<b>推奨は Claude です</b>
 （このツールの AI への依頼文と動作の確認は、Claude で行っています）。</li>
 <li>API キーの作り方、利用料の支払い、利用上限の設定などは、<b>各社の案内を自分で調べて行ってください</b>（このノートブックでは説明しません）。</li>
 <li>作った API キーは、上の 2. と同じ手順で Colab のシークレットに登録します。「名前」は、ChatGPT では <code>OPENAI_API_KEY</code>、
-Gemini では <code>GEMINI_API_KEY</code> にします（Gemini は <code>GOOGLE_API_KEY</code> という名前で登録したものも使えます）。</li>
-<li>使うモデルの名前は、手順 4 の「ChatGPT・Gemini のモデル名（OTHER_MODEL）」に自分で入力します（各社の資料で確認してください）。
+Gemini では <code>GEMINI_API_KEY</code>（<code>GOOGLE_API_KEY</code> という名前で登録したものも使えます）、Sakana AI では <code>SAKANA_API_KEY</code> にします。</li>
+<li>使うモデルの名前は、手順 4 の「Claude 以外のモデル名（OTHER_MODEL）」に自分で入力します（各社の資料で確認してください）。
 <b>Claude Opus と同等以上の性能のモデル（各社の最上位クラスのモデル）を推奨します。</b>
 性能の低いモデルでは、取りこぼしや誤った提案が増えます（誤った提案はプログラムの検証で採用されませんが、補完の効果が下がります）。</li>
-<li>論文の本文は、選んだ会社（OpenAI または Google）に送信されます。送信した内容の扱い（無料の利用枠では、サービスの改善に使われる場合があります）は、
-各社の利用規約で確認してください。</li>
+<li>論文の本文は、選んだ会社（OpenAI、Google、Sakana AI）に送信されます。送信した内容の扱いは、各社の利用規約で確認してください。
+無料の利用枠では、送信した内容がサービスの改善に使われる場合があります。<b>Sakana AI は、既定で送信した内容をモデルの学習に使う設定です。</b>
+未公開の原稿を送るので、使う前に Sakana AI の管理画面（Console）の設定で、学習への利用を止めて（オプトアウトして）ください。</li>
 <li>料金は各社の料金表で確認してください。使ったトークン数は、変換レポートの「AI による補完」の章の最後に表示されます。</li>
 </ul>
 </details>'''
@@ -132,11 +133,12 @@ cells = [
 
 このノートブックは、テンプレートで作成された論文の Word ファイル（.docx）を、J-STAGE の全文 XML（JATS 1.1）に変換します。
 パソコンに何かをインストールする必要はありません。**上から順に、各セルの左の ▶ ボタンを押して実行してください。**
+**前の手順の実行が終わってから、次の手順の ▶ を押します**（実行中に次の ▶ を押すと、アップロードのボタンなどが出ないことがあります）。
 前の手順を実行せずに後の手順の ▶ を押すと、「先に手順 ○ を実行してください」と表示されて止まります。
 
 | 手順 | 内容 |
 |---|---|
-| 1 | 準備（最初に 1 回だけ。▶ を押したら、終わるのを待たずに手順 2 の ▶ を押しておくと、準備の後に続けて実行されます） |
+| 1 | 準備（最初に 1 回だけ。「準備ができました」と表示されたら、手順 2 に進みます） |
 | 2 | 論文の docx と PDF をアップロード（ボタンが別々に出ます） |
 | 3 | 書誌情報（巻・号・ページ・査読の有無・キーワード・日付）を入力 |
 | 4 | AI による補完の方法を選ぶ |
@@ -147,7 +149,7 @@ cells = [
 
 - 本文の文字は 1 文字も変えません。変換後に、docx と XML の文字を 1 文字ずつ照合して確かめます（レポートの「文字の不変性チェック」）。
 - アップロードしたファイルは、このノートブックを閉じる（ランタイムが切れる）と Google のサーバーから消えます。
-- 「API で自動実行」を選ぶと、論文の本文が選んだ AI の会社（Claude は Anthropic、ChatGPT は OpenAI、Gemini は Google）の API に送信されます。
+- 「API で自動実行」を選ぶと、論文の本文が選んだ AI の会社（Claude は Anthropic、ChatGPT は OpenAI、Gemini は Google、Sakana AI は Sakana AI）の API に送信されます。
 - 複数の論文を続けて変換するときは、1 本ごとに手順 7 で結果をダウンロードしてから、手順 8 の ▶ を押し、手順 2 から繰り返します。
   手順 3 などの入力欄には前の論文の値が残るので、書き換えてから実行します（心配なときは、ノートブックを開き直して手順 1 から）。
 
@@ -155,7 +157,7 @@ cells = [
 """),
     code(f"""
 #@title 1. 準備（最初に 1 回だけ。1 分ほどかかります）
-#@markdown **EMF/WMF の図を変換する（CONVERT_EMF）**: 図が Word の図形（EMF/WMF 形式）で貼られている論文では、画像の変換に LibreOffice を使います。チェックを入れると LibreOffice を**裏で**インストールします（数分かかりますが、終わるのを待たずに手順 2 以降へ進めます。手順 5 の変換は、インストールが終わってから始まります）。
+#@markdown **EMF/WMF の図を変換する（CONVERT_EMF）**: 図が Word の図形（EMF/WMF 形式）で貼られている論文では、画像の変換に LibreOffice を使います。チェックを入れると LibreOffice を**裏で**インストールします（数分かかります。インストールは手順 1 の後も裏で続き、手順 5 の変換はそれが終わってから始まります）。
 CONVERT_EMF = True  #@param {{type:"boolean"}}
 #@markdown **開発版を使う（USE_DEV_VERSION）**: 開発者向け。開発中の版を試すときだけチェックを入れます（実行するとブランチ名の入力欄が出ます）。
 USE_DEV_VERSION = False  #@param {{type:"boolean"}}
@@ -196,12 +198,13 @@ if USE_DEV_VERSION:
 elif ver and not ver.startswith("{VERSION}"):
     print("※ このノートブックの説明は版 {VERSION} のものです。ノートブックを開き直してください。")
 if globals().get("LO_PROC") is not None and LO_PROC.poll() is None:
-    print("LibreOffice を裏でインストールしています（数分）。終わるのを待たずに手順 2 へ進んでください。")
+    print("LibreOffice を裏でインストールしています（数分）。インストールは裏で続くので、このまま手順 2 に進んでください"
+          "（手順 5 の変換は、インストールが終わってから始まります）。")
 """ + "DONE = {1}\n"),
     code("""
 #@title 2. 論文の docx と PDF をアップロード
 #@markdown 実行すると、まず **docx 用**の「ファイル選択」ボタンが出ます。docx を選ぶと、続けて **PDF 用**の「ファイル選択」ボタンが出ます。
-#@markdown **PDF もアップロードする（UPLOAD_PDF）**: J-STAGE に登載する PDF がまだなければ、チェックを外してから実行してください（PDF 用のボタンは出ません。後で jasme.zip に入れることもできます）。
+#@markdown **PDF もアップロードする（UPLOAD_PDF）**: J-STAGE に登載する PDF がまだなければ、チェックを外してから実行してください（PDF 用のボタンは出ません。後で jasme_巻_開始ページ.zip に入れることもできます）。
 UPLOAD_PDF = True  #@param {type:"boolean"}
 """ + guard(1) + """
 from pathlib import Path
@@ -257,9 +260,9 @@ peer_review = "（選んでください）"  #@param ["（選んでください�
 #@markdown **最終査読日（last_review_date）**（査読ありで、分かれば）
 last_review_date = ""  #@param {type:"string"}
 #@markdown ***
-#@markdown **キーワード（日本語）（keywords_ja）**（任意。「；」または「;」で区切る。例: `数学教育；ジェンダー`）
+#@markdown **キーワード（日本語）（keywords_ja）**（任意。「；」または「;」で区切る。例: `数学教育；活動；哲学`）
 keywords_ja = ""  #@param {type:"string"}
-#@markdown **キーワード（英語）（keywords_en）**（任意。「;」または「；」で区切る。例: `equity; gender`）。日・英あわせて 100 個まで
+#@markdown **キーワード（英語）（keywords_en）**（任意。「;」または「；」で区切る。例: `mathematics education; activity; philosophy`）。日・英あわせて 100 個まで
 keywords_en = ""  #@param {type:"string"}
 #@markdown ***
 #@markdown **発行日（pub_date）**
@@ -324,29 +327,36 @@ if _prev:
     code("""
 #@title 4. AI による補完の方法を選ぶ
 #@markdown - **使わない**（推奨しません）: 機械的な変換だけを行います。取りこぼしがあっても補われません。
-#@markdown - **API で自動実行**: AI の API を呼び出して、機械処理で取りこぼした引用・スタイルの誤り・画像の数式などを補完します。**Claude を推奨します**（ChatGPT・Gemini にも対応）。左の 🔑（シークレット）に API キー（Claude は名前 `ANTHROPIC_API_KEY`）を登録し、「ノートブックからのアクセス」をオンにしてください（API の利用料がかかります）。キーの作り方と登録の手順は、このセルのすぐ下の「**API キーについての詳細**」を開いてください。
+#@markdown - **API で自動実行**: AI の API を呼び出して、機械処理で取りこぼした引用・スタイルの誤り・画像の数式などを補完します。**Claude を推奨します**（ChatGPT・Gemini・Sakana AI にも対応）。左の 🔑（シークレット）に API キー（Claude は名前 `ANTHROPIC_API_KEY`）を登録し、「ノートブックからのアクセス」をオンにしてください（API の利用料がかかります）。キーの作り方と登録の手順は、このセルのすぐ下の「**API キーについての詳細**」を開いてください。
 #@markdown - **手動**: AI への依頼文を作ります。claude.ai などのチャットに貼り付け、返ってきた回答を手順 6 で貼り戻します（API キー不要）。
 #@markdown ***
 #@markdown **AI による補完の方法（AI_MODE）**
-AI_MODE = "手動（チャットに貼り付け）"  #@param ["使わない", "API で自動実行（Claude・推奨）", "API で自動実行（ChatGPT）", "API で自動実行（Gemini）", "手動（チャットに貼り付け）"]
+AI_MODE = "手動（チャットに貼り付け）"  #@param ["使わない", "API で自動実行（Claude・推奨）", "API で自動実行（ChatGPT）", "API で自動実行（Gemini）", "API で自動実行（Sakana AI）", "手動（チャットに貼り付け）"]
 #@markdown **Claude のモデル（MODEL）**（Claude を使うとき。通常は変更不要。「API キーについての詳細」の 5. を参照）
 MODEL = "claude-opus-5-5"  #@param ["claude-opus-5-5", "自動（最新の Opus）"] {allow-input: true}
-#@markdown **ChatGPT・Gemini のモデル名（OTHER_MODEL）**（ChatGPT・Gemini を使うときは必ず入力。**Claude Opus と同等以上の性能のモデル**（各社の最上位クラスのモデル）を推奨します。モデル名は各社の資料で確認してください。「API キーについての詳細」の 6. を参照）
+#@markdown **Claude 以外のモデル名（OTHER_MODEL）**（ChatGPT・Gemini・Sakana AI を使うときは必ず入力。**Claude Opus と同等以上の性能のモデル**（各社の最上位クラスのモデル）を推奨します。モデル名は各社の資料で確認してください。「API キーについての詳細」の 6. を参照）
 OTHER_MODEL = ""  #@param {type:"string"}
 #@markdown **図表番号を分ける（SPLIT_LABELS）**: 図表番号（「図1」）を J-STAGE の <label> 要素に分けるか（分けると番号とタイトルの間の空白 1 文字を落とします。既定は分けない）
 SPLIT_LABELS = False  #@param {type:"boolean"}
 """ + guard(1, 2, 3) + """AI = "api" if AI_MODE.startswith("API") else {"使わない": "none", "手動（チャットに貼り付け）": "manual"}[AI_MODE]
-PROVIDER = {"API で自動実行（ChatGPT）": "openai", "API で自動実行（Gemini）": "gemini"}.get(AI_MODE, "claude")
+PROVIDER = {"API で自動実行（ChatGPT）": "openai", "API で自動実行（Gemini）": "gemini",
+            "API で自動実行（Sakana AI）": "sakana"}.get(AI_MODE, "claude")
 if PROVIDER == "claude":
     API_MODEL = "auto" if MODEL.startswith("自動") else MODEL.strip()
 else:
     API_MODEL = OTHER_MODEL.strip()
     if not API_MODEL or API_MODEL.lower().startswith("claude"):
-        raise SystemExit("ChatGPT・Gemini を使うときは、ChatGPT・Gemini のモデル名（OTHER_MODEL）の欄に、使うモデルの名前を入力してください"
+        raise SystemExit("Claude 以外を使うときは、Claude 以外のモデル名（OTHER_MODEL）の欄に、使うモデルの名前を入力してください"
                          "（Claude Opus と同等以上の性能のモデルを推奨します。モデル名は各社の資料で確認してください）。")
 print("AI による補完:", AI_MODE + (f"（モデル: {API_MODEL}）" if AI == "api" else ""))
 if PROVIDER != "claude":
     print("※ 推奨は Claude です。API キーの作り方・料金などは各社の案内で確かめてください（「API キーについての詳細」の 6.）。")
+if PROVIDER == "sakana":
+    from IPython.display import HTML, display
+    from jasme_jats.colab import error_box
+    display(HTML(error_box("Sakana AI は、既定で送信した内容をモデルの学習に使う設定です",
+                           "未公開の原稿を送るので、手順 5 の前に、Sakana AI の管理画面（Console）の設定で"
+                           "学習への利用を止めて（オプトアウトして）ください。")))
 if AI == "none":
     from IPython.display import HTML, display
     from jasme_jats.colab import no_ai_box
@@ -447,7 +457,7 @@ display(Markdown(res.report_path.read_text(encoding="utf-8")))
 """, form=False),
     code("""
 #@title 7. 結果をダウンロード
-#@markdown 「変換結果_巻_開始ページ.zip」の中に、J-STAGE にアップロードする jasme.zip、XML、変換レポートが入っています。
+#@markdown 「変換結果_巻_開始ページ.zip」の中に、J-STAGE にアップロードする jasme_巻_開始ページ.zip、XML、変換レポートが入っています。
 """ + guard(1, 2, 3, 4, 5) + """archive = shutil.make_archive(str(WORK / f"変換結果_{res.xml_path.stem}"), "zip", OUT)
 files.download(archive)
 CONVERTED = {**globals().get("CONVERTED", {}), Path(archive).name: docx_path.name}

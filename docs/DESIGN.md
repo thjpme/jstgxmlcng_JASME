@@ -76,11 +76,15 @@
 - API モードと手動モードは、依頼文の作り方と回答の受け取り方が違うだけで、検証・適用・最終チェックは同じ。
 - API の呼び出し（Claude）: 既定モデル `claude-opus-5-5`、構造化出力（JSON スキーマ）、`effort: high`、ストリーミング、拒否時のサーバー側フォールバック（`fallbacks: "default"`）。
 - モデル: 既定は動作確認済みの `claude-opus-5-5`（提供終了は 2027-09-22 以降の予定）。指定したモデルが見つからない（提供終了など）ときは、Models API の一覧から最新の Opus を選んで 1 回だけやり直し、レポートに記録する。`auto`（Colab の「自動（最新の Opus）」）では、はじめから最新の Opus を使う。
-- API モードの入口は `ai_assist.call_provider()`。Claude（推奨・`call_api()`）のほか、ChatGPT（`call_openai()`。OpenAI の Responses API）と
-  Gemini（`call_gemini()`。Google の Gemini API）に対応する。どれも依頼文と画像を渡して JSON の文字列（`AIOutcome.raw`）を受け取るだけで、
+- API モードの入口は `ai_assist.call_provider()`。Claude（推奨・`call_api()`）のほか、ChatGPT（`call_openai()`。OpenAI の Responses API）、
+  Gemini（`call_gemini()`。Google の Gemini API）、Sakana AI（`call_sakana()`。Sakana Namazu・Fugu の OpenAI 互換 Chat Completions API、
+  接続先 `https://api.sakana.ai/v1`）に対応する。どれも依頼文と画像を渡して JSON の文字列（`AIOutcome.raw`）を受け取るだけで、
   検証・適用・最終チェックは共通。回答は同じ JSON スキーマ（`RESPONSE_SCHEMA`）で受け取る（OpenAI は strict の json_schema、
-  Gemini は `response_json_schema`）。
-- ChatGPT・Gemini では、モデルを利用者が指定する（既定値を持たない。モデルの入れ替わりが速く、動作確認もしていないため）。
+  Gemini は `response_json_schema`、Sakana AI は `response_format` の json_schema。Sakana AI では受け付けられなければ指定なしで
+  1 回だけやり直し、依頼文に入れた回答の形式（見本と項目の説明）で JSON を返させる）。
+- OpenAI 互換の接続先（Sakana AI）には、API キーを必ず明示して渡す（環境変数 `OPENAI_API_KEY` の OpenAI のキーを別の会社に送らないため）。
+- Sakana AI は既定で送信内容を学習に使う設定なので、ノートブックで選んだときに、学習への利用を止める（オプトアウトする）よう赤い枠で注意する。
+- Claude 以外では、モデルを利用者が指定する（既定値を持たない。モデルの入れ替わりが速く、動作確認もしていないため）。
   Claude Opus と同等以上の性能のモデルを推奨する。API キーの作り方などは利用者が各社の案内で調べる（ノートブックでは説明しない）。
 - 推奨を Claude とする理由: 依頼文（`SYSTEM_PROMPT`）と回答の検証を Claude で試して調整しているため。他社のモデルでも、誤った提案は
   検証で捨てられるので本文の文字は変わらないが、補完の効果は下がりうる。
@@ -106,6 +110,7 @@
 | 付記 | `<notes>` | J-STAGE の「注釈」 |
 | 資料 | `<app-group>` | J-STAGE の「付録」 |
 | 画像ファイル名 | `{巻}_{開始ページ}_{連番2桁}.png` | J-STAGE フォルダ構成（連番を 0 埋めすると表示順が揃う） |
+| アップロード用 ZIP の名前 | `{資料コード}_{記事識別子}.zip`（例: `jasme_31_1.zip`） | 複数の論文を続けて変換しても名前が重ならないように。フォルダ構成の資料（別紙 2）の `{資料コード}.zip` に記事識別子を足した。J-STAGE が確かめるのは中のフォルダ構成で、名前のエラーは日本語のファイル名（EMSGM034E）だけ（`docs/JSTAGE_NOTES.md`） |
 | 著作権表記・ライセンス | 出力しない | J-STAGE の資料の設定が使われる |
 
 ## 7. 既知の限界
