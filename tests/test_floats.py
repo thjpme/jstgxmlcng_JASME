@@ -50,8 +50,16 @@ def test_mechanical_placement_and_request(journal):
     doc, plan, linker = _mechanical(FLOAT, journal)
     assert {fid: i.mode for fid, i in plan.floats.items()} == {"s1": "unplaced", "s2": "unplaced", "s3": "unplaced",
                                                               "s4": "mechanical"}
+    # 位置を決められない図表は本文の冒頭（最初の章の前）に仮に置く。中身が単純なら組にする（s1: 表と図1、s3: 画像と図2）、
+    # 単純でなければ中身をそのまま（s2: 画像とキャプションが並んだ表）
+    k = next(i for i, n in enumerate(plan.body) if isinstance(n, Sec))
+    head = plan.body[:k]
+    assert [(type(n).__name__, n.caption.src if n.caption else None) for n in head] == [
+        ("FigNode", "d16"), ("FigNode", "d24"), ("TableNode", None)]
+    assert [t.tid for t in head[0].tables] == ["t2"] and [i.image_id for i in head[1].extra_images] == ["img3"]
+    assert head[2].table.tid == "t3"
     # s4: 図の左上がアンカー段落の左上にあるので、画像とキャプションを組にしてアンカー段落（d27）の前に置く
-    sec = plan.body[0]
+    sec = plan.body[k]
     kinds = [type(n).__name__ if not isinstance(n, FigNode) else f"Fig:{n.caption.src}" for n in sec.children]
     i = kinds.index("Fig:d29")
     assert sec.children[i + 1].para.src == "d27"
@@ -97,12 +105,37 @@ def test_missing_placement_is_reported_after_ai(journal, meta, tmp_path):
     data["placements"] = [p for p in data["placements"] if p["float"] != "s2"]
     res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=json.dumps(data),
                                                 convert_metafiles=False))
-    assert res.fidelity.ok and res.dtd_valid
+    assert res.fidelity.ok and res.dtd_valid and res.jstage_issues == []
     assert res.plan.unplaced_floats == ["s2"]
-    assert any(u[0] == "float" and "s2" in u[3] for u in res.unresolved_after)
+    assert any(u[0] == "float" and "手作業" in u[3] for u in res.unresolved_after)
+    # AI による補完でも位置が決まらなかった図表は本文の冒頭に置き、手作業で直すようレポートに出す
+    first = load(res).find("body")[0]
+    assert first.tag == "table-wrap" and "図3" in "".join(first.itertext())
+    report = res.report_path.read_text(encoding="utf-8")
+    assert "要対応: 位置を決められなかった図表が 1 件" in report and "手作業で正しい位置" in report
+    assert "本文の冒頭に仮に置いた図表" in report.split("## 13.")[1]
     path = tmp_path / "resp.json"
     path.write_text(json.dumps(data), encoding="utf-8")
     assert cli_main([str(FLOAT), "--out", str(tmp_path / "cli"), "--ai", "manual", "--ai-response", str(path)]) == 1
+
+
+def test_unplaced_simple_float_is_paired_at_body_start(journal, meta, tmp_path):
+    data = json.loads(RESPONSE)
+    data["placements"] = [p for p in data["placements"] if p["float"] != "s1"]
+    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=json.dumps(data),
+                                                convert_metafiles=False))
+    assert res.fidelity.ok and res.dtd_valid
+    first = load(res).find("body")[0]
+    assert first.tag == "fig" and first.get("id") == "F1" and first.find("table-wrap/table") is not None
+    assert "F1" in res.forced_floats[0] and "図1" in res.forced_floats[0]
+
+
+def test_manual_mode_before_response_places_floats_at_body_start(journal, meta, tmp_path):
+    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", convert_metafiles=False))
+    assert res.fidelity.ok and res.dtd_valid
+    assert res.forced_floats == []                          # AI の回答を反映する前は「手作業で直す」ではない
+    assert "本文の冒頭に仮に置いています" in res.output_note
+    assert all("AI の回答を反映すると配置される" in u[3] for u in res.unresolved_after if u[0] == "float")
 
 
 @pytest.mark.parametrize("bad, why", [

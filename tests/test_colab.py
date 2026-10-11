@@ -28,4 +28,4 @@ def test_ai_required_and_unplaced_boxes():
     assert "変換を中止しました" in ai_required_box("s1: …") and "#dc2626" in ai_required_box("x")
     assert unplaced_box(SimpleNamespace(unplaced_floats=[])) == ""
     html = unplaced_box(SimpleNamespace(unplaced_floats=["s1", "s3"]))
-    assert "s1, s3" in html and "placements" in html and "登載に使わない" in html
+    assert "s1, s3" in html and "本文の冒頭" in html and "手作業" in html

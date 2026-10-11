@@ -60,7 +60,8 @@ def main(argv=None):
     # AI の回答を反映した後（API、または手動モードで回答あり）も位置を決められない図表が残っている
     ai_applied = res.ai.mode == "api" or (res.ai.mode == "manual" and a.ai_response)
     if ai_applied and res.plan.unplaced_floats:
-        print("位置を決められない図表が残っています（レポート 3 章）: " + ", ".join(res.plan.unplaced_floats), file=sys.stderr)
+        print("位置を決められなかった図表を本文の冒頭に仮に置きました。XML の中で手作業で正しい位置に移してください（レポート 3 章）: "
+              + ", ".join(res.plan.unplaced_floats), file=sys.stderr)
         return 1
     return 0 if res.ok else 1
 

@@ -439,7 +439,9 @@ class Classifier:
     def build_body(self, items):
         plan = self.plan
         order = {id(b): k for k, (b, _) in enumerate(items)}
-        items, inserts = self.place_floats(items)
+        items, inserts, front = self.place_floats(items)
+        for k in front:
+            order[k] = -1           # 位置を決められない図表の中身（本文の冒頭に置く）
         flat = []
         for b, role in items:
             if isinstance(b, Table):
@@ -528,8 +530,10 @@ class Classifier:
         - AI の指定（placements）があれば、その組み合わせで、指定された段落の直後に置く。
         - なければ、図の左上がアンカー段落の左上の位置にあり（floats.at_anchor）、中身が単純（キャプション 1 つと本体 1 つ）な
           場合だけ、機械的にアンカー段落の前に置く。
-        - どちらでもなければ「位置を決められない図表」として記録し、中身はこれまでどおりアンカー段落の後に出す。
-        戻り値: (残りの items, [(items での位置, 同じ位置での順番, [(役割, 要素)])])。同じ位置に置くものはキャプションの番号順
+        - どちらでもなければ「位置を決められない図表」として記録し、本文の冒頭に仮に置く（利用者が手作業で移す）。
+          中身が単純なら図の本体とキャプションを組にし、そうでなければ中身をそのまま（これまでの扱いで）出す。
+        戻り値: (並べ直した items, [(items での位置, 同じ位置での順番, [(役割, 要素)])], 本文の冒頭に移した中身の id の集合)。
+        同じ位置に置くものはキャプションの番号順
         """
         plan = self.plan
         src_index = {b.src: k for k, (b, _) in enumerate(items) if isinstance(b, Para)}
@@ -544,7 +548,7 @@ class Classifier:
                 for img in b.images:
                     if img.float_id:
                         group_imgs.setdefault(img.float_id, []).append(img)
-        placed, inserts = set(), []
+        placed, inserts, front = set(), [], []
         layout = plan.layout
         for fl in getattr(self.doc, "floats", []):
             if fl.anchor_src not in src_index:
@@ -571,7 +575,15 @@ class Classifier:
                                    else "中身の組み合わせ（図表の本体とキャプション）を機械的に決められない")
                     plan.decide("mechanical", "figure", fl.anchor_src,
                                 f"テキストボックス・グループ図形 {fl.fid}（{self.float_summary(info)}）は、位置を機械的に"
-                                f"決められない（{info.reason}）。AI による補完で位置を指定する必要がある", applied=False)
+                                f"決められない（{info.reason}）。AI による補完で位置を指定する必要がある"
+                                "（指定がなければ本文の冒頭に仮に置く）", applied=False)
+                    # 位置は決められないので本文の冒頭に置く。組み合わせは、中身が単純なら機械的に組む
+                    entries = self.float_mechanical(info, groups, others)
+                    placed.update(id(b) for b in blocks)
+                    if entries is None:
+                        front.extend((b, roles[id(b)]) for b in blocks)
+                        continue
+                    inserts.append((-1, (self.float_number(info), len(inserts)), entries))
                     continue
                 target = src_index[fl.anchor_src]
                 info.mode = "mechanical"
@@ -580,7 +592,8 @@ class Classifier:
                             f"「{_para_text(plan.paras[fl.anchor_src])[:20]}」の前に置いた（図の左上がアンカー段落の左上の位置にあるため）")
             placed.update(id(b) for b in blocks)
             inserts.append((target, (self.float_number(info), len(inserts)), entries))
-        return [(b, r) for b, r in items if id(b) not in placed], inserts
+        rest = [(b, r) for b, r in items if id(b) not in placed]
+        return front + rest, inserts, {id(b) for b, _ in front}
 
     @staticmethod
     def float_number(info) -> float:
