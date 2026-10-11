@@ -21,4 +21,4 @@ def journal():
 def meta():
     return ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "lpage": "12",
                                   "pub_date": "2026-03-31", "received": "2025-06-01", "accepted": "2025-11-20",
-                                  "peer_review": "あり"})
+                                  "peer_review": "あり", "keywords": "proof; 論証; 数学的探究"})

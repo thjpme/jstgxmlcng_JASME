@@ -56,7 +56,7 @@ cells = [
 |---|---|
 | 1 | 準備（最初に 1 回だけ。▶ を押したら、終わるのを待たずに手順 2 の ▶ を押しておくと、準備の後に続けて実行されます） |
 | 2 | 論文の docx と PDF をアップロード（ボタンが別々に出ます） |
-| 3 | 書誌情報（巻・号・ページ・査読の有無・日付）を入力 |
+| 3 | 書誌情報（巻・号・ページ・査読の有無・キーワード・日付）を入力 |
 | 4 | AI による補完の方法を選ぶ |
 | 5 | 変換を実行（結果のレポートが表示されます） |
 | 6 | （手動モードのときだけ）AI の回答を貼り付けて再変換 |
@@ -164,14 +164,17 @@ last_page = ""  #@param {type:"string"}
 #@markdown **査読の有無**（必須。必ず選んでください）。査読ありで最終査読日が分かれば、last_review_date に YYYY-MM-DD の形で入力します（分からなければ空欄）。
 peer_review = "（選んでください）"  #@param ["（選んでください）", "査読あり", "査読なし"]
 last_review_date = ""  #@param {type:"string"}
+#@markdown **キーワード**（必須。3 個以上 100 個以下）。「；」または「;」で区切って 1 つの欄に入力します。かな・漢字を含むものは日本語、それ以外は英語のキーワードとして登録します。例: `equity; gender; 数学教育`
+keywords = ""  #@param {type:"string"}
 #@markdown **日付**（YYYY-MM-DD の形で。分からなければ空欄）
 pub_date = ""  #@param {type:"string"}
 jstage_release_date = ""  #@param {type:"string"}
 received = ""  #@param {type:"string"}
 accepted = ""  #@param {type:"string"}
-#@markdown **その他**（DOI は空欄なら 10.24529/jasme.巻.号_開始ページ を使います）
+#@markdown **その他**（DOI は空欄なら 10.24529/jasme.巻.号_開始ページ を使います。原稿種別は通常変更不要）
 doi = ""  #@param {type:"string"}
 subject = "論文"  #@param {type:"string"}
+subject_en = "Article"  #@param {type:"string"}
 corresponding_author = ""  #@param {type:"string"}
 #@markdown corresponding_author: 責任著者が何番目の著者か（例: 1）。複数なら「1,2」。
 """ + guard(1, 2) + """if peer_review not in ("査読あり", "査読なし"):
@@ -179,15 +182,20 @@ corresponding_author = ""  #@param {type:"string"}
 if peer_review == "査読なし" and last_review_date.strip():
     raise SystemExit("査読なしのときは last_review_date（最終査読日）を空欄にしてください。")
 meta_input = {"volume": volume, "issue": issue, "fpage": first_page, "lpage": last_page,
-              "peer_review": peer_review, "approved": last_review_date,
+              "peer_review": peer_review, "approved": last_review_date, "keywords": keywords,
               "pub_date": pub_date, "epub_date": jstage_release_date, "received": received,
-              "accepted": accepted, "doi": doi, "subject_ja": subject, "corresp": corresponding_author}
-from jasme_jats.config import ArticleMeta
+              "accepted": accepted, "doi": doi, "subject_ja": subject, "subject_en": subject_en,
+              "corresp": corresponding_author}
+from jasme_jats.config import ArticleMeta, keyword_problem
 try:
-    ArticleMeta.from_dict(meta_input)   # 日付の書き方などをここで確かめる
+    _meta = ArticleMeta.from_dict(meta_input)   # 日付の書き方などをここで確かめる
 except ValueError as e:
     raise SystemExit(f"入力を確認してください: {e}")
+if keyword_problem(_meta):
+    raise SystemExit(f"{keyword_problem(_meta)}。keywords に「；」または「;」で区切って入力してください。")
 print("入力しました（" + peer_review + "）。未入力の項目はレポートに表示されます。")
+print("キーワード（日）:", "；".join(_meta.keywords_ja) or "（なし）")
+print("キーワード（英）:", "; ".join(_meta.keywords_en) or "（なし）")
 """ + mark(3)),
     code("""
 #@title 4. AI による補完の方法を選ぶ

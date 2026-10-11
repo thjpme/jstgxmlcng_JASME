@@ -21,8 +21,9 @@ article_id_pattern = "{volume}_{fpage}"
 image_name_pattern = "{article_id}_{n:02d}"
 
 [defaults]
-article_type = "research-article"   # <article article-type>
-subject_ja = "論文"                  # 原稿種別 <subject>
+article_type = "other"              # 記事種別 <article article-type>（"other" = その他）
+subject_ja = "論文"                  # 原稿種別（日） <subj-group subj-group-type="article" xml:lang="ja"><subject>
+subject_en = "Article"               # 原稿種別（英） <subj-group subj-group-type="article" xml:lang="en"><subject>
 lang = "ja"                          # 本文の言語
 # 抄録の二次利用（J-STAGE では必須属性）。学会の方針を確認して設定すること。
 #   "secondary-allow" = 二次利用可 / "secondary-disallow" = 二次利用不可

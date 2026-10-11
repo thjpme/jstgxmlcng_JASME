@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,8 +30,9 @@ class JournalConfig:
     doi_pattern: str
     article_id_pattern: str
     image_name_pattern: str
-    article_type: str = "research-article"
+    article_type: str = "other"
     subject_ja: str = "論文"
+    subject_en: str = "Article"
     lang: str = "ja"
     abstract_specific_use: str = "secondary-disallow"
     split_labels: bool = False
@@ -61,6 +63,31 @@ def _date(v) -> Optional[_dt.date]:
         return _dt.date.fromisoformat(s)
     except ValueError:
         raise ValueError(f"日付「{v}」を読めません（YYYY-MM-DD の形で入力してください）") from None
+
+
+RE_JA_CHARS = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\uff65々]")
+KEYWORDS_MIN, KEYWORDS_MAX = 3, 100
+
+
+def split_keywords(v) -> tuple:
+    """「;」「；」区切りのキーワードを (日本語, 英語) に分ける。リストで渡されたらその要素ごと。"""
+    items = v if isinstance(v, (list, tuple)) else re.split(r"[;；]", str(v))
+    ja, en = [], []
+    for k in items:
+        k = str(k).strip()
+        if k:
+            (ja if RE_JA_CHARS.search(k) else en).append(k)
+    return ja, en
+
+
+def keyword_problem(meta) -> str:
+    """キーワードの個数が範囲外なら理由を返す（本誌は 3 個以上、J-STAGE の上限は 100 個）。"""
+    n = len(meta.keywords_ja) + len(meta.keywords_en)
+    if n < KEYWORDS_MIN:
+        return f"キーワードが {n} 個しかない（{KEYWORDS_MIN} 個以上必要）"
+    if n > KEYWORDS_MAX:
+        return f"キーワードが {n} 個ある（J-STAGE の上限は {KEYWORDS_MAX} 個）"
+    return ""
 
 
 _PEER_REVIEW = {"yes": "yes", "true": "yes", "あり": "yes", "査読あり": "yes", "有": "yes", "有り": "yes",
@@ -96,6 +123,7 @@ class ArticleMeta:
     doi: str = ""                               # 空なら doi_pattern から作る
     article_type: str = ""
     subject_ja: str = ""
+    subject_en: str = ""
     lang: str = ""
     keywords_en: list = field(default_factory=list)
     keywords_ja: list = field(default_factory=list)
@@ -114,6 +142,11 @@ class ArticleMeta:
             v = d.get(k)
             if isinstance(v, str):
                 d[k] = [x.strip() for x in v.replace("，", ",").replace("、", ",").split(",") if x.strip()]
+        # キーワードを 1 つの欄で受け取る場合（「;」「；」区切り）。かな・漢字を含むものは日本語、それ以外は英語のキーワード
+        if d.get("keywords"):
+            ja, en = split_keywords(d["keywords"])
+            d["keywords_ja"] = list(d.get("keywords_ja") or []) + ja
+            d["keywords_en"] = list(d.get("keywords_en") or []) + en
         if isinstance(d.get("corresp"), (int, str)):
             d["corresp"] = [int(x) for x in str(d["corresp"]).replace("，", ",").split(",") if str(x).strip()]
         known = {f for f in cls.__dataclass_fields__}

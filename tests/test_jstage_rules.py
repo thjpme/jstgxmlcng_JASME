@@ -68,3 +68,9 @@ def test_peer_review_dates():
     both = ok.replace("</history>", '<date date-type="accepted as received"><day></day><month></month>'
                                     "<year></year></date></history>")
     assert ids(both) == ["-"]
+
+
+def test_keyword_count_limit():
+    kw = "".join(f"<kwd>k{i}</kwd>" for i in range(101))
+    xml = XML.replace("{abstract}", f'<kwd-group kwd-group-type="author" xml:lang="en">{kw}</kwd-group>')
+    assert ids(xml) == ["EMSGM149E"]

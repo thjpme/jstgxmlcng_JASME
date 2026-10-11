@@ -37,6 +37,8 @@
   （`<abstract xml:lang="en">` にすると「抄録(英)が設定されていますが、タイトル(英)が設定されていません」で弾かれる）。
 - `<abstract>` の `specific-use` は抄録ライセンスフラグ（secondary-allow / secondary-disallow）。`<trans-abstract>` には付けられない。
 - 引用文献 `<ref>` の `xml:lang`（記述言語）がないと EMSGM247E。
+- キーワードは `<kwd-group kwd-group-type="author" xml:lang="ja|en">`。上限 100 個（EMSGM149E）、1 個 1000 文字まで。kwd-group があってキーワードがないと EMSGM234E。本誌は 3 個以上とする。
+- 原稿種別は `<subj-group subj-group-type="article" xml:lang="ja|en"><subject>`（200 文字まで）。記事種別 `article-type` の "other" はその他。
 - 査読の有無（ガイドライン 3.1.30）: `<history>` に、査読ありなら `<date date-type="approved">`（最終査読日。不明なら年月日を空に）、査読なしなら `<date date-type="accepted as received">`（年月日を空に）。どちらもなければ資料の設定が引き継がれる。年・月・日は、1 つでも入れるならすべて入れる。
 - 文字数の上限: 抄録・翻訳抄録 4000（p の合計）、記事表題 2000、引用文献（mixed-citation）4000。
 - `<label>` の自動付番は行われない。番号を表示したい場合は label か本文に書く。

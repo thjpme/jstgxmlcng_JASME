@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from lxml import etree
 
 from . import emit as E
-from .config import ArticleMeta, JournalConfig
+from .config import ArticleMeta, JournalConfig, keyword_problem
 from .model import Exclusion, Para
 from .ooxml import is_ws
 from .structure import (ArticlePlan, BackSec, FigNode, FnNode, FormulaNode, ListNode, PNode, QuoteNode,
@@ -139,11 +139,13 @@ class Builder:
         doi = meta.doi_value(j)
         if doi:
             _sub(am, "article-id", doi, pub_id_type="doi")
-        subject = meta.subject_ja or j.subject_ja
-        if subject:
+        subjects = [("ja", meta.subject_ja or j.subject_ja), ("en", meta.subject_en or j.subject_en)]
+        if any(s for _, s in subjects):
             cats = _sub(am, "article-categories")
-            sg = _lang(_sub(cats, "subj-group", subj_group_type="article"), "ja")
-            _sub(sg, "subject", subject)
+            for lang, subject in subjects:
+                if subject:
+                    sg = _lang(_sub(cats, "subj-group", subj_group_type="article"), lang)
+                    _sub(sg, "subject", subject)
         self.title_group(am)
         self.contrib_group(am)
         dates = [("ppub", meta.pub_date), ("epub", meta.epub_date)]
@@ -214,6 +216,9 @@ class Builder:
                 kg = _lang(_sub(am, "kwd-group", kwd_group_type="author"), lang)
                 for k in kws:
                     _sub(kg, "kwd", k)
+        problem = keyword_problem(meta)
+        if problem:
+            self.info.warnings.append(problem)
 
     def article_lang(self) -> str:
         return self.meta.lang or self.plan.lang or self.j.lang
