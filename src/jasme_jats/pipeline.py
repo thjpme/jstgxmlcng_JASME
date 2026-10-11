@@ -114,7 +114,7 @@ def tool_version() -> str:
 def _mechanical(docx_path, journal, overrides=None):
     doc = read_docx(docx_path)
     plan = classify(doc, journal, overrides)
-    linker = link(plan)
+    linker = link(plan, journal.ref_doi)
     return doc, plan, linker
 
 

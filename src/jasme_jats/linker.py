@@ -140,8 +140,9 @@ def body_paragraphs(plan: ArticlePlan):
 
 # ---------------------------------------------------------------------------- 個別のリンク
 class Linker:
-    def __init__(self, plan: ArticlePlan):
+    def __init__(self, plan: ArticlePlan, ref_doi: str = "uri"):
         self.plan = plan
+        self.ref_doi = ref_doi      # 引用文献中の DOI: "uri"（リンクとして表示）/ "pub-id"（DOI として登録）
         self.count = {"fig": 0, "table": 0, "disp-formula": 0, "fn": 0, "bibr": 0, "url": 0, "doi": 0, "word": 0}
         self.unresolved = []    # (category, src, text, detail)
 
@@ -214,6 +215,12 @@ class Linker:
             else:
                 i += 1
 
+    def doi_spec(self, doi: str, kind: str, where: str) -> LinkSpec:
+        href = "https://doi.org/" + doi
+        if where == "ref" and self.ref_doi == "pub-id":
+            return LinkSpec(kind="pub-id", attrs={"pub-id-type": "doi", "href": href})
+        return LinkSpec(kind=kind, attrs={"href": href})
+
     def urls(self, p: Para, where: str):
         plain = p.plain()
         kind = "ext-link" if where in ("fn", "back") else "uri"
@@ -222,10 +229,7 @@ class Linker:
             s, e = m.start(1), m.end(1)
             doi = _trim(plain[s:e])
             e = s + len(doi)
-            if where == "ref":
-                spec = LinkSpec(kind="pub-id", attrs={"pub-id-type": "doi", "href": "https://doi.org/" + doi})
-            else:
-                spec = LinkSpec(kind=kind, attrs={"href": "https://doi.org/" + doi})
+            spec = self.doi_spec(doi, kind, where)
             if apply_span(p, s, e, spec):
                 self.count["doi"] += 1
         for m in RE_URL.finditer(plain):
@@ -234,14 +238,14 @@ class Linker:
             e = s + len(url)
             href = url if re.match(r"https?://", url, re.I) else "http://" + url
             dm = re.match(r"https?://(?:dx\.)?doi\.org/(10\.\d{4,9}/\S+)", url, re.I)
-            if dm and where == "ref":
+            if dm and where == "ref" and self.ref_doi == "pub-id":
                 ds = s + dm.start(1)
                 spec = LinkSpec(kind="pub-id", attrs={"pub-id-type": "doi", "href": url})
                 if apply_span(p, ds, e, spec):
                     self.count["doi"] += 1
                 continue
             if apply_span(p, s, e, LinkSpec(kind=kind, attrs={"href": href})):
-                self.count["url"] += 1
+                self.count["doi" if dm else "url"] += 1
                 if not url.lower().startswith("http"):
                     self.note("url", p.src, f"「{url}」に http:// を補ってリンク先とした")
         if where == "ref":
@@ -249,7 +253,7 @@ class Linker:
                 s = m.start(1)
                 doi = _trim(m.group(1))
                 e = s + len(doi)
-                spec = LinkSpec(kind="pub-id", attrs={"pub-id-type": "doi", "href": "https://doi.org/" + doi})
+                spec = self.doi_spec(doi, "uri", where)
                 if apply_span(p, s, e, spec):
                     self.count["doi"] += 1
 
@@ -341,8 +345,8 @@ def _trim(url: str) -> str:
     return url
 
 
-def link(plan: ArticlePlan) -> Linker:
-    return Linker(plan).run()
+def link(plan: ArticlePlan, ref_doi: str = "uri") -> Linker:
+    return Linker(plan, ref_doi).run()
 
 
 def linked_ids(plan: ArticlePlan, ref_type: str) -> set:

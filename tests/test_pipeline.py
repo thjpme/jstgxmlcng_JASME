@@ -43,15 +43,13 @@ def test_links_in_full_sample(journal, meta, tmp_path):
     assert any(x.get("ref-type") == "disp-formula" and x.text == "式(1)" for x in root.iter("xref"))
     uris = [u.get(f"{{{XLINK}}}href") for u in root.iter("uri")]
     assert "https://www.mext.go.jp/" in uris
-    dois = [p.text for p in root.iter("pub-id")]
-    assert "10.1023/A:1012737223465" in dois and "10.1234/jt.2025.001" in dois
-    # Word のハイパーリンクが付いた文献中の DOI も、他の文献と同じ形（https://doi.org/ の文字 + pub-id）
-    assert "10.1017/CBO9781139171472" in dois
-    # DOI の pub-id にはリンク先（https://doi.org/…）も入れる
-    hrefs = {p.text: p.get(f"{{{XLINK}}}href") for p in root.iter("pub-id")}
-    assert hrefs["10.1234/jt.2025.001"] == "https://doi.org/10.1234/jt.2025.001"
-    assert hrefs["10.1023/A:1012737223465"] == "https://doi.org/10.1023/A:1012737223465"
-    assert not any("CBO9781139171472" in (u.get(f"{{{XLINK}}}href") or "") for u in root.iter("uri"))
+    # 引用文献中の DOI は既定で <uri>（J-STAGE の画面でリンクとして表示される）。文字はそのまま
+    ref_uris = {"".join(u.itertext()): u.get(f"{{{XLINK}}}href") for r in root.iter("ref") for u in r.iter("uri")}
+    assert ref_uris["https://doi.org/10.1023/A:1012737223465"] == "https://doi.org/10.1023/A:1012737223465"
+    assert ref_uris["10.1234/jt.2025.001"] == "https://doi.org/10.1234/jt.2025.001"          # 「doi:10.…」の DOI 部分
+    # Word のハイパーリンクが付いた DOI も同じ形
+    assert ref_uris["https://doi.org/10.1017/CBO9781139171472"] == "https://doi.org/10.1017/CBO9781139171472"
+    assert root.find(".//pub-id") is None
     ext = [e.get(f"{{{XLINK}}}href") for e in root.iter("ext-link")]
     assert "https://example.org/srp-notes" in ext
     # スタイル違反の見出しは機械的に章として推定される
@@ -115,3 +113,31 @@ def test_float_notes_list_unreferenced_and_uncaptioned(journal):
     notes = float_notes(plan)
     assert any(n.startswith("本文中のどこからも参照（リンク）されていない図: F2") for n in notes)
     assert any(n.startswith("キャプションのない表") and "T1" in n for n in notes)
+
+
+def test_ref_doi_as_pub_id(journal, meta, tmp_path):
+    # 設定 ref_doi = "pub-id": 「10.…」の部分を pub-id（リンク先も xlink:href に入れる）
+    import dataclasses
+    j = dataclasses.replace(journal, ref_doi="pub-id")
+    res = convert(FULL, meta, j, Options(out_dir=tmp_path, convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    root = load(res)
+    hrefs = {p.text: p.get(f"{{{XLINK}}}href") for p in root.iter("pub-id")}
+    assert hrefs["10.1234/jt.2025.001"] == "https://doi.org/10.1234/jt.2025.001"
+    assert hrefs["10.1023/A:1012737223465"] == "https://doi.org/10.1023/A:1012737223465"
+    assert "10.1017/CBO9781139171472" in hrefs                 # Word のハイパーリンクが付いた DOI
+    assert not any("CBO9781139171472" in (u.get(f"{{{XLINK}}}href") or "") for u in root.iter("uri"))
+
+
+def test_note_notes_detect_unreferenced_and_out_of_order(journal):
+    from jasme_jats.linker import apply_span, body_paragraphs
+    from jasme_jats.model import LinkSpec
+    from jasme_jats.pipeline import _mechanical
+    from jasme_jats.report import note_notes
+    doc, plan, linker = _mechanical(FULL, journal)
+    # 見本の論文では注2 が本文から参照されていない
+    assert note_notes(plan) == ["本文中のどこからも参照（リンク）されていない注: fn2（2) 詳細は https://examp）"]
+    # 注1 の参照より前に注2 への参照を作る → 本文での初出の順が 注2 → 注1
+    p = next(p for p, w in body_paragraphs(plan) if w == "body" and p.plain().strip())
+    assert apply_span(p, 0, 1, LinkSpec(kind="xref", attrs={"ref-type": "fn", "rid": "fn2"}))
+    assert note_notes(plan) == ["本文で注が番号順に参照されていない（本文での初出の順: 注2 → 注1）"]
