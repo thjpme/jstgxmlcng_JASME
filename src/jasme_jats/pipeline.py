@@ -55,13 +55,25 @@ def _head(plan, src) -> str:
 
 
 def _float_caption(info) -> str:
+    """浮動配置の図形の中のキャプション（表のセルの中のものも）の冒頭。"""
     import unicodedata
     from .structure import RE_FIGCAP, RE_TABCAP
-    for q in info.paras:
+    caps = []
+    for q in info.paras + [c for t in info.tables for c in t.paragraphs()]:
         t = unicodedata.normalize("NFKC", q.plain()).strip()
         if RE_FIGCAP.match(t) or RE_TABCAP.match(t):
-            return f"「{q.plain().strip()[:20]}」"
-    return "キャプションなし"
+            caps.append(f"「{q.plain().strip()[:20]}」")
+    return "".join(caps) or "キャプションなし"
+
+
+def _float_ids(plan, info) -> str:
+    """浮動配置の図形の中身を出力した図・表の ID（F1、T2 など）。"""
+    paras, tables = {id(q) for q in info.paras}, {id(t) for t in info.tables}
+    ids = [f.fid for f in plan.figures if f.fid and (
+        any(id(q) in paras for q in f.image_paras + ([f.caption] if f.caption is not None else []))
+        or any(id(t) in tables for t in f.tables))]
+    ids += [t.tid for t in plan.tables if t.table is not None and id(t.table) in tables]
+    return "・".join(ids)
 
 
 @dataclass
@@ -100,6 +112,7 @@ class Result:
     comments: int = 0
     has_pdf: bool = False
     output_note: str = ""
+    forced_floats: list = field(default_factory=list)   # AI による補完でも位置が決まらず、本文の冒頭に仮に置いた図表の説明
     xml_path: Optional[Path] = None
     zip_path: Optional[Path] = None
     report_path: Optional[Path] = None
@@ -159,13 +172,13 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     outcome = AIOutcome(mode=opts.ai_mode, model=opts.ai_model if opts.ai_mode == "api" else "")
     prompt_path = None
     output_note = ""
+    data = None                 # AI の回答（読めたもの）
 
     # ---------------------------------------------------------------- AI 補完
     if opts.ai_mode in ("api", "manual"):
         unsplit = [(src, msg.split("「", 1)[-1].split("」", 1)[0]) for cat, src, msg in info.notes if cat == "name"]
         req_text, req_images = build_request(plan, linker, info.exclusions, unsplit)
         blocks = image_blocks(doc, req_images)
-        data = None
         if opts.ai_mode == "api":
             outcome = call_api(req_text, blocks, model=opts.ai_model, api_key=opts.ai_api_key)
             if outcome.raw and not outcome.error:
@@ -191,7 +204,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
                 output_note = ("> 手動モード: 「AI依頼文.txt」をチャット（claude.ai など）に貼り付け、返ってきた JSON を"
                                "ツールに貼り戻して再実行すると、AI による補完が反映されます。この出力は AI 補完の前の状態です。")
                 if plan.unplaced_floats:
-                    output_note += ("位置を決められない図表（3 章）は、AI の回答を反映するまで、アンカー段落の後に仮に置いています。")
+                    output_note += ("位置を決められない図表（3 章）は、AI の回答を反映するまで、本文の冒頭に仮に置いています。")
         if data is not None:
             ops = split_ops(data)
             outcome.notes = [str(n) for n in data.get("notes", []) if str(n).strip()]
@@ -248,11 +261,23 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         if any(s == src and (t == year or (t and t in raw)) for s, t in ai_links):
             continue
         unresolved_after.append(u)
+    # 位置を決められなかった図表（本文の冒頭に仮に置いている）
+    pending_ai = opts.ai_mode == "manual" and data is None and not outcome.error   # 手動モードで AI の回答を待っている
+    forced_floats = []
     for sid in plan.unplaced_floats:
         fi = plan.floats[sid]
-        unresolved_after.append(("float", fi.float.anchor_src, _float_caption(fi),
-                                 f"テキストボックス・グループ図形 {sid} の位置を決められない（{fi.reason}）。"
-                                 "AI による補完で位置を指定する（今はアンカー段落の後に仮に置いている）"))
+        ids = _float_ids(plan, fi)
+        where = f"XML の本文の冒頭にある {ids}" if ids else "XML の本文の冒頭"
+        near = f"図形 {sid} のアンカー段落「{_head(plan, fi.float.anchor_src)}」付近"
+        if pending_ai:
+            detail = (f"テキストボックス・グループ図形 {sid} の位置を決められない（{fi.reason}）。AI の回答を反映すると配置される"
+                      f"（今は本文の冒頭に仮に置いている）")
+        else:
+            detail = (f"AI による補完でも位置を決められなかったため、本文の冒頭に仮に置いた。手作業で、{where}を正しい位置"
+                      f"（Word で表示したときに図の左上の直上にある本文の段落の後。{near}）に移すこと。"
+                      f"機械的に決められなかった理由: {fi.reason}")
+            forced_floats.append(f"{_float_caption(fi)}: {where}（{near}）")
+        unresolved_after.append(("float", fi.float.anchor_src, _float_caption(fi), detail))
     warnings = list(dict.fromkeys(doc.warnings + info.warnings))
     build_notes = [Decision(did=f"M-B{i}", stage="mechanical", category=c, src=s, message=m,
                             location=plan.locations.get(s, "")) for i, (c, s, m) in enumerate(info.notes, 1)]
@@ -263,7 +288,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         link_counts=linker.count, unresolved_after=unresolved_after, images=images, warnings=warnings, ai=outcome,
         build_notes=build_notes, hidden_text=doc.hidden_text, tracked_changes=doc.tracked_changes,
         comments=doc.comments, has_pdf=has_pdf, output_note=output_note, xml_path=flat_xml, zip_path=zip_path,
-        prompt_path=prompt_path)
+        prompt_path=prompt_path, forced_floats=forced_floats)
     report_path = out_dir / f"{aid}_変換レポート.md"
     report_path.write_text(render(res), encoding="utf-8")
     res.report_path = report_path

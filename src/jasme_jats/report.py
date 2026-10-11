@@ -129,11 +129,18 @@ def render(r) -> str:
         ("画像", f"{len(r.images)} 件（要対応 {sum(1 for i in r.images if i.status in ('failed', 'missing'))} 件、9 章）"),
         ("警告", f"{len(r.warnings)} 件（10 章）"),
     ]
+    if plan.unplaced_floats:
+        rows.insert(7, ("位置を決められなかった図表（3 章）", f"{len(plan.unplaced_floats)} 件（本文の冒頭に仮に配置）"))
     L.append(table(["項目", "結果"], rows))
     L.append("")
     if not fid.ok or fid.final_ok is False:
         L.append("> **注意: 文字の不変性チェックが不合格です。** 出力された XML の本文が docx と一致していません。"
                  "下の 5 章の差分を確認し、この XML は登載に使わないでください（変換ツールの不具合の可能性があります）。")
+        L.append("")
+    if r.forced_floats:
+        L.append(f"> **要対応: 位置を決められなかった図表が {len(r.forced_floats)} 件あります（AI による補完でも決まりませんでした）。** "
+                 "本文の冒頭に仮に置いています。登載の前に、XML の中でこれらの図表を手作業で正しい位置（Word で表示したときに、図の左上の"
+                 "直上にある本文の段落の後）に移してください（3 章）: " + "、".join(esc(x) for x in r.forced_floats))
         L.append("")
     if r.output_note:
         L.append(r.output_note)
@@ -358,6 +365,8 @@ def render(r) -> str:
     L.append("")
     L.append(f"- [{'x' if r.has_pdf else ' '}] PDF（{m.article_id(j)}.pdf）を記事フォルダに入れる（J-STAGE では PDF が必須）")
     L.append("- [ ] 2 章（AI による補完）と 3 章（未解決）を PDF と照らして確認する")
+    if r.forced_floats:
+        L.append("- [ ] 本文の冒頭に仮に置いた図表（3 章の「図表の位置」）を、XML の中で手作業で正しい位置に移す")
     L.append("- [ ] 9 章で「要対応」の画像があれば用意して Graphics/ に入れる")
     L.append("- [ ] 11 章の書誌情報（巻・号・頁・日付・DOI）を確認する")
     L.append(f"- [ ] J-STAGE 編集登載システムで、巻（{esc(m.volume or '?')}）・号（{esc(m.issue or '?')}）と、その号のセクション"
