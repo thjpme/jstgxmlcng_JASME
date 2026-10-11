@@ -38,6 +38,7 @@ class JournalConfig:
     split_labels: bool = False
     ref_doi: str = "pub-id"
     styles: dict = field(default_factory=dict)
+    manuscript_types: dict = field(default_factory=dict)   # 原稿種別の選択肢（日本語 → 英語）
 
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "JournalConfig":
@@ -46,7 +47,13 @@ class JournalConfig:
             data = tomllib.load(f)
         j = data.get("journal", {})
         d = data.get("defaults", {})
-        return cls(styles=data.get("styles", {}), **j, **d)
+        return cls(styles=data.get("styles", {}), manuscript_types=data.get("manuscript_types", {}), **j, **d)
+
+    def subjects(self, meta) -> tuple:
+        """原稿種別（日本語, 英語）。英語が入力されていなければ、選択肢の対応表から決める。"""
+        ja = meta.subject_ja or self.subject_ja
+        en = meta.subject_en or self.manuscript_types.get(ja) or (self.subject_en if ja == self.subject_ja else "")
+        return ja, en
 
 
 def _date(v) -> Optional[_dt.date]:
