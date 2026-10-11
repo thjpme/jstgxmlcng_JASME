@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .model import Atom, Cell, Document, ImageRef, Para, Row, Table
+from .model import Atom, Cell, Document, Float, ImageRef, Layout, Para, Row, Table
 from .numbering import Numbering
 from .ooxml import (A_NS, BR_TEXT_TYPES, O_NS, PIC_NS, R_NS, V_NS, WP_NS, DocxPackage, m,
                     on_off, paragraph_ids, run_hidden, sym_char, w, wval)
@@ -84,6 +84,8 @@ class Reader:
         self.hidden = []
         self.textbox_excluded = []
         self._img_count = 0
+        self.floats = []
+        self._float = None      # 読み取り中の浮動配置の図形（Float）
 
     # ------------------------------------------------------------ styles
     def style_chain(self, sid):
@@ -123,7 +125,7 @@ class Reader:
         doc = Document(blocks=blocks, footnotes=footnotes, endnotes=endnotes, media=self.media,
                        styles=self.styles, warnings=self.warnings, hidden_text=self.hidden,
                        textbox_excluded=self.textbox_excluded, tracked_changes=tracked, comments=comments,
-                       images=self.images)
+                       images=self.images, floats=self.floats, layout=read_layout(root, self.pkg))
         return doc
 
     def read_notes(self, part, tag, prefix) -> dict:
@@ -174,7 +176,8 @@ class Reader:
         tpr = tbl.find(w("tblPr"))
         sid = wval(tpr.find(w("tblStyle"))) if tpr is not None else ""
         t = Table(tid=f"t{self._tcount}", style_id=sid or "",
-                  style_name=self.styles[sid].name if sid in self.styles else (sid or ""))
+                  style_name=self.styles[sid].name if sid in self.styles else (sid or ""),
+                  float_id=self._float.fid if self._float else "")
         for tr in tbl.findall(w("tr")):
             trpr = tr.find(w("trPr"))
             row = Row(header=trpr is not None and on_off(trpr.find(w("tblHeader"))))
@@ -225,7 +228,8 @@ class Reader:
             numpr = (sn[0], numpr[1]) if sn else None
         para = Para(src=src, style_id=sid, style_name=self.styles[sid].name if sid in self.styles else sid,
                     numbering=numpr if numpr and numpr[0] not in (None, "0") else None,
-                    align=align, section_break=sect, in_textbox=in_textbox)
+                    align=align, section_break=sect, in_textbox=in_textbox,
+                    float_id=self._float.fid if self._float else "")
         if para.numbering:
             para.autonum = self.numbering.label(*para.numbering)
         self._extra = []
@@ -386,7 +390,8 @@ class Reader:
                 data = self.pkg.read(target)
                 if data is not None:
                     self.media[target] = data
-        img = ImageRef(rel_id=rid or "", target=target, source=source, image_id=f"img{self._img_count}", **kw)
+        img = ImageRef(rel_id=rid or "", target=target, source=source, image_id=f"img{self._img_count}",
+                       float_id=self._float.fid if self._float else "", **kw)
         if not target and not kw.get("shape_only"):
             img.shape_only = True
         self.images.append(img)
@@ -433,6 +438,13 @@ class Reader:
                 dp = holder.find(f"{{{WP_NS}}}docPr")
                 if dp is not None:
                     descr = dp.get("descr", "") or dp.get("title", "")
+            has_tx = any(True for _ in el.iter(w("txbxContent")))
+            gd = el.find(f".//{{{A_NS}}}graphicData")
+            uri = gd.get("uri", "") if gd is not None else ""
+            outer = self._float
+            if (not inline and holder is not None and outer is None and self.part == "word/document.xml"
+                    and (has_tx or "wordprocessingGroup" in uri or "wordprocessingCanvas" in uri)):
+                self._float = self._new_float(holder, para, "wordprocessingGroup" in uri)
             # テキストボックスの中の画像は、テキストボックスの段落として読む（ここで拾うと二重になる）
             pics = [pic for pic in el.iter(f"{{{PIC_NS}}}pic") if not _in_textbox(pic, el)]
             for pic in pics:
@@ -443,10 +455,7 @@ class Reader:
                 img = self._new_image(rid, "drawing", cx_emu=pcx, cy_emu=pcy, inline=inline, descr=descr)
                 if not hidden:
                     para.atoms.append(Atom(kind="image", image=img))
-            has_tx = any(True for _ in el.iter(w("txbxContent")))
             if not pics:
-                gd = el.find(f".//{{{A_NS}}}graphicData")
-                uri = gd.get("uri", "") if gd is not None else ""
                 if not has_tx or "wordprocessingGroup" in uri or "wordprocessingCanvas" in uri or "chart" in uri:
                     img = self._new_image(None, "drawing", cx_emu=cx, cy_emu=cy, inline=inline, descr=descr,
                                           shape_only=True)
@@ -454,6 +463,7 @@ class Reader:
                         para.atoms.append(Atom(kind="image", image=img))
             if has_tx:
                 self._textboxes(el, para)
+            self._float = outer
             return
         # VML（w:pict / w:object）
         progid = ""
@@ -482,6 +492,80 @@ class Reader:
                 para.atoms.append(Atom(kind="image", image=img))
         if has_tx:
             self._textboxes(el, para)
+
+
+    def _new_float(self, holder, para, group) -> Float:
+        fl = Float(fid=f"s{len(self.floats) + 1}", anchor_src=para.src, group=group)
+        for tag, pre in (("positionH", "h"), ("positionV", "v")):
+            pos = holder.find(f"{{{WP_NS}}}{tag}")
+            if pos is None:
+                continue
+            setattr(fl, f"{pre}_from", pos.get("relativeFrom", ""))
+            off, al = pos.find(f"{{{WP_NS}}}posOffset"), pos.find(f"{{{WP_NS}}}align")
+            if off is not None and (off.text or "").strip().lstrip("-").isdigit():
+                setattr(fl, f"{pre}_offset_cm", int(off.text) / 360000.0)
+            elif al is not None:
+                setattr(fl, f"{pre}_align", (al.text or "").strip())
+        ext = holder.find(f"{{{WP_NS}}}extent")
+        if ext is not None:
+            fl.width_cm, fl.height_cm = int(ext.get("cx", "0")) / 360000.0, int(ext.get("cy", "0")) / 360000.0
+        fl.wrap = next((etree_local(c) for c in holder if etree_local(c).startswith("wrap")), "")
+        self.floats.append(fl)
+        return fl
+
+
+def etree_local(el) -> str:
+    tag = el.tag if isinstance(el.tag, str) else ""
+    return tag.rsplit("}", 1)[-1]
+
+
+TWIP_CM = 2.54 / 1440
+
+
+def read_layout(root, pkg) -> Layout:
+    """本文の段組みと行の設定。段組みのあるセクション（なければ最後のセクション）の w:sectPr から求める。"""
+    sects = list(root.iter(w("sectPr")))
+    if not sects:
+        return Layout()
+
+    def num(el, attr, default=0):
+        try:
+            return int(el.get(w(attr))) if el is not None and el.get(w(attr)) is not None else default
+        except ValueError:
+            return default
+    sp = next((x for x in sects if num(x.find(w("cols")), "num", 1) > 1), sects[-1])
+    pg, mar, cols, grid = (sp.find(w(t)) for t in ("pgSz", "pgMar", "cols", "docGrid"))
+    width = num(pg, "w", 11906) - num(mar, "left", 1440) - num(mar, "right", 1440)
+    height = num(pg, "h", 16838) - num(mar, "top", 1440) - num(mar, "bottom", 1440)
+    n = max(1, num(cols, "num", 1))
+    col = (width - num(cols, "space", 425) * (n - 1)) / n
+    font_pt = _body_font_pt(pkg)
+    # 文字数と行数の指定（w:docGrid）があれば、その行送りと字送り（charSpace は 1/4096 pt 単位の追加分）
+    gtype = grid.get(w("type")) if grid is not None else ""
+    pitch = num(grid, "linePitch", 0) if gtype in ("lines", "linesAndChars", "snapToChars") else 0
+    char_pt = font_pt + (num(grid, "charSpace", 0) / 4096.0 if gtype in ("linesAndChars", "snapToChars") else 0)
+    return Layout(text_width_cm=width * TWIP_CM, text_height_cm=height * TWIP_CM, columns=n,
+                  column_width_cm=col * TWIP_CM, line_pitch_cm=(pitch or font_pt * 20 * 1.5) * TWIP_CM,
+                  chars_per_line=(col / 20.0) / char_pt if char_pt else 0.0)
+
+
+def _body_font_pt(pkg) -> float:
+    """既定の段落スタイル（標準）の文字の大きさ（pt）。"""
+    st = pkg.xml("word/styles.xml")
+    size = None
+    if st is not None:
+        dd = st.find(f"{w('docDefaults')}/{w('rPrDefault')}/{w('rPr')}/{w('sz')}")
+        if dd is not None:
+            size = dd.get(w("val"))
+        for s in st.findall(w("style")):
+            if s.get(w("type")) == "paragraph" and s.get(w("default")) in ("1", "true"):
+                sz = s.find(f"{w('rPr')}/{w('sz')}")
+                if sz is not None:
+                    size = sz.get(w("val"))
+    try:
+        return int(size) / 2.0 if size else 10.5
+    except ValueError:
+        return 10.5
 
 
 def _in_textbox(el, container) -> bool:

@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 from .config import ArticleMeta, JournalConfig
-from .pipeline import Options, convert
+from .pipeline import AIRequiredError, Options, convert
 
 
 def main(argv=None):
@@ -36,7 +36,11 @@ def main(argv=None):
                    ai_mode=a.ai, ai_model=a.ai_model, ai_api_key=os.environ.get("ANTHROPIC_API_KEY"),
                    ai_response=a.ai_response.read_text(encoding="utf-8") if a.ai_response else None,
                    pdf_path=a.pdf, convert_metafiles=not a.no_metafile_conversion)
-    res = convert(a.docx, meta, journal, opts)
+    try:
+        res = convert(a.docx, meta, journal, opts)
+    except AIRequiredError as e:
+        print(e, file=sys.stderr)
+        return 2
     fid = res.fidelity
     print(f"文字の不変性チェック: {fid.summary()}（段落 {fid.units} 件中 {fid.mapped} 件を出力、{len(fid.excluded)} 件は除外）")
     print(f"最終出力の再チェック: {'合格' if fid.final_ok else '不合格'}")
@@ -53,6 +57,11 @@ def main(argv=None):
         print(f"AI 依頼文: {res.prompt_path}")
     if res.ai.error:
         print(f"AI: {res.ai.error}", file=sys.stderr)
+    # AI の回答を反映した後（API、または手動モードで回答あり）も位置を決められない図表が残っている
+    ai_applied = res.ai.mode == "api" or (res.ai.mode == "manual" and a.ai_response)
+    if ai_applied and res.plan.unplaced_floats:
+        print("位置を決められない図表が残っています（レポート 3 章）: " + ", ".join(res.plan.unplaced_floats), file=sys.stderr)
+        return 1
     return 0 if res.ok else 1
 
 

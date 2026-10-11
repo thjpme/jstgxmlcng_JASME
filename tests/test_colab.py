@@ -20,3 +20,12 @@ def test_no_ai_box_is_red_warning():
     from jasme_jats.colab import no_ai_box
     html = no_ai_box()
     assert "推奨しません" in html and "#dc2626" in html and "手動（チャットに貼り付け）" in html
+
+
+def test_ai_required_and_unplaced_boxes():
+    from types import SimpleNamespace
+    from jasme_jats.colab import ai_required_box, unplaced_box
+    assert "変換を中止しました" in ai_required_box("s1: …") and "#dc2626" in ai_required_box("x")
+    assert unplaced_box(SimpleNamespace(unplaced_floats=[])) == ""
+    html = unplaced_box(SimpleNamespace(unplaced_floats=["s1", "s3"]))
+    assert "s1, s3" in html and "placements" in html and "登載に使わない" in html

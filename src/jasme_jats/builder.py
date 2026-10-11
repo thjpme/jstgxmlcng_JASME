@@ -73,7 +73,7 @@ class Builder:
                 k += 1
                 fn_numbers[fn.word_id] = (fn.fid, k)
                 fn.number = fn.number or k
-        self.em = E.Emitter(self.name_image, fn_numbers)
+        self.em = E.Emitter(self.name_image, fn_numbers, plan.moved_images)
 
     # ------------------------------------------------------------------ 画像
     def name_image(self, img) -> str:
@@ -460,11 +460,18 @@ class Builder:
                     self.info.warnings.append(
                         f"{img.image_id}: Word の図形（画像ファイルなし）のため画像化できない。"
                         f"{img.export_name} を手作業で用意すること")
+        for img in node.extra_images:
+            g = _sub(f, "graphic")
+            g.set(f"{{{XLINK}}}href", self.name_image(img))
+            graphics += 1
+        for t in node.tables:
+            # 表で組んだ図（問題文など）: 図の中に表を入れる（JATS の fig は table-wrap を含められる）
+            self.table(_sub(f, "table-wrap"), t)
         if node.formula is not None:
             parent.remove(f)
             self.formula_image(parent, node)
             return
-        if graphics == 0 and node.caption is not None:
+        if graphics == 0 and not node.tables and node.caption is not None:
             self.info.warnings.append(f"{node.fid or '図'}: 画像が見つからないため <graphic> なしで出力")
 
     def caption_more(self, holder, paras):

@@ -20,9 +20,10 @@ from dataclasses import dataclass, field
 
 from lxml import etree
 
+from .floats import describe, estimate_top_left
 from .model import OBJ, LinkSpec, Para
 from .omml import MML_NS, OmmlConverter, math_display_text
-from .structure import ArticlePlan, _para_text
+from .structure import ArticlePlan, Classifier, _para_text
 
 DEFAULT_MODEL = "claude-opus-5-5"
 
@@ -74,14 +75,39 @@ OP_SCHEMA = {
                  "confidence"],
     "additionalProperties": False,
 }
+PLACEMENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "float": {"type": "string", "description": "図形の ID（s1 など。「位置を決められなかった図表」に挙げたもの）"},
+        "after": {"type": "string", "description": "図表を置く位置: Word で表示したときに図の左上の直上にある本文の文章を含む段落の ID"},
+        "items": {"type": "array", "description": "図形の中身を、図・表ごとに組にしたもの", "items": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": ["fig", "table"]},
+                "caption": {"type": "array", "items": {"type": "string"},
+                            "description": "キャプションの段落 ID（出典などの続きの段落も順に）"},
+                "body": {"type": "array", "items": {"type": "string"},
+                         "description": "本体: 表 ID（t3 など）、画像 ID（img2 など）、または画像だけの段落 ID"},
+            },
+            "required": ["kind", "caption", "body"],
+            "additionalProperties": False,
+        }},
+        "reason": {"type": "string", "description": "位置と組み合わせの根拠（日本語で具体的に）"},
+        "confidence": {"type": "string", "enum": ["高", "中", "低"]},
+    },
+    "required": ["float", "after", "items", "reason", "confidence"],
+    "additionalProperties": False,
+}
 RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
         "operations": {"type": "array", "items": OP_SCHEMA},
+        "placements": {"type": "array", "items": PLACEMENT_SCHEMA,
+                       "description": "位置を決められなかった図表（テキストボックス・グループ図形）の位置と組み合わせ"},
         "notes": {"type": "array", "items": {"type": "string"},
                   "description": "操作にはできないが、人が確認すべきと考えたこと（日本語）"},
     },
-    "required": ["operations", "notes"],
+    "required": ["operations", "placements", "notes"],
     "additionalProperties": False,
 }
 
@@ -92,7 +118,7 @@ Python のプログラムがすでに機械的な変換を済ませています�
 - 論文の文字は 1 文字も変えてはいけません（誤字脱字に見えても直さない）。あなたが提案できるのは、既存の文字列に対する次の操作だけです。
 - 操作の text には、段落中にある文字列を一字一句そのまま書いてください。プログラムが完全一致で探し、見つからなければその操作は捨てられます。
 
-提案できる操作:
+提案できる操作（6 の placements は operations とは別の一覧に書きます）:
 1. link_citation: 本文中の引用を引用文献リストの文献にリンクする。リンクにするのは「年」の部分だけです（例: 「Claude (2025)」なら text は「2025」、「中原（1995, p.3）」なら「1995」）。
    機械処理は「著者名（年）」「（著者名, 年）」の形だけを扱います。著者名と年が離れている、括弧がない、著者名の表記が文献リストと異なる、年が食い違う、などで未リンクのものを探してください。
    年が文献リストと食い違う場合（本文 1977 / 文献 1976 など）は、文脈から同じ文献と判断できるときだけ、確度「低」で提案してください。
@@ -102,6 +128,21 @@ Python のプログラムがすでに機械的な変換を済ませています�
    著者表の中の段落（役割 author_ja / aff_ja / author_en / aff_en）は確認のために載せているもので、役割は変えられません。
 4. formula_image: 画像として貼り付けられた数式を MathML（MathML 2.0、<math xmlns="http://www.w3.org/1998/Math/MathML"> を根要素とする）に書き起こす。元の画像は残したまま、読み取った数式を併記します。数式でない画像には提案しないでください。
 5. split_name: 姓と名の間に空白がない和文の著者名について、姓と名の境目を指定する（surname + given が氏名の文字列と完全に一致すること）。
+
+6. placements（図表の位置と組み合わせ）: 依頼文の「# 位置を決められなかった図表」に挙げた図形（s1 など）は、1 つ残らず、
+   必ず placements に 1 件ずつ指定してください（省略できません）。これらは Word のテキストボックスやグループ図形に入った図表
+   （2 段組をまたぐ図など）で、docx には Word で表示したときの位置が記録されていないため、プログラムでは置き場所を決められませんでした。
+   - after: 図表を置く位置です。Word で表示したときに、図の左上の直上にある本文の文章を含む段落の ID を書いてください（その段落の直後に置きます）。
+     図の直上が別の図表なら、さらにその上にある本文の文章を含む段落です。図が段やページの先頭にあるときは、読む順で直前にある本文の段落です。
+     依頼文に示した配置の情報（アンカー段落、アンカー段落からの距離、行数による推定）から判断してください。行数による推定は文字数から計算した
+     目安で、ページや段の区切りは考慮していません。図の番号の順序（図2 は図1 より後）とも矛盾しないようにしてください。
+     after に書けるのは「# 論文の段落一覧」の本文の段落（テキストボックス・グループ図形の中の段落と、表のセルの段落を除く）だけです。
+   - items: 図形の中身を、図・表ごとに組にしたものです。kind は fig（図）か table（表）。caption はキャプションの段落 ID
+     （「図1　…」の段落と、それに続く出典などの段落を順に）。body は本体で、表 ID（t3 など）、画像 ID（img2 など）、または画像だけの段落 ID。
+     問題文などを表で組んだ図は、kind を fig、body をその表にします。1 つの図形に図が 2 つ並んでいる（表の中に画像とキャプションが並んでいる）
+     場合は、画像とキャプションのセルの段落を図ごとに組にして、items を 2 つにします。表は kind を table、body をその表 1 つにします。
+   - 「# 位置を機械的に決めた図表（変更不可）」に挙げた図形は、位置も組み合わせも確定しています。placements に書かないでください（書いても採用されません）。
+   - テキストボックス・グループ図形の中の段落の役割は、set_role ではなく placements で指定してください。
 
 reason には、人が後で確認できるように、判断の根拠を日本語で具体的に書いてください（例: 「第3章第2段落の『その後の論考（2001）』は、直前の主語『国宗は』から国宗（2001）と判断」）。
 confidence は 高・中・低 のいずれか。自信がないものは提案しないか、「低」としてください。
@@ -187,6 +228,8 @@ def build_request(plan: ArticlePlan, linker, build_exclusions=(), unsplit_names=
             continue
         role = p.role or region
         loc = plan.locations.get(src, "")
+        if p.float_id:
+            loc = f"図形 {p.float_id} の中"
         text = para_view_with_links(p)
         if not text.strip():
             continue
@@ -231,7 +274,68 @@ def build_request(plan: ArticlePlan, linker, build_exclusions=(), unsplit_names=
             for img in ip.images:
                 if f.caption is None and img.target:
                     images.append(img)
+    lines += float_section(plan, images)
+    seen = set()
+    images = [i for i in images if not (i.image_id in seen or seen.add(i.image_id))]
     return "\n".join(lines), images
+
+
+def float_section(plan: ArticlePlan, images: list) -> list:
+    """依頼文の「位置を決められなかった図表」と「位置を機械的に決めた図表（変更不可）」の節。images に添付する画像を足す。"""
+    if not plan.floats:
+        return []
+    lines = []
+    unplaced = [info for info in plan.floats.values() if info.mode == "unplaced"]
+    fixed = [info for info in plan.floats.values() if info.mode != "unplaced"]
+    lay = plan.layout
+    if unplaced:
+        lines.append("\n# 位置を決められなかった図表（テキストボックス・グループ図形）")
+        lines.append("以下のすべてについて、placements に位置（after）と組み合わせ（items）を必ず指定してください。")
+        if lay and lay.columns:
+            lines.append(f"本文の体裁: {lay.columns} 段組、1 段の幅 {lay.column_width_cm:.1f} cm（1 行 約 {lay.chars_per_line:.0f} 字）、"
+                         f"行送り {lay.line_pitch_cm:.2f} cm（1 段 約 {lay.text_height_cm / lay.line_pitch_cm:.0f} 行）、"
+                         f"本文の幅 {lay.text_width_cm:.1f} cm")
+        seq = plan.body_seq
+        for info in unplaced:
+            fl = info.float
+            anchor = plan.paras.get(fl.anchor_src)
+            lines.append(f"\n[{fl.fid}] アンカー段落: [{fl.anchor_src}]「{_para_text(anchor)[:30] if anchor else ''}」")
+            lines.append(f"  docx に記録された位置: {describe(fl, lay)}")
+            k = seq.index(fl.anchor_src) if fl.anchor_src in seq else -1
+            est = estimate_top_left(fl, lay, [plan.paras[x] for x in seq[k:k + 40]], seq[k - 1] if k > 0 else "") \
+                if k >= 0 else None
+            if est and est[0]:
+                lines.append(f"  行数による推定: 図の左上の直上の本文は段落 [{est[0]}]（{est[1]}）")
+            else:
+                lines.append("  行数による推定: できない（縦の位置がアンカー段落を基準にしていない、または別の段にあるため）。"
+                             "アンカー段落の前後と本文中の参照から判断してください")
+            lines.append("  中身:")
+            for q in info.paras:
+                if q.is_blank and not q.images:
+                    continue
+                lines.append(f"    段落 [{q.src}]（スタイル: {q.style_name}）{para_view(q)[:80]}")
+                images.extend(i for i in q.images if i.target)
+            for t in info.tables:
+                cells = [c for c in t.paragraphs() if not c.is_blank or c.images]
+                lines.append(f"    表 {t.tid}（{len(t.rows)} 行。セルの段落: "
+                             + "、".join(f"[{c.src}]{para_view(c)[:30]}" for c in cells[:12])
+                             + ("…" if len(cells) > 12 else "") + "）")
+                images.extend(i for c in cells for i in c.images if i.target)
+            for img in info.images:
+                lines.append(f"    画像 {img.image_id}（グループ図形の画像。{img.width_cm:.1f}cm×{img.height_cm:.1f}cm）")
+                if img.target:
+                    images.append(img)
+            if info.reason:
+                lines.append(f"  機械的に決められなかった理由: {info.reason}")
+    if fixed:
+        lines.append("\n# 位置を機械的に決めた図表（変更不可。placements に書かないこと）")
+        for info in fixed:
+            fl = info.float
+            caps = [q for q in info.paras if q.role in ("fig_caption", "table_caption")]
+            what = "「" + _para_text(caps[0])[:30] + "」" if caps else "（キャプションなし）"
+            how = (f"段落 [{fl.anchor_src}] の前に配置済み" if info.mode == "mechanical" else "AI の指定で配置済み")
+            lines.append(f"[{fl.fid}] {what}: {how}")
+    return lines
 
 
 def image_blocks(doc, images):
@@ -351,6 +455,10 @@ MANUAL_EXAMPLE = """```json
     {"op": "set_role", "src": "d46", "text": "", "occurrence": 1, "target": "", "role": "sec1", "image": "",
      "mathml": "", "surname": "", "given": "", "reason": "「２．考察」は章番号の形式で、前後の章見出しと同じ書き方", "confidence": "中"}
   ],
+  "placements": [
+    {"float": "s1", "after": "d47", "items": [{"kind": "fig", "caption": ["d52", "d53"], "body": ["t3"]}],
+     "reason": "図の上端はアンカー段落 d48 の上端から約 1.8 行下で、推定では直上の本文は d47。図1 の初出（d46）より後", "confidence": "中"}
+  ],
   "notes": ["本文の「Lakatos（1977）」は文献リストでは 1976 年になっている"]
 }
 ```"""
@@ -366,7 +474,13 @@ FIELD_GUIDE = """各項目の意味（すべての操作に 12 項目すべて�
 - mathml: formula_image で読み取った数式（<math xmlns="http://www.w3.org/1998/Math/MathML"> から </math> まで）
 - surname, given: split_name の姓と名
 - reason: 判断の根拠（日本語で具体的に）
-- confidence: 高 / 中 / 低"""
+- confidence: 高 / 中 / 低
+
+placements（位置を決められなかった図表ごとに 1 件。依頼文に「# 位置を決められなかった図表」がなければ []）の各項目:
+- float: 図形の ID（s1 など）
+- after: 図表を置く位置（Word で表示したときに図の左上の直上にある本文の文章を含む段落の ID。その段落の直後に置く）
+- items: 図・表ごとの組。kind（fig / table）、caption（キャプションの段落 ID の一覧）、body（表 ID・画像 ID・画像だけの段落 ID の一覧）
+- reason, confidence: 上と同じ"""
 
 
 def manual_prompt(request_text, images) -> str:
@@ -386,7 +500,9 @@ def manual_prompt(request_text, images) -> str:
             "- 回答は、```json で始まり ``` で終わるコードブロック 1 つだけにしてください。コードブロックの前後には何も書かないでください。\n"
             "- アーティファクトやファイルにはせず、この会話の中にコードブロックとして書いてください。\n"
             "- 文字列はすべて半角の二重引用符（\"）で囲んでください。飾りの引用符（“ ” ‘ ’）は使わないでください。\n"
-            "- 提案する操作がなければ \"operations\": [] とし、気づいたことだけを notes に書いてください。\n\n"
+            "- 提案する操作がなければ \"operations\": [] とし、気づいたことだけを notes に書いてください。\n"
+            "- 「# 位置を決められなかった図表」に挙げた図形は、すべて placements に書いてください（省略できません）。"
+            "なければ \"placements\": [] としてください。\n\n"
             "回答の見本（形式の見本です。内容はこの論文とは関係ありません）:\n"
             f"{MANUAL_EXAMPLE}\n\n"
             f"{FIELD_GUIDE}\n\n"
@@ -427,6 +543,8 @@ def parse_response(text: str) -> dict:
                          f"該当行: {line[:80]!r}。{hint}") from None
     if not isinstance(data, dict) or not isinstance(data.get("operations", []), list):
         raise ValueError("JSON に operations の一覧がありません")
+    if not isinstance(data.get("placements", []), list):
+        raise ValueError("JSON の placements が一覧（[ ]）になっていません")
     return data
 
 
@@ -458,12 +576,105 @@ def role_overrides(ops, plan: ArticlePlan, outcome: AIOutcome) -> dict:
         if role not in ROLES:
             outcome.rejected.append((op, f"役割「{role}」は指定できない"))
             continue
+        if plan.paras[src].float_id:
+            outcome.rejected.append((op, "テキストボックス・グループ図形の中の段落の役割は placements で指定する"))
+            continue
         region = plan.region.get(src, "")
         if region and role not in REGION_ROLES.get(region, set()):
             outcome.rejected.append((op, f"この位置（{region}）では役割「{role}」を指定できない"))
             continue
         out[src] = role
     return out
+
+
+def placement_op(pl) -> dict:
+    """配置の指定を、レポートの「操作」の一覧に載せる形にする。"""
+    pl = pl if isinstance(pl, dict) else {}
+    items = pl.get("items") if isinstance(pl.get("items"), list) else []
+    what = "；".join(f"{it.get('kind')}: キャプション {','.join(map(str, it.get('caption') or []))} / 本体 "
+                     f"{','.join(map(str, it.get('body') or []))}" for it in items if isinstance(it, dict))
+    return {"op": "place_float", "src": str(pl.get("float", "")), "text": what, "target": str(pl.get("after", "")),
+            "role": "", "image": "", "reason": str(pl.get("reason", "")), "confidence": str(pl.get("confidence", ""))}
+
+
+def float_placements(data, plan: ArticlePlan, outcome: AIOutcome) -> dict:
+    """placements（図表の位置と組み合わせ）を検証し、図形の ID → 指定 の表にする（構造の組み立てをやり直すため）。
+
+    採用するのは、位置を決められなかった図形について、中身をすべて正しく指定したものだけ。機械的に配置した図形は変更させない。
+    """
+    out = {}
+    body = set(plan.body_seq)
+    for pl in data.get("placements", []) or []:
+        op = placement_op(pl)
+        why = _placement_problem(pl, plan, body, out)
+        if why:
+            outcome.rejected.append((op, why))
+            continue
+        out[pl["float"]] = {"after": pl["after"], "items": pl["items"], "reason": op["reason"],
+                            "confidence": op["confidence"] if op["confidence"] in ("高", "中", "低") else "低", "op": op}
+    return out
+
+
+def _placement_problem(pl, plan: ArticlePlan, body: set, done: dict) -> str:
+    if not isinstance(pl, dict):
+        return "指定の形式が正しくない"
+    fid, after, items = pl.get("float"), pl.get("after"), pl.get("items")
+    info = plan.floats.get(fid)
+    if info is None:
+        return f"図形 {fid} は「位置を決められなかった図表」にない"
+    if info.mode != "unplaced":
+        return f"図形 {fid} は位置を機械的に決めた図表なので、位置も組み合わせも変更できない"
+    if fid in done:
+        return f"図形 {fid} の指定が 2 回ある（最初の指定を採用）"
+    if after not in body:
+        return f"置く位置の段落 {after} は本文の段落ではない（図形の中の段落・表のセル・本文以外は指定できない）"
+    if not isinstance(items, list) or not items:
+        return "items（図表の組）がない"
+    paras = {q.src: q for q in info.paras}
+    cells = {q.src: q for t in info.tables for q in t.paragraphs()}
+    tables = {t.tid for t in info.tables}
+    group_imgs = {i.image_id for i in info.images}
+    img_paras = {i.image_id: q for q in list(paras.values()) + list(cells.values()) for i in q.images}
+    used, whole, split = set(), set(), set()
+    cell_table = {q.src: t.tid for t in info.tables for q in t.paragraphs()}
+    for it in items:
+        if not isinstance(it, dict) or it.get("kind") not in ("fig", "table"):
+            return "items の kind は fig か table"
+        caps, bodies = it.get("caption") or [], it.get("body") or []
+        if not isinstance(caps, list) or not isinstance(bodies, list):
+            return "caption と body は一覧（[ ]）で書く"
+        for c in caps:
+            q = paras.get(c) or cells.get(c)
+            if q is None:
+                return f"キャプションの段落 {c} は図形 {fid} の中にない"
+            if not _para_text(q).strip():
+                return f"キャプションの段落 {c} に文字がない"
+            if c in cell_table:
+                split.add(cell_table[c])
+        if it["kind"] == "table" and (len(bodies) != 1 or bodies[0] not in tables):
+            return "表（table）の body は、図形の中の表 1 つ"
+        if it["kind"] == "fig" and not bodies:
+            return "図（fig）の body（画像か表）がない"
+        for x in bodies:
+            if x in tables:
+                whole.add(x)
+                continue
+            if x in group_imgs:
+                continue
+            q = paras.get(x) or cells.get(x) or img_paras.get(x)
+            if q is None:
+                return f"本体 {x} は図形 {fid} の中の表・画像・画像の段落ではない"
+            if not Classifier.is_image_para(q):
+                return f"本体 {x} の段落 {q.src} には画像以外の文字がある（文字はキャプションか、指定しない段落として残す）"
+            if q.src in cell_table:
+                split.add(cell_table[q.src])
+        for x in list(caps) + [img_paras[b].src if b in img_paras and b not in group_imgs else b for b in bodies]:
+            if x in used:
+                return f"{x} が 2 回使われている"
+            used.add(x)
+    if whole & split:
+        return f"表 {', '.join(sorted(whole & split))} を、表全体と、セルの段落の両方で使っている"
+    return ""
 
 
 def apply_ops(ops, plan: ArticlePlan, doc, outcome: AIOutcome):

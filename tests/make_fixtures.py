@@ -5,6 +5,8 @@
 tests/fixtures/sample_full.docx : 本番に近い論文（数式・図表・注・文献・URL・意図的なスタイル違反を含む）
 tests/fixtures/sample_edge.docx : 読み取りの境界ケース（Word の脚注、自動番号、隠し文字、変更履歴、
                                    テキストボックス、記号フォント、フィールドのハイパーリンクなど）
+tests/fixtures/sample_float.docx : 位置を機械的に決められない浮動配置の図表（テキストボックス・グループ図形）。
+                                   AI 補完（tests/data/ai_response_sample_float.json）が必要
 
 内容は架空のもので、実在の論文ではない。
 """
@@ -33,6 +35,7 @@ NSDECL = ('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main
           'xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" '
           'xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" '
           'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" '
+          'xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" '
           'xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"')
 
 # テンプレートのスタイル ID
@@ -107,17 +110,36 @@ def drawing(rid, cx, cy, pid, name="図", anchor=False):
             f'<wp:docPr id="{pid}" name="{name}"/>{graphic}</wp:inline></w:drawing></w:r>')
 
 
-def textbox(inner, pid, cx=2000000, cy=500000):
-    """浮動配置のテキストボックス（Word と同じく、DrawingML と VML の代替の両方に同じ中身を入れる）。"""
+def anchored(graphic, fallback, pid, cx, cy, h=("column", 0), v=("paragraph", 0), wrap="wrapNone"):
+    """浮動配置の図形（wp:anchor）。h, v は (relativeFrom, EMU 単位のずれ)。"""
     return ('<w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wp:anchor distT="0" distB="0" distL="0" '
             'distR="0" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">'
-            '<wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH>'
-            '<wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>'
-            f'<wp:extent cx="{cx}" cy="{cy}"/><wp:wrapNone/><wp:docPr id="{pid}" name="テキスト ボックス"/>'
-            '<a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">'
-            f'<wps:wsp><wps:txbx><w:txbxContent>{inner}</w:txbxContent></wps:txbx><wps:bodyPr/></wps:wsp>'
-            '</a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice><mc:Fallback><w:pict><v:shape><v:textbox>'
-            f'<w:txbxContent>{inner}</w:txbxContent></v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r>')
+            f'<wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="{h[0]}"><wp:posOffset>{h[1]}</wp:posOffset></wp:positionH>'
+            f'<wp:positionV relativeFrom="{v[0]}"><wp:posOffset>{v[1]}</wp:posOffset></wp:positionV>'
+            f'<wp:extent cx="{cx}" cy="{cy}"/><wp:{wrap}/><wp:docPr id="{pid}" name="図形 {pid}"/>'
+            f'{graphic}</wp:anchor></w:drawing></mc:Choice><mc:Fallback>{fallback}</mc:Fallback></mc:AlternateContent></w:r>')
+
+
+def textbox(inner, pid, cx=2000000, cy=500000, **pos):
+    """浮動配置のテキストボックス（Word と同じく、DrawingML と VML の代替の両方に同じ中身を入れる）。"""
+    graphic = ('<a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">'
+               f'<wps:wsp><wps:txbx><w:txbxContent>{inner}</w:txbxContent></wps:txbx><wps:bodyPr/></wps:wsp>'
+               '</a:graphicData></a:graphic>')
+    fallback = f'<w:pict><v:shape><v:textbox><w:txbxContent>{inner}</w:txbxContent></v:textbox></v:shape></w:pict>'
+    return anchored(graphic, fallback, pid, cx, cy, **pos)
+
+
+def group(rid, pic_cx, pic_cy, inner, pid, cx, cy, **pos):
+    """画像とテキストボックス（キャプション）をまとめたグループ図形。"""
+    pic = (f'<pic:pic><pic:nvPicPr><pic:cNvPr id="{pid + 1}" name="図"/><pic:cNvPicPr/></pic:nvPicPr>'
+           f'<pic:blipFill><a:blip r:embed="{rid}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
+           f'<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{pic_cx}" cy="{pic_cy}"/></a:xfrm>'
+           '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>')
+    graphic = ('<a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup">'
+               f'<wpg:wgp><wpg:cNvGrpSpPr/><wpg:grpSpPr/>{pic}<wps:wsp><wps:txbx><w:txbxContent>{inner}</w:txbxContent>'
+               '</wps:txbx><wps:bodyPr/></wps:wsp></wpg:wgp></a:graphicData></a:graphic>')
+    fallback = f'<w:pict><v:group><v:shape><v:textbox><w:txbxContent>{inner}</w:txbxContent></v:textbox></v:shape></v:group></w:pict>'
+    return anchored(graphic, fallback, pid, cx, cy, **pos)
 
 
 def cell(content, span=1, vmerge=None, width=2000):
@@ -492,9 +514,54 @@ def make_edge(path):
     b.save(path, body)
 
 
+# ----------------------------------------------------------------------------- sample_float
+def make_float(path):
+    """2 段組をまたぐ図などを、テキストボックス・グループ図形で配置した原稿（位置の多くは機械的に決められない）。"""
+    b = Builder()
+    img_a = b.add_image("float_a.png", png_bytes("Area model", size=(300, 240)))
+    img_b = b.add_image("float_b.png", png_bytes("Tree diagram", size=(300, 240)))
+    img_g = b.add_image("float_g.png", png_bytes("Textbook page", size=(480, 300)))
+    img_m = b.add_image("float_m.png", png_bytes("Fixed figure", size=(400, 240)))
+    cm = 360000
+    body = []
+    body += front_ja(b, "浮動配置の図表の検証用文書", "―テキストボックスとグループ図形―", [("架空大学", "試験\u3000花子")])
+    body.append(para(S["sec1"], "１．テキストボックスの図表"))
+    body.append(para(S["body"], "図1は表で組んだ問題である。この段落は図の前に置かれる本文である。"))
+    # s1: 表で組んだ問題と、本文スタイルのキャプション。アンカー段落から 2 cm 下（2 段にまたがる）
+    body.append(para(S["body"], "この段落に図1のテキストボックスが結び付いている。図の上端はこの段落の上端から離れている。", textbox(
+        table([[cell("問1\u3000架空の問題文である。")], [cell("問2\u3000もう一つの問題文である。")]])
+        + para(S["body"], "図1\u3000表で組んだ問題"), 301, cx=18 * cm, cy=5 * cm, v=("paragraph", 2 * cm),
+        wrap="wrapTopAndBottom")))
+    body.append(para(S["body"], "図3と図4は，1つのテキストボックスの中の表に並べた図である。"))
+    # s2: 表の中に画像 2 つとキャプション 2 つ（図3・図4）
+    body.append(para(S["body"], "この段落には図3と図4のテキストボックスが結び付いている。", textbox(
+        table([[cell(para(S["body"], drawing(img_a, 1800000, 1440000, 311))),
+                cell(para(S["body"], drawing(img_b, 1800000, 1440000, 312)))],
+               [cell(para(S["fig_cap"], "図3\u3000面積図")), cell(para(S["fig_cap"], "図4\u3000樹形図"))]]),
+        302, cx=18 * cm, cy=6 * cm, v=("paragraph", 3 * cm), wrap="wrapTopAndBottom")))
+    # s3: 画像とキャプションのテキストボックスをまとめたグループ図形。縦はページ基準
+    body.append(para(S["body"], "図2は教科書の見開きページであり，グループ図形で配置されている。", group(
+        img_g, 6 * cm, 3 * cm, para(S["fig_cap"], "図2\u3000グループ図形の図") + para(S["fig_cap"], "（出典：架空の教科書）"),
+        320, cx=18 * cm, cy=5 * cm, v=("page", 10 * cm), wrap="wrapTopAndBottom")))
+    body.append(para(S["body"], "以上のように，図の位置は docx だけでは決められない。"))
+    # s4: 図の左上がアンカー段落の左上にある（機械的に位置を決められる）
+    body.append(para(S["body"], "図5は位置が機械的に決まる図である。", textbox(
+        para(S["body"], drawing(img_m, 1800000, 1080000, 331)) + para(S["body"], "図5\u3000位置が決まる図"), 330,
+        cx=8 * cm, cy=4 * cm, wrap="wrapTopAndBottom")))
+    body.append(para(S["sec1"], "２．おわりに"))
+    body.append(para(S["body"], "図1から図5を本文の適切な位置に置く。"))
+    body.append(para(S["ref_head"], "引用および参考文献"))
+    body.append(para(S["ref"], "試験花子（2021）．「浮動配置」．『架空誌』，第2巻，pp.3-4．"))
+    body += front_en(b, "Floating Figures", "Text Boxes and Groups", [("Hanako SHIKEN", "Fictional University")],
+                     ["Floating figure abstract."])
+    body += tail(b)
+    b.save(path, body)
+
+
 if __name__ == "__main__":
     out = HERE / "fixtures"
     make_full(out / "sample_full.docx")
     make_edge(out / "sample_edge.docx")
-    print("written:", out / "sample_full.docx", out / "sample_edge.docx")
+    make_float(out / "sample_float.docx")
+    print("written:", out / "sample_full.docx", out / "sample_edge.docx", out / "sample_float.docx")
     sys.exit(0)

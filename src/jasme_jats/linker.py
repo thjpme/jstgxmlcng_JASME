@@ -115,6 +115,9 @@ def body_paragraphs(plan: ArticlePlan):
             elif isinstance(node, FigNode):
                 if node.caption is not None:
                     yield node.caption, "caption"
+                for t in node.tables:
+                    for p in t.paragraphs():
+                        yield p, "cell"
             elif isinstance(node, TableNode):
                 if node.caption is not None:
                     yield node.caption, "caption"

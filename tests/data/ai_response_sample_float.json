@@ -1,0 +1,18 @@
+{
+  "operations": [
+    {"op": "set_role", "src": "d16", "text": "", "occurrence": 1, "target": "", "role": "fig_caption", "image": "",
+     "mathml": "", "surname": "", "given": "", "reason": "図形の中の段落の役割は placements で指定する決まり（不採用になる例）", "confidence": "中"}
+  ],
+  "placements": [
+    {"float": "s1", "after": "d17", "items": [{"kind": "fig", "caption": ["d16"], "body": ["t2"]}],
+     "reason": "図の上端はアンカー段落 d13 の上端から約 3.6 行下で、推定では直上の本文は d17", "confidence": "中"},
+    {"float": "s2", "after": "d26", "items": [{"kind": "fig", "caption": ["d21"], "body": ["img1"]},
+                                               {"kind": "fig", "caption": ["d22"], "body": ["d20"]}],
+     "reason": "表の 1 行目の画像と 2 行目のキャプションを列ごとに組にした。推定では直上の本文は d26", "confidence": "中"},
+    {"float": "s3", "after": "d23", "items": [{"kind": "fig", "caption": ["d24", "d25"], "body": ["img3"]}],
+     "reason": "縦はページ基準のため推定できないが、図2 に初めて言及するアンカー段落 d23 の後とした", "confidence": "低"},
+    {"float": "s4", "after": "d31", "items": [{"kind": "fig", "caption": ["d29"], "body": ["d28"]}],
+     "reason": "機械的に配置した図を動かそうとする例（不採用になる）", "confidence": "低"}
+  ],
+  "notes": []
+}
