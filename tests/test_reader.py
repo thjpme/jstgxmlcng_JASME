@@ -42,8 +42,15 @@ def test_edge_cases():
     assert "記号α" in joined
     assert "改行\nの後" in joined
     # テキストボックスの中身は 1 回だけ読む（mc:Fallback を二重に数えない）
-    tb = [p for p in doc.all_paragraphs() if p.in_textbox]
-    assert len(tb) == 1 and tb[0].text_only().startswith("図1")
+    tb = [p.text_only() for p in doc.all_paragraphs() if p.in_textbox]
+    assert tb.count("図1　テキストボックス内のキャプション") == 1
+    # テキストボックスの中の表も読む
+    assert "問1　架空の問題文である。" in joined and "根拠を示す" in joined
+    # テキストボックスの中の画像は、テキストボックスの段落の画像として 1 回だけ読む（外側の図形の画像にしない）
+    tbimg = [p.in_textbox for p in doc.all_paragraphs() for a in p.atoms
+             if a.kind == "image" and a.image.target == "word/media/tbfig.png"]
+    assert tbimg == [True]
+    assert [i.target for i in doc.images].count("word/media/tbfig.png") == 1
     # フィールドのハイパーリンク
     hrefs = {a.href for p in doc.all_paragraphs() for a in p.atoms if a.kind == "text" and a.href}
     assert "https://example.net/field" in hrefs

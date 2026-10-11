@@ -107,6 +107,19 @@ def drawing(rid, cx, cy, pid, name="図", anchor=False):
             f'<wp:docPr id="{pid}" name="{name}"/>{graphic}</wp:inline></w:drawing></w:r>')
 
 
+def textbox(inner, pid, cx=2000000, cy=500000):
+    """浮動配置のテキストボックス（Word と同じく、DrawingML と VML の代替の両方に同じ中身を入れる）。"""
+    return ('<w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wp:anchor distT="0" distB="0" distL="0" '
+            'distR="0" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">'
+            '<wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH>'
+            '<wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>'
+            f'<wp:extent cx="{cx}" cy="{cy}"/><wp:wrapNone/><wp:docPr id="{pid}" name="テキスト ボックス"/>'
+            '<a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">'
+            f'<wps:wsp><wps:txbx><w:txbxContent>{inner}</w:txbxContent></wps:txbx><wps:bodyPr/></wps:wsp>'
+            '</a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice><mc:Fallback><w:pict><v:shape><v:textbox>'
+            f'<w:txbxContent>{inner}</w:txbxContent></v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r>')
+
+
 def cell(content, span=1, vmerge=None, width=2000):
     tcpr = f'<w:tcW w:w="{width}" w:type="dxa"/>'
     if span > 1:
@@ -425,6 +438,7 @@ def make_full(path):
 def make_edge(path):
     b = Builder()
     link = b.add_hyperlink("https://example.com/a?b=1&c=2")
+    tbimg = b.add_image("tbfig.png", png_bytes("Figure in a text box", size=(400, 240)))
     body = []
     body += front_ja(b, "境界ケースの検証用文書", "―読み取りの網羅性を確かめる―",
                      [("架空大学", "試験\u3000一郎")])
@@ -453,19 +467,20 @@ def make_edge(path):
                      f'<w:hyperlink r:id="{link}">{run("通常のリンク")}</w:hyperlink>',
                      "。改行", "<w:r><w:br/></w:r>", "の後。"))
     # テキストボックスに入った図キャプション
-    tb = ('<w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wp:anchor distT="0" distB="0" distL="0" '
-          'distR="0" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">'
-          '<wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH>'
-          '<wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>'
-          '<wp:extent cx="2000000" cy="500000"/><wp:wrapNone/><wp:docPr id="201" name="テキスト ボックス"/>'
-          '<a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">'
-          '<wps:wsp><wps:txbx><w:txbxContent>'
-          + para(S["fig_cap"], "図1\u3000テキストボックス内のキャプション") +
-          '</w:txbxContent></wps:txbx><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing>'
-          '</mc:Choice><mc:Fallback><w:pict><v:shape><v:textbox><w:txbxContent>'
-          + para(S["fig_cap"], "図1\u3000テキストボックス内のキャプション") +
-          '</w:txbxContent></v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r>')
-    body.append(para(S["body"], "図1はテキストボックスの例。", tb))
+    body.append(para(S["body"], "図1はテキストボックスの例。",
+                     textbox(para(S["fig_cap"], "図1　テキストボックス内のキャプション"), 201)))
+    # テキストボックスに入った表（表で組んだ問題）と、本文スタイルのキャプション（スタイル違反）
+    body.append(para(S["body"], "図2は表で組んだ問題の例。", textbox(
+        table([[cell("問1　架空の問題文である。")], [cell("問2　もう一つの問題文である。")]])
+        + para(S["body"], "図2　テキストボックス内の表で組んだ問題"), 202, cy=1200000)))
+    # テキストボックスに入った画像と、本文スタイルのキャプション（画像を外側の図形の画像として二重に読まない）
+    body.append(para(S["body"], "図3はテキストボックス内の画像の例。", textbox(
+        para(S["body"], drawing(tbimg, 1800000, 1100000, 204, name="図"))
+        + para(S["body"], "図3　テキストボックス内の画像"), 203, cy=1500000)))
+    # テキストボックスに入った表キャプション（本文スタイル）と表
+    body.append(para(S["body"], "表1はテキストボックス内の表の例。", textbox(
+        para(S["body"], "表1　テキストボックス内の表")
+        + table([[cell("観点"), cell("内容")], [cell("論証"), cell("根拠を示す")]]), 205, cy=1000000)))
     # 自動番号付きの段落（numbering.xml の numId=1 が無ければ無視される）
     body.append(para(S["body"], "全角スペースで始まる段落と\tタブ。"))
     body.append(para(S["body"], "\u3000全角スペースで始まる段落。"))

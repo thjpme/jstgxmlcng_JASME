@@ -27,6 +27,8 @@ RE_HEAD2 = re.compile(r"^[(（][0-9０-９]{1,2}[)）]\s*\S.{0,40}$")
 RE_HEAD3 = re.compile(r"^[①-⑳]\s*\S.{0,40}$")
 RE_FIGCAP = re.compile(r"^(?:図|Figure|Fig\.?)\s*([0-9０-９]+)")
 RE_TABCAP = re.compile(r"^(?:表|Table)\s*([0-9０-９]+)")
+# テキストボックス内のキャプションの形（NFKC 後）。番号の直後がひらがな・読点・範囲の記号なら「図1は…」のような本文の文
+RE_TEXTBOX_CAP = re.compile(r"^(?:(?P<fig>図|Figure|Fig\.?)|(?P<tab>表|Table))\s*[0-9]+(?![0-9ぁ-ゟ,、・~〜\-–—])")
 RE_FORMULA_LABEL = re.compile(r"^[\s\u3000]*([(（][\s\u3000]*[0-9０-９]+(?:[.．\-－][0-9０-９]+)?[\s\u3000]*[)）])[\s\u3000]*$")
 RE_NOTE_MARK = re.compile(r"^[\s\u3000]*((?:注[\s\u3000]*)?[(（]?[\s\u3000]*([0-9０-９]{1,3})[\s\u3000]*[)）])")
 RE_REF_HEADING_TEXT = re.compile(r"^\s*(?:引用(?:・|及び|および)?参考文献|参考(?:・|及び|および)?引用文献|引用文献|参考文献|文献"
@@ -422,9 +424,17 @@ class Classifier:
                 continue
             plan.region[b.src] = "body"
             if b.in_textbox and role not in ("fig_caption", "table_caption") and not b.images:
-                if not b.is_blank:
-                    plan.exclude(b, "テキストボックス内の文字（図の一部とみなして本文から除外）")
-                continue
+                cap = self.textbox_caption(b)
+                if cap is None:
+                    if not b.is_blank:
+                        plan.exclude(b, "テキストボックス内の文字（図の一部とみなして本文から除外）")
+                    continue
+                role = cap
+                b.role_origin = "heuristic"
+                kind = "図" if cap == "fig_caption" else "表"
+                plan.decide("mechanical", "style", b.src,
+                            f"テキストボックス内のスタイル「{b.style_name}」の段落「{_para_text(b)[:30]}」を"
+                            f"{kind}キャプションと推定（「{kind}N」で始まる）")
             if b.is_blank:
                 if b.plain():
                     plan.exclude(b, "空白のみの段落")
@@ -475,6 +485,17 @@ class Classifier:
         self.compute_locations(plan.body, [])
 
     @staticmethod
+    def textbox_caption(b: Para) -> Optional[str]:
+        """図表キャプションのスタイルでないテキストボックス内の段落が、キャプションの形をしていれば役割を返す。"""
+        t = nfkc(_para_text(b)).strip()
+        if len(t) > 80 or t.endswith("。"):
+            return None
+        m = RE_TEXTBOX_CAP.match(t)
+        if not m:
+            return None
+        return "fig_caption" if m.group("fig") else "table_caption"
+
+    @staticmethod
     def is_image_para(b) -> bool:
         if not isinstance(b, Para):
             return False
@@ -486,6 +507,9 @@ class Classifier:
         out = []
         used = set()
         n = len(flat)
+        below = sum(1 for k in range(1, n) if flat[k][0] == "fig_caption" and self.is_image_para(flat[k - 1][1]))
+        above = sum(1 for k in range(n - 1) if flat[k][0] == "fig_caption" and self.is_image_para(flat[k + 1][1]))
+        captions_below = below >= above
         for k, (role, b) in enumerate(flat):
             if id(b) in used:
                 continue
@@ -506,6 +530,9 @@ class Classifier:
                         break
                 if img is None:
                     for j in range(k + 1, min(n, k + 3)):
+                        # キャプションを画像の下に置く原稿では、直後に図キャプションがある画像はそのキャプションの図のもの
+                        if captions_below and j + 1 < n and flat[j + 1][0] == "fig_caption":
+                            continue
                         if self.is_image_para(flat[j][1]) and id(flat[j][1]) not in used:
                             img = flat[j][1]
                             used.add(id(img))

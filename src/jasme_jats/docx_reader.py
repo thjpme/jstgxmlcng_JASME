@@ -395,14 +395,7 @@ class Reader:
     def _textboxes(self, container, para):
         for tx in container.iter(w("txbxContent")):
             # 入れ子のテキストボックスは外側の処理で読む
-            anc = tx.getparent()
-            nested = False
-            while anc is not None and anc is not container:
-                if anc.tag == w("txbxContent"):
-                    nested = True
-                    break
-                anc = anc.getparent()
-            if nested:
+            if _in_textbox(tx, container):
                 continue
             for el in tx:
                 if el.tag == w("p"):
@@ -410,13 +403,20 @@ class Reader:
                     self._extra.append(sub)
                     self._extra.extend(extra)
                 elif el.tag == w("tbl"):
-                    self._extra.append(self.read_table(el))
+                    self._extra.append(self._read_nested_table(el))
 
     def _read_nested_paragraph(self, p):
         saved = (self._extra, self._fields)
         sub, extra = self.read_paragraph(p, in_textbox=True)
         self._extra, self._fields = saved
         return sub, extra
+
+    def _read_nested_table(self, tbl):
+        # セルの段落を読むと read_paragraph が _extra を作り直すため、外側の段落の分を退避しておく
+        saved = (self._extra, self._fields)
+        t = self.read_table(tbl)
+        self._extra, self._fields = saved
+        return t
 
     def _graphic(self, el, para, hidden):
         if el.tag == w("drawing"):
@@ -433,7 +433,8 @@ class Reader:
                 dp = holder.find(f"{{{WP_NS}}}docPr")
                 if dp is not None:
                     descr = dp.get("descr", "") or dp.get("title", "")
-            pics = list(el.iter(f"{{{PIC_NS}}}pic"))
+            # テキストボックスの中の画像は、テキストボックスの段落として読む（ここで拾うと二重になる）
+            pics = [pic for pic in el.iter(f"{{{PIC_NS}}}pic") if not _in_textbox(pic, el)]
             for pic in pics:
                 blip = pic.find(f".//{{{A_NS}}}blip")
                 rid = blip.get(f"{{{R_NS}}}embed") if blip is not None else None
@@ -459,7 +460,7 @@ class Reader:
         ole = el.find(f".//{{{O_NS}}}OLEObject")
         if ole is not None:
             progid = ole.get("ProgID", "")
-        imgdata = list(el.iter(f"{{{V_NS}}}imagedata"))
+        imgdata = [d for d in el.iter(f"{{{V_NS}}}imagedata") if not _in_textbox(d, el)]
         shape = el.find(f".//{{{V_NS}}}shape")
         cx = cy = 0
         if shape is not None:
@@ -481,6 +482,16 @@ class Reader:
                 para.atoms.append(Atom(kind="image", image=img))
         if has_tx:
             self._textboxes(el, para)
+
+
+def _in_textbox(el, container) -> bool:
+    """el が container の中のテキストボックス（w:txbxContent）の中にあるか。"""
+    anc = el.getparent()
+    while anc is not None and anc is not container:
+        if anc.tag == w("txbxContent"):
+            return True
+        anc = anc.getparent()
+    return False
 
 
 def _plain(el) -> str:
