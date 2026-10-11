@@ -99,7 +99,8 @@ python -m jasme_jats tests/private/論文.docx --meta examples/meta_example.toml
 ## 開発を再開するとき
 
 正本は GitHub の `main` ブランチ。Colab のノートブックも、実行のたびに `main` からツールを入れる。
-これまでの開発に関わっていない人が引き継ぐときは、先に [HANDOFF.md](HANDOFF.md)（権限の引き継ぎと、Claude Code の環境の作り方）を読む。
+これまでの開発に関わっていない人が引き継ぐときは、先に [HANDOFF.md](HANDOFF.md)（権限の引き継ぎ、所有者に連絡が取れなくなったときの手順、
+Claude Code の環境の作り方）を読む。
 リポジトリ直下の `CLAUDE.md` は Claude Code が自動で読む要点（原則・テスト・反映）なので、原則や手順を変えたらそちらも直す。
 
 ### Claude Code で再開する場合
