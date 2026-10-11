@@ -1,6 +1,7 @@
 """コマンドラインの入口。
 
   python -m jasme_jats 論文.docx --meta 書誌情報.toml --out 出力フォルダ [--ai api|manual|none]
+                       [--ai-provider claude|openai|gemini] [--ai-model モデル名]
 
 書誌情報ファイル（TOML）の例は examples/meta_example.toml を参照。
 """
@@ -11,6 +12,7 @@ import os
 import sys
 from pathlib import Path
 
+from .ai_assist import API_KEY_NAMES, DEFAULT_MODEL
 from .config import ArticleMeta, JournalConfig
 from .pipeline import Options, convert
 
@@ -23,17 +25,25 @@ def main(argv=None):
     ap.add_argument("--config", type=Path, help="雑誌の設定ファイル（既定: 同梱の jasme.toml）")
     ap.add_argument("--split-labels", choices=["yes", "no"], help="図表番号を <label> に分けるか（既定: 設定ファイルに従う）")
     ap.add_argument("--ai", choices=["none", "api", "manual"], default="none", help="AI による補完の方法")
-    ap.add_argument("--ai-model", default="claude-opus-5-5",
-                    help="API モードで使うモデル（auto で使える最新の Opus。指定したモデルが使えなければ最新の Opus に切り替える）")
+    ap.add_argument("--ai-provider", choices=["claude", "openai", "gemini"], default="claude",
+                    help="API モードで使う AI（既定・推奨: claude。openai は ChatGPT、gemini は Gemini）。API キーは環境変数 "
+                         "ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY（または GOOGLE_API_KEY）")
+    ap.add_argument("--ai-model",
+                    help=f"API モードで使うモデル。claude の既定は {DEFAULT_MODEL}（auto で使える最新の Opus。指定したモデルが"
+                         "使えなければ最新の Opus に切り替える）。openai・gemini では必ず指定する（Claude Opus と同等以上のモデルを推奨）")
     ap.add_argument("--ai-response", type=Path, help="手動モード: AI の回答（JSON）を保存したファイル")
     ap.add_argument("--pdf", type=Path, help="記事の PDF（J-STAGE への登載に必須。指定すると ZIP に入れる）")
     ap.add_argument("--no-metafile-conversion", action="store_true", help="EMF/WMF 画像の変換を行わない")
     a = ap.parse_args(argv)
+    if a.ai == "api" and a.ai_provider != "claude" and not a.ai_model:
+        ap.error(f"--ai-provider {a.ai_provider} では --ai-model でモデル名を指定してください"
+                 "（Claude Opus と同等以上のモデルを推奨）")
+    api_key = next((os.environ[k] for k in API_KEY_NAMES[a.ai_provider] if os.environ.get(k)), None)
 
     journal = JournalConfig.load(a.config)
     meta = ArticleMeta.load(a.meta) if a.meta else ArticleMeta()
     opts = Options(out_dir=a.out, split_labels=None if a.split_labels is None else a.split_labels == "yes",
-                   ai_mode=a.ai, ai_model=a.ai_model, ai_api_key=os.environ.get("ANTHROPIC_API_KEY"),
+                   ai_mode=a.ai, ai_provider=a.ai_provider, ai_model=a.ai_model or DEFAULT_MODEL, ai_api_key=api_key,
                    ai_response=a.ai_response.read_text(encoding="utf-8") if a.ai_response else None,
                    pdf_path=a.pdf, convert_metafiles=not a.no_metafile_conversion)
     res = convert(a.docx, meta, journal, opts)
