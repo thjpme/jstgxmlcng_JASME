@@ -677,6 +677,41 @@ def _placement_problem(pl, plan: ArticlePlan, body: set, done: dict) -> str:
     return ""
 
 
+def target_keys(plan: ArticlePlan) -> dict:
+    """リンク先の ID（F1, T2, FD1, fn1, B3）→ 構造を組み直しても変わらない目印（キャプションなどの段落 ID）。
+
+    AI は依頼文（1 回目の組み立て）の ID でリンク先を指定するが、役割や図表の配置の指定を反映して組み直すと、
+    図表の並びが変わって ID がずれることがある（retarget_ops で読み替える）。
+    """
+    keys = {}
+    for f in plan.figures:
+        p = f.caption if f.caption is not None else (f.image_paras[0] if f.image_paras else None)
+        if f.fid and p is not None:
+            keys[f.fid] = ("fig", p.src)
+    for t in plan.tables:
+        if t.tid:
+            keys[t.tid] = ("table", t.caption.src if t.caption is not None else (t.table.tid if t.table else ""))
+    for fm in plan.formulas:
+        if fm.fid:
+            keys[fm.fid] = ("formula", fm.para.src)
+    for fn in plan.fns:
+        if fn.fid and fn.paras:
+            keys[fn.fid] = ("fn", fn.paras[0].src)
+    for r in plan.refs:
+        keys[r.rid] = ("ref", r.para.src)
+    return keys
+
+
+def retarget_ops(ops, before: dict, plan: ArticlePlan):
+    """リンクの操作の target（1 回目の組み立ての ID）を、組み直した後の plan の ID に読み替える。"""
+    after = {key: rid for rid, key in target_keys(plan).items()}
+    for op in ops:
+        if op["op"] in TARGET_PREFIX and op["target"] in before:
+            new = after.get(before[op["target"]])
+            # 組み直した後に見つからなければ、別の図表に誤ってリンクしないよう存在しない ID にする（不採用になる）
+            op["target"] = new or f"{op['target']}（組み直した後に見当たらない）"
+
+
 def apply_ops(ops, plan: ArticlePlan, doc, outcome: AIOutcome):
     """set_role 以外の操作を検証して適用する（構造を組み直した後の plan に対して）。"""
     from .linker import apply_span, range_linked
