@@ -300,6 +300,9 @@ def render(r) -> str:
             ("DOI", m.doi_value(j) or "（未入力）"), ("記事識別子", m.article_id(j)),
             ("発行日", m.pub_date or "（未入力）"), ("J-STAGE 公開日", m.epub_date or "（未入力）"),
             ("受付日", m.received or "（未入力）"), ("受理日", m.accepted or "（未入力）"),
+            ("査読の有無", {"yes": "査読あり", "no": "査読なし"}.get(m.peer_review,
+                                                                "（未入力。J-STAGE の資料の設定が引き継がれる）")),
+            ("最終査読日", m.approved or ("（未入力）" if m.peer_review == "yes" else "―")),
             ("原稿種別", m.subject_ja or j.subject_ja), ("論文種別（article-type）", m.article_type or j.article_type),
             ("抄録の二次利用（specific-use）",
              f"{j.abstract_specific_use}（英文の論文で英文要旨を <abstract> に入れるときだけ使う。学会の方針を確認すること）")]

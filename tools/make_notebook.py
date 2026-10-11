@@ -56,7 +56,7 @@ cells = [
 |---|---|
 | 1 | 準備（最初に 1 回だけ。▶ を押したら、終わるのを待たずに手順 2 の ▶ を押しておくと、準備の後に続けて実行されます） |
 | 2 | 論文の docx と PDF をアップロード（ボタンが別々に出ます） |
-| 3 | 書誌情報（巻・号・ページ・日付）を入力 |
+| 3 | 書誌情報（巻・号・ページ・査読の有無・日付）を入力 |
 | 4 | AI による補完の方法を選ぶ |
 | 5 | 変換を実行（結果のレポートが表示されます） |
 | 6 | （手動モードのときだけ）AI の回答を貼り付けて再変換 |
@@ -161,6 +161,9 @@ volume = ""  #@param {type:"string"}
 issue = ""  #@param {type:"string"}
 first_page = ""  #@param {type:"string"}
 last_page = ""  #@param {type:"string"}
+#@markdown **査読の有無**（必須。必ず選んでください）。査読ありで最終査読日が分かれば、last_review_date に YYYY-MM-DD の形で入力します（分からなければ空欄）。
+peer_review = "（選んでください）"  #@param ["（選んでください）", "査読あり", "査読なし"]
+last_review_date = ""  #@param {type:"string"}
 #@markdown **日付**（YYYY-MM-DD の形で。分からなければ空欄）
 pub_date = ""  #@param {type:"string"}
 jstage_release_date = ""  #@param {type:"string"}
@@ -171,10 +174,20 @@ doi = ""  #@param {type:"string"}
 subject = "論文"  #@param {type:"string"}
 corresponding_author = ""  #@param {type:"string"}
 #@markdown corresponding_author: 責任著者が何番目の著者か（例: 1）。複数なら「1,2」。
-""" + guard(1, 2) + """meta_input = {"volume": volume, "issue": issue, "fpage": first_page, "lpage": last_page,
+""" + guard(1, 2) + """if peer_review not in ("査読あり", "査読なし"):
+    raise SystemExit("査読の有無を選んでください（この手順の「peer_review」）。")
+if peer_review == "査読なし" and last_review_date.strip():
+    raise SystemExit("査読なしのときは last_review_date（最終査読日）を空欄にしてください。")
+meta_input = {"volume": volume, "issue": issue, "fpage": first_page, "lpage": last_page,
+              "peer_review": peer_review, "approved": last_review_date,
               "pub_date": pub_date, "epub_date": jstage_release_date, "received": received,
               "accepted": accepted, "doi": doi, "subject_ja": subject, "corresp": corresponding_author}
-print("入力しました。未入力の項目はレポートに表示されます。")
+from jasme_jats.config import ArticleMeta
+try:
+    ArticleMeta.from_dict(meta_input)   # 日付の書き方などをここで確かめる
+except ValueError as e:
+    raise SystemExit(f"入力を確認してください: {e}")
+print("入力しました（" + peer_review + "）。未入力の項目はレポートに表示されます。")
 """ + mark(3)),
     code("""
 #@title 4. AI による補完の方法を選ぶ

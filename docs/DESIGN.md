@@ -85,6 +85,7 @@
 | 英文要旨 | 和文の論文では `<trans-abstract xml:lang="en">`、英文の論文では `<abstract xml:lang="en">` | J-STAGE では「抄録(英)」（abstract）には「タイトル(英)」（article-title）、「翻訳抄録(英)」（trans-abstract）には「翻訳タイトル(英)」（trans-title）が必要（アップロードメッセージ EMSGM102E/104E）。和文の論文で英文要旨を abstract にすると「英語タイトルがない」エラーになる。ガイドライン 3.1.23 の例も和文論文の英文抄録は trans-abstract。本誌には和文要旨がない |
 | 抄録の `specific-use` | 設定ファイルの値（既定 `secondary-disallow`） | 抄録ライセンスフラグ。DTD・ガイドライン上 `<abstract>` にだけ付けられ、`<trans-abstract>` には付けられない（和文の論文では出力されない）。学会の方針で決める |
 | 引用文献の `xml:lang` | かな・漢字を含む文献は `ja`、それ以外は `en` | J-STAGE の「引用文献（記述言語）」（未設定だと EMSGM247E） |
+| 査読の有無 | 利用者が必ず入力（Colab の手順 3 で選ばないと先に進めない）。査読ありは `<history><date date-type="approved">`（最終査読日。分からなければ年月日を空に）、査読なしは `<date date-type="accepted as received">`（年月日を空に） | ガイドライン 3.1.30。どちらも書かないと資料の査読あり/なしの設定が引き継がれるため、記事ごとに明示する |
 | 登載時チェックの再現 | `jstage_rules.py` で、アップロードメッセージ一覧のうち XML だけで判定できるもの（題目と抄録の言語の対応、日付の前後、所属番号の連番、DOI の文字、画像ファイル名など）を確かめ、レポート 12 章に出す | DTD に合っていても J-STAGE で弾かれる条件があるため |
 | 図表番号 | 既定は caption の中に番号ごと入れる | 文字を落とさないため（`split_labels` で切替） |
 | 引用文献 | `<mixed-citation>` に原文をそのまま入れ、年・論文名・誌名・DOI・URL にだけタグを付ける | J-STAGE は mixed-citation の文字をそのまま表示する。タグは文字を変えない |

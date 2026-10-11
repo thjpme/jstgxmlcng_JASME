@@ -167,11 +167,25 @@ class Builder:
             _sub(am, "fpage", meta.fpage)
             if meta.lpage:
                 _sub(am, "lpage", meta.lpage)
+        # 諸日付と査読の有無（ガイドライン 3.1.30）。査読ありは最終査読日 approved（日付が分からなければ年月日を空に）、
+        # 査読なしは査読なし受付日 accepted as received（年月日を空に）。どちらもなければ資料の設定が引き継がれる
         hist = [("received", meta.received), ("rev-recd", meta.revised), ("accepted", meta.accepted)]
+        if meta.peer_review == "yes":
+            hist.append(("approved", meta.approved or "empty"))
+        elif meta.peer_review == "no":
+            hist.append(("accepted as received", "empty"))
+            if meta.approved:
+                self.info.warnings.append("査読なしなのに最終査読日が入力されている（最終査読日は出力しない）")
+        else:
+            self.info.warnings.append("査読の有無が未入力（J-STAGE では資料の査読あり/なしの設定が引き継がれる）")
         if any(d for _, d in hist):
             h = _sub(am, "history")
             for typ, d in hist:
-                if d:
+                if d == "empty":
+                    dt = _sub(h, "date", date_type=typ)
+                    for part in ("day", "month", "year"):
+                        _sub(dt, part, "")
+                elif d:
                     dt = _sub(h, "date", date_type=typ)
                     _sub(dt, "day", f"{d.day:02d}")
                     _sub(dt, "month", f"{d.month:02d}")
