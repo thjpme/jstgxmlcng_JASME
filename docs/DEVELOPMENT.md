@@ -31,6 +31,7 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
 | `jstage_rules.py` | J-STAGE のアップロード時チェック（記事アップロードメッセージ一覧）のうち XML だけで判定できるものの再現 |
 | `images.py` / `package.py` / `report.py` | 画像の書き出し、ZIP、レポート |
 | `pipeline.py` / `cli.py` | 全体の流れとコマンドライン |
+| `colab.py` | Colab ノートブックの表示部品（手動モードの依頼文の枠など） |
 | `data/jasme.toml` | 本誌の設定（誌名・ISSN・DOI 形式・スタイル名の対応表など） |
 
 ## 守るべき原則
@@ -75,6 +76,9 @@ python -m jasme_jats tests/private/論文.docx --meta examples/meta_example.toml
 
 - 手順 1 はツール本体を毎回入れ直す（同じ版番号でもコードが新しくなるように）。同じランタイムで前の版を読み込んだ後だと
   入れ直しが反映されないため、その場合はセッションの再起動を求めて止まる。
+- LibreOffice は手順 1 で裏でインストールし（`LO_PROC`）、手順 5 で終わるのを待つ。ツール本体の pip は確実さを優先して手順 1 の中で済ませる。
+- 開発版は手順 1 の `USE_DEV_VERSION` にチェックを入れると `input()` でブランチ名を尋ねる（通常の利用者が誤って変えないように）。
+- 手動モードの依頼文の表示（コピーボタン付きの枠）とエラーの枠は `src/jasme_jats/colab.py`。
 - Colab ではどのセルも押せてしまうため、各手順の最初で前の手順が済んでいるかを確かめる（変数 `DONE`）。
   ある手順をやり直すと、それより後の手順は未実行に戻る。
 
