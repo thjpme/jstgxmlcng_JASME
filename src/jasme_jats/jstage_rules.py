@@ -128,8 +128,14 @@ def check(root, article_id: str = "", image_names=()):
                 out.append(("EMSGM117E", "所属(英)と所属(日)の両方が未設定の所属がある"))
 
     kgs = am.findall("kwd-group")
-    if kgs and not any(_text(k) for kg in kgs for k in kg.findall("kwd")):
+    kwds = [_text(k) for kg in kgs for k in kg.findall("kwd")]
+    if kgs and not any(kwds):
         out.append(("EMSGM234E", "キーワード(英)とキーワード(日)の両方が未設定（kwd-group だけがある）"))
+    if len(kwds) > 100:
+        out.append(("EMSGM149E", f"キーワードが {len(kwds)} 個ある（上限 100 個）"))
+    for k in kwds:
+        if len(k) > 1000:
+            out.append(("-", f"キーワード「{k[:20]}…」が 1000 文字を超える"))
 
     if not _text(am.find("fpage")) and not _text(am.find("elocation-id")):
         out.append(("EMSGM230E", "開始ページと論文番号の両方が未設定"))

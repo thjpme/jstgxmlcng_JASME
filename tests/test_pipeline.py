@@ -169,3 +169,22 @@ def test_peer_review_missing_or_invalid(journal, tmp_path):
         ArticleMeta.from_dict({"peer_review": "たぶん"})
     with pytest.raises(ValueError, match="YYYY-MM-DD"):
         ArticleMeta.from_dict({"approved": "2025/13/40"})
+
+
+def test_categories_and_keywords(journal, meta, tmp_path):
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    root = load(res)
+    assert root.get("article-type") == "other"                       # 記事種別: その他
+    subjects = [(g.get(XML_LANG), g.findtext("subject")) for g in root.iter("subj-group")]
+    assert subjects == [("ja", "論文"), ("en", "Article")]           # 原稿種別（日・英）
+    kwds = {g.get(XML_LANG): [k.text for k in g.iter("kwd")] for g in root.iter("kwd-group")}
+    assert kwds == {"ja": ["論証", "数学的探究"], "en": ["proof"]}
+    assert not any("キーワード" in w for w in res.warnings)
+
+
+def test_keyword_parsing_and_count():
+    from jasme_jats.config import ArticleMeta, keyword_problem, split_keywords
+    assert split_keywords("equity；ジェンダー; 数学教育 ; ;ICT活用") == (["ジェンダー", "数学教育", "ICT活用"], ["equity"])
+    assert "2 個しかない" in keyword_problem(ArticleMeta.from_dict({"keywords": "a; b"}))
+    assert keyword_problem(ArticleMeta.from_dict({"keywords": "a; b; c"})) == ""
+    assert "上限は 100 個" in keyword_problem(ArticleMeta.from_dict({"keywords": ";".join(map(str, range(101)))}))
