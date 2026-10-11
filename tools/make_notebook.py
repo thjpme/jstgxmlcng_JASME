@@ -294,25 +294,29 @@ if keyword_language_mismatch(_meta):
 """ + mark(3)),
     code("""
 #@title 4. AI による補完の方法を選ぶ
-#@markdown - **使わない**: 機械的な変換だけを行います。
+#@markdown - **使わない**（推奨しません）: 機械的な変換だけを行います。取りこぼしがあっても補われません。
 #@markdown - **API で自動実行**: Claude API を呼び出して、機械処理で取りこぼした引用・スタイルの誤り・画像の数式などを補完します。左の 🔑（シークレット）に名前 `ANTHROPIC_API_KEY` で API キーを登録し、「ノートブックからのアクセス」をオンにしてください（API の利用料がかかります）。キーの作り方と登録の手順は、このセルのすぐ下の「**API キーについての詳細**」を開いてください。
 #@markdown - **手動**: AI への依頼文を作ります。claude.ai などのチャットに貼り付け、返ってきた回答を手順 6 で貼り戻します（API キー不要）。
 #@markdown ***
 #@markdown **AI による補完の方法（AI_MODE）**
-AI_MODE = "使わない"  #@param ["使わない", "API で自動実行", "手動（チャットに貼り付け）"]
+AI_MODE = "手動（チャットに貼り付け）"  #@param ["使わない", "API で自動実行", "手動（チャットに貼り付け）"]
 #@markdown **API で使うモデル（MODEL）**（通常は変更不要。「API キーについての詳細」の 5. を参照）
 MODEL = "claude-opus-5-5"  #@param ["claude-opus-5-5", "自動（最新の Opus）"] {allow-input: true}
 #@markdown **図表番号を分ける（SPLIT_LABELS）**: 図表番号（「図1」）を J-STAGE の <label> 要素に分けるか（分けると番号とタイトルの間の空白 1 文字を落とします。既定は分けない）
 SPLIT_LABELS = False  #@param {type:"boolean"}
 """ + guard(1, 2, 3) + """AI = {"使わない": "none", "API で自動実行": "api", "手動（チャットに貼り付け）": "manual"}[AI_MODE]
 print("AI による補完:", AI_MODE)
+if AI == "none":
+    from IPython.display import HTML, display
+    from jasme_jats.colab import no_ai_box
+    display(HTML(no_ai_box()))
 """ + mark(4)),
     md(API_HELP),
     code("""
 #@title 5. 変換を実行
 """ + guard(1, 2, 3, 4) + """import shutil
 from IPython.display import HTML, Markdown, display
-from jasme_jats.colab import error_box, prompt_box
+from jasme_jats.colab import error_box, no_ai_box, prompt_box
 from jasme_jats.config import ArticleMeta, JournalConfig
 from jasme_jats.pipeline import Options, convert
 
@@ -345,6 +349,8 @@ print("J-STAGE のアップロード時チェック:", "問題なし" if not res
 for mid, msg in res.jstage_issues:
     print("  ", mid, msg)
 manual_prompt = None
+if AI == "none":
+    display(HTML(no_ai_box()))
 if AI == "manual" and res.prompt_path:
     # 依頼文は、レポートの前に目立つ枠で出し、レポートの後ろにも同じものをコピーできる枠を出す
     attach = OUT / "AI添付画像"

@@ -68,6 +68,17 @@ def prompt_box(prompt: str, image_names=(), compact: bool = False) -> str:
             "</div>")
 
 
+NO_AI_TITLE = "AI による補完を「使わない」設定です（推奨しません）"
+NO_AI_DETAIL = ("機械的な変換だけでは、テンプレートのスタイルが正しく設定されていない段落、決まった形でない引用（著者名と年が離れている、"
+                "括弧がないなど）、画像で貼られた数式などを取りこぼすことがあります。"
+                "API キーがなくても使える「手動（チャットに貼り付け）」を選ぶことをお勧めします。")
+
+
+def no_ai_box() -> str:
+    """AI による補完を使わないときに出す注意（赤い枠）。"""
+    return error_box(NO_AI_TITLE, NO_AI_DETAIL)
+
+
 def error_box(title: str, detail: str) -> str:
     """読み込めなかった AI の回答など、見落とされると困るエラーを赤い枠で表示する HTML。"""
     return ("<div style='border:3px solid #dc2626;border-radius:8px;padding:12px 16px;margin:12px 0;background:#fef2f2;"

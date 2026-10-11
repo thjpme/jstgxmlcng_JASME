@@ -14,3 +14,9 @@ def test_compact_box_and_error_box():
     assert "依頼文をコピー" in html and "手順 6" not in html
     assert prompt_box("x").count("jasme-prompt-") != 0
     assert "&lt;x&gt;" in error_box("読めません", "<x>")
+
+
+def test_no_ai_box_is_red_warning():
+    from jasme_jats.colab import no_ai_box
+    html = no_ai_box()
+    assert "推奨しません" in html and "#dc2626" in html and "手動（チャットに貼り付け）" in html
