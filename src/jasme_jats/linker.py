@@ -140,7 +140,7 @@ def body_paragraphs(plan: ArticlePlan):
 
 # ---------------------------------------------------------------------------- 個別のリンク
 class Linker:
-    def __init__(self, plan: ArticlePlan, ref_doi: str = "uri"):
+    def __init__(self, plan: ArticlePlan, ref_doi: str = "pub-id"):
         self.plan = plan
         self.ref_doi = ref_doi      # 引用文献中の DOI: "uri"（リンクとして表示）/ "pub-id"（DOI として登録）
         self.count = {"fig": 0, "table": 0, "disp-formula": 0, "fn": 0, "bibr": 0, "url": 0, "doi": 0, "word": 0}
@@ -345,7 +345,7 @@ def _trim(url: str) -> str:
     return url
 
 
-def link(plan: ArticlePlan, ref_doi: str = "uri") -> Linker:
+def link(plan: ArticlePlan, ref_doi: str = "pub-id") -> Linker:
     return Linker(plan, ref_doi).run()
 
 
