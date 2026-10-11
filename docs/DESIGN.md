@@ -89,7 +89,7 @@
 | 登載時チェックの再現 | `jstage_rules.py` で、アップロードメッセージ一覧のうち XML だけで判定できるもの（題目と抄録の言語の対応、日付の前後、所属番号の連番、DOI の文字、画像ファイル名など）を確かめ、レポート 12 章に出す | DTD に合っていても J-STAGE で弾かれる条件があるため |
 | 図表番号 | 既定は caption の中に番号ごと入れる | 文字を落とさないため（`split_labels` で切替） |
 | 引用文献 | `<mixed-citation>` に原文をそのまま入れ、年・論文名・誌名・DOI・URL にだけタグを付ける | J-STAGE は mixed-citation の文字をそのまま表示する。タグは文字を変えない |
-| 文献中の DOI | 既定（設定 `ref_doi = "uri"`）は「https://doi.org/10.…」の文字全体を `<uri xlink:href>` にする。`ref_doi = "pub-id"` では `10.…` の部分を `<pub-id pub-id-type="doi" xlink:href>` にする。Word のハイパーリンクが付いていても、表示文字が URL そのもの（または同じ DOI）なら同じ形にする | J-STAGE の mixed-citation の子要素は uri・pub-id などで ext-link は使えない。ガイドラインは pub-id を推奨（引用文献リンクの反映率が上がる）が、2026-10 の試験登載では pub-id は画面上リンクにならなかったため、「DOI はそのままリンク」という要件を優先して uri を既定にした。pub-id にした場合も、編集登載システムで DOI 欄に入力できる |
+| 文献中の DOI | 既定（設定 `ref_doi = "pub-id"`）は `https://doi.org/` の部分を文字のまま、`10.…` の部分を `<pub-id pub-id-type="doi" xlink:href>` にする。`ref_doi = "uri"` では「https://doi.org/10.…」の文字全体を `<uri xlink:href>` にする。Word のハイパーリンクが付いていても、表示文字が URL そのもの（または同じ DOI）なら同じ形にする | J-STAGE の mixed-citation の子要素は uri・pub-id などで ext-link は使えず、同じ文字をリンクと DOI の両方にはできない。ガイドラインは pub-id を推奨（引用文献リンクの反映率が上がる）。2026-10 の試験登載では pub-id は画面上リンクにならなかったが、DOI としての登録を優先する（uri にした場合も、編集登載システムで DOI 欄に手入力すれば登録できる） |
 | 本文中の URL | `<uri xlink:href>`（注・付記・資料では `<ext-link>`） | J-STAGE マニュアルの子要素構成 |
 | 注 | `<fn-group>`。本文の上付き「1)」を `<xref ref-type="fn">` | テンプレートの注の書き方 |
 | 付記 | `<notes>` | J-STAGE の「注釈」 |
