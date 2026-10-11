@@ -12,7 +12,8 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .model import Decision, Exclusion, Para, Table
+from .floats import at_anchor, why_not_at_anchor
+from .model import Decision, Exclusion, Float, Para, Table
 from .ooxml import is_ws
 
 BODY_ROLES = {"sec1", "sec2", "sec3", "p", "fig_caption", "table_caption", "quote", "fn"}
@@ -80,6 +81,8 @@ class FigNode:
     image_paras: list
     caption: Optional[Para] = None
     caption_more: list = field(default_factory=list)   # 2 段落目以降のキャプション
+    tables: list = field(default_factory=list)         # 表で組んだ図の本体（テキストボックスの中の表など）
+    extra_images: list = field(default_factory=list)   # 他の段落の中から移した画像（グループ図形の画像）
     fid: str = ""
     number: Optional[int] = None
     formula: object = None        # AI が数式画像と判断した場合に読み取った MathML（mml:math 要素）
@@ -148,6 +151,17 @@ class Aff:
     aid: str = ""
 
 
+@dataclass(eq=False)
+class FloatInfo:
+    """本文の浮動配置の図形のうち、図表の中身（画像・表・キャプション）を持つもの。"""
+    float: Float
+    paras: list = field(default_factory=list)      # テキストボックスの段落（出現順）
+    tables: list = field(default_factory=list)     # テキストボックスの表
+    images: list = field(default_factory=list)     # グループ図形の画像（アンカー段落の中にある ImageRef）
+    mode: str = ""                                 # mechanical（機械的に配置）/ ai（AI の指定で配置）/ unplaced（未配置）
+    reason: str = ""                               # 未配置の理由
+
+
 @dataclass
 class ArticlePlan:
     lang: str = "ja"
@@ -177,6 +191,15 @@ class ArticlePlan:
     region: dict = field(default_factory=dict)       # src -> front_ja / body / notes / ack / fn / refs / front_en / app
     citation_mode: str = ""                          # author-year / numeric（refparse が設定）
     uncited_refs: list = field(default_factory=list) # 本文からリンクされていない文献の ID
+    floats: dict = field(default_factory=dict)       # 浮動配置の図形の ID -> FloatInfo
+    body_seq: list = field(default_factory=list)     # 本文の段落 ID（出現順。浮動配置の図形の中の段落を除く）
+    moved_images: set = field(default_factory=set)   # 図に移したため、元の段落では出力しない画像の ID
+    float_decisions: dict = field(default_factory=dict)  # AI の指定で配置した図形の ID -> Decision
+    layout: object = None                            # 本文の段組みと行の設定（model.Layout）
+
+    @property
+    def unplaced_floats(self) -> list:
+        return [fid for fid, info in self.floats.items() if info.mode == "unplaced"]
 
     def decide(self, stage, category, src, message, confidence="", applied=True) -> Decision:
         n = sum(1 for x in self.decisions if x.stage == stage) + 1
@@ -197,11 +220,12 @@ def _para_text(para: Para) -> str:
 
 # ----------------------------------------------------------------------------- roles
 class Classifier:
-    def __init__(self, doc, journal, overrides=None):
+    def __init__(self, doc, journal, overrides=None, placements=None):
         self.doc = doc
         self.journal = journal
         self.mapping = journal.styles
         self.overrides = overrides or {}      # src -> role（AI 補完）
+        self.placements = placements or {}    # 浮動配置の図形の ID -> 配置の指定（AI 補完。ai_assist.float_placements）
         self.plan = ArticlePlan(lang=journal.lang)
 
     def style_role(self, para: Para) -> Optional[str]:
@@ -414,6 +438,8 @@ class Classifier:
     # ----------------------------------------------------------------- body
     def build_body(self, items):
         plan = self.plan
+        order = {id(b): k for k, (b, _) in enumerate(items)}
+        items, inserts = self.place_floats(items)
         flat = []
         for b, role in items:
             if isinstance(b, Table):
@@ -462,6 +488,16 @@ class Classifier:
             b.role = role
             flat.append((role, b))
 
+        # 配置を決めた浮動配置の図表を、決めた位置（items での位置）に差し込む
+        merged, pending = [], sorted(inserts, key=lambda x: (x[0], x[1]))
+        for entry in flat:
+            while pending and pending[0][0] <= order[id(entry[1])]:
+                merged.extend(pending.pop(0)[2])
+            merged.append(entry)
+        for _, _, entries in pending:
+            merged.extend(entries)
+        flat = merged
+
         # 本文スタイルのまま書かれた図表キャプションの推定
         for k, (role, b) in enumerate(flat):
             if role != "p" or not isinstance(b, Para):
@@ -483,6 +519,239 @@ class Classifier:
         nodes = self.assemble_floats(flat)
         plan.body = self.nest(nodes)
         self.compute_locations(plan.body, [])
+
+    # ----------------------------------------------------------------- 浮動配置の図表
+    def place_floats(self, items):
+        """浮動配置の図形（テキストボックス・グループ図形）に入った図表を、本文のどこに置くかを決める。
+
+        図を置く位置の規則は「Word で表示したときに、図の左上の直上にある本文の文章を含む段落の直後」。
+        - AI の指定（placements）があれば、その組み合わせで、指定された段落の直後に置く。
+        - なければ、図の左上がアンカー段落の左上の位置にあり（floats.at_anchor）、中身が単純（キャプション 1 つと本体 1 つ）な
+          場合だけ、機械的にアンカー段落の前に置く。
+        - どちらでもなければ「位置を決められない図表」として記録し、中身はこれまでどおりアンカー段落の後に出す。
+        戻り値: (残りの items, [(items での位置, 同じ位置での順番, [(役割, 要素)])])。同じ位置に置くものはキャプションの番号順
+        """
+        plan = self.plan
+        src_index = {b.src: k for k, (b, _) in enumerate(items) if isinstance(b, Para)}
+        plan.layout = getattr(self.doc, "layout", None)
+        plan.body_seq = [b.src for b, _ in items if isinstance(b, Para) and not b.float_id]
+        members, group_imgs, roles = {}, {}, {}
+        for b, role in items:
+            if b.float_id:
+                members.setdefault(b.float_id, []).append(b)
+                roles[id(b)] = role
+            elif isinstance(b, Para):
+                for img in b.images:
+                    if img.float_id:
+                        group_imgs.setdefault(img.float_id, []).append(img)
+        placed, inserts = set(), []
+        layout = plan.layout
+        for fl in getattr(self.doc, "floats", []):
+            if fl.anchor_src not in src_index:
+                continue
+            blocks = members.get(fl.fid, [])
+            info = FloatInfo(float=fl, paras=[b for b in blocks if isinstance(b, Para)],
+                             tables=[b for b in blocks if isinstance(b, Table)], images=group_imgs.get(fl.fid, []))
+            groups, others = self.float_captions(info.paras, roles)
+            if not (info.images or info.tables or groups or any(q.images for q in info.paras)):
+                continue        # 文字だけのテキストボックスは図表ではない（これまでどおり）
+            plan.floats[fl.fid] = info
+            spec = self.placements.get(fl.fid)
+            if spec and spec["after"] not in src_index:
+                spec = None     # AI の役割の指定で、指定された段落が本文でなくなった
+            if spec:
+                entries = self.float_from_spec(info, spec)
+                target = src_index[spec["after"]] + 1
+                info.mode = "ai"
+            else:
+                entries = self.float_mechanical(info, groups, others) if at_anchor(fl, layout) else None
+                if entries is None:
+                    info.mode = "unplaced"
+                    info.reason = (why_not_at_anchor(fl, layout) if not at_anchor(fl, layout)
+                                   else "中身の組み合わせ（図表の本体とキャプション）を機械的に決められない")
+                    plan.decide("mechanical", "figure", fl.anchor_src,
+                                f"テキストボックス・グループ図形 {fl.fid}（{self.float_summary(info)}）は、位置を機械的に"
+                                f"決められない（{info.reason}）。AI による補完で位置を指定する必要がある", applied=False)
+                    continue
+                target = src_index[fl.anchor_src]
+                info.mode = "mechanical"
+                plan.decide("mechanical", "figure", fl.anchor_src,
+                            f"テキストボックス・グループ図形 {fl.fid}（{self.float_summary(info)}）を、アンカー段落"
+                            f"「{_para_text(plan.paras[fl.anchor_src])[:20]}」の前に置いた（図の左上がアンカー段落の左上の位置にあるため）")
+            placed.update(id(b) for b in blocks)
+            inserts.append((target, (self.float_number(info), len(inserts)), entries))
+        return [(b, r) for b, r in items if id(b) not in placed], inserts
+
+    @staticmethod
+    def float_number(info) -> float:
+        """浮動配置の図形の中の最初の図表番号（なければ無限大）。"""
+        for q in info.paras + [c for t in info.tables for c in t.paragraphs()]:
+            m = RE_FIGCAP.match(nfkc(_para_text(q)).strip()) or RE_TABCAP.match(nfkc(_para_text(q)).strip())
+            if m:
+                return int(nfkc(m.group(1)))
+        return float("inf")
+
+    def float_captions(self, paras, roles):
+        """テキストボックスの段落からキャプションを探す。戻り値: ([(役割, [段落…])], キャプションでも画像でもない段落)"""
+        groups, others = [], []
+        prev_cap = False
+        for p in paras:
+            if p.is_blank or p.images:
+                prev_cap = prev_cap and p.is_blank
+                continue
+            role = roles.get(id(p), "")
+            cap = role if role in ("fig_caption", "table_caption") else self.textbox_caption(p)
+            t = nfkc(_para_text(p)).strip()
+            if cap and (RE_FIGCAP.match(t) or RE_TABCAP.match(t) or not groups):
+                groups.append((cap, [p]))
+                prev_cap = True
+            elif role in ("fig_caption", "table_caption") and prev_cap:
+                groups[-1][1].append(p)       # 番号で始まらないキャプションの続き（出典など）
+            else:
+                others.append(p)
+                prev_cap = False
+        return groups, others
+
+    @staticmethod
+    def float_summary(info) -> str:
+        """浮動配置の図形の中身の要約（レポート用）: キャプションの冒頭と、本体の種類。"""
+        texts = [nfkc(_para_text(q)).strip() for q in info.paras if not q.is_blank]
+        caps = [t[:20] for t in texts if RE_FIGCAP.match(t) or RE_TABCAP.match(t)]
+        body = (["画像"] if info.images or any(q.images for q in info.paras) else []) + (["表"] if info.tables else [])
+        head = "、".join(f"「{c}」" for c in caps) if caps else "キャプションなし"
+        return f"{head}／中身: {'・'.join(body) or '文字'}"
+
+    def _take(self, p: Para, role: str, origin=""):
+        p.role = role
+        if origin:
+            p.role_origin = origin
+        self.plan.region[p.src] = "body"
+
+    def _take_table(self, t: Table):
+        for tp in t.paragraphs():
+            self.plan.region[tp.src] = "body"
+            tp.role = tp.role or "cell"
+
+    def _caption_decision(self, p: Para, role: str):
+        if p.role_origin != "style" or self.style_role(p) not in ("fig_caption", "table_caption"):
+            kind = "図" if role == "fig_caption" else "表"
+            self.plan.decide("mechanical", "style", p.src,
+                             f"テキストボックス内のスタイル「{p.style_name}」の段落「{_para_text(p)[:30]}」を"
+                             f"{kind}キャプションと推定（「{kind}N」で始まる）")
+            return "heuristic"
+        return ""
+
+    def _drop_blank(self, p: Para):
+        self.plan.region[p.src] = "body"
+        if p.plain():
+            self.plan.exclude(p, "空白のみの段落")
+
+    def float_mechanical(self, info, groups, others):
+        """位置が機械的に決まる浮動配置の図形の中身を組む。中身が単純でなければ None（AI に任せる）。"""
+        image_paras = [q for q in info.paras if q.images]
+        if len(groups) > 1 or others or len(info.tables) > 1 or (info.tables and (image_paras or info.images)):
+            return None
+        if groups and groups[0][0] == "table_caption" and (image_paras or info.images):
+            return None
+        # ここから先は必ず組む（状態を変えるのは、組めると決まってから）
+        for q in info.paras:
+            if q.is_blank and not q.images:
+                self._drop_blank(q)
+        for t in info.tables:
+            self._take_table(t)
+        for q in image_paras:
+            self._take(q, "p")
+        if not groups:
+            # キャプションのない画像・表（これまでの扱い: キャプションなしの図・表）
+            return [("p", q) for q in image_paras] + [("table", t) for t in info.tables]
+        role, caps = groups[0]
+        for q in caps:
+            self._take(q, role, self._caption_decision(q, role))
+        if role == "table_caption":
+            if not info.tables:
+                return [(role, q) for q in caps]
+            return [("node", TableNode(table=info.tables[0], caption=caps[0], caption_more=caps[1:]))]
+        if not (image_paras or info.images or info.tables):
+            return [(role, q) for q in caps]     # キャプションだけ（隣の画像と組にする。これまでの扱い）
+        self.plan.moved_images.update(i.image_id for i in info.images)
+        return [("node", FigNode(image_paras=image_paras, caption=caps[0], caption_more=caps[1:],
+                                 tables=list(info.tables), extra_images=list(info.images)))]
+
+    def float_from_spec(self, info, spec):
+        """AI が指定した組み合わせ（ai_assist.float_placements で検証済み）で、浮動配置の図形の中身を組む。"""
+        plan = self.plan
+        paras = {q.src: q for q in info.paras}
+        cells = {q.src: t for t in info.tables for q in t.paragraphs()}
+        cell_paras = {q.src: q for t in info.tables for q in t.paragraphs()}
+        tables = {t.tid: t for t in info.tables}
+        group_imgs = {i.image_id: i for i in info.images}
+        img_para = {i.image_id: q for q in list(info.paras) + list(cell_paras.values()) for i in q.images}
+        used, used_tables, dissolved, entries, descs = set(), set(), set(), [], []
+        for item in spec["items"]:
+            caps = []
+            for src in item["caption"]:
+                q = paras.get(src) or cell_paras[src]
+                if src in cells:
+                    dissolved.add(cells[src].tid)
+                role = "fig_caption" if item["kind"] == "fig" else "table_caption"
+                self._take(q, role, "ai")
+                caps.append(q)
+                used.add(q.src)
+            image_paras, extra, tbls = [], [], []
+            for x in item["body"]:
+                if x in tables:
+                    tbls.append(tables[x])
+                    used_tables.add(x)
+                    self._take_table(tables[x])
+                elif x in group_imgs:
+                    extra.append(group_imgs[x])
+                else:
+                    q = paras.get(x) or cell_paras.get(x) or img_para[x]
+                    if q.src in cells:
+                        dissolved.add(cells[q.src].tid)
+                    if q not in image_paras:
+                        image_paras.append(q)
+                        self._take(q, "p")
+                        used.add(q.src)
+            plan.moved_images.update(i.image_id for i in extra)
+            cap, more = (caps[0], caps[1:]) if caps else (None, [])
+            if item["kind"] == "table":
+                entries.append(("node", TableNode(table=tbls[0], caption=cap, caption_more=more)))
+            else:
+                entries.append(("node", FigNode(image_paras=image_paras, caption=cap, caption_more=more,
+                                                tables=tbls, extra_images=extra)))
+            what = "表" if item["kind"] == "table" else "図"
+            body = "表" if tbls else "画像"
+            descs.append(f"{what}「{_para_text(cap)[:20] if cap else 'キャプションなし'}」（本体: {body}）")
+        # 指定に含まれなかった中身は、図表の後にそのまま出す（文字を落とさないため）
+        for q in info.paras:
+            if q.src in used:
+                continue
+            if q.is_blank and not q.images:
+                self._drop_blank(q)
+            else:
+                self._take(q, "p")
+                entries.append(("p", q))
+        for t in info.tables:
+            if t.tid in dissolved:
+                for q in t.paragraphs():
+                    if q.src in used:
+                        continue
+                    if q.is_blank and not q.images:
+                        self._drop_blank(q)
+                    else:
+                        self._take(q, "p")
+                        entries.append(("p", q))
+            elif t.tid not in used_tables:
+                self._take_table(t)
+                entries.append(("table", t))
+        after = plan.paras.get(spec["after"])
+        d = plan.decide("ai", "figure", spec["after"],
+                        f"テキストボックス・グループ図形 {info.float.fid} の中身を{'、'.join(descs)}として組み、段落"
+                        f"「{_para_text(after)[:20] if after else spec['after']}」の後に置いた。{spec.get('reason', '')}",
+                        spec.get("confidence", ""))
+        plan.float_decisions[info.float.fid] = d
+        return entries
 
     @staticmethod
     def textbox_caption(b: Para) -> Optional[str]:
@@ -511,6 +780,9 @@ class Classifier:
         above = sum(1 for k in range(n - 1) if flat[k][0] == "fig_caption" and self.is_image_para(flat[k + 1][1]))
         captions_below = below >= above
         for k, (role, b) in enumerate(flat):
+            if role == "node":          # 組み立て済みの図表（浮動配置の図形）
+                out.append(b)
+                continue
             if id(b) in used:
                 continue
             if role in ("fig_caption", "table_caption") and out and k > 0 and flat[k - 1][1] is not None \
@@ -660,7 +932,8 @@ class Classifier:
         if isinstance(node, ListNode):
             return node.items
         if isinstance(node, FigNode):
-            return node.image_paras + ([node.caption] if node.caption else []) + node.caption_more
+            return (node.image_paras + ([node.caption] if node.caption else []) + node.caption_more
+                    + [p for t in node.tables for p in t.paragraphs()])
         if isinstance(node, TableNode):
             out = ([node.caption] if node.caption else []) + node.caption_more
             if node.table:
@@ -944,5 +1217,5 @@ class Classifier:
         plan.figures, plan.tables, plan.formulas = figs, tabs, forms
 
 
-def classify(doc, journal, overrides=None) -> ArticlePlan:
-    return Classifier(doc, journal, overrides).run()
+def classify(doc, journal, overrides=None, placements=None) -> ArticlePlan:
+    return Classifier(doc, journal, overrides, placements).run()

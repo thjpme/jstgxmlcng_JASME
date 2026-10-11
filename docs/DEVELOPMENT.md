@@ -28,6 +28,7 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
 | `tracking.py` | 変換途中の目印の定義 |
 | `fidelity.py` | 文字の不変性チェック |
 | `validate.py` | DTD 検証（`dtd/` に J-STAGE 指定 DTD を同梱） |
+| `floats.py` | 浮動配置の図形（テキストボックス・グループ図形）の位置: 機械的に配置できるかの判定、AI に渡す位置の説明と行数の推定 |
 | `jstage_rules.py` | J-STAGE のアップロード時チェック（記事アップロードメッセージ一覧）のうち XML だけで判定できるものの再現 |
 | `images.py` / `package.py` / `report.py` | 画像の書き出し、ZIP、レポート |
 | `pipeline.py` / `cli.py` | 全体の流れとコマンドライン |
@@ -49,6 +50,8 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
   変更したら `python tests/make_fixtures.py` で作り直してコミットする。
 - `tests/test_fidelity.py`: 不変性チェックがわざと壊した XML を確実に検出することのテスト。チェックの処理を変えたら必ず通すこと。
 - `tests/test_ai.py`: AI の回答の検証と適用（実際の API は呼ばない。`tests/data/ai_response_sample_full.json` が模擬回答）。
+- `tests/test_floats.py`: 浮動配置の図表（`tests/fixtures/sample_float.docx` と模擬回答 `tests/data/ai_response_sample_float.json`）。
+  AI を使わない設定での中止、機械的な配置、`placements` の検証と適用。
 - GitHub Actions（`.github/workflows/test.yml`）で push のたびに実行される。
 
 `tests/fixtures/JASME_template_20261009.docx` は学会のテンプレートから、`tools/sanitize_docx.py` でコメントと作成者情報を
@@ -136,5 +139,5 @@ python -m jasme_jats tests/private/論文.docx --meta examples/meta_example.toml
 | API モードを ChatGPT・Gemini などにも広げる | 保留（利用者の判断待ち）。`ai_assist.call_api()` と同じ形（依頼文と画像 → JSON の文字列）を返す関数を追加すれば、検証・適用・最終チェックはそのまま使える（`docs/DESIGN.md` の 5 章）。今は手動モードで他社のチャットを使える |
 | 注の番号から本文へ戻るリンク | J-STAGE の仕様上できない（`<xref>` に付けられるのは ref-type と rid だけで、戻り先の目印を付けられない。注の中は `<p>` だけ）。ブラウザの「戻る」で戻れる |
 | 引用文献の DOI のリンク | 今は J-STAGE に DOI として登録する `<pub-id>`。公開後に J-STAGE の引用文献リンクが付くかを確認し、画面上のリンクを優先するなら `ref_doi = "uri"` にする |
-| テキストボックス・グループ図形の中の図 | 図の本体（画像・表）とキャプションが同じテキストボックスやグループに入っていると、図として組にならない（2026-10 の実際の論文 3 本すべてで発生）。表で組んだ図（問題文など）を J-STAGE でどう表示できるかの確認が必要 |
+| テキストボックス・グループ図形の中の図 | 位置を機械的に決められない図表は AI に位置と組み合わせを指定させる（`docs/DESIGN.md` の 6.1）。表で組んだ図（`fig` の中の `table-wrap`）が J-STAGE の画面でどう表示されるかは、試験登載で確認が必要 |
 | 正式リリース | 試験運用で問題がなければ、版を 1.0.0 にする |

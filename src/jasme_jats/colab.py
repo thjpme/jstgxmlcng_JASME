@@ -85,3 +85,20 @@ def error_box(title: str, detail: str) -> str:
             "color:#1f2937;font-size:14px;line-height:1.6'>"
             f"<div style='font-size:17px;font-weight:bold;color:#b91c1c'>{html.escape(title)}</div>"
             f"<div style='white-space:pre-wrap'>{html.escape(detail)}</div></div>")
+
+
+def ai_required_box(message: str) -> str:
+    """AI による補完を使わない設定で、位置を決められない図表があったときの表示（変換は中止）。"""
+    return error_box("AI による補完が必要です（変換を中止しました）", message)
+
+
+def unplaced_box(plan) -> str:
+    """AI の回答を反映した後も、位置を決められない図表が残っているときの表示。なければ空文字。"""
+    if not plan.unplaced_floats:
+        return ""
+    return error_box(
+        "位置を決められない図表が残っています（この結果は登載に使わないでください）",
+        f"AI の回答に、次の図表の位置（placements）の指定がないか、指定が検証で採用されませんでした: "
+        f"{', '.join(plan.unplaced_floats)}（レポートの 2 章・3 章）。手動モードでは、チャットで「位置を決められなかった図表を"
+        "すべて placements に書いて、回答の書き方に従って出し直してください」と頼み、手順 6 で貼り付け直してください。"
+        "API モードでは、手順 5 をもう一度実行してください。")

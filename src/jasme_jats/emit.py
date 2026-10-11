@@ -53,9 +53,10 @@ def xl(name):
 
 
 class Emitter:
-    def __init__(self, image_namer, fn_numbers=None):
+    def __init__(self, image_namer, fn_numbers=None, skip_images=()):
         self.image_namer = image_namer          # ImageRef -> ファイル名
         self.fn_numbers = fn_numbers or {}      # Word 脚注 id -> (fid, 表示番号)
+        self.skip_images = set(skip_images)     # 図に移したため段落の中では出力しない画像の ID
         self.math_warnings = []
 
     # ------------------------------------------------------------------ 範囲の切り出し
@@ -227,7 +228,7 @@ class Emitter:
                 inf.append(conv.convert(a.math, display=False))
             self.math_warnings.extend(conv.warnings)
         elif a.kind == "image":
-            if ctx.images:
+            if ctx.images and a.image.image_id not in self.skip_images:
                 g = etree.SubElement(parent, "inline-graphic")
                 g.set(xl("href"), self.image_namer(a.image))
         elif a.kind == "fnref":

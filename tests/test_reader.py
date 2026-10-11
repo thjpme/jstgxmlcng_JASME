@@ -1,7 +1,7 @@
 """docx の読み取り: 中間表現の文字列が、独立に取り出した docx の文字列と一致すること。"""
 import pytest
 
-from conftest import ALL_DOCS, EDGE, FULL
+from conftest import ALL_DOCS, EDGE, FLOAT, FULL
 from jasme_jats.docx_reader import read_docx
 from jasme_jats.omml import math_plain, omml_to_mathml
 from jasme_jats.ooxml import DocxPackage, canonical_text, paragraph_ids
@@ -17,7 +17,7 @@ def atoms_text(p):
     return "".join(out)
 
 
-@pytest.mark.parametrize("path", ALL_DOCS, ids=lambda p: p.name)
+@pytest.mark.parametrize("path", ALL_DOCS + [FLOAT], ids=lambda p: p.name)
 def test_reader_matches_canonical(path):
     doc = read_docx(path)
     root = DocxPackage(path).xml("word/document.xml")

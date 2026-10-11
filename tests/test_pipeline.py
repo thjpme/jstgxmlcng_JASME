@@ -219,8 +219,11 @@ def test_textbox_figures_and_captions(journal, meta, tmp_path):
     root = load(res)
     caps = {el.get("id"): ("".join(el.find("caption").itertext()) if el.find("caption") is not None else None,
                            len(list(el.iter("graphic"))), el.find("table") is not None)
-            for el in root.iter("fig", "table-wrap")}
+            for el in root.iter("fig", "table-wrap") if el.get("id")}
+    # 図の左上がアンカー段落の左上にあるテキストボックス: 中身を組にして、アンカー段落の前に機械的に置く
     assert caps["F2"] == ("図2　テキストボックス内の表で組んだ問題", 0, False)
+    assert root.find(".//fig[@id='F2']/table-wrap/table") is not None      # 表で組んだ図は図の中に表を入れる
+    assert {i.mode for i in res.plan.floats.values()} == {"mechanical"}
     assert caps["F3"] == ("図3　テキストボックス内の画像", 1, False)        # 前の図のキャプションに画像を取られない
     assert ("表1　テキストボックス内の表", 0, True) in caps.values()
     assert "問1　架空の問題文である。" in "".join(root.itertext())

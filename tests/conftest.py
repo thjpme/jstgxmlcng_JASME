@@ -9,6 +9,7 @@ DATA = Path(__file__).resolve().parent / "data"
 FULL = FIXTURES / "sample_full.docx"
 EDGE = FIXTURES / "sample_edge.docx"
 TEMPLATE = FIXTURES / "JASME_template_20261009.docx"
+FLOAT = FIXTURES / "sample_float.docx"   # 位置を決めるのに AI 補完が必要（ALL_DOCS には入れない）
 ALL_DOCS = [FULL, EDGE, TEMPLATE]
 
 

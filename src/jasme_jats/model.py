@@ -75,6 +75,7 @@ class ImageRef:
     shape_only: bool = False    # 画像ファイルを持たない Word 図形
     export_name: str = ""       # 出力ファイル名（Graphics/ 配下）
     image_id: str = ""          # レポート・AI 用の識別子 (img1, img2, ...)
+    float_id: str = ""          # 浮動配置の図形（Float）の中の画像なら、その図形の ID
 
     @property
     def height_cm(self) -> float:
@@ -96,6 +97,7 @@ class Para:
     align: str = ""
     section_break: bool = False  # この段落でセクション（段組みなど）が終わる
     in_textbox: bool = False
+    float_id: str = ""          # 浮動配置の図形（Float）の中の段落なら、その図形の ID
     role: str = ""              # structure.py が決める役割
     role_origin: str = ""       # "style" / "heuristic" / "ai" / "position"
     note: str = ""
@@ -140,6 +142,7 @@ class Table:
     style_id: str = ""
     style_name: str = ""
     role: str = ""
+    float_id: str = ""          # 浮動配置の図形（Float）の中の表なら、その図形の ID
 
     def paragraphs(self):
         for r in self.rows:
@@ -149,6 +152,38 @@ class Table:
                         yield b
                     elif isinstance(b, Table):
                         yield from b.paragraphs()
+
+
+@dataclass(eq=False)
+class Float:
+    """浮動配置の図形（テキストボックス・グループ図形）。2 段組をまたぐ図表などに使われる。
+
+    中身（テキストボックスの段落・表、グループの中の画像）は float_id でこの図形を指す。
+    位置は Word で表示したときのものではなく、docx に記録された「アンカー段落からの距離」などである。
+    """
+    fid: str                        # s1, s2, ...
+    anchor_src: str                 # 図形が結び付いている段落（アンカー段落）
+    h_from: str = ""                # wp:positionH の relativeFrom（column / margin / page / character など）
+    h_offset_cm: Optional[float] = None
+    h_align: str = ""
+    v_from: str = ""                # wp:positionV の relativeFrom（paragraph / line / page / margin など）
+    v_offset_cm: Optional[float] = None
+    v_align: str = ""
+    width_cm: float = 0.0
+    height_cm: float = 0.0
+    wrap: str = ""                  # wrapTopAndBottom / wrapSquare / wrapTight / wrapNone など
+    group: bool = False             # グループ図形
+
+
+@dataclass
+class Layout:
+    """本文の段組みと行の設定（docx の w:sectPr）。図の位置を推定する手がかりにする。"""
+    text_width_cm: float = 0.0
+    text_height_cm: float = 0.0
+    columns: int = 1
+    column_width_cm: float = 0.0
+    line_pitch_cm: float = 0.0
+    chars_per_line: float = 0.0     # 1 段の 1 行に入る全角文字の数
 
 
 @dataclass
@@ -185,6 +220,8 @@ class Document:
     tracked_changes: int = 0
     comments: int = 0
     images: list = field(default_factory=list)         # ImageRef（出現順）
+    floats: list = field(default_factory=list)         # Float（出現順）
+    layout: Optional[Layout] = None
 
     def all_paragraphs(self):
         for b in self.blocks:

@@ -294,7 +294,7 @@ if keyword_language_mismatch(_meta):
 """ + mark(3)),
     code("""
 #@title 4. AI による補完の方法を選ぶ
-#@markdown - **使わない**（推奨しません）: 機械的な変換だけを行います。取りこぼしがあっても補われません。
+#@markdown - **使わない**（推奨しません）: 機械的な変換だけを行います。取りこぼしがあっても補われません。テキストボックスなどに入った図表で、位置を機械的に決められないものがあると、手順 5 で変換を中止します（AI による補完が必要です）。
 #@markdown - **API で自動実行**: Claude API を呼び出して、機械処理で取りこぼした引用・スタイルの誤り・画像の数式などを補完します。左の 🔑（シークレット）に名前 `ANTHROPIC_API_KEY` で API キーを登録し、「ノートブックからのアクセス」をオンにしてください（API の利用料がかかります）。キーの作り方と登録の手順は、このセルのすぐ下の「**API キーについての詳細**」を開いてください。
 #@markdown - **手動**: AI への依頼文を作ります。claude.ai などのチャットに貼り付け、返ってきた回答を手順 6 で貼り戻します（API キー不要）。
 #@markdown ***
@@ -316,9 +316,9 @@ if AI == "none":
 #@title 5. 変換を実行
 """ + guard(1, 2, 3, 4) + """import shutil
 from IPython.display import HTML, Markdown, display
-from jasme_jats.colab import error_box, no_ai_box, prompt_box
+from jasme_jats.colab import ai_required_box, error_box, no_ai_box, prompt_box, unplaced_box
 from jasme_jats.config import ArticleMeta, JournalConfig
-from jasme_jats.pipeline import Options, convert
+from jasme_jats.pipeline import AIRequiredError, Options, convert
 
 api_key = None
 if AI == "api":
@@ -339,8 +339,12 @@ OUT = WORK / "output"
 shutil.rmtree(OUT, ignore_errors=True)
 journal = JournalConfig.load()
 meta = ArticleMeta.from_dict(meta_input)
-res = convert(docx_path, meta, journal, Options(out_dir=OUT, ai_mode=AI, ai_model="auto" if MODEL.startswith("自動") else MODEL.strip(), ai_api_key=api_key,
-                                              pdf_path=pdf_path, split_labels=SPLIT_LABELS))
+try:
+    res = convert(docx_path, meta, journal, Options(out_dir=OUT, ai_mode=AI, ai_model="auto" if MODEL.startswith("自動") else MODEL.strip(),
+                                                  ai_api_key=api_key, pdf_path=pdf_path, split_labels=SPLIT_LABELS))
+except AIRequiredError as e:
+    display(HTML(ai_required_box(str(e))))
+    raise SystemExit("手順 4 で「API で自動実行」か「手動（チャットに貼り付け）」を選び、手順 4 からやり直してください。")
 fid = res.fidelity
 print("文字の不変性チェック:", fid.summary(), f"（段落 {fid.units} 件中 {fid.mapped} 件を出力、{len(fid.excluded)} 件は除外）")
 print("最終出力の再チェック:", "合格" if fid.final_ok else "不合格")
@@ -361,6 +365,8 @@ if AI == "manual" and res.prompt_path:
     display(HTML(prompt_box(manual_prompt, image_names)))
 if res.ai.error:
     display(HTML(error_box("AI による補完ができませんでした", res.ai.error)))
+if AI == "api":
+    display(HTML(unplaced_box(res.plan)))
 display(Markdown(res.report_path.read_text(encoding="utf-8")))
 if manual_prompt:
     display(HTML(prompt_box(manual_prompt, compact=True)))
@@ -392,6 +398,7 @@ print("文字の不変性チェック:", fid.summary(), "/ 最終出力の再チ
       "/ J-STAGE のアップロード時チェック:", "問題なし" if not res.jstage_issues else f"要対応 {len(res.jstage_issues)} 件")
 if res.ai.error:
     display(HTML(error_box("貼り付けた回答を読み込めませんでした（AI による補完は反映されていません）", res.ai.error)))
+display(HTML(unplaced_box(res.plan)))
 display(Markdown(res.report_path.read_text(encoding="utf-8")))
 """, form=False),
     code("""

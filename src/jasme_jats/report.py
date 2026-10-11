@@ -27,7 +27,7 @@ def table(headers, rows) -> str:
 
 CAT_JA = {"style": "段落の役割（スタイル）", "citation": "引用文献へのリンク", "xref": "図表・注・数式へのリンク",
           "formula": "数式", "name": "著者名", "figure": "図", "table": "表", "url": "URL", "note": "注"}
-UNRES_JA = {"bibr": "引用文献", "fig": "図の参照", "table": "表の参照", "fn": "注の参照"}
+UNRES_JA = {"bibr": "引用文献", "fig": "図の参照", "table": "表の参照", "fn": "注の参照", "float": "図表の位置"}
 
 
 def style_unknown_rows(plan):
@@ -148,7 +148,8 @@ def render(r) -> str:
         L.append(f"AI による補完は行えませんでした: {ai.error}")
     else:
         L.append("AI の判断には誤りの可能性があります。特に確度「低」「中」の項目は、PDF と照らして確認してください。"
-                 "AI が変更できるのはリンク・段落の役割・姓名の区切り・数式画像への MathML の併記だけで、本文の文字は変更していません。")
+                 "AI が変更できるのはリンク・段落の役割・姓名の区切り・数式画像への MathML の併記と、テキストボックス・"
+                 "グループ図形に入った図表の位置と組み合わせだけで、本文の文字は変更していません。")
         L.append("")
         if ai_acc:
             order = {"低": 0, "中": 1, "高": 2}
@@ -373,7 +374,8 @@ def render_ai_only(r) -> str:
     ai = r.ai
     L = [f"# AI による補完の判断一覧: {r.docx_name}", "",
          "AI（生成 AI）が判断した箇所の一覧です。AI は本文の文字を変更していません（リンク・段落の役割・姓名の区切り・"
-         "数式画像への MathML の併記のみ）。確度の低いものから順に並べています。PDF と照らして確認してください。", ""]
+         "数式画像への MathML の併記、テキストボックス・グループ図形に入った図表の位置と組み合わせのみ）。"
+         "確度の低いものから順に並べています。PDF と照らして確認してください。", ""]
     acc = [d for _, d in ai.accepted]
     if ai.error:
         L.append(f"AI による補完は行えませんでした: {ai.error}")

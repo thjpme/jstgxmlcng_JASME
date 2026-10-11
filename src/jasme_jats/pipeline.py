@@ -20,8 +20,8 @@ from pathlib import Path
 from typing import Optional
 
 from . import __version__
-from .ai_assist import (AIOutcome, apply_ops, build_request, call_api, image_blocks, manual_prompt, parse_response,
-                        role_overrides, split_ops)
+from .ai_assist import (AIOutcome, apply_ops, build_request, call_api, float_placements, image_blocks, manual_prompt,
+                        parse_response, role_overrides, split_ops)
 from .builder import build, finalize, serialize
 from .config import ArticleMeta, JournalConfig
 from .docx_reader import read_docx
@@ -34,6 +34,34 @@ from .package import article_dir, write_package
 from .report import render, render_ai_only
 from .structure import classify
 from .validate import validate
+
+
+class AIRequiredError(Exception):
+    """位置を機械的に決められない図表があるのに、AI による補完を使わない設定で変換しようとした。"""
+
+    def __init__(self, plan):
+        self.floats = [plan.floats[fid] for fid in plan.unplaced_floats]
+        lines = [f"- {info.float.fid}: アンカー段落「{_head(plan, info.float.anchor_src)}」付近、"
+                 f"{_float_caption(info)}（{info.reason}）" for info in self.floats]
+        super().__init__(
+            f"この原稿には、位置を機械的に決められない図表（テキストボックス・グループ図形に入った図表）が {len(self.floats)} 件"
+            "あります。これらの位置と組み合わせは AI に判断させる必要があるため、AI による補完を「使わない」設定では変換できません。"
+            "「API で自動実行」か「手動（チャットに貼り付け）」を選んで、もう一度変換してください。\n" + "\n".join(lines))
+
+
+def _head(plan, src) -> str:
+    p = plan.paras.get(src)
+    return "".join(a.text for a in p.atoms if a.kind == "text")[:20] if p is not None else src
+
+
+def _float_caption(info) -> str:
+    import unicodedata
+    from .structure import RE_FIGCAP, RE_TABCAP
+    for q in info.paras:
+        t = unicodedata.normalize("NFKC", q.plain()).strip()
+        if RE_FIGCAP.match(t) or RE_TABCAP.match(t):
+            return f"「{q.plain().strip()[:20]}」"
+    return "キャプションなし"
 
 
 @dataclass
@@ -111,9 +139,9 @@ def tool_version() -> str:
     return __version__
 
 
-def _mechanical(docx_path, journal, overrides=None):
+def _mechanical(docx_path, journal, overrides=None, placements=None):
     doc = read_docx(docx_path)
-    plan = classify(doc, journal, overrides)
+    plan = classify(doc, journal, overrides, placements)
     linker = link(plan, journal.ref_doi)
     return doc, plan, linker
 
@@ -125,6 +153,8 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     split = journal.split_labels if opts.split_labels is None else opts.split_labels
 
     doc, plan, linker = _mechanical(docx_path, journal)
+    if plan.unplaced_floats and opts.ai_mode == "none":
+        raise AIRequiredError(plan)
     root, info = build(plan, meta, journal, split)
     outcome = AIOutcome(mode=opts.ai_mode, model=opts.ai_model if opts.ai_mode == "api" else "")
     prompt_path = None
@@ -160,12 +190,18 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
             else:
                 output_note = ("> 手動モード: 「AI依頼文.txt」をチャット（claude.ai など）に貼り付け、返ってきた JSON を"
                                "ツールに貼り戻して再実行すると、AI による補完が反映されます。この出力は AI 補完の前の状態です。")
+                if plan.unplaced_floats:
+                    output_note += ("位置を決められない図表（3 章）は、AI の回答を反映するまで、アンカー段落の後に仮に置いています。")
         if data is not None:
             ops = split_ops(data)
             outcome.notes = [str(n) for n in data.get("notes", []) if str(n).strip()]
             overrides = role_overrides(ops, plan, outcome)
+            placements = float_placements(data, plan, outcome)
             # 構造を最初から組み直し（docx を読み直す）、AI の操作を適用する
-            doc, plan, linker = _mechanical(docx_path, journal, overrides)
+            doc, plan, linker = _mechanical(docx_path, journal, overrides, placements)
+            for sid, spec in placements.items():
+                if sid in plan.float_decisions:
+                    outcome.accepted.append((spec["op"], plan.float_decisions[sid]))
             apply_ops(ops, plan, doc, outcome)
             cited = cited_refs(plan)
             plan.uncited_refs = [r.rid for r in plan.refs if r.rid not in cited]
@@ -212,6 +248,11 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         if any(s == src and (t == year or (t and t in raw)) for s, t in ai_links):
             continue
         unresolved_after.append(u)
+    for sid in plan.unplaced_floats:
+        fi = plan.floats[sid]
+        unresolved_after.append(("float", fi.float.anchor_src, _float_caption(fi),
+                                 f"テキストボックス・グループ図形 {sid} の位置を決められない（{fi.reason}）。"
+                                 "AI による補完で位置を指定する（今はアンカー段落の後に仮に置いている）"))
     warnings = list(dict.fromkeys(doc.warnings + info.warnings))
     build_notes = [Decision(did=f"M-B{i}", stage="mechanical", category=c, src=s, message=m,
                             location=plan.locations.get(s, "")) for i, (c, s, m) in enumerate(info.notes, 1)]
