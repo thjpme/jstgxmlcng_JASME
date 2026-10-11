@@ -70,9 +70,9 @@ cells = [
 """),
     code(f"""
 #@title 1. 準備（最初に 1 回だけ。1 分ほどかかります）
-#@markdown 図が Word の図形（EMF/WMF 形式）で貼られている論文では、画像の変換に LibreOffice を使います。チェックを入れると LibreOffice を**裏で**インストールします（数分かかりますが、終わるのを待たずに手順 2 以降へ進めます。手順 5 の変換は、インストールが終わってから始まります）。
+#@markdown **EMF/WMF の図を変換する（CONVERT_EMF）**: 図が Word の図形（EMF/WMF 形式）で貼られている論文では、画像の変換に LibreOffice を使います。チェックを入れると LibreOffice を**裏で**インストールします（数分かかりますが、終わるのを待たずに手順 2 以降へ進めます。手順 5 の変換は、インストールが終わってから始まります）。
 CONVERT_EMF = True  #@param {{type:"boolean"}}
-#@markdown 開発者向け: 開発中の版を試すときだけチェックを入れます（実行するとブランチ名の入力欄が出ます）。
+#@markdown **開発版を使う（USE_DEV_VERSION）**: 開発者向け。開発中の版を試すときだけチェックを入れます（実行するとブランチ名の入力欄が出ます）。
 USE_DEV_VERSION = False  #@param {{type:"boolean"}}
 
 import shutil, subprocess, sys
@@ -116,7 +116,7 @@ if globals().get("LO_PROC") is not None and LO_PROC.poll() is None:
     code("""
 #@title 2. 論文の docx と PDF をアップロード
 #@markdown 実行すると、まず **docx 用**の「ファイル選択」ボタンが出ます。docx を選ぶと、続けて **PDF 用**の「ファイル選択」ボタンが出ます。
-#@markdown J-STAGE に登載する PDF がまだなければ、下のチェックを外してから実行してください（PDF 用のボタンは出ません。後で jasme.zip に入れることもできます）。
+#@markdown **PDF もアップロードする（UPLOAD_PDF）**: J-STAGE に登載する PDF がまだなければ、チェックを外してから実行してください（PDF 用のボタンは出ません。後で jasme.zip に入れることもできます）。
 UPLOAD_PDF = True  #@param {type:"boolean"}
 """ + guard(1) + """
 from pathlib import Path
@@ -156,55 +156,77 @@ print("PDF :", pdf_path.name if pdf_path else "（なし。J-STAGE への登載�
 """ + mark(2)),
     code("""
 #@title 3. 書誌情報を入力
-#@markdown **巻・号・ページ**（J-STAGE のフォルダ名・ファイル名と DOI に使います）
+#@markdown 各欄の上の説明（日本語）に対応する欄に入力します。日付は YYYY-MM-DD の形で、分からなければ空欄にします。
+#@markdown ---
+#@markdown **巻（volume）**（J-STAGE のフォルダ名・ファイル名と DOI に使います）
 volume = ""  #@param {type:"string"}
+#@markdown **号（issue）**
 issue = ""  #@param {type:"string"}
+#@markdown **最初のページ（first_page）**
 first_page = ""  #@param {type:"string"}
+#@markdown **最後のページ（last_page）**
 last_page = ""  #@param {type:"string"}
-#@markdown **査読の有無**（必須。必ず選んでください）。査読ありで最終査読日が分かれば、last_review_date に YYYY-MM-DD の形で入力します（分からなければ空欄）。
+#@markdown ---
+#@markdown **査読の有無（peer_review）**（必須。必ず選んでください）
 peer_review = "（選んでください）"  #@param ["（選んでください）", "査読あり", "査読なし"]
+#@markdown **最終査読日（last_review_date）**（査読ありで、分かれば）
 last_review_date = ""  #@param {type:"string"}
-#@markdown **キーワード**（必須。3 個以上 100 個以下）。「；」または「;」で区切って 1 つの欄に入力します。かな・漢字を含むものは日本語、それ以外は英語のキーワードとして登録します。例: `equity; gender; 数学教育`
-keywords = ""  #@param {type:"string"}
-#@markdown **日付**（YYYY-MM-DD の形で。分からなければ空欄）
+#@markdown ---
+#@markdown **キーワード（日本語）（keywords_ja）**（任意。「；」または「;」で区切る。例: `数学教育；ジェンダー`）
+keywords_ja = ""  #@param {type:"string"}
+#@markdown **キーワード（英語）（keywords_en）**（任意。「;」または「；」で区切る。例: `equity; gender`）。日・英あわせて 100 個まで
+keywords_en = ""  #@param {type:"string"}
+#@markdown ---
+#@markdown **発行日（pub_date）**
 pub_date = ""  #@param {type:"string"}
+#@markdown **J-STAGE 公開日（jstage_release_date）**
 jstage_release_date = ""  #@param {type:"string"}
+#@markdown **受付日（received）**
 received = ""  #@param {type:"string"}
+#@markdown **受理日（accepted）**
 accepted = ""  #@param {type:"string"}
-#@markdown **その他**（DOI は空欄なら 10.24529/jasme.巻.号_開始ページ を使います。原稿種別は通常変更不要）
+#@markdown ---
+#@markdown **DOI（doi）**（空欄なら 10.24529/jasme.巻.号_開始ページ を使います）
 doi = ""  #@param {type:"string"}
+#@markdown **原稿種別（日本語）（subject）**（通常は変更不要）
 subject = "論文"  #@param {type:"string"}
+#@markdown **原稿種別（英語）（subject_en）**（通常は変更不要）
 subject_en = "Article"  #@param {type:"string"}
+#@markdown **責任著者が何番目の著者か（corresponding_author）**（例: 1。複数なら「1,2」）
 corresponding_author = ""  #@param {type:"string"}
-#@markdown corresponding_author: 責任著者が何番目の著者か（例: 1）。複数なら「1,2」。
 """ + guard(1, 2) + """if peer_review not in ("査読あり", "査読なし"):
-    raise SystemExit("査読の有無を選んでください（この手順の「peer_review」）。")
+    raise SystemExit("査読の有無（peer_review）を選んでください。")
 if peer_review == "査読なし" and last_review_date.strip():
-    raise SystemExit("査読なしのときは last_review_date（最終査読日）を空欄にしてください。")
+    raise SystemExit("査読なしのときは、最終査読日（last_review_date）を空欄にしてください。")
 meta_input = {"volume": volume, "issue": issue, "fpage": first_page, "lpage": last_page,
-              "peer_review": peer_review, "approved": last_review_date, "keywords": keywords,
+              "peer_review": peer_review, "approved": last_review_date,
+              "keywords_ja": keywords_ja, "keywords_en": keywords_en,
               "pub_date": pub_date, "epub_date": jstage_release_date, "received": received,
               "accepted": accepted, "doi": doi, "subject_ja": subject, "subject_en": subject_en,
               "corresp": corresponding_author}
-from jasme_jats.config import ArticleMeta, keyword_problem
+from jasme_jats.config import ArticleMeta, keyword_language_mismatch, keyword_problem
 try:
     _meta = ArticleMeta.from_dict(meta_input)   # 日付の書き方などをここで確かめる
 except ValueError as e:
     raise SystemExit(f"入力を確認してください: {e}")
 if keyword_problem(_meta):
-    raise SystemExit(f"{keyword_problem(_meta)}。keywords に「；」または「;」で区切って入力してください。")
+    raise SystemExit(keyword_problem(_meta) + "。")
 print("入力しました（" + peer_review + "）。未入力の項目はレポートに表示されます。")
-print("キーワード（日）:", "；".join(_meta.keywords_ja) or "（なし）")
-print("キーワード（英）:", "; ".join(_meta.keywords_en) or "（なし）")
+print("キーワード（日本語）:", "；".join(_meta.keywords_ja) or "（なし）")
+print("キーワード（英語）  :", "; ".join(_meta.keywords_en) or "（なし）")
+if keyword_language_mismatch(_meta):
+    print("※ 日本語・英語の欄を取り違えていないか確認してください:", "、".join(keyword_language_mismatch(_meta)))
 """ + mark(3)),
     code("""
 #@title 4. AI による補完の方法を選ぶ
 #@markdown - **使わない**: 機械的な変換だけを行います。
 #@markdown - **API で自動実行**: Claude API を呼び出して、機械処理で取りこぼした引用・スタイルの誤り・画像の数式などを補完します。左の 🔑（シークレット）に名前 `ANTHROPIC_API_KEY` で API キーを登録し、「ノートブックからのアクセス」をオンにしてください（API の利用料がかかります）。
 #@markdown - **手動**: AI への依頼文を作ります。claude.ai などのチャットに貼り付け、返ってきた回答を手順 6 で貼り戻します（API キー不要）。
+#@markdown **AI による補完の方法（AI_MODE）**
 AI_MODE = "使わない"  #@param ["使わない", "API で自動実行", "手動（チャットに貼り付け）"]
+#@markdown **API で使うモデル（MODEL）**（通常は変更不要）
 MODEL = "claude-opus-5-5"  #@param {type:"string"}
-#@markdown 図表番号（「図1」）を J-STAGE の <label> 要素に分けるか（分けると番号とタイトルの間の空白 1 文字を落とします。既定は分けない）
+#@markdown **図表番号を分ける（SPLIT_LABELS）**: 図表番号（「図1」）を J-STAGE の <label> 要素に分けるか（分けると番号とタイトルの間の空白 1 文字を落とします。既定は分けない）
 SPLIT_LABELS = False  #@param {type:"boolean"}
 """ + guard(1, 2, 3) + """AI = {"使わない": "none", "API で自動実行": "api", "手動（チャットに貼り付け）": "manual"}[AI_MODE]
 print("AI による補完:", AI_MODE)

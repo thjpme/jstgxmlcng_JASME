@@ -40,6 +40,9 @@ def test_links_in_full_sample(journal, meta, tmp_path):
     assert ("Figure 1", "F1") in figs
     assert any(x.get("ref-type") == "table" and x.get("rid") == "T1" for x in root.iter("xref"))
     assert any(x.get("ref-type") == "fn" and x.get("rid") == "fn1" for x in root.iter("xref"))
+    # 注の番号は注の本文（p）の先頭に入れる（J-STAGE の注には label を書けない・表示されない）
+    fn1 = root.find(".//fn[@id='fn1']")
+    assert fn1.find("label") is None and "".join(fn1.find("p").itertext()).startswith("1)")
     assert any(x.get("ref-type") == "disp-formula" and x.text == "式(1)" for x in root.iter("xref"))
     uris = [u.get(f"{{{XLINK}}}href") for u in root.iter("uri")]
     assert "https://www.mext.go.jp/" in uris
@@ -183,8 +186,12 @@ def test_categories_and_keywords(journal, meta, tmp_path):
 
 
 def test_keyword_parsing_and_count():
-    from jasme_jats.config import ArticleMeta, keyword_problem, split_keywords
+    from jasme_jats.config import ArticleMeta, keyword_language_mismatch, keyword_problem, split_keywords
     assert split_keywords("equity；ジェンダー; 数学教育 ; ;ICT活用") == (["ジェンダー", "数学教育", "ICT活用"], ["equity"])
-    assert "2 個しかない" in keyword_problem(ArticleMeta.from_dict({"keywords": "a; b"}))
-    assert keyword_problem(ArticleMeta.from_dict({"keywords": "a; b; c"})) == ""
-    assert "上限は 100 個" in keyword_problem(ArticleMeta.from_dict({"keywords": ";".join(map(str, range(101)))}))
+    # 言語別の欄（「;」「；」区切り）。キーワードは任意
+    m = ArticleMeta.from_dict({"keywords_ja": "数学教育；ジェンダー; ", "keywords_en": "equity; gender, participation"})
+    assert m.keywords_ja == ["数学教育", "ジェンダー"] and m.keywords_en == ["equity", "gender, participation"]
+    assert keyword_problem(ArticleMeta.from_dict({})) == ""
+    assert "上限は 100 個" in keyword_problem(ArticleMeta.from_dict({"keywords_en": ";".join(map(str, range(101)))}))
+    # 入力欄の取り違えの確認
+    assert keyword_language_mismatch(ArticleMeta.from_dict({"keywords_ja": "equity", "keywords_en": "数学"})) == ["equity", "数学"]
