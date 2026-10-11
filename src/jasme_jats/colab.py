@@ -87,6 +87,36 @@ def error_box(title: str, detail: str) -> str:
             f"<div style='white-space:pre-wrap'>{html.escape(detail)}</div></div>")
 
 
+# ---------------------------------------------------------------------------- 続けて他の論文を変換するとき（手順 8 の後）
+# 論文ごとに違うはずの項目。手順 3 で、前の論文の値が残ったままになっていないかを確かめる。
+PER_ARTICLE_FIELDS = {"fpage": "最初のページ", "lpage": "最後のページ", "keywords_ja": "キーワード（日本語）",
+                      "keywords_en": "キーワード（英語）", "approved": "最終査読日", "received": "受付日",
+                      "accepted": "受理日", "doi": "DOI"}
+
+
+def same_first_page(previous: dict, current: dict) -> bool:
+    """巻と最初のページが前の論文と同じ（出力のファイル名と DOI が前の論文と同じになる）か。"""
+    return all(str(current.get(k, "")).strip() and current.get(k) == previous.get(k) for k in ("volume", "fpage"))
+
+
+def carried_over(previous: dict, current: dict) -> list:
+    """前の論文と同じ値のままの項目の名前（空欄の項目は除く）。"""
+    return [label for key, label in PER_ARTICLE_FIELDS.items()
+            if str(current.get(key, "")).strip() and current.get(key) == previous.get(key)]
+
+
+def next_article_box(previous_docx: str = "") -> str:
+    """手順 8 で出す注意（赤い枠）: 入力欄には前の論文の値が残っている。"""
+    prev = f"前の論文（{previous_docx}）" if previous_docx else "前の論文"
+    return error_box(
+        f"手順 3 などの入力欄には、{prev}の値が残っています",
+        "手順 2 から順に実行し、手順 3 の巻・号・ページ・査読の有無・キーワード・日付・責任著者などを、"
+        "今回の論文のものに書き換えてから ▶ を押してください。手順 4（AI による補完の方法・モデル名）と、"
+        "手順 6（AI の回答）の欄も前の論文のときのままです。\n"
+        "書き換え漏れが心配なときは、ノートブックを開き直して（README の「Open in Colab」のボタンなどから）、"
+        "手順 1 からやり直すほうが確実です。GitHub のノートブックを開き直すと、入力欄は初期の値に戻ります。")
+
+
 def ai_required_box(message: str) -> str:
     """AI による補完を使わない設定で、位置を決められない図表があったときの表示（変換は中止）。"""
     return error_box("AI による補完が必要です（変換を中止しました）", message)

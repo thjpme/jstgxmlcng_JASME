@@ -4,7 +4,10 @@ J-STAGE『記事アップロードフォルダ構成（FULL-J）』に従う:
   {資料コード}/{巻}/{号}/{記事識別子}/{記事識別子}.xml
                                      /{記事識別子}.pdf      ← PDF は J-STAGE で必須（利用者が用意）
                                      /Graphics/{画像}
-ZIP のファイル名は {資料コード}.zip。
+ZIP のファイル名は {資料コード}_{記事識別子}.zip（例: jasme_31_1.zip）。複数の論文を続けて変換しても名前が重ならないように、
+フォルダ構成の資料に書かれた {資料コード}.zip に記事識別子を足している。J-STAGE が確かめるのは ZIP の中のフォルダ構成で、
+記事アップロードメッセージ一覧に ZIP の名前についてのエラーは日本語のファイル名（EMSGM034E）しかない
+（2026-10 の試験登載で、この名前のまま受け付けられることを確認）。
 """
 from __future__ import annotations
 
@@ -28,7 +31,7 @@ def write_package(out_dir: Path, journal, meta, xml_bytes: bytes, pdf_path=None)
     if pdf_path:
         shutil.copyfile(pdf_path, adir / f"{aid}.pdf")
         has_pdf = True
-    zpath = out_dir / f"{journal.journal_id}.zip"
+    zpath = out_dir / f"{journal.journal_id}_{aid}.zip"
     root = out_dir / journal.journal_id
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
         for f in sorted(root.rglob("*")):
