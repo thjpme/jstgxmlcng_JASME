@@ -660,49 +660,22 @@ class Builder:
         self.check_length(mc, 4000, f"引用文献 {r.rid}")
 
     def fn(self, fg, fn: FnNode):
+        """注。J-STAGE の注（fn）には label を書けない（書いても表示されない）ため、番号は本文（p）の先頭に入れる。
+
+        - Word の自動番号・脚注番号: 生成した番号と空白を p の先頭に（jx:gen。docx の文字ではない）
+        - 手で打たれた番号「1)」: docx の文字なので、そのまま p の中に残す（label に分けない）
+        """
         el = _sub(fg, "fn", id=fn.fid)
-        if fn.paras and fn.paras[0].autonum and not fn.word_note:
-            lab = _sub(el, "label")
-            self.em.gen(lab, fn.paras[0].autonum, "autonum")
-            for p in fn.paras:
-                pe = _sub(el, "p")
-                self.em.span(pe, p, E.BACKP)
-            return
+        mark = ""
         if fn.word_note:
-            lab = _sub(el, "label")
-            self.em.gen(lab, str(fn.number), "footnote-mark")
-            for p in fn.paras:
-                pe = _sub(el, "p")
-                self.em.span(pe, p, E.BACKP)
-            return
-        first = fn.paras[0]
-        if self.split and fn.mark_range:
-            s, e = fn.mark_range
-            text = first.plain()
-            seq = 0
-            lab = _sub(el, "label")
-            if s > 0:
-                if is_ws(text[:s]):
-                    self.em.drop(lab, first, 0, s, seq, "注番号の前の空白")
-                    self.info.drops.append((first.src, text[:s], "注番号の前の空白"))
-                    seq += 1
-                else:
-                    s = 0
-            self.em.span(lab, first, E.LABEL, start=s, end=e, seq=seq)
-            seq += 1
+            mark = f"{fn.number})"
+        elif fn.paras and fn.paras[0].autonum:
+            mark = fn.paras[0].autonum.strip()
+        for i, p in enumerate(fn.paras):
             pe = _sub(el, "p")
-            m = re.match(r"[\s\u3000]*", text[e:])
-            gap = m.end() if m else 0
-            if gap:
-                self.em.drop(pe, first, e, e + gap, seq, "注番号と本文の間の空白")
-                self.info.drops.append((first.src, text[e:e + gap], "注番号と本文の間の空白"))
-                seq += 1
-            self.em.span(pe, first, E.BACKP, start=e + gap, seq=seq)
-            rest = fn.paras[1:]
-        else:
-            rest = fn.paras
-        for p in rest:
-            pe = _sub(el, "p")
+            if i == 0 and mark:
+                sep = "" if p.plain()[:1].isspace() else " "
+                self.em.gen(pe, mark + sep, "footnote-mark" if fn.word_note else "autonum")
             self.em.span(pe, p, E.BACKP)
 
 

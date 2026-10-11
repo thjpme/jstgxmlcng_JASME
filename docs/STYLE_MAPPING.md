@@ -18,7 +18,7 @@
 | ブロック引用 | quote | `disp-quote/p`（連続する段落を 1 つにまとめる） |
 | 付記見出し | notes_heading | `back/notes/title` |
 | 謝辞見出し | ack_heading | `back/ack/title` |
-| 注見出し | fn_heading | `back/fn-group/title`（以降の段落を 1 段落 1 件の `fn` に。「1)」で始まらない段落は前の注の続き） |
+| 注見出し | fn_heading | `back/fn-group/title`（以降の段落を 1 段落 1 件の `fn` に。「1)」で始まらない段落は前の注の続き。注の番号は `fn/p` の先頭に入れる。J-STAGE は `fn/label` を表示しないため） |
 | 参考文献見出し / 参考文献 | ref_heading / ref | `back/ref-list/title`, `ref/mixed-citation` |
 | 標準（Normal） | normal | 位置と内容から推定（下記） |
 

@@ -66,7 +66,7 @@ def _date(v) -> Optional[_dt.date]:
 
 
 RE_JA_CHARS = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\uff65々]")
-KEYWORDS_MIN, KEYWORDS_MAX = 3, 100
+KEYWORDS_MAX = 100
 
 
 def split_keywords(v) -> tuple:
@@ -81,13 +81,17 @@ def split_keywords(v) -> tuple:
 
 
 def keyword_problem(meta) -> str:
-    """キーワードの個数が範囲外なら理由を返す（本誌は 3 個以上、J-STAGE の上限は 100 個）。"""
+    """キーワードが J-STAGE の上限（日・英あわせて 100 個）を超えていれば理由を返す。キーワードは任意。"""
     n = len(meta.keywords_ja) + len(meta.keywords_en)
-    if n < KEYWORDS_MIN:
-        return f"キーワードが {n} 個しかない（{KEYWORDS_MIN} 個以上必要）"
     if n > KEYWORDS_MAX:
-        return f"キーワードが {n} 個ある（J-STAGE の上限は {KEYWORDS_MAX} 個）"
+        return f"キーワードが日・英あわせて {n} 個ある（J-STAGE の上限は {KEYWORDS_MAX} 個）"
     return ""
+
+
+def keyword_language_mismatch(meta) -> list:
+    """日本語の欄に英語だけのキーワード、英語の欄にかな・漢字を含むキーワードがあれば、その一覧（入力欄の取り違えの確認用）。"""
+    return ([k for k in meta.keywords_ja if not RE_JA_CHARS.search(k)]
+            + [k for k in meta.keywords_en if RE_JA_CHARS.search(k)])
 
 
 _PEER_REVIEW = {"yes": "yes", "true": "yes", "あり": "yes", "査読あり": "yes", "有": "yes", "有り": "yes",
@@ -141,7 +145,7 @@ class ArticleMeta:
         for k in ("keywords_en", "keywords_ja"):
             v = d.get(k)
             if isinstance(v, str):
-                d[k] = [x.strip() for x in v.replace("，", ",").replace("、", ",").split(",") if x.strip()]
+                d[k] = [x.strip() for x in re.split(r"[;；]", v) if x.strip()]
         # キーワードを 1 つの欄で受け取る場合（「;」「；」区切り）。かな・漢字を含むものは日本語、それ以外は英語のキーワード
         if d.get("keywords"):
             ja, en = split_keywords(d["keywords"])
