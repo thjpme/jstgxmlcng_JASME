@@ -7,8 +7,11 @@ from __future__ import annotations
 
 from collections import Counter
 
+from pathlib import Path
+
 from .ai_assist import PROVIDERS
 from .linker import body_paragraphs, linked_ids
+from .package import article_dir
 
 
 def esc(s, n=None) -> str:
@@ -66,6 +69,33 @@ def float_notes(plan):
     if nc:
         out.append("キャプションのない表（表番号がないため本文からリンクできない。表として出力した）: " + "、".join(nc))
     return out
+
+
+def images_to_prepare(r) -> list:
+    """利用者が用意する必要のある画像（画像ファイルがない Word の図形、変換できなかった EMF など）。
+
+    戻り値: [(出力ファイル名, 図のキャプション, 理由)]。レポートの冒頭・13 章、Colab の枠、コマンドラインの表示で使う。
+    """
+    caps = {}
+    for f in r.plan.figures:
+        cap = f.caption.plain().strip() if f.caption is not None else ""
+        for img in [i for ip in f.image_paras for i in ip.images] + list(f.extra_images):
+            caps.setdefault(img.image_id, cap)
+    out = []
+    for i in r.images:
+        if i.status not in ("missing", "failed"):
+            continue
+        if i.status == "missing" and not i.source:
+            why = "Word の図形・グラフで描かれていて、docx に画像ファイルがない"
+        else:
+            why = i.message
+        out.append((i.name, caps.get(i.image_id, ""), why))
+    return out
+
+
+def graphics_dir(r) -> str:
+    """ZIP の中の Graphics フォルダ（例: jasme/25/1/25_77/Graphics/）。"""
+    return (article_dir(Path(""), r.journal, r.meta) / "Graphics").as_posix() + "/"
 
 
 def word_note_refs(plan) -> int:
@@ -159,6 +189,16 @@ def render(r) -> str:
         L.append(f"> **要対応: 位置を決められなかった図表が {len(r.forced_floats)} 件あります（AI による補完でも決まりませんでした）。** "
                  "本文の冒頭に仮に置いています。登載の前に、XML の中でこれらの図表を手作業で正しい位置（Word で表示したときに、図の左上の"
                  "直上にある本文の段落の後）に移してください（3 章）: " + "、".join(esc(x) for x in r.forced_floats))
+        L.append("")
+    need = images_to_prepare(r)
+    if need:
+        zname = r.zip_path.name if r.zip_path else "アップロード用の ZIP"
+        L.append(f"> **要対応: 画像ファイルを用意できなかった図が {len(need)} 件あります（9 章）。** 次の名前の画像（PNG）を"
+                 f"作り、{esc(zname)} の中の `{graphics_dir(r)}` に入れてください。画像がないままでは、その図が J-STAGE の"
+                 "画面に表示されません。")
+        L.append(">")
+        for name, cap, why in need:
+            L.append(f"> - `{name}`: {esc(cap, 40) or '（キャプションなし）'}（{esc(why)}）")
         L.append("")
     if r.output_note:
         L.append(r.output_note)
@@ -388,7 +428,11 @@ def render(r) -> str:
     L.append("- [ ] 2 章（AI による補完）と 3 章（未解決）を PDF と照らして確認する")
     if r.forced_floats:
         L.append("- [ ] 本文の冒頭に仮に置いた図表（3 章の「図表の位置」）を、XML の中で手作業で正しい位置に移す")
-    L.append("- [ ] 9 章で「要対応」の画像があれば用意して Graphics/ に入れる")
+    if need:
+        L.append(f"- [ ] **画像ファイルを用意できなかった図 {len(need)} 件**の画像を作り、ZIP の中の `{graphics_dir(r)}` に入れる: "
+                 + "、".join(f"`{name}`（{esc(cap, 20) or 'キャプションなし'}）" for name, cap, _ in need))
+    elif r.images:
+        L.append(f"- [x] 画像 {len(r.images)} 件はすべて Graphics/ に出力した（9 章）")
     L.append("- [ ] 11 章の書誌情報（巻・号・頁・日付・DOI）を確認する")
     L.append(f"- [ ] J-STAGE 編集登載システムで、巻（{esc(m.volume or '?')}）・号（{esc(m.issue or '?')}）と、その号のセクション"
              "（目次の見出し。例: 論文）を作成しておく（ないとアップロード時に EMSGM181E「巻号が学会誌別巻号の設定に存在しません」・"

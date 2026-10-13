@@ -103,6 +103,28 @@ def test_template_emf_conversion(journal, meta, tmp_path):
         assert img.status == "failed"
 
 
+def test_images_to_prepare_are_listed_at_top_and_in_checklist(journal, meta, tmp_path):
+    from jasme_jats.images import ImageResult
+    from jasme_jats.report import images_to_prepare, render
+    # EMF を変換しない設定では、テンプレートの図は「要対応」になる
+    res = convert(TEMPLATE, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    assert [(n, c) for n, c, _ in images_to_prepare(res)] == [("31_1_01.png", "図1\u3000三角形ABC")]
+    report = res.report_path.read_text(encoding="utf-8")
+    top = report.split("## 2.")[0]
+    assert "要対応: 画像ファイルを用意できなかった図が 1 件あります" in top
+    assert "jasme_31_1.zip の中の `jasme/31/1/31_1/Graphics/`" in top and "`31_1_01.png`: 図1\u3000三角形ABC" in top
+    checklist = report.split("## 13.")[1]
+    assert "- [ ] **画像ファイルを用意できなかった図 1 件**" in checklist and "`31_1_01.png`（図1\u3000三角形ABC）" in checklist
+    # Word の図形で描かれた図（画像ファイルがない）
+    res.images[0] = ImageResult(res.images[0].image_id, "31_1_01.png", "", "missing", "")
+    assert images_to_prepare(res)[0][2] == "Word の図形・グラフで描かれていて、docx に画像ファイルがない"
+    # 画像がすべて出力できたときは、チェックリストに済みとして載る
+    res.images[0] = ImageResult(res.images[0].image_id, "31_1_01.png", "word/media/x.emf", "converted")
+    assert images_to_prepare(res) == []
+    report = render(res)
+    assert "要対応: 画像ファイル" not in report and "- [x] 画像 1 件はすべて Graphics/ に出力した" in report
+
+
 def test_float_notes_list_unreferenced_and_uncaptioned(journal):
     from jasme_jats.linker import body_paragraphs
     from jasme_jats.pipeline import _mechanical

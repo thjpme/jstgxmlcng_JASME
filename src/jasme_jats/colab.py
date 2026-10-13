@@ -122,6 +122,19 @@ def ai_required_box(message: str) -> str:
     return error_box("AI による補完が必要です（変換を中止しました）", message)
 
 
+def missing_images_box(res) -> str:
+    """画像ファイルを用意できなかった図（Word の図形で描かれた図など）があるときの表示（赤い枠）。なければ空文字。"""
+    from .report import graphics_dir, images_to_prepare
+    need = images_to_prepare(res)
+    if not need:
+        return ""
+    items = "\n".join(f"・{name}: {cap or '（キャプションなし）'}（{why}）" for name, cap, why in need)
+    return error_box(
+        f"画像ファイルを用意できなかった図が {len(need)} 件あります",
+        f"次の名前の画像（PNG）を作り、{res.zip_path.name} の中の {graphics_dir(res)} に入れてから、J-STAGE に"
+        f"アップロードしてください（レポートの冒頭と 9 章）。画像がないままでは、その図が J-STAGE の画面に表示されません。\n{items}")
+
+
 def unplaced_box(plan) -> str:
     """AI の回答を反映した後も、位置を決められない図表が残っているときの表示。なければ空文字。"""
     if not plan.unplaced_floats:

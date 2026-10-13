@@ -15,6 +15,7 @@ from pathlib import Path
 from .ai_assist import API_KEY_NAMES, DEFAULT_MODEL
 from .config import ArticleMeta, JournalConfig
 from .pipeline import AIRequiredError, Options, convert
+from .report import graphics_dir, images_to_prepare
 
 
 def main(argv=None):
@@ -68,6 +69,11 @@ def main(argv=None):
         print(f"AI 依頼文: {res.prompt_path}")
     if res.ai.error:
         print(f"AI: {res.ai.error}", file=sys.stderr)
+    need = images_to_prepare(res)
+    if need:
+        print(f"要対応: 画像ファイルを用意できなかった図 {len(need)} 件。画像を作り、ZIP の中の {graphics_dir(res)} に入れること"
+              "（レポートの冒頭と 9 章）: " + ", ".join(f"{name}（{(cap[:20] + '…' if len(cap) > 20 else cap) or 'キャプションなし'}）" for name, cap, _ in need),
+              file=sys.stderr)
     # AI の回答を反映した後（API、または手動モードで回答あり）も位置を決められない図表が残っている
     ai_applied = res.ai.mode == "api" or (res.ai.mode == "manual" and a.ai_response)
     if ai_applied and res.plan.unplaced_floats:
