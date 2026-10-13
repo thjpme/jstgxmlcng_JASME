@@ -26,12 +26,12 @@ from .builder import build, finalize, serialize
 from .config import ArticleMeta, JournalConfig
 from .docx_reader import read_docx
 from .fidelity import final_check, verify
-from .images import export_images
+from .images import ImageResult, export_images, user_image
 from .jstage_rules import check as jstage_check
 from .linker import cited_refs, link
 from .model import Decision
-from .package import article_dir, write_package
-from .report import render, render_ai_only
+from .package import article_dir, make_zip, write_package
+from .report import images_to_prepare, render, render_ai_only
 from .structure import classify
 from .validate import validate
 
@@ -300,3 +300,47 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         res.ai_report_path = out_dir / f"{aid}_AI判断一覧.md"
         res.ai_report_path.write_text(render_ai_only(res), encoding="utf-8")
     return res
+
+
+def graphics_path(res: Result) -> Path:
+    """出力フォルダの中の Graphics フォルダ（画像の置き場所）。"""
+    return article_dir(res.zip_path.parent, res.journal, res.meta) / "Graphics"
+
+
+def add_images(res: Result, supplied: dict, skip_unneeded: bool = False) -> list:
+    """利用者が用意した画像（Word の図形で描かれた図など、変換で画像ファイルを作れなかった図の画像）を Graphics/ に入れ、
+    アップロード用の ZIP とレポートを作り直す。
+
+    supplied: 出力ファイル名（25_77_01.png など）→ 画像（ファイルのパス、バイト列、または (元のファイル名, バイト列)）。
+      元のファイル名は何でもよい。PNG・JPEG・GIF など、または 1 ページの PDF を、出力ファイル名の形式にして入れる。
+    受け付けるのは、用意が必要な画像（report.images_to_prepare）の名前だけ。それ以外の名前と読めない画像は ValueError
+    （skip_unneeded なら、用意が不要な名前は黙って飛ばす。変換をやり直した後に、前に受け取った画像を入れ直すとき）。
+    戻り値: 入れた画像の出力ファイル名。
+    """
+    need = {name: why for name, _, why in images_to_prepare(res)}
+    prepared = {}
+    for name, src in supplied.items():
+        if name not in need:
+            if skip_unneeded:
+                continue
+            raise ValueError(f"{name} は、用意が必要な画像ではありません（必要なもの: {'、'.join(need) or 'なし'}）")
+        if isinstance(src, tuple):
+            label, data = src
+        elif isinstance(src, (bytes, bytearray)):
+            label, data = "", bytes(src)
+        else:
+            label, data = Path(src).name, Path(src).read_bytes()
+        prepared[name] = (label, user_image(data, name, f"「{label}」" if label else ""))
+    gdir = graphics_path(res)
+    gdir.mkdir(parents=True, exist_ok=True)
+    for name, (label, data) in prepared.items():
+        (gdir / name).write_bytes(data)
+        k = next(k for k, i in enumerate(res.images) if i.name == name)
+        old = res.images[k]
+        res.images[k] = ImageResult(old.image_id, name, old.source, "user",
+                                    f"利用者が用意した画像{f'（{label}）' if label else ''}を入れた。変換のときの状態: {need[name]}")
+        res.warnings = [w for w in res.warnings if not w.startswith(f"{old.image_id}:")]
+    if prepared:
+        make_zip(res.zip_path.parent, res.journal, res.meta)
+        res.report_path.write_text(render(res), encoding="utf-8")
+    return list(prepared)

@@ -87,7 +87,7 @@ def error_box(title: str, detail: str) -> str:
             f"<div style='white-space:pre-wrap'>{html.escape(detail)}</div></div>")
 
 
-# ---------------------------------------------------------------------------- 続けて他の論文を変換するとき（手順 8 の後）
+# ---------------------------------------------------------------------------- 続けて他の論文を変換するとき（手順 9 の後）
 # 論文ごとに違うはずの項目。手順 3 で、前の論文の値が残ったままになっていないかを確かめる。
 PER_ARTICLE_FIELDS = {"fpage": "最初のページ", "lpage": "最後のページ", "keywords_ja": "キーワード（日本語）",
                       "keywords_en": "キーワード（英語）", "approved": "最終査読日", "received": "受付日",
@@ -106,7 +106,7 @@ def carried_over(previous: dict, current: dict) -> list:
 
 
 def next_article_box(previous_docx: str = "") -> str:
-    """手順 8 で出す注意（赤い枠）: 入力欄には前の論文の値が残っている。"""
+    """手順 9 で出す注意（赤い枠）: 入力欄には前の論文の値が残っている。"""
     prev = f"前の論文（{previous_docx}）" if previous_docx else "前の論文"
     return error_box(
         f"手順 3 などの入力欄には、{prev}の値が残っています",
@@ -131,8 +131,10 @@ def missing_images_box(res) -> str:
     items = "\n".join(f"・{name}: {cap or '（キャプションなし）'}（{why}）" for name, cap, why in need)
     return error_box(
         f"画像ファイルを用意できなかった図が {len(need)} 件あります",
-        f"次の名前の画像（PNG）を作り、{res.zip_path.name} の中の {graphics_dir(res)} に入れてから、J-STAGE に"
-        f"アップロードしてください（レポートの冒頭と 9 章）。画像がないままでは、その図が J-STAGE の画面に表示されません。\n{items}")
+        "Word の図形で描かれた図などは、docx に画像ファイルがないので、変換で画像を作れません。画像がないままでは、その図が "
+        "J-STAGE の画面に表示されません。手順 7「足りない画像をアップロード」で、図ごとにその図の画像を選んでください"
+        f"（ファイル名は何でもかまいません）。手元で入れるときは、次の名前の画像を {res.zip_path.name} の中の "
+        f"{graphics_dir(res)} に入れます（レポートの冒頭と 9 章）。\n{items}")
 
 
 def unplaced_box(plan) -> str:

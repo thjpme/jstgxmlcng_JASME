@@ -122,7 +122,66 @@ def test_images_to_prepare_are_listed_at_top_and_in_checklist(journal, meta, tmp
     res.images[0] = ImageResult(res.images[0].image_id, "31_1_01.png", "word/media/x.emf", "converted")
     assert images_to_prepare(res) == []
     report = render(res)
-    assert "要対応: 画像ファイル" not in report and "- [x] 画像 1 件はすべて Graphics/ に出力した" in report
+    assert "要対応: 画像ファイル" not in report and "- [x] 画像 1 件はすべて Graphics/ に入っている" in report
+
+
+def _image_bytes(fmt="PNG", mode="RGB", size=(120, 80)):
+    import io
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new(mode, size, "white").save(buf, fmt)
+    return buf.getvalue()
+
+
+def test_add_images_puts_user_images_into_zip_and_report(journal, meta, tmp_path):
+    from jasme_jats.pipeline import add_images
+    from jasme_jats.report import images_to_prepare
+    res = convert(TEMPLATE, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    # 用意が必要でない名前・読めない画像・複数ページの PDF は受け付けない（何も入れない）
+    with pytest.raises(ValueError, match="用意が必要な画像ではありません"):
+        add_images(res, {"31_1_09.png": _image_bytes()})
+    with pytest.raises(ValueError, match="「x.png」を画像として読めません"):
+        add_images(res, {"31_1_01.png": ("x.png", b"not an image")})
+    assert add_images(res, {"31_1_09.png": _image_bytes()}, skip_unneeded=True) == []
+    assert images_to_prepare(res)
+    # JPEG（CMYK）を渡しても、出力ファイル名の形式（PNG）にして入れる
+    assert add_images(res, {"31_1_01.png": ("図1.jpg", _image_bytes("JPEG", "CMYK"))}) == ["31_1_01.png"]
+    assert images_to_prepare(res) == []
+    with zipfile.ZipFile(res.zip_path) as z:
+        assert z.read("jasme/31/1/31_1/Graphics/31_1_01.png")[:4] == b"\x89PNG"
+    report = res.report_path.read_text(encoding="utf-8")
+    assert "要対応: 画像ファイル" not in report and "- [x] 画像 1 件はすべて Graphics/ に入っている" in report
+    assert "| 利用者が用意 | 利用者が用意した画像（図1.jpg）を入れた。変換のときの状態: EMF/WMF の変換を行わない設定" in report
+
+
+def test_add_images_accepts_one_page_pdf(journal, meta, tmp_path):
+    pytest.importorskip("pypdfium2")
+    from jasme_jats.images import user_image
+    pdf = _image_bytes("PDF", size=(300, 200))
+    assert user_image(pdf, "a.png")[:4] == b"\x89PNG"
+    with pytest.raises(ValueError, match="2 ページの PDF"):
+        import io
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new("RGB", (50, 50), "white").save(buf, "PDF", save_all=True,
+                                                  append_images=[Image.new("RGB", (50, 50), "white")])
+        user_image(buf.getvalue(), "a.png")
+
+
+def test_cli_images_option(journal, tmp_path, capsys):
+    from jasme_jats.cli import main
+    meta = tmp_path / "meta.toml"
+    meta.write_text('[article]\nvolume = "31"\nissue = "1"\nfpage = "1"\npeer_review = "あり"\n', encoding="utf-8")
+    args = [str(TEMPLATE), "--meta", str(meta), "--no-metafile-conversion"]
+    assert main(args + ["--out", str(tmp_path / "a")]) == 0
+    assert "--images で指定するか" in capsys.readouterr().err
+    imgs = tmp_path / "imgs"
+    imgs.mkdir()
+    (imgs / "31_1_01.jpg").write_bytes(_image_bytes("JPEG"))      # 拡張子は問わない
+    assert main(args + ["--out", str(tmp_path / "b"), "--images", str(imgs)]) == 0
+    out = capsys.readouterr()
+    assert "画像を入れて ZIP とレポートを作り直した: 31_1_01.png" in out.out and "要対応" not in out.err
+    assert (tmp_path / "b/jasme/31/1/31_1/Graphics/31_1_01.png").exists()
 
 
 def test_float_notes_list_unreferenced_and_uncaptioned(journal):

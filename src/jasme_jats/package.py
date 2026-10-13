@@ -31,10 +31,15 @@ def write_package(out_dir: Path, journal, meta, xml_bytes: bytes, pdf_path=None)
     if pdf_path:
         shutil.copyfile(pdf_path, adir / f"{aid}.pdf")
         has_pdf = True
-    zpath = out_dir / f"{journal.journal_id}_{aid}.zip"
+    return make_zip(out_dir, journal, meta), adir, has_pdf
+
+
+def make_zip(out_dir: Path, journal, meta) -> Path:
+    """フォルダ構成（{資料コード}/…）を ZIP にする。利用者が後から画像を入れたとき（pipeline.add_images）にも作り直す。"""
+    zpath = out_dir / f"{journal.journal_id}_{meta.article_id(journal)}.zip"
     root = out_dir / journal.journal_id
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
         for f in sorted(root.rglob("*")):
             if f.is_file():
                 z.write(f, f.relative_to(out_dir).as_posix())
-    return zpath, adir, has_pdf
+    return zpath

@@ -14,7 +14,7 @@ from pathlib import Path
 
 from .ai_assist import API_KEY_NAMES, DEFAULT_MODEL
 from .config import ArticleMeta, JournalConfig
-from .pipeline import AIRequiredError, Options, convert
+from .pipeline import AIRequiredError, Options, add_images, convert
 from .report import graphics_dir, images_to_prepare
 
 
@@ -36,6 +36,9 @@ def main(argv=None):
     ap.add_argument("--ai-response", type=Path, help="手動モード: AI の回答（JSON）を保存したファイル")
     ap.add_argument("--pdf", type=Path, help="記事の PDF（J-STAGE への登載に必須。指定すると ZIP に入れる）")
     ap.add_argument("--no-metafile-conversion", action="store_true", help="EMF/WMF 画像の変換を行わない")
+    ap.add_argument("--images", type=Path,
+                    help="画像を用意できなかった図（Word の図形で描かれた図など）の画像を入れたフォルダ。出力のファイル名"
+                         "（25_77_01.png など。拡張子は .png・.jpg・.pdf などでもよい）と同じ名前の画像を Graphics/ に入れる")
     a = ap.parse_args(argv)
     if a.ai == "api" and a.ai_provider != "claude" and not a.ai_model:
         ap.error(f"--ai-provider {a.ai_provider} では --ai-model でモデル名を指定してください"
@@ -69,10 +72,18 @@ def main(argv=None):
         print(f"AI 依頼文: {res.prompt_path}")
     if res.ai.error:
         print(f"AI: {res.ai.error}", file=sys.stderr)
+    if a.images:
+        try:
+            added = add_images(res, user_images_in(a.images, images_to_prepare(res)))
+        except ValueError as e:
+            print(f"画像: {e}", file=sys.stderr)
+            return 1
+        if added:
+            print(f"画像を入れて ZIP とレポートを作り直した: {', '.join(added)}")
     need = images_to_prepare(res)
     if need:
-        print(f"要対応: 画像ファイルを用意できなかった図 {len(need)} 件。画像を作り、ZIP の中の {graphics_dir(res)} に入れること"
-              "（レポートの冒頭と 9 章）: " + ", ".join(f"{name}（{(cap[:20] + '…' if len(cap) > 20 else cap) or 'キャプションなし'}）" for name, cap, _ in need),
+        print(f"要対応: 画像ファイルを用意できなかった図 {len(need)} 件。画像を作り、同じ名前でフォルダに入れて --images で"
+              f"指定するか、ZIP の中の {graphics_dir(res)} に入れること（レポートの冒頭と 9 章）: " + ", ".join(f"{name}（{(cap[:20] + '…' if len(cap) > 20 else cap) or 'キャプションなし'}）" for name, cap, _ in need),
               file=sys.stderr)
     # AI の回答を反映した後（API、または手動モードで回答あり）も位置を決められない図表が残っている
     ai_applied = res.ai.mode == "api" or (res.ai.mode == "manual" and a.ai_response)
@@ -81,6 +92,17 @@ def main(argv=None):
               + ", ".join(res.plan.unplaced_floats), file=sys.stderr)
         return 1
     return 0 if res.ok else 1
+
+
+def user_images_in(folder: Path, need) -> dict:
+    """フォルダの中から、用意が必要な画像と同じ名前（拡張子は問わない）のファイルを探す。出力ファイル名 → パス。"""
+    found = {}
+    for name, _, _ in need:
+        stem = name.rsplit(".", 1)[0]
+        cands = sorted(p for p in folder.iterdir() if p.is_file() and p.stem == stem)
+        if cands:
+            found[name] = cands[0]
+    return found
 
 
 if __name__ == "__main__":

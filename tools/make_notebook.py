@@ -144,13 +144,14 @@ cells = [
 | 4 | AI による補完の方法を選ぶ |
 | 5 | 変換を実行（結果のレポートが表示されます） |
 | 6 | （手動モードのときだけ）AI の回答を貼り付けて再変換 |
-| 7 | 結果をダウンロード |
-| 8 | 続けて他の論文を変換するとき: ▶ を押してから、手順 2 に戻る |
+| 7 | （画像を用意できなかった図があるときだけ）足りない画像をアップロード |
+| 8 | 結果をダウンロード |
+| 9 | 続けて他の論文を変換するとき: ▶ を押してから、手順 2 に戻る |
 
 - 本文の文字は 1 文字も変えません。変換後に、docx と XML の文字を 1 文字ずつ照合して確かめます（レポートの「文字の不変性チェック」）。
 - アップロードしたファイルは、このノートブックを閉じる（ランタイムが切れる）と Google のサーバーから消えます。
 - 「API で自動実行」を選ぶと、論文の本文が選んだ AI の会社（Claude は Anthropic、ChatGPT は OpenAI、Gemini は Google、Sakana AI は Sakana AI）の API に送信されます。
-- 複数の論文を続けて変換するときは、1 本ごとに手順 7 で結果をダウンロードしてから、手順 8 の ▶ を押し、手順 2 から繰り返します。
+- 複数の論文を続けて変換するときは、1 本ごとに手順 8 で結果をダウンロードしてから、手順 9 の ▶ を押し、手順 2 から繰り返します。
   手順 3 などの入力欄には前の論文の値が残るので、書き換えてから実行します（心配なときは、ノートブックを開き直して手順 1 から）。
 
 ソースコードと説明書: https://github.com/{REPO}
@@ -213,6 +214,7 @@ from google.colab import files
 WORK = Path("/content/jasme_work")
 INPUT = WORK / "input"
 INPUT.mkdir(parents=True, exist_ok=True)
+USER_IMAGES = {}   # 手順 7 でアップロードした画像（出力ファイル名 → (元のファイル名, 中身)）。論文を選び直したら捨てる
 
 
 def upload(what, ext):
@@ -369,7 +371,7 @@ if AI == "none":
 from IPython.display import HTML, Markdown, display
 from jasme_jats.colab import ai_required_box, error_box, missing_images_box, no_ai_box, prompt_box, unplaced_box
 from jasme_jats.config import ArticleMeta, JournalConfig
-from jasme_jats.pipeline import AIRequiredError, Options, convert
+from jasme_jats.pipeline import AIRequiredError, Options, add_images, convert
 
 api_key = None
 if AI == "api":
@@ -409,6 +411,10 @@ print("DTD 検証:", "合格" if res.dtd_valid else "不合格")
 print("J-STAGE のアップロード時チェック:", "問題なし" if not res.jstage_issues else f"要対応 {len(res.jstage_issues)} 件")
 for mid, msg in res.jstage_issues:
     print("  ", mid, msg)
+if globals().get("USER_IMAGES"):
+    _again = add_images(res, USER_IMAGES, skip_unneeded=True)
+    if _again:
+        print("手順 7 でアップロードした画像を入れ直しました:", "、".join(_again))
 manual_prompt = None
 if AI == "none":
     display(HTML(no_ai_box()))
@@ -454,6 +460,10 @@ if globals().get("PREVIOUS") and AI_RESPONSE.strip() == PREVIOUS.get("ai_respons
 res = convert(docx_path, meta, journal, Options(out_dir=OUT, ai_mode="manual", ai_response=AI_RESPONSE,
                                               pdf_path=pdf_path, split_labels=SPLIT_LABELS))
 LAST_AI_RESPONSE = AI_RESPONSE.strip()
+if globals().get("USER_IMAGES"):
+    _again = add_images(res, USER_IMAGES, skip_unneeded=True)
+    if _again:
+        print("手順 7 でアップロードした画像を入れ直しました:", "、".join(_again))
 fid = res.fidelity
 print("文字の不変性チェック:", fid.summary(), "/ 最終出力の再チェック:", "合格" if fid.final_ok else "不合格",
       "/ DTD 検証:", "合格" if res.dtd_valid else "不合格",
@@ -465,18 +475,72 @@ display(HTML(missing_images_box(res)))
 display(Markdown(res.report_path.read_text(encoding="utf-8")))
 """, form=False),
     code("""
-#@title 7. 結果をダウンロード
+#@title 7. 足りない画像をアップロード（画像を用意できなかった図があるときだけ）
+#@markdown Word の図形で描かれた図などは、docx に画像ファイルがないので、変換で画像を作れません（手順 5 の赤い枠「画像ファイルを用意できなかった図」）。そのときだけ ▶ を押します。
+#@markdown 図ごとに「ファイル選択」ボタンが出るので、その図の画像を選んでください。**ファイル名は何でもかまいません**（正しい名前にして入れ、jasme_巻_開始ページ.zip とレポートを作り直します）。PNG・JPEG のほか、図の部分だけの 1 ページの PDF も使えます。
+#@markdown - 画像の作り方の例: 記事の PDF を開いて図の部分を切り取る（スクリーンショットなど）。Word で図を右クリックして「図として保存」を選ぶ。
+#@markdown - 図の題目（「図1　…」）は XML に入っているので、画像には含めません。
+#@markdown - 用意できない図は、ファイルを選ばずに「キャンセル」を押すと飛ばせます（後でこの手順をやり直せます）。
+""" + guard(1, 2, 3, 4, 5) + """from IPython.display import HTML, Image, display
+from jasme_jats.colab import error_box, missing_images_box
+from jasme_jats.pipeline import add_images, graphics_path
+from jasme_jats.report import images_to_prepare
+
+USER_IMAGES = globals().get("USER_IMAGES") or {}
+_missing = images_to_prepare(res)
+if not _missing:
+    print("用意が必要な画像はありません。手順 8 に進んでください。")
+for _name, _cap, _why in _missing:
+    print(f"▼ {_cap or _name} の画像を選んでください（{_name} として入れます。用意できないときはキャンセル）")
+    _up = files.upload()
+    if not _up:
+        print("  選ばれなかったので飛ばします")
+        continue
+    if len(_up) > 1:
+        print("  ファイルが複数選ばれたので、最初の 1 つだけを使います")
+    _file, _data = next(iter(_up.items()))
+    try:
+        add_images(res, {_name: (_file, _data)})
+    except ValueError as e:
+        display(HTML(error_box(f"{_cap or _name} の画像を入れられませんでした", str(e))))
+        continue
+    USER_IMAGES[_name] = (_file, _data)
+    print(f"  {_file} を {_name} として入れました")
+    display(Image(filename=str(graphics_path(res) / _name), width=360))
+if _missing:
+    _rest = images_to_prepare(res)
+    if len(_rest) < len(_missing):
+        print(f"画像を {len(_missing) - len(_rest)} 件入れ、{res.zip_path.name} とレポートを作り直しました。")
+    if _rest:
+        display(HTML(missing_images_box(res)))
+    else:
+        print("足りない画像はなくなりました。手順 8 でダウンロードしてください。")
+""" + mark(7)),
+    code("""
+#@title 8. 結果をダウンロード
 #@markdown 「変換結果_巻_開始ページ.zip」の中に、J-STAGE にアップロードする jasme_巻_開始ページ.zip、XML、変換レポートが入っています。
-""" + guard(1, 2, 3, 4, 5) + """archive = shutil.make_archive(str(WORK / f"変換結果_{res.xml_path.stem}"), "zip", OUT)
+""" + guard(1, 2, 3, 4, 5) + """from IPython.display import HTML, display
+from jasme_jats.colab import missing_images_box
+from jasme_jats.report import images_to_prepare
+
+_missing = images_to_prepare(res)
+_key = str(docx_path) + "|" + ",".join(n for n, _, _ in _missing)
+if _missing and globals().get("_NO_IMAGES_OK") != _key:
+    _NO_IMAGES_OK = _key
+    display(HTML(missing_images_box(res)))
+    raise SystemExit(f"画像を用意できなかった図が {len(_missing)} 件あります。手順 7 で画像をアップロードしてから、もう一度この ▶ を押して"
+                     "ください。画像を入れずにダウンロードするときは、そのままもう一度この ▶ を押します（後で ZIP の Graphics/ に"
+                     "入れることもできます）。")
+archive = shutil.make_archive(str(WORK / f"変換結果_{res.xml_path.stem}"), "zip", OUT)
 files.download(archive)
 CONVERTED = {**globals().get("CONVERTED", {}), Path(archive).name: docx_path.name}
 print("ダウンロードしました:", Path(archive).name, "（" + docx_path.name + "）")
 display(HTML(missing_images_box(res)))
-print("続けて他の論文を変換するときは、下の手順 8 の ▶ を押してください。")
-""" + mark(7)),
+print("続けて他の論文を変換するときは、下の手順 9 の ▶ を押してください。")
+""" + mark(8)),
     code("""
-#@title 8. 続けて他の論文を変換する
-#@markdown 手順 7 で結果をダウンロードした後、同じ画面のまま次の論文を変換するときに ▶ を押します。
+#@title 9. 続けて他の論文を変換する
+#@markdown 手順 8 で結果をダウンロードした後、同じ画面のまま次の論文を変換するときに ▶ を押します。
 #@markdown この論文のファイルと入力の記録を片付けて、手順 2 から始められるようにします（手順 1 の準備はやり直しません）。
 #@markdown ▶ を押したら、**手順 2 から順に**実行してください。手順 3 などの入力欄には前の論文の値が残っているので、**今回の論文のものに書き換えます**。
 #@markdown 書き換え漏れが心配なときは、ノートブックを開き直して、手順 1 からやり直すほうが確実です（入力欄が初期の値に戻ります）。
@@ -485,15 +549,15 @@ from pathlib import Path
 from IPython.display import HTML, display
 from jasme_jats.colab import next_article_box
 
-if 5 in DONE and 7 not in DONE and globals().get("_DISCARD_OK") != str(globals().get("docx_path")):
+if 5 in DONE and 8 not in DONE and globals().get("_DISCARD_OK") != str(globals().get("docx_path")):
     _DISCARD_OK = str(globals().get("docx_path"))
-    raise SystemExit(f"この論文（{docx_path.name}）の結果を、まだダウンロードしていません。手順 7 でダウンロードしてから、"
+    raise SystemExit(f"この論文（{docx_path.name}）の結果を、まだダウンロードしていません。手順 8 でダウンロードしてから、"
                      "もう一度この ▶ を押してください。ダウンロードせずに次の論文へ進むときは、そのままもう一度この ▶ を押します。")
 if "docx_path" in globals():
     PREVIOUS = {"docx": docx_path.name, "meta": dict(globals().get("meta_input") or {}),
                 "ai_response": globals().get("LAST_AI_RESPONSE", "")}
 for _name in ("docx_path", "pdf_path", "meta_input", "meta", "res", "manual_prompt", "LAST_AI_RESPONSE", "_DISCARD_OK",
-              "_SAME_PAGE_OK"):
+              "_SAME_PAGE_OK", "USER_IMAGES", "_NO_IMAGES_OK"):
     globals().pop(_name, None)
 _work = Path("/content/jasme_work")
 shutil.rmtree(_work / "input", ignore_errors=True)
