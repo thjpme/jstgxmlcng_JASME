@@ -7,6 +7,8 @@ tests/fixtures/sample_edge.docx : 読み取りの境界ケース（Word の脚�
                                    テキストボックス、記号フォント、フィールドのハイパーリンクなど）
 tests/fixtures/sample_float.docx : 位置を機械的に決められない浮動配置の図表（テキストボックス・グループ図形）。
                                    AI 補完（tests/data/ai_response_sample_float.json）が必要
+tests/fixtures/sample_notes.docx : テンプレートの規定と違う書き方の注（本文の大きさの「（注1）」、引用文献の後ろの注の節、
+                                   番号の書き方が想定外の注）
 
 内容は架空のもので、実在の論文ではない。
 """
@@ -559,10 +561,37 @@ def make_float(path):
     b.save(path, body)
 
 
+# ----------------------------------------------------------------------------- sample_notes
+def make_notes(path):
+    """テンプレートの規定（本文に上付きの「1)」、注の節は引用文献の前）と違う書き方の注。"""
+    b = Builder()
+    body = []
+    body += front_ja(b, "注の書き方の検証用文書", "―規定と違う注の番号―", [("架空大学", "試験\u3000三郎")])
+    body.append(para(S["sec1"], "１．はじめに"))
+    body.append(para(S["body"], "本文の大きさで書いた注番号（注1）と，角括弧の注番号［注2］がある文。"))
+    body.append(para(S["body"], "箇条の番号 (1) と (2) は注へのリンクにしない。2 段落からなる注（注3）もある。"))
+    body.append(para(S["body"], "番号の書き方が想定外の注※4は，機械的には区切れない。"))
+    # 注の節を引用文献の後ろに置く
+    body.append(para(S["ref_head"], "引用および参考文献"))
+    body.append(para(S["ref"], "試験三郎（2022）．「注の書き方」．『架空誌』，第3巻，pp.5-6．"))
+    body.append(para(S["fn_head"], "注"))
+    body.append(para(S["body"], "（注1）本文の大きさで書かれた注番号の注である。"))
+    body.append(para(S["body"], "［注2］角括弧で書かれた注番号の注である。"))
+    body.append(para(S["body"], "（注3）2 段落からなる注の 1 段落目である。"))
+    body.append(para(S["body"], "これは注3の 2 段落目である。"))
+    body.append(para(S["body"], "※4 番号の書き方が想定外の注である。"))
+    body += front_en(b, "Notes in Various Forms", "Checking Note Numbers", [("Saburo SHIKEN", "Fictional University")],
+                     ["Note abstract."])
+    body += tail(b)
+    b.save(path, body)
+
+
 if __name__ == "__main__":
     out = HERE / "fixtures"
     make_full(out / "sample_full.docx")
     make_edge(out / "sample_edge.docx")
     make_float(out / "sample_float.docx")
-    print("written:", out / "sample_full.docx", out / "sample_edge.docx", out / "sample_float.docx")
+    make_notes(out / "sample_notes.docx")
+    print("written:", out / "sample_full.docx", out / "sample_edge.docx", out / "sample_float.docx",
+          out / "sample_notes.docx")
     sys.exit(0)

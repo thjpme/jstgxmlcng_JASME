@@ -55,7 +55,7 @@ def xl(name):
 class Emitter:
     def __init__(self, image_namer, fn_numbers=None, skip_images=()):
         self.image_namer = image_namer          # ImageRef -> ファイル名
-        self.fn_numbers = fn_numbers or {}      # Word 脚注 id -> (fid, 表示番号)
+        self.fn_numbers = fn_numbers or {}      # Word 脚注 id -> (fid, 表示する番号の文字列。本誌は「1)」)
         self.skip_images = set(skip_images)     # 図に移したため段落の中では出力しない画像の ID
         self.math_warnings = []
 
@@ -232,17 +232,17 @@ class Emitter:
                 g = etree.SubElement(parent, "inline-graphic")
                 g.set(xl("href"), self.image_namer(a.image))
         elif a.kind == "fnref":
-            fid, number = self.fn_numbers.get(a.fn_id, (None, None))
+            fid, mark = self.fn_numbers.get(a.fn_id, (None, None))
             if fid and ctx.xref:
                 x = etree.SubElement(parent, "xref")
                 x.set("ref-type", "fn")
                 x.set("rid", fid)
                 if not a.fn_kind.endswith("-custom"):
                     sup = etree.SubElement(x, "sup")
-                    self.gen(sup, str(number), "footnote-mark")
-            elif not a.fn_kind.endswith("-custom") and number is not None:
+                    self.gen(sup, mark, "footnote-mark")
+            elif not a.fn_kind.endswith("-custom") and mark is not None:
                 sup = etree.SubElement(parent, "sup")
-                self.gen(sup, str(number), "footnote-mark")
+                self.gen(sup, mark, "footnote-mark")
 
 
 def _same_key(k1, k2) -> bool:

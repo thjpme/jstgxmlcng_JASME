@@ -33,7 +33,8 @@ ROLES = {
     "sec1": "章見出し", "sec2": "節見出し", "sec3": "項見出し", "p": "本文段落", "fig_caption": "図キャプション",
     "table_caption": "表キャプション", "quote": "ブロック引用", "ref": "引用文献（参考文献リストの 1 件）",
     "ref_heading": "参考文献見出し", "notes_heading": "付記見出し", "ack_heading": "謝辞見出し",
-    "fn_heading": "注見出し", "abstract": "英文要旨の段落", "title": "題目", "subtitle": "副題",
+    "fn_heading": "注見出し", "fn_start": "注の始まり（注の一覧で、新しい注が始まる段落）",
+    "abstract": "英文要旨の段落", "title": "題目", "subtitle": "副題",
     "exclude": "論文の本文ではない（テンプレートの装飾など）",
 }
 _HEADINGS = {"ref_heading", "notes_heading", "ack_heading", "fn_heading"}
@@ -41,7 +42,7 @@ REGION_ROLES = {
     "front_ja": {"title", "subtitle", "exclude"},
     "body": {"sec1", "sec2", "sec3", "p", "fig_caption", "table_caption", "quote", "exclude"} | _HEADINGS,
     "notes": {"p", "exclude"} | _HEADINGS, "ack": {"p", "exclude"} | _HEADINGS,
-    "fn": {"p", "exclude"} | _HEADINGS, "refs": {"ref", "exclude"} | _HEADINGS, "back": {"p", "exclude"} | _HEADINGS,
+    "fn": {"fn_start", "p", "exclude"} | _HEADINGS, "refs": {"ref", "exclude"} | _HEADINGS, "back": {"p", "exclude"} | _HEADINGS,
     "front_en": {"abstract", "exclude"}, "app": {"p", "exclude"},
     "authors": set(),   # 著者表の中の著者名・所属（確認のために見せるだけで、役割は変えさせない）
 }
@@ -152,7 +153,11 @@ confidence は 高・中・低 のいずれか。自信がないものは提案�
 
 注についても必ず確認してください: 本文中の注番号（上付きの「1)」など）と、注の一覧（[fn1] など）の対応を確かめ、
 上付きになっていないなどの理由で未リンクの注番号は link_note でリンクしてください。番号の飛び・重複、本文から参照されていない注、
-本文の注番号の位置の文脈と注の内容が合わない（番号の付け違いと思われる）ものは、操作にせず notes に書いてください。"""
+本文の注番号の位置の文脈と注の内容が合わない（番号の付け違いと思われる）ものは、操作にせず notes に書いてください。
+注の一覧は、番号（「1)」「（注1）」など）で始まる段落から新しい注、番号のない段落は前の注の続きとして機械的に区切っています。
+番号の書き方が想定外で複数の注が 1 件にまとめられている場合は、新しい注が始まる段落を set_role の fn_start に、
+誤って分けられた続きの段落を set_role の p（前の注の続き）にしてください（注の一覧の段落でだけ指定できます）。
+fn_start で新しく分けた注へリンクするときは、link_note の target に、その注の最初の段落の ID（d42 など）を書いてください。"""
 
 
 @dataclass
@@ -249,7 +254,8 @@ def build_request(plan: ArticlePlan, linker, build_exclusions=(), unsplit_names=
         cap = _para_text(t.caption) if t.caption is not None else "（キャプションなし）"
         lines.append(f"[{t.tid}] 表 {cap}")
     for fn in plan.fns:
-        lines.append(f"[{fn.fid}] 注 {(fn.paras[0].autonum or '')}{para_view(fn.paras[0])[:80]}")
+        where = "Word の脚注" if fn.word_note else "段落 " + ", ".join(p.src for p in fn.paras)
+        lines.append(f"[{fn.fid}]（{where}）注 {(fn.paras[0].autonum or '')}{para_view(fn.paras[0])[:80]}")
     for fm in plan.formulas:
         if fm.fid:
             lines.append(f"[{fm.fid}] 数式 番号 {fm.label}")
@@ -258,8 +264,11 @@ def build_request(plan: ArticlePlan, linker, build_exclusions=(), unsplit_names=
         cat, src, raw, detail = item[:4]
         lines.append(f"- [{src}] {cat}: 「{raw}」 … {detail}")
     for d in plan.decisions:
-        if d.category in ("style", "formula", "figure", "table"):
+        if d.category in ("style", "formula", "figure", "table", "note"):
             lines.append(f"- [{d.src}] 推定: {d.message}")
+    for fn in plan.fns:
+        if not fn.word_note and fn.number is None:
+            lines.append(f"- [{fn.fid}] 注の先頭に番号を読み取れなかった（段落 {', '.join(p.src for p in fn.paras)} を 1 件の注とした）")
     for p in plan.paras.values():
         if p.note == "style_unknown":
             lines.append(f"- [{p.src}] スタイル「{p.style_name}」は想定外のため本文段落として扱った: 「{_para_text(p)[:40]}」")
@@ -793,6 +802,9 @@ def role_overrides(ops, plan: ArticlePlan, outcome: AIOutcome) -> dict:
         if plan.paras[src].float_id:
             outcome.rejected.append((op, "テキストボックス・グループ図形の中の段落の役割は placements で指定する"))
             continue
+        if role == "fn_start" and any(q is plan.paras[src] for fn in plan.fns if fn.word_note for q in fn.paras):
+            outcome.rejected.append((op, "Word の脚注機能で書かれた注は、Word の区切りのとおりにする"))
+            continue
         region = plan.region.get(src, "")
         if region and role not in REGION_ROLES.get(region, set()):
             outcome.rejected.append((op, f"この位置（{region}）では役割「{role}」を指定できない"))
@@ -920,6 +932,10 @@ def retarget_ops(ops, before: dict, plan: ArticlePlan):
     """リンクの操作の target（1 回目の組み立ての ID）を、組み直した後の plan の ID に読み替える。"""
     after = {key: rid for rid, key in target_keys(plan).items()}
     for op in ops:
+        if op["op"] == "link_note" and op["target"] not in before and ("fn", op["target"]) in after:
+            # fn_start で新しく分けた注は、依頼文に ID がないので、その注の最初の段落の ID で指定される
+            op["target"] = after[("fn", op["target"])]
+            continue
         if op["op"] in TARGET_PREFIX and op["target"] in before:
             new = after.get(before[op["target"]])
             # 組み直した後に見つからなければ、別の図表に誤ってリンクしないよう存在しない ID にする（不採用になる）

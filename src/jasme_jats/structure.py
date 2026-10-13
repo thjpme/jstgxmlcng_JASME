@@ -31,12 +31,19 @@ RE_TABCAP = re.compile(r"^(?:表|Table)\s*([0-9０-９]+)")
 # テキストボックス内のキャプションの形（NFKC 後）。番号の直後がひらがな・読点・範囲の記号なら「図1は…」のような本文の文
 RE_TEXTBOX_CAP = re.compile(r"^(?:(?P<fig>図|Figure|Fig\.?)|(?P<tab>表|Table))\s*[0-9]+(?![0-9ぁ-ゟ,、・~〜\-–—])")
 RE_FORMULA_LABEL = re.compile(r"^[\s\u3000]*([(（][\s\u3000]*[0-9０-９]+(?:[.．\-－][0-9０-９]+)?[\s\u3000]*[)）])[\s\u3000]*$")
-RE_NOTE_MARK = re.compile(r"^[\s\u3000]*((?:注[\s\u3000]*)?[(（]?[\s\u3000]*([0-9０-９]{1,3})[\s\u3000]*[)）])")
+# 注の一覧の各注の先頭の番号: 「1)」「(1)」「注1)」/「（注1）」「［注1］」/「注1　…」（「註」も）
+_WS = r"[\s\u3000]*"
+RE_NOTE_MARK = re.compile(
+    rf"^{_WS}("
+    rf"(?:[注註]{_WS})?[(（]?{_WS}(?P<n1>[0-9０-９]{{1,3}}){_WS}[)）]"
+    rf"|[(（\[［〔]{_WS}[注註]{_WS}(?P<n2>[0-9０-９]{{1,3}}){_WS}[)）\]］〕]"
+    rf"|[注註]{_WS}(?P<n3>[0-9０-９]{{1,3}})(?=[\s\u3000:：.．,，、]|$)"
+    rf")")
 RE_REF_HEADING_TEXT = re.compile(r"^\s*(?:引用(?:・|及び|および)?参考文献|参考(?:・|及び|および)?引用文献|引用文献|参考文献|文献"
                                  r"|References?|REFERENCES?|Bibliography)\s*$")
 RE_ACK_TEXT = re.compile(r"^\s*(?:謝辞|Acknowledge?ments?)\s*$")
 RE_NOTES_TEXT = re.compile(r"^\s*付記\s*$")
-RE_FN_TEXT = re.compile(r"^\s*(?:注|注釈|Notes?)\s*$")
+RE_FN_TEXT = re.compile(r"^\s*(?:注|註|注釈|Notes?)\s*$")
 RE_APPENDIX = re.compile(r"^[\s\u3000]*(?:資料|付録|附録|Appendix)(?:[\s\u3000]*[0-9０-９A-ZＡ-Ｚ]+)?(?=[\s\u3000:：]|$)")
 
 
@@ -49,6 +56,14 @@ def num_of(s: str) -> Optional[int]:
         return int(nfkc(s))
     except ValueError:
         return None
+
+
+def note_mark(s: str) -> Optional[tuple]:
+    """注の先頭の番号（「1)」「（注1）」など）の (開始, 終了, 番号)。番号で始まっていなければ None。"""
+    m = RE_NOTE_MARK.match(s or "")
+    if not m:
+        return None
+    return m.start(1), m.end(1), num_of(m.group("n1") or m.group("n2") or m.group("n3"))
 
 
 # ----------------------------------------------------------------------------- nodes
@@ -992,6 +1007,9 @@ class Classifier:
                 elif state == "fn":
                     plan.fn_heading = b
                     plan.locations[b.src] = "注（見出し）"
+                    if plan.ref_heading is not None:
+                        plan.decide("mechanical", "note", b.src,
+                                    "注の節が引用文献の後ろにある（テンプレートでは引用文献の前）。XML では位置に関係なく注の一覧として出力した")
                 elif state == "refs":
                     plan.ref_heading = b
                     plan.locations[b.src] = "引用文献（見出し）"
@@ -1006,24 +1024,29 @@ class Classifier:
                 plan.refs.append(RefNode(para=b))
                 plan.locations[b.src] = f"引用文献 {len(plan.refs)}件目"
             elif state == "fn":
-                if b.autonum and RE_NOTE_MARK.match(b.autonum):
-                    # Word の自動番号で「1)」などを付けた注
-                    current_fn = FnNode(paras=[b], number=num_of(RE_NOTE_MARK.match(b.autonum).group(2)))
-                    plan.fns.append(current_fn)
-                    plan.locations[b.src] = f"注 {len(plan.fns)}件目"
-                    continue
-                m = RE_NOTE_MARK.match(b.plain())
-                sup_lead = b.atoms and b.atoms[0].kind == "text" and "sup" in b.atoms[0].fmt and \
-                    re.match(r"^[\s\u3000]*[0-9０-９]+", b.atoms[0].text)
-                if m or sup_lead or current_fn is None:
+                # 番号（Word の自動番号の「1)」、手で打った「1)」「（注1）」、上付きの数字）で始まる段落から新しい注。
+                # 番号のない段落は前の注の続き。AI の指定（fn_start: 新しい注の始まり / p: 前の注の続き）があればそれに従う
+                auto = note_mark(b.autonum) if b.autonum else None
+                mark = None if auto else note_mark(b.plain())
+                sup_lead = None
+                if not (auto or mark) and b.atoms and b.atoms[0].kind == "text" and "sup" in b.atoms[0].fmt:
+                    sup_lead = re.match(r"^[\s\u3000]*([0-9０-９]+)", b.atoms[0].text)
+                starts = bool(auto or mark or sup_lead)
+                ai_role = self.overrides.get(b.src)
+                if ai_role == "fn_start":
+                    starts = True
+                elif ai_role == "p" and current_fn is not None:
+                    starts = False
+                if starts or current_fn is None:
                     current_fn = FnNode(paras=[b])
-                    if m:
-                        current_fn.number = num_of(m.group(2))
-                        current_fn.mark_range = (m.start(1), m.end(1))
+                    if auto:
+                        current_fn.number = auto[2]
+                    elif mark:
+                        current_fn.number = mark[2]
+                        current_fn.mark_range = mark[:2]
                     elif sup_lead:
-                        mm = re.match(r"^[\s\u3000]*([0-9０-９]+)", b.atoms[0].text)
-                        current_fn.number = num_of(mm.group(1))
-                        current_fn.mark_range = (mm.start(1), mm.end(1))
+                        current_fn.number = num_of(sup_lead.group(1))
+                        current_fn.mark_range = (sup_lead.start(1), sup_lead.end(1))
                     plan.fns.append(current_fn)
                 else:
                     current_fn.paras.append(b)
@@ -1170,6 +1193,11 @@ class Classifier:
                 plan.locations[p.src] = f"Word の脚注 {len(order)}件中"
             node.word_id = nid
             plan.fns.append(node)
+        word = [fn for fn in plan.fns if fn.word_note]
+        if word:
+            plan.decide("mechanical", "note", word[0].paras[0].src,
+                        f"Word の脚注機能で書かれた注 {len(word)} 件を、注の一覧にした（テンプレートの規定は、本文に上付きの「1)」を書き、"
+                        f"注は「注」の節にまとめる）。本文と注の一覧の番号、注の見出しは補った（8 章）")
         for p in self.doc.endnotes.values():
             for q in p:
                 if not q.is_blank:

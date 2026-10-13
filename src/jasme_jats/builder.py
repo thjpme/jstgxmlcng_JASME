@@ -71,9 +71,13 @@ class Builder:
         for fn in plan.fns:
             if fn.word_note:
                 k += 1
-                fn_numbers[fn.word_id] = (fn.fid, k)
                 fn.number = fn.number or k
+                fn_numbers[fn.word_id] = (fn.fid, self.fn_mark(fn.number))
         self.em = E.Emitter(self.name_image, fn_numbers, plan.moved_images)
+
+    def fn_mark(self, n) -> str:
+        """Word の脚注機能で書かれた注の番号の表示（設定 fn_mark。本誌は「1)」）。"""
+        return self.j.fn_mark.format(n=n)
 
     # ------------------------------------------------------------------ 画像
     def name_image(self, img) -> str:
@@ -622,6 +626,11 @@ class Builder:
             if plan.fn_heading is not None:
                 t = _sub(fg, "title")
                 self.em.span(t, plan.fn_heading, E.SECTITLE)
+            else:
+                # docx に注の見出しがない（Word の脚注機能で書かれた注など）。設定の見出しを生成した文字として補う
+                title = self.j.fn_title_en if self.article_lang() == "en" else self.j.fn_title
+                if title:
+                    self.em.gen(_sub(fg, "title"), title, "fn-title")
             for fn in plan.fns:
                 self.fn(fg, fn)
         elif plan.fn_heading is not None:
@@ -678,15 +687,25 @@ class Builder:
         el = _sub(fg, "fn", id=fn.fid)
         mark = ""
         if fn.word_note:
-            mark = f"{fn.number})"
+            mark = self.fn_mark(fn.number)
         elif fn.paras and fn.paras[0].autonum:
             mark = fn.paras[0].autonum.strip()
         for i, p in enumerate(fn.paras):
             pe = _sub(el, "p")
             if i == 0 and mark:
-                sep = "" if p.plain()[:1].isspace() else " "
+                # 番号の後の空白は、docx の文字が空白で始まっていなければ補う（Word の脚注は記号の後に空白があることが多い）
+                sep = "" if _starts_with_space(p) else " "
                 self.em.gen(pe, mark + sep, "footnote-mark" if fn.word_note else "autonum")
             self.em.span(pe, p, E.BACKP)
+
+
+def _starts_with_space(p) -> bool:
+    """段落の docx の文字（脚注記号などの生成文字を除く）が空白で始まるか。"""
+    for a in p.atoms:
+        if a.kind == "gen" or (a.kind == "text" and not a.text):
+            continue
+        return a.kind == "text" and a.text[:1].isspace()
+    return False
 
 
 # ---------------------------------------------------------------------------- 仕上げ
