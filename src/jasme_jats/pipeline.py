@@ -11,8 +11,10 @@
   9. J-STAGE のアップロード時のチェックのうち XML だけで判定できるものを再現する（jstage_rules）
  10. 画像の書き出し、J-STAGE のフォルダ構成と ZIP、レポート（images, package, report）
 
-記事の PDF があれば、XML を組み立てる前に docx の段落と照合し（pdfmatch）、英数字・記号の全角・半角だけの違いを
-PDF に合わせる（設定でやめられる）。それ以外の違いはレポートに載せるだけ。
+作り方は 2 通り（Options.route）:
+  ルート1（docx）: docx から作る。docx の文字は 1 文字も変えない。記事の PDF があれば照合して、違いをレポートに載せるだけ（pdfmatch）
+  ルート2（pdf） : 出版版 PDF に合わせて直した docx（Word の変更履歴つき）を先に作り（pdfdocx）、それをルート1 と同じ処理で
+                   変換する。Word が付ける番号（自動番号・脚注番号）は docx の文字ではないので、変換のときに全角・半角を PDF に合わせる
 """
 from __future__ import annotations
 
@@ -34,6 +36,7 @@ from .jstage_rules import check as jstage_check
 from .linker import cited_refs, link
 from .model import Decision
 from .package import article_dir, make_zip, write_package
+from .pdfdocx import DocxFix, make_fixed_docx
 from .pdfmatch import PdfCheck, check_pdf
 from .report import images_to_prepare, render, render_ai_only
 from .structure import classify
@@ -90,7 +93,7 @@ class Options:
     ai_api_key: Optional[str] = None
     ai_response: Optional[str] = None         # 手動モード: AI の回答（JSON）
     pdf_path: Optional[Path] = None
-    pdf_width: bool = True                    # 記事の PDF があるとき、英数字・記号の全角・半角を PDF に合わせる
+    route: str = "docx"                       # docx（ルート1: docx から作る）/ pdf（ルート2: 出版版 PDF に合わせてから作る）
     convert_metafiles: bool = True
 
 
@@ -119,7 +122,9 @@ class Result:
     has_pdf: bool = False
     output_note: str = ""
     forced_floats: list = field(default_factory=list)   # AI による補完でも位置が決まらず、本文の冒頭に仮に置いた図表の説明
-    pdf_check: Optional[PdfCheck] = None                # 出版版 PDF との照合（PDF がなければ None）
+    pdf_check: Optional[PdfCheck] = None                # 出版版 PDF との照合（PDF がなければ None）。ルート2 では直した docx との照合
+    route: str = "docx"
+    docx_fix: Optional[DocxFix] = None                  # ルート2: PDF に合わせて直した docx と、直した箇所
     xml_path: Optional[Path] = None
     zip_path: Optional[Path] = None
     report_path: Optional[Path] = None
@@ -171,6 +176,19 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     out_dir = Path(opts.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     split = journal.split_labels if opts.split_labels is None else opts.split_labels
+
+    docx_name = docx_path.name
+    docx_fix = None
+    if opts.route == "pdf":
+        # ルート2: 出版版 PDF に合わせて直した docx（変更履歴つき）を作り、以降はそれを変換する
+        if not opts.pdf_path:
+            raise ValueError("出版版 PDF に合わせてから作る（ルート2）には、記事の PDF が必要です")
+        fixed = out_dir / f"{meta.article_id(journal)}_PDFに合わせた原稿.docx"
+        docx_fix = make_fixed_docx(docx_path, opts.pdf_path, fixed, journal)
+        if docx_fix.check.ok:
+            docx_path = fixed
+        else:                   # PDF の文字を読めなかった: 元の docx をそのまま変換する（レポートに理由を出す）
+            docx_fix = None
 
     doc, plan, linker = _mechanical(docx_path, journal)
     if plan.unplaced_floats and opts.ai_mode == "none":
@@ -234,9 +252,9 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     pdf_check = None
     if opts.pdf_path:
         marks = {wid: m for wid, (_, m) in word_note_marks(plan, journal).items()}
-        pdf_check = check_pdf(plan, opts.pdf_path, apply=opts.pdf_width, fn_marks=marks)
-        if pdf_check.edits or pdf_check.number_edits:
-            plan.pdf_edits = pdf_check.edits
+        pdf_check = check_pdf(plan, opts.pdf_path, fn_marks=marks)
+        if opts.route == "pdf" and pdf_check.number_edits:
+            # ルート2: Word が付ける番号（docx の文字ではない）の全角・半角を PDF に合わせて組み立て直す
             plan.pdf_numbers = pdf_check.number_edits
             root, info = build(plan, meta, journal, split)
 
@@ -302,13 +320,13 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     build_notes = [Decision(did=f"M-B{i}", stage="mechanical", category=c, src=s, message=m,
                             location=plan.locations.get(s, "")) for i, (c, s, m) in enumerate(info.notes, 1)]
     res = Result(
-        docx_name=docx_path.name, created=_dt.datetime.now().strftime("%Y-%m-%d %H:%M"), tool_version=tool_version(),
+        docx_name=docx_name, created=_dt.datetime.now().strftime("%Y-%m-%d %H:%M"), tool_version=tool_version(),
         split_labels=split, meta=meta, journal=journal, plan=plan, fidelity=fid, dtd_valid=valid, dtd_errors=errors,
         jstage_issues=jstage_issues,
         link_counts=linker.count, unresolved_after=unresolved_after, images=images, warnings=warnings, ai=outcome,
         build_notes=build_notes, hidden_text=doc.hidden_text, tracked_changes=doc.tracked_changes,
         comments=doc.comments, has_pdf=has_pdf, output_note=output_note, xml_path=flat_xml, zip_path=zip_path,
-        prompt_path=prompt_path, forced_floats=forced_floats, pdf_check=pdf_check)
+        prompt_path=prompt_path, forced_floats=forced_floats, pdf_check=pdf_check, route=opts.route, docx_fix=docx_fix)
     report_path = out_dir / f"{aid}_変換レポート.md"
     report_path.write_text(render(res), encoding="utf-8")
     res.report_path = report_path
