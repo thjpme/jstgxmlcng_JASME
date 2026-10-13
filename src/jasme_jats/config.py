@@ -37,6 +37,9 @@ class JournalConfig:
     abstract_specific_use: str = "secondary-disallow"
     split_labels: bool = False
     ref_doi: str = "pub-id"
+    fn_mark: str = "{n})"
+    fn_title: str = "注"
+    fn_title_en: str = "Notes"
     styles: dict = field(default_factory=dict)
     manuscript_types: dict = field(default_factory=dict)   # 原稿種別の選択肢（日本語 → 英語）
 

@@ -68,6 +68,13 @@ def float_notes(plan):
     return out
 
 
+def word_note_refs(plan) -> int:
+    """本文中の Word の脚注参照（注へのリンクとして出力されるもの）の数。"""
+    ids = {fn.word_id for fn in plan.fns if fn.word_note}
+    return sum(1 for p in plan.paras.values() for a in p.atoms
+               if a.kind == "fnref" and a.fn_kind.startswith("footnote") and a.fn_id in ids)
+
+
 def note_notes(plan):
     """注（Word の脚注機能を使わずに書かれたもの）の番号と、本文での参照の対応。PDF と照らして確認するためのもの。"""
     out = []
@@ -83,8 +90,15 @@ def note_notes(plan):
                 if a.link.attrs.get("rid") not in order:
                     order.append(a.link.attrs.get("rid"))
     nums = [fn.number for fn in fns]
-    if nums != list(range(1, len(nums) + 1)):
-        out.append("注の番号が 1 からの連番になっていない: " + "、".join("（番号なし）" if n is None else str(n) for n in nums))
+    unnum = [fn for fn in fns if fn.number is None]
+    if unnum:
+        out.append("先頭に番号（「1)」「（注1）」など）を読み取れなかった注: " + "、".join(
+            f"{fn.fid}（「{esc(fn.paras[0].plain()[:20])}」"
+            + (f"。{len(fn.paras)} 段落を 1 件の注にまとめた" if len(fn.paras) > 1 else "") + "）" for fn in unnum)
+            + "。番号の書き方が想定外のため、複数の注が 1 件にまとめられている可能性がある。PDF と照らして確認し、"
+              "AI 補完（注の区切りの指定）を使うか、docx の注の番号をテンプレートの形式（「1)」）にしてから変換し直す")
+    elif nums != list(range(1, len(nums) + 1)):
+        out.append("注の番号が 1 からの連番になっていない: " + "、".join(str(n) for n in nums))
     unref = [f"{fn.fid}（{esc(fn.paras[0].plain()[:20])}）" for fn in fns if fn.fid not in order]
     if unref:
         out.append("本文中のどこからも参照（リンク）されていない注: " + "、".join(unref))
@@ -116,7 +130,9 @@ def render(r) -> str:
                 f"［6 章に全文］）")
     final_line = "合格" if fid.final_ok else ("不合格: " + fid.final_detail if fid.final_ok is False else "未実施")
     c = r.link_counts
-    links = (f"引用文献 {c.get('bibr', 0)} / 図 {c.get('fig', 0)} / 表 {c.get('table', 0)} / 注 {c.get('fn', 0)} / "
+    wn = word_note_refs(plan)
+    fn_links = f"{c.get('fn', 0) + wn}" + (f"（うち Word の脚注 {wn}）" if wn else "")
+    links = (f"引用文献 {c.get('bibr', 0)} / 図 {c.get('fig', 0)} / 表 {c.get('table', 0)} / 注 {fn_links} / "
              f"数式 {c.get('disp-formula', 0)} / URL {c.get('url', 0) + c.get('word', 0)} / DOI {c.get('doi', 0)}")
     ai_acc = [d for _, d in ai.accepted]
     rows = [
@@ -277,13 +293,16 @@ def render(r) -> str:
     L.append("")
 
     # ------------------------------------------------------------------ 8. 生成文字
-    L.append("## 8. Word が自動生成していた文字")
+    L.append("## 8. Word が自動生成していた文字・補った文字")
     L.append("")
-    L.append("Word の自動段落番号や脚注番号は docx の文字ではなく Word が表示時に作るものです。表示どおりの文字を XML に出力しました。")
+    L.append("Word の自動段落番号や脚注番号は docx の文字ではなく Word が表示時に作るものです。表示どおりの文字を XML に出力しました"
+             "（Word の脚注機能で書かれた注の番号だけは、Word の表示「1」ではなく本誌の形式（設定 fn_mark）にしています）。"
+             "docx に注の見出しがない場合（Word の脚注機能で書かれた注など）は、見出し（設定 fn_title）を補いました。")
     L.append("")
     if fid.generated:
         cnt = Counter(k for k, _ in fid.generated)
-        L.append("、".join(f"{ {'autonum': '自動番号', 'footnote-mark': '脚注番号'}.get(k, k)} {n} 件" for k, n in cnt.items())
+        names = {"autonum": "自動番号", "footnote-mark": "脚注番号", "fn-title": "補った注の見出し"}
+        L.append("、".join(f"{names.get(k, k)} {n} 件" for k, n in cnt.items())
                  + "（例: " + "、".join(esc(t) for _, t in fid.generated[:8]) + "）")
     else:
         L.append("ありません。")

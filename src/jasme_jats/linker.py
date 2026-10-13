@@ -26,6 +26,9 @@ RE_FIGREF = re.compile(rf"(図|Figure|Figs?\.)[\s\u3000]?({NUM})((?:[\s\u3000]*(
 RE_TABREF = re.compile(rf"(表|Tables?)[\s\u3000]?({NUM})((?:[\s\u3000]*(?:[,，、・]|～|〜|-|－|–|と|及び|および|and)[\s\u3000]*(?:表)?{NUM})*)")
 RE_EQREF = re.compile(rf"式[\s\u3000]?([(（][\s\u3000]*{NUM}(?:[.．\-－]{NUM})?[\s\u3000]*[)）])|([(（][\s\u3000]*{NUM}(?:[.．\-－]{NUM})?[\s\u3000]*[)）])[\s\u3000]?式")
 RE_FN_MARK = re.compile(rf"^[\s\u3000]*(?:注[\s\u3000]*)?[(（]?[\s\u3000]*({NUM})[\s\u3000]*[)）]?[\s\u3000]*$")
+# 上付きでない注番号。「注」の字と閉じ括弧があるもの（「（注1）」「［注1］」「注1)」）だけ。「(1)」は箇条の番号などと区別できない
+RE_FN_PLAIN = re.compile(rf"[(（\[［〔][\s\u3000]*[注註][\s\u3000]*({NUM})[\s\u3000]*[)）\]］〕]"
+                         rf"|(?<![\u3400-\u9fff々])[注註][\s\u3000]*({NUM})[\s\u3000]*[)）]")
 
 
 def fw_int(s: str) -> int:
@@ -180,6 +183,7 @@ class Linker:
                 self.eq_refs(p, eq_ids)
             if where not in ("fn",):
                 self.fn_marks(p, fn_ids)
+                self.fn_marks_plain(p, fn_ids)
         link_citations(plan, self, paras)
         return self
 
@@ -328,6 +332,28 @@ class Linker:
                 i = next((k for k, (a0, a1) in enumerate(offs) if a0 >= end_pos), len(atoms))
             else:
                 i += 1
+
+    def fn_marks_plain(self, p: Para, fn_ids):
+        """上付きでない「（注1）」などを注へのリンクにする（テンプレートの規定は上付きの「1)」だが、本文の大きさで書かれた場合）。"""
+        if not fn_ids:
+            return
+        text = p.plain()
+        for m in RE_FN_PLAIN.finditer(text):
+            s, e = m.span()
+            if range_linked(p, s, e) or _has_sup(p, s, e):
+                continue    # 上付きのものは fn_marks() で扱う
+            n = fw_int(m.group(1) or m.group(2))
+            rid = fn_ids.get(n)
+            if rid is None:
+                self.unresolved.append(("fn", p.src, m.group(0), f"「{m.group(0)}」に対応する注が見つからない"))
+                continue
+            if apply_span(p, s, e, LinkSpec(kind="xref", attrs={"ref-type": "fn", "rid": rid})):
+                self.count["fn"] += 1
+                self.note("note", p.src, f"上付きでない注番号「{m.group(0)}」を注 {rid} にリンクした")
+
+
+def _has_sup(p: Para, s: int, e: int) -> bool:
+    return any(a.kind == "text" and "sup" in a.fmt for a, (a0, a1) in zip(p.atoms, atom_offsets(p)) if a0 < e and a1 > s)
 
 
 def _same_as_text(href: str, text: str) -> bool:

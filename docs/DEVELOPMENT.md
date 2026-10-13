@@ -46,13 +46,15 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
 
 ## テスト
 
-- `tests/make_fixtures.py` がテスト用の docx（`tests/fixtures/sample_full.docx`, `sample_edge.docx`）を生成する。内容は架空。
+- `tests/make_fixtures.py` がテスト用の docx（`tests/fixtures/sample_full.docx`, `sample_edge.docx`, `sample_float.docx`, `sample_notes.docx`）を生成する。内容は架空。
   変更したら `python tests/make_fixtures.py` で作り直してコミットする。
 - `tests/test_fidelity.py`: 不変性チェックがわざと壊した XML を確実に検出することのテスト。チェックの処理を変えたら必ず通すこと。
 - `tests/test_ai.py`: AI の回答の検証と適用（実際の API は呼ばない。`tests/data/ai_response_sample_full.json` が模擬回答。
   Claude・ChatGPT・Gemini・Sakana AI の呼び出しは、それぞれ偽のクライアントに置き換えて確かめる）。
 - `tests/test_floats.py`: 浮動配置の図表（`tests/fixtures/sample_float.docx` と模擬回答 `tests/data/ai_response_sample_float.json`）。
   AI を使わない設定での中止、機械的な配置、`placements` の検証と適用。
+- `tests/test_notes.py`: テンプレートの規定と違う書き方の注（`sample_notes.docx` の本文の大きさの「（注1）」・引用文献の後ろの注の節・
+  番号の書き方が想定外の注、`sample_edge.docx` の Word の脚注機能）。AI による注の区切りの指定（`fn_start`）も。
 - GitHub Actions（`.github/workflows/test.yml`）で push のたびに実行される。
 
 `tests/fixtures/JASME_template_20261009.docx` は学会のテンプレートから、`tools/sanitize_docx.py` でコメントと作成者情報を
@@ -149,4 +151,5 @@ Claude Code の環境の作り方）を読む。
 | 注の番号から本文へ戻るリンク | J-STAGE の仕様上できない（`<xref>` に付けられるのは ref-type と rid だけで、戻り先の目印を付けられない。注の中は `<p>` だけ）。ブラウザの「戻る」で戻れる |
 | 引用文献の DOI のリンク | 今は J-STAGE に DOI として登録する `<pub-id>`。公開後に J-STAGE の引用文献リンクが付くかを確認し、画面上のリンクを優先するなら `ref_doi = "uri"` にする |
 | テキストボックス・グループ図形の中の図 | 位置を機械的に決められない図表は AI に位置と組み合わせを指定させる（`docs/DESIGN.md` の 6.1。0.14.0）。`placements` は模擬回答でのみ確かめていて、実際の AI（どの会社のものも）ではまだ試していない。表で組んだ図（`fig` の中の `table-wrap`）が J-STAGE の画面でどう表示されるかも、試験登載で確認が必要 |
+| テンプレートと違う書き方の注 | 0.15.0 で、Word の脚注機能・本文の大きさの「（注1）」・引用文献の後ろの注の節に対応（`docs/DESIGN.md` の 6 章）。番号の書き方が想定外の注（「※1」など）は AI に区切りを指定させる（`fn_start`）が、模擬回答でのみ確かめていて、実際の AI ではまだ試していない。補った見出し「注」と「1)」の番号が J-STAGE の画面でどう表示されるかも、試験登載で確認する |
 | 正式リリース | 試験運用で問題がなければ、版を 1.0.0 にする |
