@@ -361,7 +361,8 @@ def render(r) -> str:
     L.append("## 9. 画像")
     L.append("")
     if r.images:
-        st = {"ok": "そのまま出力", "converted": "変換して出力", "failed": "要対応", "missing": "要対応（画像なし）"}
+        st = {"ok": "そのまま出力", "converted": "変換して出力", "failed": "要対応", "missing": "要対応（画像なし）",
+              "user": "利用者が用意"}
         L.append(table(["画像", "出力ファイル（Graphics/）", "docx 内のファイル", "状態", "備考"],
                        [(i.image_id, i.name, i.source, st.get(i.status, i.status), i.message) for i in r.images]))
     else:
@@ -432,7 +433,7 @@ def render(r) -> str:
         L.append(f"- [ ] **画像ファイルを用意できなかった図 {len(need)} 件**の画像を作り、ZIP の中の `{graphics_dir(r)}` に入れる: "
                  + "、".join(f"`{name}`（{esc(cap, 20) or 'キャプションなし'}）" for name, cap, _ in need))
     elif r.images:
-        L.append(f"- [x] 画像 {len(r.images)} 件はすべて Graphics/ に出力した（9 章）")
+        L.append(f"- [x] 画像 {len(r.images)} 件はすべて Graphics/ に入っている（9 章）")
     L.append("- [ ] 11 章の書誌情報（巻・号・頁・日付・DOI）を確認する")
     L.append(f"- [ ] J-STAGE 編集登載システムで、巻（{esc(m.volume or '?')}）・号（{esc(m.issue or '?')}）と、その号のセクション"
              "（目次の見出し。例: 論文）を作成しておく（ないとアップロード時に EMSGM181E「巻号が学会誌別巻号の設定に存在しません」・"

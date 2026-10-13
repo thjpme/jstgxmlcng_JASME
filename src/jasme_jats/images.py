@@ -23,7 +23,7 @@ class ImageResult:
     image_id: str
     name: str
     source: str
-    status: str        # ok / converted / failed / missing
+    status: str        # ok / converted / failed / missing / user（利用者が後から用意した画像）
     message: str = ""
 
 
@@ -95,6 +95,39 @@ def convert_metafile(data: bytes, ext: str, min_width_px=1200):
         buf = io.BytesIO()
         img.save(buf, "PNG", dpi=(300, 300))
         return buf.getvalue(), f"{ext.upper()} を PNG に変換（{img.width}×{img.height} px）"
+
+
+def user_image(data: bytes, name: str, label: str = "") -> bytes:
+    """利用者が用意した画像（PNG・JPEG・GIF など Pillow で読めるもの、または 1 ページの PDF）を、
+    出力ファイル名の形式（拡張子で決まる png / jpg / gif）の画像にする。読めなければ ValueError。"""
+    from PIL import Image
+    label = label or "選んだファイル"
+    if data[:5] == b"%PDF-":
+        try:
+            import pypdfium2 as pdfium
+        except ImportError:
+            raise ValueError(f"{label}は PDF です。PDF を画像にするには pypdfium2 が必要です（PNG か JPEG の画像を選んでください）") from None
+        doc = pdfium.PdfDocument(data)
+        try:
+            if len(doc) != 1:
+                raise ValueError(f"{label}は {len(doc)} ページの PDF です。図の部分だけの 1 ページの PDF か、PNG・JPEG の画像を選んでください")
+            img = _crop_white(doc[0].render(scale=300 / 72).to_pil())
+        finally:
+            doc.close()
+    else:
+        try:
+            img = Image.open(io.BytesIO(data))
+            img.load()
+        except Exception:  # noqa: BLE001
+            raise ValueError(f"{label}を画像として読めません（PNG・JPEG などの画像を選んでください）") from None
+    fmt = {"png": "PNG", "jpg": "JPEG", "jpeg": "JPEG", "gif": "GIF"}.get(name.rsplit(".", 1)[-1].lower(), "PNG")
+    if fmt == "JPEG" and img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")
+    elif img.mode not in ("RGB", "RGBA", "L", "LA", "P", "1"):
+        img = img.convert("RGB")      # CMYK の JPEG など
+    buf = io.BytesIO()
+    img.save(buf, fmt)
+    return buf.getvalue()
 
 
 def _bbox(img):
