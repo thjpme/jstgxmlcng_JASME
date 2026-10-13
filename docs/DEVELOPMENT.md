@@ -3,7 +3,7 @@
 ## 環境
 
 ```bash
-git clone https://github.com/thjpme/jstgxmlcng_JASME.git
+git clone -b main https://github.com/thjpme/jstgxmlcng_JASME.git
 cd jstgxmlcng_JASME
 python -m venv .venv && . .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"

@@ -21,8 +21,8 @@ J-STAGE の全文 XML（JATS 1.1、FULL-J）に変換します。
    （前の手順を飛ばすと「先に手順 ○ を実行してください」と表示されて止まります）。
    1. 準備（最初に 1 回。1 分ほど）。「準備ができました」とツールの版が表示されたら、手順 2 に進みます。
       LibreOffice（EMF/WMF の図の変換用）のインストールは裏で続き、手順 5 の変換はそれが終わってから始まります
-   2. 作り方（「docx から作る」/「出版版 PDF に合わせてから作る」）を選び、論文の docx と PDF をアップロード（docx 用・PDF 用のボタンが
-      順に出ます）。PDF があると、docx の文字と照合します（下の「出版版 PDF との照合と、2 通りの作り方」）
+   2. 作り方（「出版版 PDF に合わせてから作る」（初期値）/「docx から作る」）を選び、論文の docx と PDF をアップロード（docx 用・PDF 用の
+      ボタンが順に出ます）。PDF がまだないときは「docx から作る」を選びます（下の「出版版 PDF との照合と、2 通りの作り方」）
    3. 巻・号・ページ・査読の有無（必須）・キーワード（任意。日本語・英語を別の欄に「;」区切り）・日付・原稿種別（選択）を入力
    4. AI による補完の方法を選ぶ（使わない / API で自動実行（Claude・推奨 / ChatGPT / Gemini / Sakana AI） / 手動。初期値は手動）
    5. 変換を実行 → 画面に変換レポートが表示されます
@@ -133,10 +133,7 @@ docx ─読み取り→ 中間表現 ─スタイルで構造化→ ─機械的
 手順 2 で記事の PDF をアップロードすると、docx の文字と PDF の文字を段落ごとに照合します。XML はどちらの作り方でも docx から作ります
 （PDF から XML を作るのではありません。構造は docx のスタイルから決めます）。作り方は手順 2 の最初で選びます。
 
-- **docx から作る**（既定）: docx の文字のまま XML にします。PDF と違う箇所（全角・半角の違い、「資料」と「付録」、引用符の ' と ’、
-  大文字・小文字など）は、レポートの冒頭と 13 章に「要確認」として載せるだけです。PDF が正しければ、docx を直して変換し直すか、
-  「出版版 PDF に合わせてから作る」で変換し直してください。
-- **出版版 PDF に合わせてから作る**（PDF が必要）: 先に、docx の文字を PDF に合わせて直した docx
+- **出版版 PDF に合わせてから作る**（初期値。PDF が必要）: 先に、docx の文字を PDF に合わせて直した docx
   （`巻_開始ページ_PDFに合わせた原稿.docx`）を作り、それを変換します。
   - 直すのは、英数字・記号の全角・半角（そのすぐ前後の PDF にない空白も消します。「理論 (ATD) に」→「理論（ATD）に」）と、
     それ以外の文字の違い（「資料」→「付録」など）です。直した箇所はレポートの 13 章に全件載ります。
@@ -148,7 +145,11 @@ docx ─読み取り→ 中間表現 ─スタイルで構造化→ ─機械的
     PDF では上付きの「1）」のときなど。注の番号は、すべての注で docx のままにします）。直さなかった箇所は 13 章に理由付きで載ります。
   - Word が付ける番号（自動段落番号、Word の脚注機能の脚注番号）は docx の文字ではないので、変換のときに全角・半角を PDF に合わせます
     （本文の注番号「1)」→「1）」、注の一覧「1)」→「１）」など）。
-- コマンドラインでは `--pdf 記事.pdf` に加えて `--route pdf` を指定すると「出版版 PDF に合わせてから作る」になります（既定は `--route docx`）。
+- **docx から作る**: docx の文字のまま XML にします。PDF と違う箇所（全角・半角の違い、「資料」と「付録」、引用符の ' と ’、
+  大文字・小文字など）は、レポートの冒頭と 13 章に「要確認」として載せるだけです。PDF がまだないときや、docx が著者校正を経た最終版だと
+  分かっているときに選びます。
+- コマンドラインでは、`--pdf 記事.pdf` を指定すると「出版版 PDF に合わせてから作る」、指定しないと「docx から作る」になります。
+  PDF を指定して「docx から作る」にするときは `--route docx` を付けます。
 
 ## できないこと・注意点
 
@@ -175,7 +176,7 @@ docx ─読み取り→ 中間表現 ─スタイルで構造化→ ─機械的
 Python 3.10 以上が必要です。
 
 ```bash
-pip install "jasme-jats[ai,images] @ git+https://github.com/thjpme/jstgxmlcng_JASME.git"
+pip install "jasme-jats[ai,images] @ git+https://github.com/thjpme/jstgxmlcng_JASME.git@main"
 python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output            # AI を使わない
 python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai manual  # 手動モード（依頼文を作る）
 python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai manual --ai-response 回答.json
@@ -184,8 +185,8 @@ OPENAI_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml --o
 GEMINI_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai api --ai-provider gemini --ai-model モデル名
 SAKANA_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai api --ai-provider sakana --ai-model モデル名
 python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --images 画像フォルダ   # 用意できなかった図の画像（25_77_01.png など）を入れる
-python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --pdf 記事.pdf              # 出版版 PDF と照合する（docx から作る）
-python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --pdf 記事.pdf --route pdf  # 出版版 PDF に合わせてから作る
+python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --pdf 記事.pdf               # 出版版 PDF に合わせてから作る
+python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --pdf 記事.pdf --route docx  # docx から作る（PDF とは照合だけ）
 ```
 
 書誌情報ファイルの例: [examples/meta_example.toml](examples/meta_example.toml)

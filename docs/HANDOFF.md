@@ -120,7 +120,7 @@ GitHub は譲渡の後しばらく古い URL から転送しますが、転送�
 2. ソースを取得して、環境を作ります。
 
    ```bash
-   git clone https://github.com/thjpme/jstgxmlcng_JASME.git
+   git clone -b main https://github.com/thjpme/jstgxmlcng_JASME.git
    cd jstgxmlcng_JASME
    python -m venv .venv && . .venv/bin/activate      # Windows: .venv\Scripts\activate
    pip install -e ".[dev]"

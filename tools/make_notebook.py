@@ -149,9 +149,10 @@ cells = [
 | 9 | 続けて他の論文を変換するとき: ▶ を押してから、手順 2 に戻る |
 
 - 作り方は 2 通りあり、手順 2 で選びます。
-  - **docx から作る**（既定）: 本文の文字は 1 文字も変えません。PDF をアップロードすると、docx と PDF の文字を照合して、違う箇所をレポートに出します。
-  - **出版版 PDF に合わせてから作る**: docx の文字を出版版 PDF に合わせて直した docx（Word の変更履歴つき）を先に作り、それを変換します。
-    直した docx も結果に入るので、Word で開いて変更を確かめられます。
+  - **出版版 PDF に合わせてから作る**（初期値。PDF が必要）: docx の文字を出版版 PDF に合わせて直した docx（Word の変更履歴つき）を先に作り、
+    それを変換します。直した docx も結果に入るので、Word で開いて変更を確かめられます。
+  - **docx から作る**: 本文の文字は 1 文字も変えません。PDF をアップロードすると、docx と PDF の文字を照合して、違う箇所をレポートに出します。
+    PDF がまだないときは、こちらを選びます。
 - どちらでも、変換後に、変換した docx と XML の文字を 1 文字ずつ照合して確かめます（レポートの「文字の不変性チェック」）。
 - アップロードしたファイルは、このノートブックを閉じる（ランタイムが切れる）と Google のサーバーから消えます。
 - 「API で自動実行」を選ぶと、論文の本文が選んだ AI の会社（Claude は Anthropic、ChatGPT は OpenAI、Gemini は Google、Sakana AI は Sakana AI）の API に送信されます。
@@ -209,10 +210,10 @@ if globals().get("LO_PROC") is not None and LO_PROC.poll() is None:
     code("""
 #@title 2. 作り方を選び、論文の docx と PDF をアップロード
 #@markdown **作り方（ROUTE）**: 最初に選びます。
-#@markdown - **docx から作る**（既定）: docx の本文の文字を 1 文字も変えずに XML にします。PDF をアップロードすると、変換の後に docx の文字と PDF の文字を照合し、違う箇所（全角・半角の違い、「資料」と「付録」など）をレポートの 13 章に出します（XML は docx の文字のままです）。
-#@markdown - **出版版 PDF に合わせてから作る**: 受け取った docx が著者校正の前の原稿で、出版社が組版で直した文字（全角・半角、「資料」→「付録」など）が出版版 PDF にしかないときに使います。docx の文字を PDF に合わせて直した docx（**Word の変更履歴つき**。スタイル・書式・数式・図・注はそのまま）を作り、それを変換します。表の中・数式・図の中の文字・リンクの文字は直しません。**PDF のアップロードが必要です。**
-ROUTE = "docx から作る"  #@param ["docx から作る", "出版版 PDF に合わせてから作る"]
-#@markdown **PDF もアップロードする（UPLOAD_PDF）**: J-STAGE に登載する PDF がまだなければ、チェックを外してから実行してください（PDF 用のボタンは出ません。後で jasme_巻_開始ページ.zip に入れることもできます）。「出版版 PDF に合わせてから作る」では外せません。
+#@markdown - **出版版 PDF に合わせてから作る**（初期値）: 受け取った docx が著者校正の前の原稿で、出版社が組版で直した文字（全角・半角、「資料」→「付録」など）が出版版 PDF にしかないことがあるため、docx の文字を PDF に合わせて直した docx（**Word の変更履歴つき**。スタイル・書式・数式・図・注はそのまま）を作り、それを変換します。表の中・数式・図の中の文字・リンクの文字は直しません。**PDF のアップロードが必要です。**
+#@markdown - **docx から作る**: docx の本文の文字を 1 文字も変えずに XML にします。PDF をアップロードすると、変換の後に docx の文字と PDF の文字を照合し、違う箇所（全角・半角の違い、「資料」と「付録」など）をレポートの 13 章に出します（XML は docx の文字のままです）。PDF がまだないときや、docx が最終版だと分かっているときに選びます。
+ROUTE = "出版版 PDF に合わせてから作る"  #@param ["出版版 PDF に合わせてから作る", "docx から作る"]
+#@markdown **PDF もアップロードする（UPLOAD_PDF）**: J-STAGE に登載する PDF がまだなければ、チェックを外し、作り方を「docx から作る」にしてから実行してください（PDF 用のボタンは出ません。後で jasme_巻_開始ページ.zip に入れることもできます）。
 UPLOAD_PDF = True  #@param {type:"boolean"}
 """ + guard(1) + """
 from pathlib import Path
@@ -220,7 +221,8 @@ from google.colab import files
 
 ROUTE_KEY = {"docx から作る": "docx", "出版版 PDF に合わせてから作る": "pdf"}[ROUTE]
 if ROUTE_KEY == "pdf" and not UPLOAD_PDF:
-    raise SystemExit("「出版版 PDF に合わせてから作る」には PDF が必要です。UPLOAD_PDF にチェックを入れて、もう一度この手順を実行してください。")
+    raise SystemExit("「出版版 PDF に合わせてから作る」には PDF が必要です。UPLOAD_PDF にチェックを入れるか、PDF がまだないときは"
+                     "作り方（ROUTE）を「docx から作る」にして、もう一度この手順を実行してください。")
 WORK = Path("/content/jasme_work")
 INPUT = WORK / "input"
 INPUT.mkdir(parents=True, exist_ok=True)
@@ -251,7 +253,8 @@ if UPLOAD_PDF:
     pdf_files = upload("J-STAGE に登載する PDF", ".pdf")
     pdf_path = pdf_files[0] if pdf_files else None
 if ROUTE_KEY == "pdf" and not pdf_path:
-    raise SystemExit("「出版版 PDF に合わせてから作る」には PDF が必要です。もう一度この手順を実行し、PDF を選んでください。")
+    raise SystemExit("「出版版 PDF に合わせてから作る」には PDF が必要です。もう一度この手順を実行し、PDF を選んでください"
+                     "（PDF がまだないときは、作り方（ROUTE）を「docx から作る」にしてから実行します）。")
 print()
 print("作り方:", ROUTE)
 print("論文:", docx_path.name)
