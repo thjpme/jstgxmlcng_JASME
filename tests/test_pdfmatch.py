@@ -270,11 +270,15 @@ def test_colab_box_and_cli_route(journal, meta, tmp_path, capsys):
     with pytest.raises(SystemExit):
         main([str(PDFCHECK), "--out", str(tmp_path / "c"), "--route", "pdf"])
     assert "--pdf で記事の PDF を指定してください" in capsys.readouterr().err
-    assert main([str(PDFCHECK), "--out", str(tmp_path / "c"), "--route", "pdf", "--pdf", str(PDFCHECK_PDF),
-                 "--no-metafile-conversion"]) == 0
+    # --pdf があれば、既定は「出版版 PDF に合わせてから作る」
+    assert main([str(PDFCHECK), "--out", str(tmp_path / "c"), "--pdf", str(PDFCHECK_PDF), "--no-metafile-conversion"]) == 0
     out = capsys.readouterr().out
     assert "出版版 PDF との照合: PDF に合わせて docx を直した 44 箇所" in out
     assert "PDF に合わせて直した docx（変更履歴つき）:" in out and "_PDFに合わせた原稿.docx" in out
+    assert main([str(PDFCHECK), "--out", str(tmp_path / "d"), "--pdf", str(PDFCHECK_PDF), "--route", "docx",
+                 "--no-metafile-conversion"]) == 0
+    out = capsys.readouterr().out
+    assert "出版版 PDF との照合: 文字の違い 1 件" in out and "PDF に合わせて直した docx" not in out
 
 
 def test_route2_keeps_note_marks_when_fixing_breaks_notes(journal, meta, tmp_path, monkeypatch):

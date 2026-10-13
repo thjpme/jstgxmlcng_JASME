@@ -35,10 +35,10 @@ def main(argv=None):
                          "使えなければ最新の Opus に切り替える）。claude 以外では必ず指定する（Claude Opus と同等以上のモデルを推奨）")
     ap.add_argument("--ai-response", type=Path, help="手動モード: AI の回答（JSON）を保存したファイル")
     ap.add_argument("--pdf", type=Path, help="記事の PDF（J-STAGE への登載に必須。指定すると ZIP に入れる）")
-    ap.add_argument("--route", choices=["docx", "pdf"], default="docx",
-                    help="作り方。docx（既定）: docx から作る（docx の文字は 1 文字も変えない。--pdf があれば照合してレポートに"
-                         "載せるだけ）。pdf: --pdf の出版版 PDF に合わせて直した docx（Word の変更履歴つき）を出力フォルダに作り、"
-                         "それを変換する")
+    ap.add_argument("--route", choices=["docx", "pdf"],
+                    help="作り方。既定は --pdf があれば pdf、なければ docx。pdf: --pdf の出版版 PDF に合わせて直した docx"
+                         "（Word の変更履歴つき）を出力フォルダに作り、それを変換する。docx: docx から作る（docx の文字は 1 文字も"
+                         "変えない。--pdf があれば照合してレポートに載せるだけ）")
     ap.add_argument("--no-metafile-conversion", action="store_true", help="EMF/WMF 画像の変換を行わない")
     ap.add_argument("--images", type=Path,
                     help="画像を用意できなかった図（Word の図形で描かれた図など）の画像を入れたフォルダ。出力のファイル名"
@@ -47,6 +47,8 @@ def main(argv=None):
     if a.ai == "api" and a.ai_provider != "claude" and not a.ai_model:
         ap.error(f"--ai-provider {a.ai_provider} では --ai-model でモデル名を指定してください"
                  "（Claude Opus と同等以上のモデルを推奨）")
+    if a.route is None:
+        a.route = "pdf" if a.pdf else "docx"
     if a.route == "pdf" and not a.pdf:
         ap.error("--route pdf（出版版 PDF に合わせてから作る）では、--pdf で記事の PDF を指定してください")
     api_key = next((os.environ[k] for k in API_KEY_NAMES[a.ai_provider] if os.environ.get(k)), None)
