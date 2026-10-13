@@ -9,6 +9,9 @@ PDF は著者校正を経た最終版なので、XML の本文が PDF と違え�
   ・それ以外の文字の違い（「資料」と「付録」など）: レポートに載せるだけ（docx を直して変換し直すかは人が決める）
   ・PDF の中に見つからない段落: レポートに載せる
 
+Word が付ける番号（自動段落番号・脚注番号）は docx の文字ではなくツールが作って出力する文字なので、これも PDF と照合し、
+全角・半角だけの違いなら PDF に合わせた形で出力する（「1)」→「１）」など）。
+
 PDF から XML を作るのではない（構造はすべて docx のスタイルから決める）。PDF の文字は、照合にだけ使う。
 変えた文字は、XML の作業用の目印（jx:w / jx:d）に docx の元の文字を残し、文字の不変性チェックで、全角・半角の
 違いと空白のほかは docx と 1 文字ずつ一致することを確かめる（fidelity.py）。
@@ -70,6 +73,9 @@ class PdfCheck:
     width: dict = field(default_factory=dict)       # src -> {plain 上の位置: PDF の文字}
     drops: dict = field(default_factory=dict)       # src -> {plain 上の位置（落とす空白）}
     diffs: list = field(default_factory=list)       # TextDiff
+    numbers: dict = field(default_factory=dict)     # Word が付ける番号: (種類, 段落 ID または脚注 ID) -> {番号の中の位置: PDF の文字}
+    original: dict = field(default_factory=dict)    # Word が付ける番号の元の文字列: (種類, ID) -> 文字列
+    # 種類: auto（段落の自動番号。ID は段落）/ fnref（本文の脚注番号）/ fnlist（注の一覧の脚注番号。ID は Word の脚注 ID）
 
     @property
     def edits(self) -> dict:
@@ -77,6 +83,13 @@ class PdfCheck:
         if not self.apply:
             return {}
         return {s: (self.width.get(s, {}), self.drops.get(s, set())) for s in set(self.width) | set(self.drops)}
+
+    @property
+    def number_edits(self) -> dict:
+        """Word が付ける番号を PDF に合わせたもの: (種類, ID) -> 出力する文字列。設定で無効なら空。"""
+        if not self.apply:
+            return {}
+        return {k: "".join(m.get(i, c) for i, c in enumerate(self.original[k])) for k, m in self.numbers.items()}
 
     @property
     def width_count(self) -> int:
@@ -146,14 +159,40 @@ def pdf_stream(pages) -> PdfStream:
 
 
 # ---------------------------------------------------------------------------- 照合
-def _para_seq(p):
-    """段落の照合用の文字の列 [(文字, plain 上の位置)]。空白は除く。数式・画像・脚注番号・自動番号は SKIP。"""
-    seq = [(SKIP, -1) for _ in (p.autonum or "").strip()]
-    for i, ch in enumerate(p.plain()):
-        if ch.isspace():
+def _para_seq(p, fn_marks=None, list_marks=None):
+    """段落の照合用の文字の列 [(文字, plain 上の位置)] と、Word が付ける番号の文字
+    {列の位置: (種類, ID, 番号の中の位置, 番号のアトムの plain 上の位置（段落の自動番号は -1）)}。
+
+    空白は除く。数式・画像は SKIP。Word が付ける番号（段落の自動番号、本文の脚注番号、注の一覧の脚注番号）は、
+    出力する文字を列に入れ、plain 上の位置は -1 とする。fn_marks: Word の脚注 ID -> 本文・注の一覧に出力する番号。
+    list_marks: 注の一覧の最初の段落 ID -> Word の脚注 ID。
+    """
+    fn_marks, list_marks = fn_marks or {}, list_marks or {}
+    seq, gens = [], {}
+
+    def number(kind, ident, text, apos):
+        for k, c in enumerate(text):
+            if not c.isspace():
+                gens[len(seq)] = (kind, ident, k, apos)
+                seq.append((c, -1))
+
+    number("auto", p.src, p.autonum or "", -1)
+    pos = 0
+    for a in p.atoms:
+        if a.kind == "text":
+            for k, ch in enumerate(a.text):
+                if not ch.isspace():
+                    seq.append((ch, pos + k))
+            pos += len(a.text)
             continue
-        seq.append((SKIP if ch == OBJ else ch, i))
-    return seq
+        if a.kind == "fnref" and a.fn_kind == "footnote" and a.fn_id in fn_marks:
+            number("fnref", a.fn_id, fn_marks[a.fn_id], pos)
+        elif a.kind == "gen" and a.fn_kind == "mark" and p.src in list_marks and list_marks[p.src] in fn_marks:
+            number("fnlist", list_marks[p.src], fn_marks[list_marks[p.src]], pos)
+        elif a.kind != "gen":
+            seq.append((SKIP, pos))
+        pos += 1
+    return seq, gens
 
 
 def _locked_positions(p) -> set:
@@ -181,9 +220,14 @@ def target_paragraphs(plan) -> list:
     return [p for p in out if not (p.src in seen or seen.add(p.src))]
 
 
-def compare(plan, pages, apply: bool = True) -> PdfCheck:
-    """docx の段落と PDF の文字を照合する。pages は PDF の各ページの文字（extract_pages）。"""
+def compare(plan, pages, apply: bool = True, fn_marks=None) -> PdfCheck:
+    """docx の段落と PDF の文字を照合する。pages は PDF の各ページの文字（extract_pages）。
+
+    fn_marks: Word の脚注 ID -> 出力する脚注番号（builder.word_note_marks）。Word の脚注番号も PDF と照合する。
+    """
     res = PdfCheck(apply=apply)
+    fn_marks = fn_marks or {}
+    list_marks = {fn.paras[0].src: fn.word_id for fn in plan.fns if fn.word_note and fn.paras}
     st = pdf_stream(pages)
     pf = st.keys
     if not pf:
@@ -193,11 +237,11 @@ def compare(plan, pages, apply: bool = True) -> PdfCheck:
     targets = {p.src for p in target_paragraphs(plan)}
     # 位置合わせには、照合しない段落（図の中の文字・表のセル・資料など）も docx の順で使う。PDF の文字のうち、
     # ほかの段落に当たった文字を「PDF にだけある文字」と数えないため
-    paras = [(p, _para_seq(p)) for p in plan.paras.values()]
-    paras = [(p, q) for p, q in paras if sum(1 for c, _ in q if c != SKIP) >= MIN_CHARS]
+    paras = [(p, *_para_seq(p, fn_marks, list_marks)) for p in plan.paras.values()]
+    paras = [(p, q, g) for p, q, g in paras if sum(1 for c, _ in q if c != SKIP) >= MIN_CHARS]
     # 1. 全体の照合で、段落ごとの PDF の中のおおよその位置を決める
     whole, spans = [], []
-    for p, seq in paras:
+    for p, seq, _ in paras:
         start = len(whole)
         whole.extend(key(c) for c, _ in seq)
         spans.append((start, len(whole)))
@@ -210,18 +254,20 @@ def compare(plan, pages, apply: bool = True) -> PdfCheck:
     # 2. 段落ごとに、PDF の中の窓と照合する
     aligned = {}
     owner = {}                 # PDF の文字の位置 -> その文字に当たった段落
-    for (p, seq), (s, e) in zip(paras, spans):
+    for (p, seq, gens), (s, e) in zip(paras, spans):
         window = _window(seq, d2p[s:e], pf)
         ops = _align(seq, st, window) if window else None
         if ops is None:
             continue
-        aligned[p.src] = (p, seq, window[0], ops)
+        aligned[p.src] = (p, seq, gens, window[0], ops)
         for tag, i1, i2, j1, j2 in ops:
             if tag == "equal":
                 for k in range(j2 - j1):
                     owner.setdefault(window[0] + j1 + k, p.src)
     # 3. 照合する段落の違いを分類する
-    for p, seq in paras:
+    for p, seq, gens in paras:
+        for (kind, ident, k, _) in gens.values():
+            res.original.setdefault((kind, ident), (p.autonum or "") if kind == "auto" else fn_marks[ident])
         if p.src not in targets:
             continue
         res.checked += 1
@@ -268,11 +314,12 @@ def _align(seq, st: PdfStream, window):
     return ops if same >= MIN_COVERAGE * real else None
 
 
-def _classify(p, seq, lo, ops, st: PdfStream, owner, res: PdfCheck):
+def _classify(p, seq, gens, lo, ops, st: PdfStream, owner, res: PdfCheck):
     text = p.plain()
     locked = _locked_positions(p)
     d2w = {}          # seq の位置 -> PDF の文字の位置
     width = {}        # seq の位置 -> PDF の文字（全角・半角だけの違い）
+    numbers = set()   # PDF に合わせた Word の番号の文字の seq の位置
     regions = []      # 違う部分 (i1, i2, j1, j2)（seq と窓の中の位置）
 
     def mine(j):      # PDF の文字が、ほかの段落に当たっていない（この段落の違いとして扱ってよい）か
@@ -287,7 +334,11 @@ def _classify(p, seq, lo, ops, st: PdfStream, owner, res: PdfCheck):
                 if dc == pc:
                     continue
                 if is_width_pair(dc, pc):
-                    if seq[i1 + k][1] not in locked:
+                    if i1 + k in gens:          # Word が付ける番号
+                        kind, ident, at, _ = gens[i1 + k]
+                        res.numbers.setdefault((kind, ident), {})[at] = pc
+                        numbers.add(i1 + k)
+                    elif seq[i1 + k][1] not in locked:
                         width[i1 + k] = pc
                 else:
                     regions.append((i1 + k, i1 + k + 1, j1 + k, j1 + k + 1))   # 大文字・小文字の違い
@@ -301,16 +352,20 @@ def _classify(p, seq, lo, ops, st: PdfStream, owner, res: PdfCheck):
             if tag != "insert" or not js or len(js) >= 20:
                 continue
         regions.append((i1, i2, js[0] if js else j1, js[-1] + 1 if js else j1))
-    _report_regions(p, seq, st, lo, regions, mine, res)
-    if not width:
-        return
-    res.width[p.src] = {seq[i][1]: c for i, c in width.items()}
+    _report_regions(p, seq, gens, st, lo, regions, mine, res)
+    if width:
+        res.width[p.src] = {seq[i][1]: c for i, c in width.items()}
     drops = set()
-    for i in width:
+    for i in set(width) | numbers:
         for j, k in ((i - 1, i), (i, i + 1)):          # 前の文字との間・後ろの文字との間
             if j < 0 or k >= len(seq) or j not in d2w or k not in d2w or d2w[k] != d2w[j] + 1:
                 continue
-            gap = range(seq[j][1] + 1, seq[k][1])
+            if j in gens and k in gens:
+                continue
+            # Word が付ける番号との間なら、番号のアトムの位置から（段落の自動番号は段落の先頭から）
+            start = gens[j][3] + 1 if j in gens else seq[j][1] + 1
+            end = gens[k][3] if k in gens else seq[k][1]
+            gap = range(start, end)
             if not gap or not all(text[x].isspace() for x in gap):
                 continue
             pk = d2w[k]
@@ -331,7 +386,7 @@ def _pdf_space(st: PdfStream, k: int) -> bool:
     return ord(st.chars[k - 1]) < 0x80 and ord(st.chars[k]) < 0x80
 
 
-def _report_regions(p, seq, st: PdfStream, lo, regions, mine, res: PdfCheck, near=12):
+def _report_regions(p, seq, gens, st: PdfStream, lo, regions, mine, res: PdfCheck, near=12):
     """違う部分を、近いものどうしまとめて TextDiff にする。"""
     merged = []
     for r in sorted(regions):
@@ -348,6 +403,9 @@ def _report_regions(p, seq, st: PdfStream, lo, regions, mine, res: PdfCheck, nea
         else:                                   # docx の側に文字がない（PDF にだけある）
             a = b = (seq[i1 - 1][1] + 1) if i1 > 0 and seq[i1 - 1][1] >= 0 else 0
         dtext = text[a:b].replace(OBJ, "")
+        num = "".join(seq[i][0] for i in range(i1, i2) if i in gens)
+        if num:
+            dtext = f"（Word が付けた番号「{num}」）" + dtext
         ptext = ""
         for j in range(j1, j2):
             if not mine(j):
@@ -356,7 +414,7 @@ def _report_regions(p, seq, st: PdfStream, lo, regions, mine, res: PdfCheck, nea
             if ptext and _pdf_space(st, g):
                 ptext += " "          # 表示のために単語の間の空白を戻す（照合では空白を使わない）
             ptext += st.chars[g]
-        if fold_str(re.sub(r"\s", "", dtext)) == fold_str(re.sub(r"\s", "", ptext)):
+        if fold_str(re.sub(r"\s", "", (num + text[a:b].replace(OBJ, "")))) == fold_str(re.sub(r"\s", "", ptext)):
             continue
         ctx = (text[max(0, a - 12):a] + "［" + text[a:b] + "］" + text[b:b + 12]).replace(OBJ, "")
         res.diffs.append(TextDiff(p.src, dtext, ptext, ctx))
@@ -366,7 +424,7 @@ def fold_str(s: str) -> str:
     return "".join(fold(c) for c in s)
 
 
-def check_pdf(plan, pdf_path, apply: bool = True) -> PdfCheck:
+def check_pdf(plan, pdf_path, apply: bool = True, fn_marks=None) -> PdfCheck:
     """記事の PDF を読み、docx の段落と照合する。PDF を読めなければ ok=False（変換は続ける）。"""
     try:
         pages = extract_pages(pdf_path)
@@ -374,4 +432,4 @@ def check_pdf(plan, pdf_path, apply: bool = True) -> PdfCheck:
         return PdfCheck(ok=False, apply=apply, message="PDF の文字を読むための pypdfium2 が入っていない（pip install pypdfium2）")
     except Exception as e:  # noqa: BLE001
         return PdfCheck(ok=False, apply=apply, message=f"PDF を読めなかった: {e}")
-    return compare(plan, pages, apply)
+    return compare(plan, pages, apply, fn_marks)

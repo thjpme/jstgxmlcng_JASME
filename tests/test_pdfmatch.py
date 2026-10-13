@@ -107,3 +107,37 @@ def test_wrong_pdf_changes_nothing(journal, meta, tmp_path):
     pc = res.pdf_check
     assert pc.edits == {} and pc.diffs == [] and pc.unmatched and res.fidelity.pdf_width == []
     assert "別の記事の PDF ではないか確認" in res.report_path.read_text(encoding="utf-8")
+
+
+def test_word_footnote_numbers_follow_pdf(journal, meta, tmp_path, monkeypatch):
+    """Word の脚注番号（docx の文字ではなくツールが作る文字）も、全角・半角を PDF に合わせる。"""
+    from conftest import EDGE
+    from jasme_jats import pdfmatch
+    pages = ["Word の脚注1）が付いた文。\n１）Word の脚注機能で付けた注です。\n"]
+    monkeypatch.setattr(pdfmatch, "extract_pages", lambda path: pages)
+    (tmp_path / "dummy.pdf").write_bytes(b"%PDF-1.4\n")    # ZIP に入れるだけ（文字は extract_pages の代わりから）
+    res = convert(EDGE, meta, journal, Options(out_dir=tmp_path, pdf_path=tmp_path / "dummy.pdf", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    root = load(res)
+    x = next(x for x in root.iter("xref") if x.get("ref-type") == "fn")
+    assert "".join(x.itertext()) == "1）"
+    # 注の一覧: 番号を PDF に合わせ、docx の記号の後の空白も PDF にないので落とす（番号の後に空白を補わない）
+    assert "".join(root.find(".//fn/p").itertext()) == "１）Word の脚注機能で付けた注です。"
+    assert res.pdf_check.number_edits == {("fnref", "5"): "1）", ("fnlist", "5"): "１）"}
+    report = res.report_path.read_text(encoding="utf-8")
+    assert "| 注の一覧の脚注番号 | Word の脚注 5 | 「1)」→「１）」 |" in report
+    # 設定で切ると、Word の番号も設定 fn_mark のまま
+    res = convert(EDGE, meta, journal, Options(out_dir=tmp_path / "off", pdf_path=tmp_path / "dummy.pdf", pdf_width=False,
+                                               convert_metafiles=False))
+    assert "".join(load(res).find(".//fn/p").itertext()) == "1) Word の脚注機能で付けた注です。"
+
+
+def test_autonum_follows_pdf(journal):
+    """段落の自動番号（Word の自動段落番号）も、全角・半角を PDF に合わせる。"""
+    plan = _plan(journal)
+    plan.paras["d14"].autonum = "1. "              # 自動番号の付いた見出しとみなす
+    pages = ["本研究は架空理論（Fictional Theory, 以下，FT）に基づく（試験，2020；見本，2021）。\n"
+             "１．（1）方法の概要\n"]
+    pc = compare(plan, pages)
+    assert pc.number_edits == {("auto", "d14"): "１． "}   # 番号の後ろの空白はそのまま
+    assert compare(plan, pages, apply=False).number_edits == {}

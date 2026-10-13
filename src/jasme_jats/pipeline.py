@@ -25,7 +25,7 @@ from typing import Optional
 from . import __version__
 from .ai_assist import (AIOutcome, apply_ops, build_request, call_provider, float_placements, image_blocks,
                         manual_prompt, parse_response, retarget_ops, role_overrides, split_ops, target_keys)
-from .builder import build, finalize, serialize
+from .builder import build, finalize, serialize, word_note_marks
 from .config import ArticleMeta, JournalConfig
 from .docx_reader import read_docx
 from .fidelity import final_check, verify
@@ -233,9 +233,11 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     # ---------------------------------------------------------------- 出版版 PDF との照合
     pdf_check = None
     if opts.pdf_path:
-        pdf_check = check_pdf(plan, opts.pdf_path, apply=opts.pdf_width)
-        if pdf_check.edits:
+        marks = {wid: m for wid, (_, m) in word_note_marks(plan, journal).items()}
+        pdf_check = check_pdf(plan, opts.pdf_path, apply=opts.pdf_width, fn_marks=marks)
+        if pdf_check.edits or pdf_check.number_edits:
             plan.pdf_edits = pdf_check.edits
+            plan.pdf_numbers = pdf_check.number_edits
             root, info = build(plan, meta, journal, split)
 
     # ---------------------------------------------------------------- 検証（最終段階）

@@ -111,6 +111,8 @@ def pdf_summary(r) -> str:
         if pc.apply:
             parts.append(f"全角・半角を PDF に合わせた {pc.width_count} 文字"
                          + (f"（前後の空白 {pc.drop_count} 文字を削除）" if pc.drop_count else ""))
+            if pc.number_edits:
+                parts.append(f"Word が付けた番号を PDF に合わせた {len(pc.number_edits)} 件")
         else:
             parts.append(f"全角・半角の違い {pc.width_count} 文字（設定により PDF に合わせていない）")
     if pc.unmatched:
@@ -124,10 +126,10 @@ def pdf_edit_rows(r) -> list:
     pc = r.pdf_check
     rows = []
     for src, p in r.plan.paras.items():
-        subs = pc.width.get(src)
-        if not subs:
-            continue
+        subs = pc.width.get(src, {})
         drops = pc.drops.get(src, set()) if pc.apply else set()
+        if not subs and not drops:
+            continue
         text = p.plain()
         clusters = []
         for q in sorted(set(subs) | drops):
@@ -395,6 +397,7 @@ def render(r) -> str:
     L.append("")
     L.append("Word の自動段落番号や脚注番号は docx の文字ではなく Word が表示時に作るものです。表示どおりの文字を XML に出力しました"
              "（Word の脚注機能で書かれた注の番号だけは、Word の表示「1」ではなく本誌の形式（設定 fn_mark）にしています）。"
+             "出版版 PDF があれば、自動番号・脚注番号の全角・半角を PDF に合わせています（13 章）。"
              "docx に注の見出しがない場合（Word の脚注機能で書かれた注など）は、見出し（設定 fn_title）を補いました。")
     L.append("")
     if fid.generated:
@@ -513,6 +516,21 @@ def render(r) -> str:
                      "文字の不変性チェックでは、これらを docx の元の文字として照合し、全角・半角の違いと空白だけであることを確かめています。")
         elif pc.width_count:
             L.append("docx と PDF の違いが英数字・記号の全角・半角だけの文字です。設定により、XML では docx の文字のままにしています。")
+        if pc.numbers:
+            L.append("")
+            L.append("Word が付ける番号（自動段落番号・脚注番号。docx の文字ではなく、ツールが作って出力する文字）も、"
+                     "全角・半角だけの違いを PDF に合わせました" if pc.apply else
+                     "Word が付ける番号（自動段落番号・脚注番号）の全角・半角の違いです（設定により PDF に合わせていません）")
+            L.append("")
+            kinds = {"auto": "自動段落番号", "fnref": "本文の脚注番号", "fnlist": "注の一覧の脚注番号"}
+            rows = []
+            for (kind, ident), chg in pc.numbers.items():
+                old = pc.original[(kind, ident)]
+                new = "".join(chg.get(i, c) for i, c in enumerate(old))
+                where = plan.locations.get(ident, ident) if kind == "auto" else f"Word の脚注 {ident}"
+                rows.append((kinds[kind], where, f"「{esc(old.strip())}」→「{esc(new.strip())}」"))
+            L.append(table(["番号", "場所", "変更前 → 変更後"], rows))
+            L.append("")
         if pc.width_count:
             cnt = Counter(f"{plan.paras[s].plain()[q]}→{c}" for s, m in pc.width.items() for q, c in m.items())
             L.append("")

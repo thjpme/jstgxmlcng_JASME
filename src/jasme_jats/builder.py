@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import re
+import unicodedata
 from dataclasses import dataclass, field
 
 from lxml import etree
@@ -67,18 +68,18 @@ class Builder:
         self.article_id = meta.article_id(journal)
         self._img_n = 0
         self._named = set()
+        marks = word_note_marks(plan, journal)
         fn_numbers = {}
-        k = 0
         for fn in plan.fns:
             if fn.word_note:
-                k += 1
-                fn.number = fn.number or k
-                fn_numbers[fn.word_id] = (fn.fid, self.fn_mark(fn.number))
+                fn.number = fn.number or marks[fn.word_id][0]
+                fn_numbers[fn.word_id] = (fn.fid, plan.pdf_numbers.get(("fnref", fn.word_id), marks[fn.word_id][1]))
+        self.marks = marks
         self.em = E.Emitter(self.name_image, fn_numbers, plan.moved_images, plan.pdf_edits)
 
-    def fn_mark(self, n) -> str:
-        """Word の脚注機能で書かれた注の番号の表示（設定 fn_mark。本誌は「1)」）。"""
-        return self.j.fn_mark.format(n=n)
+    def autonum(self, p) -> str:
+        """段落の Word の自動番号（出版版 PDF があれば、全角・半角を PDF に合わせたもの）。"""
+        return self.plan.pdf_numbers.get(("auto", p.src), p.autonum)
 
     # ------------------------------------------------------------------ 画像
     def name_image(self, img) -> str:
@@ -392,7 +393,7 @@ class Builder:
         else:
             if h.autonum:
                 lab = _sub(s, "label")
-                self.em.gen(lab, h.autonum, "autonum")
+                self.em.gen(lab, self.autonum(h), "autonum")
             self.labelled(s, h, RE_HEAD_SPLIT, E.SECTITLE, title_tag="title", allow_label=not h.autonum)
         self.nodes(s, node.children)
 
@@ -437,7 +438,7 @@ class Builder:
             li = _sub(lst, "list-item")
             if p.autonum:
                 lab = _sub(li, "label")
-                self.em.gen(lab, p.autonum, "autonum")
+                self.em.gen(lab, self.autonum(p), "autonum")
             pe = _sub(li, "p")
             self.em.span(pe, p, E.BODY)
 
@@ -679,7 +680,7 @@ class Builder:
             mc.set("publication-type", typ)
         if r.para.autonum:
             lab = etree.Element("label")
-            self.em.gen(lab, r.para.autonum, "autonum")
+            self.em.gen(lab, self.autonum(r.para), "autonum")
             ref.insert(0, lab)
         self.em.span(mc, r.para, E.REF)
         self.check_length(mc, 4000, f"引用文献 {r.rid}")
@@ -693,16 +694,33 @@ class Builder:
         el = _sub(fg, "fn", id=fn.fid)
         mark = ""
         if fn.word_note:
-            mark = self.fn_mark(fn.number)
+            mark = self.plan.pdf_numbers.get(("fnlist", fn.word_id), self.marks[fn.word_id][1])
         elif fn.paras and fn.paras[0].autonum:
-            mark = fn.paras[0].autonum.strip()
+            mark = self.autonum(fn.paras[0]).strip()
         for i, p in enumerate(fn.paras):
             pe = _sub(el, "p")
             if i == 0 and mark:
-                # 番号の後の空白は、docx の文字が空白で始まっていなければ補う（Word の脚注は記号の後に空白があることが多い）
-                sep = "" if _starts_with_space(p) else " "
+                # 番号の後の空白は、docx の文字が空白で始まっていなければ補う（Word の脚注は記号の後に空白があることが多い）。
+                # 番号が全角の文字で終わる（出版版 PDF に合わせた「１）」など）ときは補わない
+                sep = "" if _starts_with_space(p) or unicodedata.east_asian_width(mark[-1]) in ("F", "W") else " "
                 self.em.gen(pe, mark + sep, "footnote-mark" if fn.word_note else "autonum")
             self.em.span(pe, p, E.BACKP)
+
+
+def word_note_marks(plan, journal) -> dict:
+    """Word の脚注機能で書かれた注の番号: Word の脚注 ID -> (番号, 出力する文字列（設定 fn_mark。本誌は「1)」）)。
+
+    本文の脚注番号と注の一覧の先頭の両方に使う。出版版 PDF があれば、全角・半角を PDF に合わせたもの（plan.pdf_numbers）で
+    置き換えて出力する。
+    """
+    out = {}
+    k = 0
+    for fn in plan.fns:
+        if fn.word_note:
+            k += 1
+            n = fn.number or k
+            out[fn.word_id] = (n, journal.fn_mark.format(n=n))
+    return out
 
 
 def _starts_with_space(p) -> bool:
