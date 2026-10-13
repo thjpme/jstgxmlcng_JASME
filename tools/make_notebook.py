@@ -367,7 +367,7 @@ if AI == "none":
 #@title 5. 変換を実行
 """ + guard(1, 2, 3, 4) + """import shutil
 from IPython.display import HTML, Markdown, display
-from jasme_jats.colab import ai_required_box, error_box, no_ai_box, prompt_box, unplaced_box
+from jasme_jats.colab import ai_required_box, error_box, missing_images_box, no_ai_box, prompt_box, unplaced_box
 from jasme_jats.config import ArticleMeta, JournalConfig
 from jasme_jats.pipeline import AIRequiredError, Options, convert
 
@@ -424,6 +424,7 @@ if res.ai.error:
     display(HTML(error_box("AI による補完ができませんでした", res.ai.error)))
 if AI == "api":
     display(HTML(unplaced_box(res.plan)))
+display(HTML(missing_images_box(res)))
 display(Markdown(res.report_path.read_text(encoding="utf-8")))
 if manual_prompt:
     display(HTML(prompt_box(manual_prompt, compact=True)))
@@ -460,6 +461,7 @@ print("文字の不変性チェック:", fid.summary(), "/ 最終出力の再チ
 if res.ai.error:
     display(HTML(error_box("貼り付けた回答を読み込めませんでした（AI による補完は反映されていません）", res.ai.error)))
 display(HTML(unplaced_box(res.plan)))
+display(HTML(missing_images_box(res)))
 display(Markdown(res.report_path.read_text(encoding="utf-8")))
 """, form=False),
     code("""
@@ -469,6 +471,7 @@ display(Markdown(res.report_path.read_text(encoding="utf-8")))
 files.download(archive)
 CONVERTED = {**globals().get("CONVERTED", {}), Path(archive).name: docx_path.name}
 print("ダウンロードしました:", Path(archive).name, "（" + docx_path.name + "）")
+display(HTML(missing_images_box(res)))
 print("続けて他の論文を変換するときは、下の手順 8 の ▶ を押してください。")
 """ + mark(7)),
     code("""

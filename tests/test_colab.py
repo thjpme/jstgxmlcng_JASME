@@ -42,6 +42,17 @@ def test_next_article_box_is_red_warning():
     assert "前の論文の値が残っています" in next_article_box()
 
 
+def test_missing_images_box(journal, meta, tmp_path):
+    from conftest import FULL, TEMPLATE
+    from jasme_jats.colab import missing_images_box
+    from jasme_jats.pipeline import Options, convert
+    res = convert(TEMPLATE, meta, journal, Options(out_dir=tmp_path / "t", convert_metafiles=False))
+    html = missing_images_box(res)
+    assert "#dc2626" in html and "画像ファイルを用意できなかった図が 1 件あります" in html
+    assert "31_1_01.png: 図1\u3000三角形ABC" in html and "jasme_31_1.zip の中の jasme/31/1/31_1/Graphics/" in html
+    assert missing_images_box(convert(FULL, meta, journal, Options(out_dir=tmp_path / "f", convert_metafiles=False))) == ""
+
+
 def test_ai_required_and_unplaced_boxes():
     from types import SimpleNamespace
     from jasme_jats.colab import ai_required_box, unplaced_box
