@@ -55,6 +55,8 @@ class Atom:
     fn_kind: str = ""
     fn_id: str = ""
     link: Optional[LinkSpec] = None
+    edit: Optional[tuple] = None        # XML に書き出すときだけ使う: ("w", 元の文字) 全角・半角を PDF に合わせた文字 /
+                                        # ("d",) 出版版 PDF にない空白（pdfmatch.py。段落のアトムには付けない）
 
     def plain(self) -> str:
         if self.kind == "text":

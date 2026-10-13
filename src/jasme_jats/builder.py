@@ -17,7 +17,7 @@ from .model import Exclusion, Para
 from .ooxml import is_ws
 from .structure import (ArticlePlan, BackSec, FigNode, FnNode, FormulaNode, ListNode, PNode, QuoteNode,
                         RefNode, Sec, TableNode, _para_text)
-from .tracking import AI, GEN, IMPLICIT, JX_NS, ORDER, SPAN
+from .tracking import AI, GEN, IMPLICIT, JX_NS, ORDER, PDFDROP, SPAN, WIDTH
 
 MML_NS = "http://www.w3.org/1998/Math/MathML"
 XLINK = "http://www.w3.org/1999/xlink"
@@ -66,6 +66,7 @@ class Builder:
         self.info = BuildInfo()
         self.article_id = meta.article_id(journal)
         self._img_n = 0
+        self._named = set()
         fn_numbers = {}
         k = 0
         for fn in plan.fns:
@@ -73,7 +74,7 @@ class Builder:
                 k += 1
                 fn.number = fn.number or k
                 fn_numbers[fn.word_id] = (fn.fid, self.fn_mark(fn.number))
-        self.em = E.Emitter(self.name_image, fn_numbers, plan.moved_images)
+        self.em = E.Emitter(self.name_image, fn_numbers, plan.moved_images, plan.pdf_edits)
 
     def fn_mark(self, n) -> str:
         """Word の脚注機能で書かれた注の番号の表示（設定 fn_mark。本誌は「1)」）。"""
@@ -81,13 +82,18 @@ class Builder:
 
     # ------------------------------------------------------------------ 画像
     def name_image(self, img) -> str:
+        if id(img) in self._named:
+            return img.export_name
+        # 同じ plan で組み立て直す（出版版 PDF に合わせる、DTD に合わない数式を取り消す）ときは、前の組み立てで付けた名前を使う。
+        # 名前の有無にかかわらず、この組み立てで出力する画像として info.images に加える
+        self._img_n += 1
         if not img.export_name:
-            self._img_n += 1
             ext = (img.target.rsplit(".", 1)[-1].lower() if "." in img.target else "png")
             ext = {"jpeg": "jpg", "jpg": "jpg", "png": "png", "gif": "gif"}.get(ext, "png")
             base = self.j.image_name_pattern.format(article_id=self.article_id, n=self._img_n)
             img.export_name = f"{base}.{ext}"
-            self.info.images.append(img)
+        self._named.add(id(img))
+        self.info.images.append(img)
         return img.export_name
 
     # ------------------------------------------------------------------ 全体
@@ -713,8 +719,8 @@ def finalize(root):
     """追跡用の目印をすべて取り除いた写しを返す（文字列は変わらない）。"""
     import copy
     out = copy.deepcopy(root)
-    etree.strip_elements(out, f"{{{JX_NS}}}drop", with_tail=False)
-    etree.strip_tags(out, SPAN, GEN, AI)
+    etree.strip_elements(out, f"{{{JX_NS}}}drop", PDFDROP, with_tail=False)
+    etree.strip_tags(out, SPAN, GEN, AI, WIDTH)
     for el in out.iter():
         if not isinstance(el.tag, str):
             continue

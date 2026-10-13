@@ -11,7 +11,9 @@ EDGE = FIXTURES / "sample_edge.docx"
 TEMPLATE = FIXTURES / "JASME_template_20261009.docx"
 FLOAT = FIXTURES / "sample_float.docx"   # 位置を決めるのに AI 補完が必要（ALL_DOCS には入れない）
 NOTES = FIXTURES / "sample_notes.docx"
-ALL_DOCS = [FULL, EDGE, TEMPLATE, NOTES]
+PDFCHECK = FIXTURES / "sample_pdfcheck.docx"
+PDFCHECK_PDF = FIXTURES / "sample_pdfcheck.pdf"   # 出版社が組版で直した想定の PDF（make_fixtures.py が LibreOffice で作る）
+ALL_DOCS = [FULL, EDGE, TEMPLATE, NOTES, PDFCHECK]
 
 
 @pytest.fixture(scope="session")

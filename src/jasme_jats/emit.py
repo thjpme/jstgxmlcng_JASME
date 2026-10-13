@@ -12,7 +12,7 @@ from lxml import etree
 
 from .model import LinkSpec, Para
 from .omml import OmmlConverter
-from .tracking import GEN, JX, SPAN
+from .tracking import GEN, JX, PDFDROP, SPAN, WIDTH
 
 XLINK = "http://www.w3.org/1999/xlink"
 DROP = JX + "drop"
@@ -53,16 +53,20 @@ def xl(name):
 
 
 class Emitter:
-    def __init__(self, image_namer, fn_numbers=None, skip_images=()):
+    def __init__(self, image_namer, fn_numbers=None, skip_images=(), edits=None):
         self.image_namer = image_namer          # ImageRef -> ファイル名
         self.fn_numbers = fn_numbers or {}      # Word 脚注 id -> (fid, 表示する番号の文字列。本誌は「1)」)
         self.skip_images = set(skip_images)     # 図に移したため段落の中では出力しない画像の ID
+        self.edits = edits or {}                # 段落 ID -> (全角・半角を PDF に合わせる {位置: 文字}, 落とす空白 {位置})
         self.math_warnings = []
 
     # ------------------------------------------------------------------ 範囲の切り出し
     @staticmethod
-    def slice_atoms(para: Para, start: int, end: int):
-        """para.plain() 上の [start, end) にあたるアトム（文字は必要に応じて切った写し）を返す。"""
+    def slice_atoms(para: Para, start: int, end: int, edits=None):
+        """para.plain() 上の [start, end) にあたるアトム（文字は必要に応じて切った写し）を返す。
+
+        edits（出版版 PDF に合わせる変更）があれば、その位置の文字を edit 付きの 1 文字のアトムに分ける。
+        """
         out = []
         pos = 0
         for a in para.atoms:
@@ -74,7 +78,9 @@ class Emitter:
                     continue
             if a.kind == "text":
                 s, e = max(start, a0) - a0, min(end, a1) - a0
-                if s == 0 and e == n:
+                if edits and any(a0 + k in edits[0] or a0 + k in edits[1] for k in range(s, e)):
+                    out.extend(_split_edits(a, a0, s, e, edits))
+                elif s == 0 and e == n:
                     out.append(a)
                 elif e > s:
                     b = _copy_atom(a)
@@ -92,7 +98,7 @@ class Emitter:
         sp = etree.SubElement(parent, SPAN)
         sp.set("src", para.src)
         sp.set("seq", str(seq))
-        atoms = self.slice_atoms(para, start, end)
+        atoms = self.slice_atoms(para, start, end, self.edits.get(para.src))
         if skip_gen:
             atoms = [a for a in atoms if a.kind != "gen"]
         self.write_atoms(sp, atoms, ctx)
@@ -127,8 +133,7 @@ class Emitter:
             target, pcdata = self.link_element(parent, key, ctx, items)
             if pcdata:
                 # PCDATA のみの要素（uri, pub-id, year）: 書式を付けずに文字だけ入れる
-                txt = "".join(a.text for a in items if a.kind == "text")
-                _append_text(target, txt)
+                _append_atoms(target, [a for a in items if a.kind == "text"])
                 for a in items:
                     if a.kind != "text":
                         self.write_object(parent, a, ctx)
@@ -196,7 +201,7 @@ class Emitter:
             for f in FMT_ORDER:
                 if f in fmt:
                     target = etree.SubElement(target, f)
-            _append_text(target, "".join(a.text for a in run))
+            _append_atoms(target, run)
             run.clear()
 
         for a in items:
@@ -255,6 +260,51 @@ def _copy_atom(a):
     from copy import copy
     b = copy(a)
     return b
+
+
+def _split_edits(a, a0, s, e, edits):
+    """文字のアトムの [s, e) を、出版版 PDF に合わせる文字・落とす空白と、そのほかの文字に分ける（写しを返す）。"""
+    subs, drops = edits
+    out = []
+    buf_start = s
+
+    def piece(k0, k1, text=None, edit=None):
+        b = _copy_atom(a)
+        b.text = a.text[k0:k1] if text is None else text
+        b.edit = edit
+        out.append(b)
+
+    for k in range(s, e):
+        pos = a0 + k
+        if pos in subs or pos in drops:
+            if k > buf_start:
+                piece(buf_start, k)
+            if pos in subs:
+                piece(k, k + 1, subs[pos], ("w", a.text[k]))
+            else:
+                piece(k, k + 1, edit=("d",))
+            buf_start = k + 1
+    if e > buf_start:
+        piece(buf_start, e)
+    return out
+
+
+def _append_atoms(el, atoms):
+    """文字のアトムを書き出す。出版版 PDF に合わせた文字は <jx:w o="元の文字">、落とす空白は <jx:d> に入れる。"""
+    buf = ""
+    for a in atoms:
+        if a.edit is None:
+            buf += a.text
+            continue
+        _append_text(el, buf)
+        buf = ""
+        if a.edit[0] == "w":
+            m = etree.SubElement(el, WIDTH)
+            m.set("o", a.edit[1])
+        else:
+            m = etree.SubElement(el, PDFDROP)
+        m.text = a.text
+    _append_text(el, buf)
 
 
 def _append_text(el, text):

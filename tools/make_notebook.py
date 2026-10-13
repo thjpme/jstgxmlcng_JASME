@@ -207,6 +207,8 @@ if globals().get("LO_PROC") is not None and LO_PROC.poll() is None:
 #@markdown 実行すると、まず **docx 用**の「ファイル選択」ボタンが出ます。docx を選ぶと、続けて **PDF 用**の「ファイル選択」ボタンが出ます。
 #@markdown **PDF もアップロードする（UPLOAD_PDF）**: J-STAGE に登載する PDF がまだなければ、チェックを外してから実行してください（PDF 用のボタンは出ません。後で jasme_巻_開始ページ.zip に入れることもできます）。
 UPLOAD_PDF = True  #@param {type:"boolean"}
+#@markdown **全角・半角を PDF に合わせる（MATCH_PDF_WIDTH）**: PDF をアップロードすると、変換の後に docx の文字と PDF の文字を照合し、違う箇所をレポートの 13 章に出します。チェックを入れておくと、英数字・記号の全角・半角だけの違い（「(」と「（」など）は PDF に合わせます（その前後の空白で PDF にないものは消します）。かな・漢字や、文字そのものが違う箇所（「資料」と「付録」など）は変えません。
+MATCH_PDF_WIDTH = True  #@param {type:"boolean"}
 """ + guard(1) + """
 from pathlib import Path
 from google.colab import files
@@ -369,7 +371,9 @@ if AI == "none":
 #@title 5. 変換を実行
 """ + guard(1, 2, 3, 4) + """import shutil
 from IPython.display import HTML, Markdown, display
-from jasme_jats.colab import ai_required_box, error_box, missing_images_box, no_ai_box, prompt_box, unplaced_box
+from jasme_jats.colab import (ai_required_box, error_box, missing_images_box, no_ai_box, pdf_diff_box, prompt_box,
+                               unplaced_box)
+from jasme_jats.report import pdf_summary
 from jasme_jats.config import ArticleMeta, JournalConfig
 from jasme_jats.pipeline import AIRequiredError, Options, add_images, convert
 
@@ -400,7 +404,8 @@ journal = JournalConfig.load()
 meta = ArticleMeta.from_dict(meta_input)
 try:
     res = convert(docx_path, meta, journal, Options(out_dir=OUT, ai_mode=AI, ai_provider=PROVIDER, ai_model=API_MODEL,
-                                                  ai_api_key=api_key, pdf_path=pdf_path, split_labels=SPLIT_LABELS))
+                                                  ai_api_key=api_key, pdf_path=pdf_path, pdf_width=MATCH_PDF_WIDTH,
+                                                  split_labels=SPLIT_LABELS))
 except AIRequiredError as e:
     display(HTML(ai_required_box(str(e))))
     raise SystemExit("手順 4 で「API で自動実行」か「手動（チャットに貼り付け）」を選び、手順 4 からやり直してください。")
@@ -411,6 +416,7 @@ print("DTD 検証:", "合格" if res.dtd_valid else "不合格")
 print("J-STAGE のアップロード時チェック:", "問題なし" if not res.jstage_issues else f"要対応 {len(res.jstage_issues)} 件")
 for mid, msg in res.jstage_issues:
     print("  ", mid, msg)
+print("出版版 PDF との照合:", pdf_summary(res))
 if globals().get("USER_IMAGES"):
     _again = add_images(res, USER_IMAGES, skip_unneeded=True)
     if _again:
@@ -431,6 +437,7 @@ if res.ai.error:
 if AI == "api":
     display(HTML(unplaced_box(res.plan)))
 display(HTML(missing_images_box(res)))
+display(HTML(pdf_diff_box(res)))
 display(Markdown(res.report_path.read_text(encoding="utf-8")))
 if manual_prompt:
     display(HTML(prompt_box(manual_prompt, compact=True)))
@@ -458,7 +465,7 @@ if globals().get("PREVIOUS") and AI_RESPONSE.strip() == PREVIOUS.get("ai_respons
     raise SystemExit(f"貼り付けられているのは、前の論文（{PREVIOUS['docx']}）の AI の回答です。今回の論文の依頼文（手順 5 の枠）を "
                      "AI に渡し、返ってきた回答に貼り替えてから ▶ を押してください。")
 res = convert(docx_path, meta, journal, Options(out_dir=OUT, ai_mode="manual", ai_response=AI_RESPONSE,
-                                              pdf_path=pdf_path, split_labels=SPLIT_LABELS))
+                                              pdf_path=pdf_path, pdf_width=MATCH_PDF_WIDTH, split_labels=SPLIT_LABELS))
 LAST_AI_RESPONSE = AI_RESPONSE.strip()
 if globals().get("USER_IMAGES"):
     _again = add_images(res, USER_IMAGES, skip_unneeded=True)
@@ -467,11 +474,13 @@ if globals().get("USER_IMAGES"):
 fid = res.fidelity
 print("文字の不変性チェック:", fid.summary(), "/ 最終出力の再チェック:", "合格" if fid.final_ok else "不合格",
       "/ DTD 検証:", "合格" if res.dtd_valid else "不合格",
-      "/ J-STAGE のアップロード時チェック:", "問題なし" if not res.jstage_issues else f"要対応 {len(res.jstage_issues)} 件")
+      "/ J-STAGE のアップロード時チェック:", "問題なし" if not res.jstage_issues else f"要対応 {len(res.jstage_issues)} 件",
+      "/ 出版版 PDF との照合:", pdf_summary(res))
 if res.ai.error:
     display(HTML(error_box("貼り付けた回答を読み込めませんでした（AI による補完は反映されていません）", res.ai.error)))
 display(HTML(unplaced_box(res.plan)))
 display(HTML(missing_images_box(res)))
+display(HTML(pdf_diff_box(res)))
 display(Markdown(res.report_path.read_text(encoding="utf-8")))
 """, form=False),
     code("""

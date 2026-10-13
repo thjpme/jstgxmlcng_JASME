@@ -9,6 +9,9 @@ tests/fixtures/sample_float.docx : 位置を機械的に決められない浮動
                                    AI 補完（tests/data/ai_response_sample_float.json）が必要
 tests/fixtures/sample_notes.docx : テンプレートの規定と違う書き方の注（本文の大きさの「（注1）」、引用文献の後ろの注の節、
                                    番号の書き方が想定外の注）
+tests/fixtures/sample_pdfcheck.docx / .pdf : 出版版 PDF との照合。PDF は、出版社が組版で直した想定の文字（全角のかっこ・
+                                   句読点、「資料」→「付録」など）の docx を LibreOffice で PDF にしたもの（LibreOffice が
+                                   なければ PDF は作り直さない）
 
 内容は架空のもので、実在の論文ではない。
 """
@@ -586,12 +589,61 @@ def make_notes(path):
     b.save(path, body)
 
 
+# ----------------------------------------------------------------------------- sample_pdfcheck
+def make_pdfcheck(path, published=False):
+    """出版版 PDF との照合の検証用。published=True なら、出版社が組版で直した想定の文字にする（PDF を作るため）。"""
+    def t(docx_text, pub_text=None):
+        return (pub_text if pub_text is not None else docx_text) if published else docx_text
+
+    b = Builder()
+    link = b.add_hyperlink("https://example.com/a")
+    body = []
+    body += front_ja(b, "出版版 PDF との照合の検証用文書", "―全角と半角の違い―", [("架空大学", "試験\u3000四郎")])
+    body.append(para(S["sec1"], "１．はじめに"))
+    body.append(para(S["body"], t("本研究は架空理論 (Fictional Theory, 以下, FT) に基づく (試験, 2020; 見本, 2021)。",
+                                  "本研究は架空理論（Fictional Theory, 以下，FT）に基づく（試験，2020；見本，2021）。")))
+    body.append(para(S["body"], t("詳しくは資料の学習指導案を参照されたい。授業は2回行った。",
+                                  "詳しくは付録の学習指導案を参照されたい。授業は２回行った。")))
+    body.append(para(S["sec2"], t("(1) 方法の概要", "（1）方法の概要")))
+    body.append(para(S["body"], "この段落は出版版と同じで，架空の資料を ",
+                     f'<w:hyperlink r:id="{link}">{run("https://example.com/a")}</w:hyperlink>', " で公開している。"))
+    body.append(para(S["ref_head"], "引用および参考文献"))
+    body.append(para(S["ref"], t("試験四郎 (2020). 「架空の研究」. 『架空誌』, 第1巻, pp.1-10.",
+                                 "試験四郎（2020）．「架空の研究」．『架空誌』，第1巻，pp.1-10．")))
+    body.append(para(S["ref"], t("見本花子 (2021). 「見本の研究」. 『見本誌』, 第2巻, pp.11-20.",
+                                 "見本花子（2021）．「見本の研究」．『見本誌』，第2巻，pp.11-20．")))
+    body += front_en(b, "Checking against the published PDF", "Width of characters",
+                     [("Shiro SHIKEN", "Fictional University")], ["This abstract is the same in the published version."])
+    body += tail(b)
+    b.save(path, body)
+
+
+def make_pdfcheck_pdf(pdf_path):
+    """出版社が直した想定の docx を LibreOffice で PDF にする。LibreOffice がなければ何もしない（False）。"""
+    import shutil
+    import subprocess
+    import tempfile
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice:
+        return False
+    with tempfile.TemporaryDirectory() as td:
+        src = Path(td) / "published.docx"
+        make_pdfcheck(src, published=True)
+        subprocess.run([soffice, "--headless", "--convert-to", "pdf", "--outdir", td, str(src)],
+                       check=True, capture_output=True, timeout=180)
+        shutil.copyfile(Path(td) / "published.pdf", pdf_path)
+    return True
+
+
 if __name__ == "__main__":
     out = HERE / "fixtures"
     make_full(out / "sample_full.docx")
     make_edge(out / "sample_edge.docx")
     make_float(out / "sample_float.docx")
     make_notes(out / "sample_notes.docx")
+    make_pdfcheck(out / "sample_pdfcheck.docx")
+    pdf_done = make_pdfcheck_pdf(out / "sample_pdfcheck.pdf")
     print("written:", out / "sample_full.docx", out / "sample_edge.docx", out / "sample_float.docx",
-          out / "sample_notes.docx")
+          out / "sample_notes.docx", out / "sample_pdfcheck.docx",
+          out / "sample_pdfcheck.pdf" if pdf_done else "（LibreOffice がないので sample_pdfcheck.pdf は作り直していない）")
     sys.exit(0)

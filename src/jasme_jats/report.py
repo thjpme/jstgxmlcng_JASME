@@ -1,7 +1,8 @@
 """変換レポート（Markdown）。
 
 冒頭に結果の要約、続いて AI による補完（不確実性のある箇所）、機械処理で解決できなかった箇所、
-機械的な推定、出力しなかった文字の全件、落とした空白の全件、生成文字、画像、書誌情報、DTD 検証と J-STAGE の登載時チェックの順に並べる。
+機械的な推定、出力しなかった文字の全件、落とした空白の全件、生成文字、画像、書誌情報、DTD 検証と J-STAGE の登載時チェック、
+出版版 PDF との照合、登載前のチェックリストの順に並べる。
 """
 from __future__ import annotations
 
@@ -74,7 +75,7 @@ def float_notes(plan):
 def images_to_prepare(r) -> list:
     """利用者が用意する必要のある画像（画像ファイルがない Word の図形、変換できなかった EMF など）。
 
-    戻り値: [(出力ファイル名, 図のキャプション, 理由)]。レポートの冒頭・13 章、Colab の枠、コマンドラインの表示で使う。
+    戻り値: [(出力ファイル名, 図のキャプション, 理由)]。レポートの冒頭・14 章、Colab の枠、コマンドラインの表示で使う。
     """
     caps = {}
     for f in r.plan.figures:
@@ -96,6 +97,53 @@ def images_to_prepare(r) -> list:
 def graphics_dir(r) -> str:
     """ZIP の中の Graphics フォルダ（例: jasme/25/1/25_77/Graphics/）。"""
     return (article_dir(Path(""), r.journal, r.meta) / "Graphics").as_posix() + "/"
+
+
+def pdf_summary(r) -> str:
+    """出版版 PDF との照合の要約（レポートの 1 章、コマンドライン・Colab の表示）。"""
+    pc = r.pdf_check
+    if pc is None:
+        return "PDF なし（照合していない）"
+    if not pc.ok:
+        return f"照合できなかった（{pc.message}）"
+    parts = [f"文字の違い {len(pc.diffs)} 件" + ("（要確認）" if pc.diffs else "")]
+    if pc.width_count:
+        if pc.apply:
+            parts.append(f"全角・半角を PDF に合わせた {pc.width_count} 文字"
+                         + (f"（前後の空白 {pc.drop_count} 文字を削除）" if pc.drop_count else ""))
+        else:
+            parts.append(f"全角・半角の違い {pc.width_count} 文字（設定により PDF に合わせていない）")
+    if pc.unmatched:
+        parts.append(f"PDF に見つからない段落 {len(pc.unmatched)} 件"
+                     + ("（半分以上の段落が見つからない。別の記事の PDF ではないか確認）" if len(pc.unmatched) * 2 > pc.checked else ""))
+    return " / ".join(parts) + "（13 章）"
+
+
+def pdf_edit_rows(r) -> list:
+    """PDF に合わせて変えた文字（全件）を段落ごとに: [(段落, 場所, 件数, 「変更前」→「変更後」…)]。"""
+    pc = r.pdf_check
+    rows = []
+    for src, p in r.plan.paras.items():
+        subs = pc.width.get(src)
+        if not subs:
+            continue
+        drops = pc.drops.get(src, set()) if pc.apply else set()
+        text = p.plain()
+        clusters = []
+        for q in sorted(set(subs) | drops):
+            if clusters and q - clusters[-1][1] <= 3:
+                clusters[-1][1] = q
+            else:
+                clusters.append([q, q])
+        snippets = []
+        for a, b in clusters:
+            s0, s1 = max(0, a - 4), min(len(text), b + 5)
+            before = text[s0:s1]
+            after = "".join(subs.get(k, text[k]) for k in range(s0, s1) if k not in drops)
+            snippets.append(f"「{esc(before.replace(chr(0xFFFC), '〓'))}」→「{esc(after.replace(chr(0xFFFC), '〓'))}」")
+        n = f"{len(subs)}" + (f"（空白 {len(drops)}）" if drops else "")
+        rows.append((src, r.plan.locations.get(src, ""), n, "、".join(snippets)))
+    return rows
 
 
 def word_note_refs(plan) -> int:
@@ -158,6 +206,9 @@ def render(r) -> str:
     L.append("")
     fid_line = (f"{fid.summary()}（docx の段落 {fid.units} 件: XML に出力 {fid.mapped} 件、出力しなかった {len(fid.excluded)} 件"
                 f"［6 章に全文］）")
+    if fid.pdf_width or fid.pdf_drops:
+        fid_line += (f"。出版版 PDF に合わせた全角・半角 {len(fid.pdf_width)} 文字と、落とした空白 {len(fid.pdf_drops)} 文字は、"
+                     "docx の元の文字として照合し、全角・半角の違いと空白だけであることを確かめた（13 章）")
     final_line = "合格" if fid.final_ok else ("不合格: " + fid.final_detail if fid.final_ok is False else "未実施")
     c = r.link_counts
     wn = word_note_refs(plan)
@@ -176,6 +227,7 @@ def render(r) -> str:
         ("機械処理で解決できなかった箇所（3 章）", f"{len(r.unresolved_after)} 件"),
         ("画像", f"{len(r.images)} 件（要対応 {sum(1 for i in r.images if i.status in ('failed', 'missing'))} 件、9 章）"),
         ("警告", f"{len(r.warnings)} 件（10 章）"),
+        ("出版版 PDF との照合", pdf_summary(r)),
     ]
     if plan.unplaced_floats:
         rows.insert(7, ("位置を決められなかった図表（3 章）", f"{len(plan.unplaced_floats)} 件（本文の冒頭に仮に配置）"))
@@ -199,6 +251,12 @@ def render(r) -> str:
         L.append(">")
         for name, cap, why in need:
             L.append(f"> - `{name}`: {esc(cap, 40) or '（キャプションなし）'}（{esc(why)}）")
+        L.append("")
+    pc = r.pdf_check
+    if pc is not None and pc.ok and pc.diffs:
+        L.append(f"> **要確認: 出版版 PDF と文字が違う箇所が {len(pc.diffs)} 件あります（13 章）。** 受け取った docx が、"
+                 "著者校正を経た最終版ではない可能性があります。PDF と照らして確認し、PDF が正しければ docx を直して変換し直してください"
+                 "（英数字・記号の全角・半角の違いだけは、" + ("PDF に合わせました）。" if pc.apply else "設定により PDF に合わせていません）。"))
         L.append("")
     if r.output_note:
         L.append(r.output_note)
@@ -422,11 +480,69 @@ def render(r) -> str:
         L.append("該当するエラーはありませんでした（J-STAGE 側でしか判定できない項目は、アップロード時に確認してください）。")
     L.append("")
 
-    # ------------------------------------------------------------------ 13. チェックリスト
-    L.append("## 13. J-STAGE に登載する前に")
+    # ------------------------------------------------------------------ 13. 出版版 PDF との照合
+    L.append("## 13. 出版版 PDF との照合")
+    L.append("")
+    if pc is None:
+        L.append("記事の PDF がないため、照合していません。")
+    elif not pc.ok:
+        L.append(f"照合できませんでした: {esc(pc.message)}")
+    else:
+        L.append("docx の段落の文字を、記事の PDF（著者校正を経た最終版）の文字と段落ごとに照合しました"
+                 f"（照合した段落 {pc.checked} 件。表のセル・別行の数式・資料と、4 文字未満の段落は除く）。"
+                 "XML は docx から作っており、PDF の文字は照合にだけ使っています。")
+        L.append("")
+        L.append("### 13.1 文字の違い（要確認）")
+        L.append("")
+        L.append("PDF と違う箇所です。docx が最終版でない（校正の直しが反映されていない、組版で直された）可能性があります。"
+                 "XML は docx の文字のままです。PDF が正しければ、docx を直して変換し直してください。"
+                 "大文字・小文字の違いや、引用符（' と ’）の違いも載せています。図の中の文字と思われる PDF の文字は除いています。")
+        L.append("")
+        if pc.diffs:
+            L.append(table(["段落", "場所", "docx", "PDF", "docx の前後（［］が違う部分）"],
+                           [(d.src, plan.locations.get(d.src, ""), esc(d.docx, 40), esc(d.pdf, 40), esc(d.context, 60))
+                            for d in pc.diffs]))
+        else:
+            L.append("ありません。")
+        L.append("")
+        L.append("### 13.2 英数字・記号の全角・半角（PDF に合わせた文字の全件）")
+        L.append("")
+        if pc.width_count and pc.apply:
+            L.append("docx と PDF の違いが英数字・記号の全角・半角だけの文字を、PDF に合わせました。その文字のすぐ前後の空白で、"
+                     "PDF にないものは落としました（空白を足すことはしません）。かな・漢字や、文字そのものが違うものは変えていません。"
+                     "文字の不変性チェックでは、これらを docx の元の文字として照合し、全角・半角の違いと空白だけであることを確かめています。")
+        elif pc.width_count:
+            L.append("docx と PDF の違いが英数字・記号の全角・半角だけの文字です。設定により、XML では docx の文字のままにしています。")
+        if pc.width_count:
+            cnt = Counter(f"{plan.paras[s].plain()[q]}→{c}" for s, m in pc.width.items() for q, c in m.items())
+            L.append("")
+            L.append(f"内訳: " + "、".join(f"「{k}」{n} 件" for k, n in cnt.most_common())
+                     + (f"。落とした空白 {pc.drop_count} 文字" if pc.apply and pc.drop_count else ""))
+            L.append("")
+            L.append(table(["段落", "場所", "文字数", "変更前 → 変更後"], pdf_edit_rows(r)))
+        else:
+            L.append("ありません。")
+        L.append("")
+        L.append("### 13.3 PDF の中に見つからなかった段落")
+        L.append("")
+        if pc.unmatched:
+            L.append("PDF の中で対応する箇所を見つけられなかった段落です（PDF にない段落か、大きく書き換えられた段落の可能性があります）。"
+                     "これらの段落は照合していません。")
+            L.append("")
+            L.append(table(["段落", "場所", "文字"], [(s, plan.locations.get(s, ""), esc(plan.paras[s].plain(), 50))
+                                                    for s in pc.unmatched]))
+        else:
+            L.append("ありません。")
+    L.append("")
+
+    # ------------------------------------------------------------------ 14. チェックリスト
+    L.append("## 14. J-STAGE に登載する前に")
     L.append("")
     L.append(f"- [{'x' if r.has_pdf else ' '}] PDF（{m.article_id(j)}.pdf）を記事フォルダに入れる（J-STAGE では PDF が必須）")
     L.append("- [ ] 2 章（AI による補完）と 3 章（未解決）を PDF と照らして確認する")
+    if pc is not None and pc.ok and pc.diffs:
+        L.append(f"- [ ] **13 章の、出版版 PDF と文字が違う箇所（{len(pc.diffs)} 件）**を確認する（docx が最終版でなければ、"
+                 "docx を直して変換し直す）")
     if r.forced_floats:
         L.append("- [ ] 本文の冒頭に仮に置いた図表（3 章の「図表の位置」）を、XML の中で手作業で正しい位置に移す")
     if need:

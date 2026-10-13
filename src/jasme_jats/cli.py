@@ -15,7 +15,7 @@ from pathlib import Path
 from .ai_assist import API_KEY_NAMES, DEFAULT_MODEL
 from .config import ArticleMeta, JournalConfig
 from .pipeline import AIRequiredError, Options, add_images, convert
-from .report import graphics_dir, images_to_prepare
+from .report import graphics_dir, images_to_prepare, pdf_summary
 
 
 def main(argv=None):
@@ -35,6 +35,8 @@ def main(argv=None):
                          "使えなければ最新の Opus に切り替える）。claude 以外では必ず指定する（Claude Opus と同等以上のモデルを推奨）")
     ap.add_argument("--ai-response", type=Path, help="手動モード: AI の回答（JSON）を保存したファイル")
     ap.add_argument("--pdf", type=Path, help="記事の PDF（J-STAGE への登載に必須。指定すると ZIP に入れる）")
+    ap.add_argument("--no-pdf-width", action="store_true",
+                    help="--pdf の PDF に合わせて英数字・記号の全角・半角を変えない（PDF との照合とレポートだけ行う）")
     ap.add_argument("--no-metafile-conversion", action="store_true", help="EMF/WMF 画像の変換を行わない")
     ap.add_argument("--images", type=Path,
                     help="画像を用意できなかった図（Word の図形で描かれた図など）の画像を入れたフォルダ。出力のファイル名"
@@ -50,7 +52,7 @@ def main(argv=None):
     opts = Options(out_dir=a.out, split_labels=None if a.split_labels is None else a.split_labels == "yes",
                    ai_mode=a.ai, ai_provider=a.ai_provider, ai_model=a.ai_model or DEFAULT_MODEL, ai_api_key=api_key,
                    ai_response=a.ai_response.read_text(encoding="utf-8") if a.ai_response else None,
-                   pdf_path=a.pdf, convert_metafiles=not a.no_metafile_conversion)
+                   pdf_path=a.pdf, pdf_width=not a.no_pdf_width, convert_metafiles=not a.no_metafile_conversion)
     try:
         res = convert(a.docx, meta, journal, opts)
     except AIRequiredError as e:
@@ -63,6 +65,8 @@ def main(argv=None):
     print(f"J-STAGE のアップロード時チェック: {'問題なし' if not res.jstage_issues else f'要対応 {len(res.jstage_issues)} 件'}")
     for mid, msg in res.jstage_issues:
         print(f"  {mid}: {msg}")
+    if res.pdf_check is not None:
+        print(f"出版版 PDF との照合: {pdf_summary(res)}")
     print(f"XML: {res.xml_path}")
     print(f"ZIP: {res.zip_path}")
     print(f"レポート: {res.report_path}")

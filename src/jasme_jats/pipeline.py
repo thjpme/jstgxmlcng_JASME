@@ -10,6 +10,9 @@
   8. J-STAGE 指定 DTD で検証する（validate）
   9. J-STAGE のアップロード時のチェックのうち XML だけで判定できるものを再現する（jstage_rules）
  10. 画像の書き出し、J-STAGE のフォルダ構成と ZIP、レポート（images, package, report）
+
+記事の PDF があれば、XML を組み立てる前に docx の段落と照合し（pdfmatch）、英数字・記号の全角・半角だけの違いを
+PDF に合わせる（設定でやめられる）。それ以外の違いはレポートに載せるだけ。
 """
 from __future__ import annotations
 
@@ -31,6 +34,7 @@ from .jstage_rules import check as jstage_check
 from .linker import cited_refs, link
 from .model import Decision
 from .package import article_dir, make_zip, write_package
+from .pdfmatch import PdfCheck, check_pdf
 from .report import images_to_prepare, render, render_ai_only
 from .structure import classify
 from .validate import validate
@@ -86,6 +90,7 @@ class Options:
     ai_api_key: Optional[str] = None
     ai_response: Optional[str] = None         # 手動モード: AI の回答（JSON）
     pdf_path: Optional[Path] = None
+    pdf_width: bool = True                    # 記事の PDF があるとき、英数字・記号の全角・半角を PDF に合わせる
     convert_metafiles: bool = True
 
 
@@ -114,6 +119,7 @@ class Result:
     has_pdf: bool = False
     output_note: str = ""
     forced_floats: list = field(default_factory=list)   # AI による補完でも位置が決まらず、本文の冒頭に仮に置いた図表の説明
+    pdf_check: Optional[PdfCheck] = None                # 出版版 PDF との照合（PDF がなければ None）
     xml_path: Optional[Path] = None
     zip_path: Optional[Path] = None
     report_path: Optional[Path] = None
@@ -224,6 +230,14 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
             plan.uncited_refs = [r.rid for r in plan.refs if r.rid not in cited]
             root, info = build(plan, meta, journal, split)
 
+    # ---------------------------------------------------------------- 出版版 PDF との照合
+    pdf_check = None
+    if opts.pdf_path:
+        pdf_check = check_pdf(plan, opts.pdf_path, apply=opts.pdf_width)
+        if pdf_check.edits:
+            plan.pdf_edits = pdf_check.edits
+            root, info = build(plan, meta, journal, split)
+
     # ---------------------------------------------------------------- 検証（最終段階）
     fid = verify(docx_path, root, plan.exclusions + info.exclusions)
     final_root = finalize(root)
@@ -292,7 +306,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         link_counts=linker.count, unresolved_after=unresolved_after, images=images, warnings=warnings, ai=outcome,
         build_notes=build_notes, hidden_text=doc.hidden_text, tracked_changes=doc.tracked_changes,
         comments=doc.comments, has_pdf=has_pdf, output_note=output_note, xml_path=flat_xml, zip_path=zip_path,
-        prompt_path=prompt_path, forced_floats=forced_floats)
+        prompt_path=prompt_path, forced_floats=forced_floats, pdf_check=pdf_check)
     report_path = out_dir / f"{aid}_変換レポート.md"
     report_path.write_text(render(res), encoding="utf-8")
     res.report_path = report_path
