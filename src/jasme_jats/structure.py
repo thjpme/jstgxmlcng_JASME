@@ -211,6 +211,7 @@ class ArticlePlan:
     moved_images: set = field(default_factory=set)   # 図に移したため、元の段落では出力しない画像の ID
     float_decisions: dict = field(default_factory=dict)  # AI の指定で配置した図形の ID -> Decision
     layout: object = None                            # 本文の段組みと行の設定（model.Layout）
+    pdf_edits: dict = field(default_factory=dict)    # 出版版 PDF に合わせる変更: src -> ({位置: 文字}, {落とす空白の位置})
 
     @property
     def unplaced_floats(self) -> list:

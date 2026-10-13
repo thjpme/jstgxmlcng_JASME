@@ -113,7 +113,7 @@ def test_images_to_prepare_are_listed_at_top_and_in_checklist(journal, meta, tmp
     top = report.split("## 2.")[0]
     assert "要対応: 画像ファイルを用意できなかった図が 1 件あります" in top
     assert "jasme_31_1.zip の中の `jasme/31/1/31_1/Graphics/`" in top and "`31_1_01.png`: 図1\u3000三角形ABC" in top
-    checklist = report.split("## 13.")[1]
+    checklist = report.split("## 14.")[1]
     assert "- [ ] **画像ファイルを用意できなかった図 1 件**" in checklist and "`31_1_01.png`（図1\u3000三角形ABC）" in checklist
     # Word の図形で描かれた図（画像ファイルがない）
     res.images[0] = ImageResult(res.images[0].image_id, "31_1_01.png", "", "missing", "")

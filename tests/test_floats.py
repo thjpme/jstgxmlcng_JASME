@@ -128,7 +128,7 @@ def test_missing_placement_is_reported_after_ai(journal, meta, tmp_path):
     assert first.tag == "table-wrap" and "図3" in "".join(first.itertext())
     report = res.report_path.read_text(encoding="utf-8")
     assert "要対応: 位置を決められなかった図表が 1 件" in report and "手作業で正しい位置" in report
-    assert "本文の冒頭に仮に置いた図表" in report.split("## 13.")[1]
+    assert "本文の冒頭に仮に置いた図表" in report.split("## 14.")[1]
     path = tmp_path / "resp.json"
     path.write_text(json.dumps(data), encoding="utf-8")
     assert cli_main([str(FLOAT), "--out", str(tmp_path / "cli"), "--ai", "manual", "--ai-response", str(path)]) == 1

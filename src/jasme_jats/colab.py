@@ -137,6 +137,20 @@ def missing_images_box(res) -> str:
         f"{graphics_dir(res)} に入れます（レポートの冒頭と 9 章）。\n{items}")
 
 
+def pdf_diff_box(res) -> str:
+    """出版版 PDF と文字が違う箇所があるときの表示（赤い枠）。なければ空文字。"""
+    pc = res.pdf_check
+    if pc is None or not pc.ok or not pc.diffs:
+        return ""
+    items = "\n".join(f"・{d.context}（docx「{d.docx}」/ PDF「{d.pdf}」）" for d in pc.diffs[:10])
+    more = f"\n…ほか {len(pc.diffs) - 10} 件" if len(pc.diffs) > 10 else ""
+    return error_box(
+        f"出版版 PDF と文字が違う箇所が {len(pc.diffs)} 件あります（要確認）",
+        "受け取った docx が、著者校正を経た最終版ではない可能性があります。XML は docx の文字のままです。PDF と照らして確認し、"
+        "PDF が正しければ docx を直して、手順 2 からやり直してください（レポートの 13 章。英数字・記号の全角・半角の違いだけは"
+        + ("PDF に合わせました）。" if pc.apply else "、設定により PDF に合わせていません）。") + f"\n{items}{more}")
+
+
 def unplaced_box(plan) -> str:
     """AI の回答を反映した後も、位置を決められない図表が残っているときの表示。なければ空文字。"""
     if not plan.unplaced_floats:

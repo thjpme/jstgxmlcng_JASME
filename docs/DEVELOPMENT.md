@@ -29,6 +29,7 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
 | `fidelity.py` | 文字の不変性チェック |
 | `validate.py` | DTD 検証（`dtd/` に J-STAGE 指定 DTD を同梱） |
 | `floats.py` | 浮動配置の図形（テキストボックス・グループ図形）の位置: 機械的に配置できるかの判定、AI に渡す位置の説明と行数の推定 |
+| `pdfmatch.py` | 出版版 PDF との照合（段落ごとの対応付け、全角・半角の違いを PDF に合わせる変更と、それ以外の違いの一覧） |
 | `jstage_rules.py` | J-STAGE のアップロード時チェック（記事アップロードメッセージ一覧）のうち XML だけで判定できるものの再現 |
 | `images.py` / `package.py` / `report.py` | 画像の書き出し、ZIP、レポート |
 | `pipeline.py` / `cli.py` | 全体の流れとコマンドライン |
@@ -43,11 +44,15 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
 4. 構造の区切りとして空白を落とす場合は `Emitter.drop()` を使う（空白以外は落とせない）。
 5. 新しい種類の docx の要素に対応するときは、`ooxml.canonical_text()`（検証側）と `docx_reader.py`（変換側）の両方を同じ文字ポリシーで直し、
    その要素を含む docx を `tests/make_fixtures.py` に加えてテストする。
+6. 例外は、出版版 PDF に合わせる英数字・記号の全角・半角とその前後の空白だけ（`pdfmatch.py`、`docs/DESIGN.md` の 4.4）。これも段落の
+   アトムは変えず、`Emitter` が書き出すときに `jx:w`（元の文字を属性に）・`jx:d` に入れ、不変性チェックで確かめる。範囲を広げるときは、
+   `fidelity._width_variant()` の検証も合わせて直す。
 
 ## テスト
 
-- `tests/make_fixtures.py` がテスト用の docx（`tests/fixtures/sample_full.docx`, `sample_edge.docx`, `sample_float.docx`, `sample_notes.docx`）を生成する。内容は架空。
-  変更したら `python tests/make_fixtures.py` で作り直してコミットする。
+- `tests/make_fixtures.py` がテスト用の docx（`tests/fixtures/sample_full.docx`, `sample_edge.docx`, `sample_float.docx`, `sample_notes.docx`,
+  `sample_pdfcheck.docx`）と、照合用の PDF（`sample_pdfcheck.pdf`。LibreOffice が要る。なければ作り直さない）を生成する。内容は架空。
+  変更したら `python tests/make_fixtures.py` で作り直してコミットする（中身の変わらない docx も作り直されるので、差分は確かめてから）。
 - `tests/test_fidelity.py`: 不変性チェックがわざと壊した XML を確実に検出することのテスト。チェックの処理を変えたら必ず通すこと。
 - `tests/test_ai.py`: AI の回答の検証と適用（実際の API は呼ばない。`tests/data/ai_response_sample_full.json` が模擬回答。
   Claude・ChatGPT・Gemini・Sakana AI の呼び出しは、それぞれ偽のクライアントに置き換えて確かめる）。
@@ -55,6 +60,8 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
   AI を使わない設定での中止、機械的な配置、`placements` の検証と適用。
 - `tests/test_notes.py`: テンプレートの規定と違う書き方の注（`sample_notes.docx` の本文の大きさの「（注1）」・引用文献の後ろの注の節・
   番号の書き方が想定外の注、`sample_edge.docx` の Word の脚注機能）。AI による注の区切りの指定（`fn_start`）も。
+- `tests/test_pdfmatch.py`: 出版版 PDF との照合（`sample_pdfcheck.docx` と `.pdf`）。全角・半角を PDF に合わせること、リンクの文字・
+  英文の空白を変えないこと、文字の違いの報告、設定で切れること。`tests/test_fidelity.py` には `jx:w`・`jx:d` の不正な使い方の検出がある。
 - GitHub Actions（`.github/workflows/test.yml`）で push のたびに実行される。
 
 `tests/fixtures/JASME_template_20261009.docx` は学会のテンプレートから、`tools/sanitize_docx.py` でコメントと作成者情報を
@@ -153,6 +160,7 @@ Claude Code の環境の作り方）を読む。
 | ChatGPT・Gemini・Sakana AI の API モード | 0.12.0（ChatGPT・Gemini）・0.13.0（Sakana AI）で対応（推奨は Claude）。偽のクライアントでのテストのみで、実際の API ではまだ試していない（Sakana Fugu のチャットでは、手動モードの依頼文に正しい JSON が返ることを利用者が確認）。試験運用で一度ずつ確かめる |
 | 注の番号から本文へ戻るリンク | J-STAGE の仕様上できない（`<xref>` に付けられるのは ref-type と rid だけで、戻り先の目印を付けられない。注の中は `<p>` だけ）。ブラウザの「戻る」で戻れる |
 | 引用文献の DOI のリンク | 今は J-STAGE に DOI として登録する `<pub-id>`。公開後に J-STAGE の引用文献リンクが付くかを確認し、画面上のリンクを優先するなら `ref_doi = "uri"` にする |
+| 出版版 PDF との照合 | 0.16.0 で追加（`docs/DESIGN.md` の 4.4）。実際の論文 1 本と、LibreOffice で作った試験用の PDF でのみ確かめている。出版社の組版ソフトで作った別の PDF（文字の取り出し方が違う場合）や、英文の論文では、誤検出や照合できない段落が出ないか、試験運用で確かめる |
 | テキストボックス・グループ図形の中の図 | 位置を機械的に決められない図表は AI に位置と組み合わせを指定させる（`docs/DESIGN.md` の 6.1。0.14.0）。`placements` は模擬回答でのみ確かめていて、実際の AI（どの会社のものも）ではまだ試していない。表で組んだ図（`fig` の中の `table-wrap`）が J-STAGE の画面でどう表示されるかも、試験登載で確認が必要 |
 | テンプレートと違う書き方の注 | 0.15.0 で、Word の脚注機能・本文の大きさの「（注1）」・引用文献の後ろの注の節に対応（`docs/DESIGN.md` の 6 章）。番号の書き方が想定外の注（「※1」など）は AI に区切りを指定させる（`fn_start`）が、模擬回答でのみ確かめていて、実際の AI ではまだ試していない。補った見出し「注」と「1)」の番号が J-STAGE の画面でどう表示されるかも、試験登載で確認する |
 | 正式リリース | 試験運用で問題がなければ、版を 1.0.0 にする |
