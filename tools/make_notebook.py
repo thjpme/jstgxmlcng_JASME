@@ -139,7 +139,7 @@ cells = [
 | 手順 | 内容 |
 |---|---|
 | 1 | 準備（最初に 1 回だけ。「準備ができました」と表示されたら、手順 2 に進みます） |
-| 2 | 論文の docx と PDF をアップロード（ボタンが別々に出ます） |
+| 2 | 作り方を選び、論文の docx と PDF をアップロード（ボタンが別々に出ます） |
 | 3 | 書誌情報（巻・号・ページ・査読の有無・キーワード・日付）を入力 |
 | 4 | AI による補完の方法を選ぶ |
 | 5 | 変換を実行（結果のレポートが表示されます） |
@@ -148,7 +148,11 @@ cells = [
 | 8 | 結果をダウンロード |
 | 9 | 続けて他の論文を変換するとき: ▶ を押してから、手順 2 に戻る |
 
-- 本文の文字は 1 文字も変えません。変換後に、docx と XML の文字を 1 文字ずつ照合して確かめます（レポートの「文字の不変性チェック」）。
+- 作り方は 2 通りあり、手順 2 で選びます。
+  - **docx から作る**（既定）: 本文の文字は 1 文字も変えません。PDF をアップロードすると、docx と PDF の文字を照合して、違う箇所をレポートに出します。
+  - **出版版 PDF に合わせてから作る**: docx の文字を出版版 PDF に合わせて直した docx（Word の変更履歴つき）を先に作り、それを変換します。
+    直した docx も結果に入るので、Word で開いて変更を確かめられます。
+- どちらでも、変換後に、変換した docx と XML の文字を 1 文字ずつ照合して確かめます（レポートの「文字の不変性チェック」）。
 - アップロードしたファイルは、このノートブックを閉じる（ランタイムが切れる）と Google のサーバーから消えます。
 - 「API で自動実行」を選ぶと、論文の本文が選んだ AI の会社（Claude は Anthropic、ChatGPT は OpenAI、Gemini は Google、Sakana AI は Sakana AI）の API に送信されます。
 - 複数の論文を続けて変換するときは、1 本ごとに手順 8 で結果をダウンロードしてから、手順 9 の ▶ を押し、手順 2 から繰り返します。
@@ -203,16 +207,20 @@ if globals().get("LO_PROC") is not None and LO_PROC.poll() is None:
           "（手順 5 の変換は、インストールが終わってから始まります）。")
 """ + "DONE = {1}\n"),
     code("""
-#@title 2. 論文の docx と PDF をアップロード
-#@markdown 実行すると、まず **docx 用**の「ファイル選択」ボタンが出ます。docx を選ぶと、続けて **PDF 用**の「ファイル選択」ボタンが出ます。
-#@markdown **PDF もアップロードする（UPLOAD_PDF）**: J-STAGE に登載する PDF がまだなければ、チェックを外してから実行してください（PDF 用のボタンは出ません。後で jasme_巻_開始ページ.zip に入れることもできます）。
+#@title 2. 作り方を選び、論文の docx と PDF をアップロード
+#@markdown **作り方（ROUTE）**: 最初に選びます。
+#@markdown - **docx から作る**（既定）: docx の本文の文字を 1 文字も変えずに XML にします。PDF をアップロードすると、変換の後に docx の文字と PDF の文字を照合し、違う箇所（全角・半角の違い、「資料」と「付録」など）をレポートの 13 章に出します（XML は docx の文字のままです）。
+#@markdown - **出版版 PDF に合わせてから作る**: 受け取った docx が著者校正の前の原稿で、出版社が組版で直した文字（全角・半角、「資料」→「付録」など）が出版版 PDF にしかないときに使います。docx の文字を PDF に合わせて直した docx（**Word の変更履歴つき**。スタイル・書式・数式・図・注はそのまま）を作り、それを変換します。表の中・数式・図の中の文字・リンクの文字は直しません。**PDF のアップロードが必要です。**
+ROUTE = "docx から作る"  #@param ["docx から作る", "出版版 PDF に合わせてから作る"]
+#@markdown **PDF もアップロードする（UPLOAD_PDF）**: J-STAGE に登載する PDF がまだなければ、チェックを外してから実行してください（PDF 用のボタンは出ません。後で jasme_巻_開始ページ.zip に入れることもできます）。「出版版 PDF に合わせてから作る」では外せません。
 UPLOAD_PDF = True  #@param {type:"boolean"}
-#@markdown **全角・半角を PDF に合わせる（MATCH_PDF_WIDTH）**: PDF をアップロードすると、変換の後に docx の文字と PDF の文字を照合し、違う箇所をレポートの 13 章に出します。チェックを入れておくと、英数字・記号の全角・半角だけの違い（「(」と「（」など）は PDF に合わせます（その前後の空白で PDF にないものは消します）。かな・漢字や、文字そのものが違う箇所（「資料」と「付録」など）は変えません。
-MATCH_PDF_WIDTH = True  #@param {type:"boolean"}
 """ + guard(1) + """
 from pathlib import Path
 from google.colab import files
 
+ROUTE_KEY = {"docx から作る": "docx", "出版版 PDF に合わせてから作る": "pdf"}[ROUTE]
+if ROUTE_KEY == "pdf" and not UPLOAD_PDF:
+    raise SystemExit("「出版版 PDF に合わせてから作る」には PDF が必要です。UPLOAD_PDF にチェックを入れて、もう一度この手順を実行してください。")
 WORK = Path("/content/jasme_work")
 INPUT = WORK / "input"
 INPUT.mkdir(parents=True, exist_ok=True)
@@ -242,7 +250,10 @@ if UPLOAD_PDF:
     print()
     pdf_files = upload("J-STAGE に登載する PDF", ".pdf")
     pdf_path = pdf_files[0] if pdf_files else None
+if ROUTE_KEY == "pdf" and not pdf_path:
+    raise SystemExit("「出版版 PDF に合わせてから作る」には PDF が必要です。もう一度この手順を実行し、PDF を選んでください。")
 print()
+print("作り方:", ROUTE)
 print("論文:", docx_path.name)
 print("PDF :", pdf_path.name if pdf_path else "（なし。J-STAGE への登載には PDF が必要です）")
 """ + mark(2)),
@@ -404,7 +415,7 @@ journal = JournalConfig.load()
 meta = ArticleMeta.from_dict(meta_input)
 try:
     res = convert(docx_path, meta, journal, Options(out_dir=OUT, ai_mode=AI, ai_provider=PROVIDER, ai_model=API_MODEL,
-                                                  ai_api_key=api_key, pdf_path=pdf_path, pdf_width=MATCH_PDF_WIDTH,
+                                                  ai_api_key=api_key, pdf_path=pdf_path, route=ROUTE_KEY,
                                                   split_labels=SPLIT_LABELS))
 except AIRequiredError as e:
     display(HTML(ai_required_box(str(e))))
@@ -417,6 +428,8 @@ print("J-STAGE のアップロード時チェック:", "問題なし" if not res
 for mid, msg in res.jstage_issues:
     print("  ", mid, msg)
 print("出版版 PDF との照合:", pdf_summary(res))
+if res.docx_fix is not None:
+    print("PDF に合わせて直した docx（変更履歴つき。手順 8 でダウンロードする ZIP に入ります）:", res.docx_fix.path.name)
 if globals().get("USER_IMAGES"):
     _again = add_images(res, USER_IMAGES, skip_unneeded=True)
     if _again:
@@ -465,7 +478,7 @@ if globals().get("PREVIOUS") and AI_RESPONSE.strip() == PREVIOUS.get("ai_respons
     raise SystemExit(f"貼り付けられているのは、前の論文（{PREVIOUS['docx']}）の AI の回答です。今回の論文の依頼文（手順 5 の枠）を "
                      "AI に渡し、返ってきた回答に貼り替えてから ▶ を押してください。")
 res = convert(docx_path, meta, journal, Options(out_dir=OUT, ai_mode="manual", ai_response=AI_RESPONSE,
-                                              pdf_path=pdf_path, pdf_width=MATCH_PDF_WIDTH, split_labels=SPLIT_LABELS))
+                                              pdf_path=pdf_path, route=ROUTE_KEY, split_labels=SPLIT_LABELS))
 LAST_AI_RESPONSE = AI_RESPONSE.strip()
 if globals().get("USER_IMAGES"):
     _again = add_images(res, USER_IMAGES, skip_unneeded=True)
@@ -527,7 +540,7 @@ if _missing:
 """ + mark(7)),
     code("""
 #@title 8. 結果をダウンロード
-#@markdown 「変換結果_巻_開始ページ.zip」の中に、J-STAGE にアップロードする jasme_巻_開始ページ.zip、XML、変換レポートが入っています。
+#@markdown 「変換結果_巻_開始ページ.zip」の中に、J-STAGE にアップロードする jasme_巻_開始ページ.zip、XML、変換レポートが入っています。「出版版 PDF に合わせてから作る」では、PDF に合わせて直した docx（Word の変更履歴つき）も入っています。
 """ + guard(1, 2, 3, 4, 5) + """from IPython.display import HTML, display
 from jasme_jats.colab import missing_images_box
 from jasme_jats.report import images_to_prepare

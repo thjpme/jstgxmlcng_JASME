@@ -7,8 +7,6 @@ docx の各段落の文字列を ooxml.canonical_text() で独立に取り出し
     （出力しない段落は Exclusion としてレポートに全文を載せる）
   ・XML に、docx にない文字が追加されていないか（追跡の目印の外に文字がないか）
   ・構造の区切りとして落とした文字は空白だけか
-  ・出版版 PDF に合わせて変えた文字（jx:w）は、元の文字と英数字・記号の全角・半角の違いだけか。
-    PDF にないため落とした空白（jx:d）は空白だけか（どちらも docx の元の文字として照合する）
 
 さらに final_check() で、目印を取り除いた最終出力の文字列が、検証済みの木と一致することを確かめる。
 """
@@ -22,7 +20,7 @@ from lxml import etree
 
 from .ooxml import DocxPackage, canonical_text, is_ws, paragraph_ids
 from .omml import MML_NS, math_plain
-from .tracking import AI, GEN, JX_NS, PDFDROP, SPAN, WIDTH
+from .tracking import AI, GEN, JX_NS, SPAN
 
 DROP = f"{{{JX_NS}}}drop"
 MATH = f"{{{MML_NS}}}math"
@@ -56,9 +54,6 @@ class FidelityResult:
     generated: list = field(default_factory=list)     # (kind, text)
     unknown: list = field(default_factory=list)       # docx に存在しない src
     ai_additions: list = field(default_factory=list)  # (decision, 文字) AI が明示的に追加したもの
-    pdf_width: list = field(default_factory=list)     # (src, 元の文字, PDF に合わせた文字)
-    pdf_drops: list = field(default_factory=list)     # (src, 落とした空白)
-    bad_pdf: list = field(default_factory=list)       # (src, 説明) 全角・半角の違いでない変更、空白でない文字の削除
     final_ok: bool = None
     final_detail: str = ""
 
@@ -89,10 +84,6 @@ def piece_text(el, nested_errors=None) -> str:
             continue
         if ch.tag == GEN:
             pass
-        elif ch.tag == WIDTH:
-            out.append(ch.get("o", ""))       # 出版版 PDF に合わせる前の docx の文字として照合する
-        elif ch.tag == PDFDROP:
-            out.append(ch.text or "")
         elif ch.tag == MATH:
             out.append(math_plain(ch))
         elif ch.tag in (SPAN, DROP):
@@ -138,19 +129,6 @@ def verify(docx_path, tracked_root, exclusions) -> FidelityResult:
         res.generated.append((el.get("kind", ""), el.text or ""))
     for el in tracked_root.iter(AI):
         res.ai_additions.append((el.get("decision", ""), "".join(el.itertext())))
-    for sp in tracked_root.iter(SPAN):
-        s = sp.get("src")
-        for w in sp.iter(WIDTH):
-            o, t = w.get("o", ""), w.text or ""
-            if _width_variant(o, t) and not len(w):
-                res.pdf_width.append((s, o, t))
-            else:
-                res.bad_pdf.append((s, f"全角・半角の違いではない変更「{o}」→「{t}」"))
-        for d in sp.iter(PDFDROP):
-            if d.text and is_ws(d.text) and not len(d):
-                res.pdf_drops.append((s, d.text))
-            else:
-                res.bad_pdf.append((s, f"空白でない文字「{''.join(d.itertext())}」を落とそうとした"))
 
     for s, text in src.items():
         if text != "":
@@ -186,18 +164,10 @@ def verify(docx_path, tracked_root, exclusions) -> FidelityResult:
 
     res.stray = stray_text(tracked_root)
     res.ok = not (res.mismatches or res.missing or res.duplicates or res.stray or res.bad_drops or res.unknown
-                  or nested or res.bad_pdf)
+                  or nested)
     if nested:
         res.mismatches.append(Mismatch(",".join(nested), "", "", "追跡用の目印が入れ子になっている（変換処理の誤り）"))
     return res
-
-
-def _width_variant(a: str, b: str) -> bool:
-    """a と b が、英数字・記号の全角（U+FF01〜U+FF5E）と半角（U+0021〜U+007E）の違いだけか（pdfmatch とは別に確かめる）。"""
-    if len(a) != 1 or len(b) != 1 or a == b:
-        return False
-    lo, hi = sorted((ord(a), ord(b)))
-    return 0x21 <= lo <= 0x7E and hi - lo == 0xFEE0
 
 
 def stray_text(root):
@@ -224,7 +194,7 @@ def final_check(tracked_root, final_bytes: bytes, res: FidelityResult):
     """目印を取り除いた最終出力の文字列が、検証済みの木（落とした空白を除く）と一致するかを確かめる。"""
     import copy
     t = copy.deepcopy(tracked_root)
-    etree.strip_elements(t, DROP, PDFDROP, with_tail=False)
+    etree.strip_elements(t, DROP, with_tail=False)
     expected = "".join(t.itertext())
     parser = etree.XMLParser(load_dtd=False, no_network=True, resolve_entities=False, huge_tree=True)
     final = etree.fromstring(final_bytes, parser)

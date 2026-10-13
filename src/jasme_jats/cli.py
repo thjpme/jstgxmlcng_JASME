@@ -1,7 +1,7 @@
 """コマンドラインの入口。
 
   python -m jasme_jats 論文.docx --meta 書誌情報.toml --out 出力フォルダ [--ai api|manual|none]
-                       [--ai-provider claude|openai|gemini|sakana] [--ai-model モデル名]
+                       [--ai-provider claude|openai|gemini|sakana] [--ai-model モデル名] [--pdf 記事.pdf [--route docx|pdf]]
 
 書誌情報ファイル（TOML）の例は examples/meta_example.toml を参照。
 """
@@ -35,8 +35,10 @@ def main(argv=None):
                          "使えなければ最新の Opus に切り替える）。claude 以外では必ず指定する（Claude Opus と同等以上のモデルを推奨）")
     ap.add_argument("--ai-response", type=Path, help="手動モード: AI の回答（JSON）を保存したファイル")
     ap.add_argument("--pdf", type=Path, help="記事の PDF（J-STAGE への登載に必須。指定すると ZIP に入れる）")
-    ap.add_argument("--no-pdf-width", action="store_true",
-                    help="--pdf の PDF に合わせて英数字・記号の全角・半角を変えない（PDF との照合とレポートだけ行う）")
+    ap.add_argument("--route", choices=["docx", "pdf"], default="docx",
+                    help="作り方。docx（既定）: docx から作る（docx の文字は 1 文字も変えない。--pdf があれば照合してレポートに"
+                         "載せるだけ）。pdf: --pdf の出版版 PDF に合わせて直した docx（Word の変更履歴つき）を出力フォルダに作り、"
+                         "それを変換する")
     ap.add_argument("--no-metafile-conversion", action="store_true", help="EMF/WMF 画像の変換を行わない")
     ap.add_argument("--images", type=Path,
                     help="画像を用意できなかった図（Word の図形で描かれた図など）の画像を入れたフォルダ。出力のファイル名"
@@ -45,6 +47,8 @@ def main(argv=None):
     if a.ai == "api" and a.ai_provider != "claude" and not a.ai_model:
         ap.error(f"--ai-provider {a.ai_provider} では --ai-model でモデル名を指定してください"
                  "（Claude Opus と同等以上のモデルを推奨）")
+    if a.route == "pdf" and not a.pdf:
+        ap.error("--route pdf（出版版 PDF に合わせてから作る）では、--pdf で記事の PDF を指定してください")
     api_key = next((os.environ[k] for k in API_KEY_NAMES[a.ai_provider] if os.environ.get(k)), None)
 
     journal = JournalConfig.load(a.config)
@@ -52,7 +56,7 @@ def main(argv=None):
     opts = Options(out_dir=a.out, split_labels=None if a.split_labels is None else a.split_labels == "yes",
                    ai_mode=a.ai, ai_provider=a.ai_provider, ai_model=a.ai_model or DEFAULT_MODEL, ai_api_key=api_key,
                    ai_response=a.ai_response.read_text(encoding="utf-8") if a.ai_response else None,
-                   pdf_path=a.pdf, pdf_width=not a.no_pdf_width, convert_metafiles=not a.no_metafile_conversion)
+                   pdf_path=a.pdf, route=a.route, convert_metafiles=not a.no_metafile_conversion)
     try:
         res = convert(a.docx, meta, journal, opts)
     except AIRequiredError as e:
@@ -67,6 +71,8 @@ def main(argv=None):
         print(f"  {mid}: {msg}")
     if res.pdf_check is not None:
         print(f"出版版 PDF との照合: {pdf_summary(res)}")
+    if res.docx_fix is not None:
+        print(f"PDF に合わせて直した docx（変更履歴つき）: {res.docx_fix.path}")
     print(f"XML: {res.xml_path}")
     print(f"ZIP: {res.zip_path}")
     print(f"レポート: {res.report_path}")

@@ -2,22 +2,21 @@
 
 PDF は著者校正を経た最終版なので、XML の本文が PDF と違えば、J-STAGE には同じ記事の 2 つの版が並ぶことになる。
 受け取った docx が校正後の最終版とは限らない（組版で印刷所がかっこ・句読点を全角にそろえる、校正の直しが docx に
-戻されていない、など）ため、変換の後に PDF の文字と比べて、
+戻されていない、など）ため、docx の段落ごとに PDF の中の対応する箇所を探して比べ、違いを次のように分ける。
 
-  ・英数字・記号の全角・半角だけの違い: PDF に合わせる（設定でやめられる）。その文字のすぐ前後の空白で、PDF にない
-    ものは落とす（「理論 (ATD) に」→「理論（ATD）に」）。空白を足すことはしない
-  ・それ以外の文字の違い（「資料」と「付録」など）: レポートに載せるだけ（docx を直して変換し直すかは人が決める）
-  ・PDF の中に見つからない段落: レポートに載せる
+  ・英数字・記号の全角・半角だけの違い（width）と、その文字のすぐ前後の空白で PDF にないもの（drops）
+  ・それ以外の文字の違い（diffs。「資料」と「付録」など）
+  ・PDF の中に見つからない段落（unmatched）
+  ・Word が付ける番号（自動段落番号・脚注番号）の全角・半角の違い（numbers）
 
-Word が付ける番号（自動段落番号・脚注番号）は docx の文字ではなくツールが作って出力する文字なので、これも PDF と照合し、
-全角・半角だけの違いなら PDF に合わせた形で出力する（「1)」→「１）」など）。
+ルート1（docx から作る）では、照合の結果をレポートに載せるだけで、文字は変えない。
+ルート2（出版版 PDF に合わせてから作る）では、この結果から、PDF に合わせて直した docx（Word の変更履歴つき）を作り
+（pdfdocx.py）、それをルート1 と同じ処理で XML にする。Word が付ける番号は docx の文字ではないので、変換のときに
+全角・半角を PDF に合わせる（plan.pdf_numbers）。
 
-PDF から XML を作るのではない（構造はすべて docx のスタイルから決める）。PDF の文字は、照合にだけ使う。
-変えた文字は、XML の作業用の目印（jx:w / jx:d）に docx の元の文字を残し、文字の不変性チェックで、全角・半角の
-違いと空白のほかは docx と 1 文字ずつ一致することを確かめる（fidelity.py）。
-
-PDF から取り出した文字には組版の都合（両端そろえの空白、行末のハイフン、図の中の文字、数式、柱）が混じるため、
-空白は照合に使わず、段落ごとに PDF の中の対応する箇所を探してから比べる。
+PDF から XML を作るのではない（構造はすべて docx のスタイルから決める）。PDF から取り出した文字には組版の都合
+（両端そろえの空白、行末のハイフン、図の中の文字、数式、柱）が混じるため、空白は照合に使わず、段落ごとに PDF の中の
+対応する箇所を探してから比べる。
 """
 from __future__ import annotations
 
@@ -59,15 +58,17 @@ def is_width_pair(a: str, b: str) -> bool:
 class TextDiff:
     src: str
     docx: str        # docx の文字（違う部分）
-    pdf: str         # PDF の文字（違う部分）
+    pdf: str         # PDF の文字（違う部分。単語の間の空白は戻してある）
     context: str     # docx の前後の文字
+    start: int = 0   # docx の段落（plain）の中の範囲 [start, end)。PDF にだけある文字なら start == end（その位置に足す）
+    end: int = 0
+    fixable: bool = True   # ルート2 で docx を直せるか（数式・Word が付ける番号・リンクの文字にかかるものは直さない）
 
 
 @dataclass
 class PdfCheck:
     ok: bool = True                 # PDF の文字を読めたか
     message: str = ""               # 読めなかった理由など
-    apply: bool = True              # 全角・半角を PDF に合わせる設定か
     checked: int = 0                # 照合した段落の数
     unmatched: list = field(default_factory=list)   # PDF の中に見つからなかった段落の src
     width: dict = field(default_factory=dict)       # src -> {plain 上の位置: PDF の文字}
@@ -78,17 +79,8 @@ class PdfCheck:
     # 種類: auto（段落の自動番号。ID は段落）/ fnref（本文の脚注番号）/ fnlist（注の一覧の脚注番号。ID は Word の脚注 ID）
 
     @property
-    def edits(self) -> dict:
-        """XML に反映する変更: src -> (置き換え {位置: 文字}, 落とす空白 {位置})。設定で無効なら空。"""
-        if not self.apply:
-            return {}
-        return {s: (self.width.get(s, {}), self.drops.get(s, set())) for s in set(self.width) | set(self.drops)}
-
-    @property
     def number_edits(self) -> dict:
-        """Word が付ける番号を PDF に合わせたもの: (種類, ID) -> 出力する文字列。設定で無効なら空。"""
-        if not self.apply:
-            return {}
+        """Word が付ける番号を PDF に合わせたもの: (種類, ID) -> 出力する文字列（ルート2 で使う）。"""
         return {k: "".join(m.get(i, c) for i, c in enumerate(self.original[k])) for k, m in self.numbers.items()}
 
     @property
@@ -220,12 +212,12 @@ def target_paragraphs(plan) -> list:
     return [p for p in out if not (p.src in seen or seen.add(p.src))]
 
 
-def compare(plan, pages, apply: bool = True, fn_marks=None) -> PdfCheck:
+def compare(plan, pages, fn_marks=None) -> PdfCheck:
     """docx の段落と PDF の文字を照合する。pages は PDF の各ページの文字（extract_pages）。
 
     fn_marks: Word の脚注 ID -> 出力する脚注番号（builder.word_note_marks）。Word の脚注番号も PDF と照合する。
     """
-    res = PdfCheck(apply=apply)
+    res = PdfCheck()
     fn_marks = fn_marks or {}
     list_marks = {fn.paras[0].src: fn.word_id for fn in plan.fns if fn.word_note and fn.paras}
     st = pdf_stream(pages)
@@ -322,6 +314,9 @@ def _classify(p, seq, gens, lo, ops, st: PdfStream, owner, res: PdfCheck):
     numbers = set()   # PDF に合わせた Word の番号の文字の seq の位置
     regions = []      # 違う部分 (i1, i2, j1, j2)（seq と窓の中の位置）
 
+    eq = [(j1, j2) for tag, _, _, j1, j2 in ops if tag == "equal"]
+    first_eq, last_eq = eq[0][0], eq[-1][1] - 1      # 窓の中で最初・最後に一致した PDF の文字
+
     def mine(j):      # PDF の文字が、ほかの段落に当たっていない（この段落の違いとして扱ってよい）か
         return owner.get(lo + j, p.src) == p.src and not st.soft[lo + j]
 
@@ -346,13 +341,19 @@ def _classify(p, seq, gens, lo, ops, st: PdfStream, owner, res: PdfCheck):
         if tag == "insert" and (i1 == 0 or i1 == len(seq)):
             continue                     # 段落の前後の PDF の文字（別の段落など）
         js = [j for j in range(j1, j2) if mine(j)]
+        # 段落の先頭・末尾の違いでは、最初・最後に一致した文字と同じ行の PDF の文字だけを使う
+        # （前・後の行の文字は、照合しない短い段落（見出しの「註」など）や別の段落の文字の可能性が高い）
+        if i1 == 0:
+            js = [j for j in js if not any(st.newline_before[lo + x] for x in range(j + 1, first_eq + 1))]
+        if i2 == len(seq):
+            js = [j for j in js if not any(st.newline_before[lo + x] for x in range(last_eq + 1, j + 1))]
         if not any(c != SKIP for c, _ in seq[i1:i2]):
             # docx の側に文字がない（数式・脚注番号は PDF では文字になっている）。PDF にだけある文字は、
             # 図の中の文字などの可能性が高い長いものは除く
             if tag != "insert" or not js or len(js) >= 20:
                 continue
         regions.append((i1, i2, js[0] if js else j1, js[-1] + 1 if js else j1))
-    _report_regions(p, seq, gens, st, lo, regions, mine, res)
+    _report_regions(p, seq, gens, st, lo, regions, mine, locked, res)
     if width:
         res.width[p.src] = {seq[i][1]: c for i, c in width.items()}
     drops = set()
@@ -379,14 +380,20 @@ def _pdf_space(st: PdfStream, k: int) -> bool:
     """PDF の k 番目の文字の前に、本物の空白があるか。
 
     和文の文字（全角の記号を含む）の隣に PDF で見える空白は、両端そろえや字間の調整による見かけのものなので、空白とみなさない。
-    前後がどちらも半角の英数字・記号のとき（英文の単語の間）だけ、空白（行の折り返しを含む）とみなす。
+    前後がどちらも英文の文字（半角の英数字・記号、アクセント付きの文字、’ “ ” – などの記号）のとき（英文の単語の間）だけ、
+    空白（行の折り返しを含む）とみなす。
     """
     if k <= 0 or not (st.space_before[k] or st.newline_before[k]):
         return False
-    return ord(st.chars[k - 1]) < 0x80 and ord(st.chars[k]) < 0x80
+    return _latin(st.chars[k - 1]) and _latin(st.chars[k])
 
 
-def _report_regions(p, seq, gens, st: PdfStream, lo, regions, mine, res: PdfCheck, near=12):
+def _latin(c: str) -> bool:
+    o = ord(c)
+    return o < 0x250 or 0x2010 <= o <= 0x2027
+
+
+def _report_regions(p, seq, gens, st: PdfStream, lo, regions, mine, locked, res: PdfCheck, near=12):
     """違う部分を、近いものどうしまとめて TextDiff にする。"""
     merged = []
     for r in sorted(regions):
@@ -398,10 +405,13 @@ def _report_regions(p, seq, gens, st: PdfStream, lo, regions, mine, res: PdfChec
     text = p.plain()
     for i1, i2, j1, j2 in merged:
         pos = [q for _, q in seq[i1:i2] if q >= 0]
+        anchor_ok = True
         if pos:
             a, b = pos[0], pos[-1] + 1
-        else:                                   # docx の側に文字がない（PDF にだけある）
-            a = b = (seq[i1 - 1][1] + 1) if i1 > 0 and seq[i1 - 1][1] >= 0 else 0
+        else:                                   # docx の側に文字がない（PDF にだけある）: 直前の docx の文字の後に足す
+            prev = seq[i1 - 1] if i1 > 0 else None
+            anchor_ok = prev is not None and prev[1] >= 0 and prev[0] != SKIP and (i1 - 1) not in gens
+            a = b = (prev[1] + 1) if anchor_ok else max([q + 1 for _, q in seq[:i1] if q >= 0] or [0])
         dtext = text[a:b].replace(OBJ, "")
         num = "".join(seq[i][0] for i in range(i1, i2) if i in gens)
         if num:
@@ -417,19 +427,21 @@ def _report_regions(p, seq, gens, st: PdfStream, lo, regions, mine, res: PdfChec
         if fold_str(re.sub(r"\s", "", (num + text[a:b].replace(OBJ, "")))) == fold_str(re.sub(r"\s", "", ptext)):
             continue
         ctx = (text[max(0, a - 12):a] + "［" + text[a:b] + "］" + text[b:b + 12]).replace(OBJ, "")
-        res.diffs.append(TextDiff(p.src, dtext, ptext, ctx))
+        fixable = anchor_ok and not num and OBJ not in text[a:b] and not any(SKIP == seq[i][0] for i in range(i1, i2)) \
+            and not any(x in locked for x in range(a, max(b, a + 1)))
+        res.diffs.append(TextDiff(p.src, dtext, ptext, ctx, a, b, fixable))
 
 
 def fold_str(s: str) -> str:
     return "".join(fold(c) for c in s)
 
 
-def check_pdf(plan, pdf_path, apply: bool = True, fn_marks=None) -> PdfCheck:
+def check_pdf(plan, pdf_path, fn_marks=None) -> PdfCheck:
     """記事の PDF を読み、docx の段落と照合する。PDF を読めなければ ok=False（変換は続ける）。"""
     try:
         pages = extract_pages(pdf_path)
     except ImportError:
-        return PdfCheck(ok=False, apply=apply, message="PDF の文字を読むための pypdfium2 が入っていない（pip install pypdfium2）")
+        return PdfCheck(ok=False, message="PDF の文字を読むための pypdfium2 が入っていない（pip install pypdfium2）")
     except Exception as e:  # noqa: BLE001
-        return PdfCheck(ok=False, apply=apply, message=f"PDF を読めなかった: {e}")
-    return compare(plan, pages, apply, fn_marks)
+        return PdfCheck(ok=False, message=f"PDF を読めなかった: {e}")
+    return compare(plan, pages, fn_marks)

@@ -18,7 +18,7 @@ from .model import Exclusion, Para
 from .ooxml import is_ws
 from .structure import (ArticlePlan, BackSec, FigNode, FnNode, FormulaNode, ListNode, PNode, QuoteNode,
                         RefNode, Sec, TableNode, _para_text)
-from .tracking import AI, GEN, IMPLICIT, JX_NS, ORDER, PDFDROP, SPAN, WIDTH
+from .tracking import AI, GEN, IMPLICIT, JX_NS, ORDER, SPAN
 
 MML_NS = "http://www.w3.org/1998/Math/MathML"
 XLINK = "http://www.w3.org/1999/xlink"
@@ -75,17 +75,17 @@ class Builder:
                 fn.number = fn.number or marks[fn.word_id][0]
                 fn_numbers[fn.word_id] = (fn.fid, plan.pdf_numbers.get(("fnref", fn.word_id), marks[fn.word_id][1]))
         self.marks = marks
-        self.em = E.Emitter(self.name_image, fn_numbers, plan.moved_images, plan.pdf_edits)
+        self.em = E.Emitter(self.name_image, fn_numbers, plan.moved_images)
 
     def autonum(self, p) -> str:
-        """段落の Word の自動番号（出版版 PDF があれば、全角・半角を PDF に合わせたもの）。"""
+        """段落の Word の自動番号（ルート2 では、全角・半角を出版版 PDF に合わせたもの）。"""
         return self.plan.pdf_numbers.get(("auto", p.src), p.autonum)
 
     # ------------------------------------------------------------------ 画像
     def name_image(self, img) -> str:
         if id(img) in self._named:
             return img.export_name
-        # 同じ plan で組み立て直す（出版版 PDF に合わせる、DTD に合わない数式を取り消す）ときは、前の組み立てで付けた名前を使う。
+        # 同じ plan で組み立て直す（Word の番号を出版版 PDF に合わせる、DTD に合わない数式を取り消す）ときは、前の組み立てで付けた名前を使う。
         # 名前の有無にかかわらず、この組み立てで出力する画像として info.images に加える
         self._img_n += 1
         if not img.export_name:
@@ -710,8 +710,8 @@ class Builder:
 def word_note_marks(plan, journal) -> dict:
     """Word の脚注機能で書かれた注の番号: Word の脚注 ID -> (番号, 出力する文字列（設定 fn_mark。本誌は「1)」）)。
 
-    本文の脚注番号と注の一覧の先頭の両方に使う。出版版 PDF があれば、全角・半角を PDF に合わせたもの（plan.pdf_numbers）で
-    置き換えて出力する。
+    本文の脚注番号と注の一覧の先頭の両方に使う。ルート2（出版版 PDF に合わせてから作る）では、全角・半角を PDF に合わせたもの
+    （plan.pdf_numbers）で置き換えて出力する。
     """
     out = {}
     k = 0
@@ -737,8 +737,8 @@ def finalize(root):
     """追跡用の目印をすべて取り除いた写しを返す（文字列は変わらない）。"""
     import copy
     out = copy.deepcopy(root)
-    etree.strip_elements(out, f"{{{JX_NS}}}drop", PDFDROP, with_tail=False)
-    etree.strip_tags(out, SPAN, GEN, AI, WIDTH)
+    etree.strip_elements(out, f"{{{JX_NS}}}drop", with_tail=False)
+    etree.strip_tags(out, SPAN, GEN, AI)
     for el in out.iter():
         if not isinstance(el.tag, str):
             continue

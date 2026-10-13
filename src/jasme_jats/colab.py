@@ -138,17 +138,39 @@ def missing_images_box(res) -> str:
 
 
 def pdf_diff_box(res) -> str:
-    """出版版 PDF と文字が違う箇所があるときの表示（赤い枠）。なければ空文字。"""
-    pc = res.pdf_check
-    if pc is None or not pc.ok or not pc.diffs:
+    """出版版 PDF との照合で確認が必要なことがあるときの表示（赤い枠）。なければ空文字。
+
+    ルート1（docx から作る）: docx と PDF で文字が違う箇所。ルート2（出版版 PDF に合わせてから作る）: 直せなかった箇所と、
+    直した後も残る違い（直した docx は変換結果の ZIP に入る）。
+    """
+    pc, fx = res.pdf_check, res.docx_fix
+    if pc is None or not pc.ok:
+        return ""
+    if fx is not None:
+        rest = len(pc.diffs) + pc.width_count
+        if not fx.skipped and not rest:
+            return ""
+        items = "\n".join(f"・{f.src}: 「{f.old}」→「{f.new}」（{f.reason}）" for f in fx.skipped[:10])
+        more = f"\n…ほか {len(fx.skipped) - 10} 件" if len(fx.skipped) > 10 else ""
+        head = []
+        if fx.skipped:
+            head.append(f"直せなかった箇所 {len(fx.skipped)} 件")
+        if rest:
+            head.append(f"直した後も PDF と違う箇所 {rest} 件")
+        return error_box(
+            "出版版 PDF に合わせきれなかった箇所があります（要確認）: " + "、".join(head),
+            f"PDF に合わせて直した docx（{fx.path.name}、変換結果の ZIP に入っています）を Word で開き、レポートの 13 章と"
+            "照らして確認してください。XML は直した docx の文字のままです。" + (f"\n{items}{more}" if items else ""))
+    if not pc.diffs and not pc.width_count:
         return ""
     items = "\n".join(f"・{d.context}（docx「{d.docx}」/ PDF「{d.pdf}」）" for d in pc.diffs[:10])
     more = f"\n…ほか {len(pc.diffs) - 10} 件" if len(pc.diffs) > 10 else ""
+    width = f"、全角・半角の違いが {pc.width_count} 文字" if pc.width_count else ""
     return error_box(
-        f"出版版 PDF と文字が違う箇所が {len(pc.diffs)} 件あります（要確認）",
-        "受け取った docx が、著者校正を経た最終版ではない可能性があります。XML は docx の文字のままです。PDF と照らして確認し、"
-        "PDF が正しければ docx を直して、手順 2 からやり直してください（レポートの 13 章。英数字・記号の全角・半角の違いだけは"
-        + ("PDF に合わせました）。" if pc.apply else "、設定により PDF に合わせていません）。") + f"\n{items}{more}")
+        f"出版版 PDF と文字が違う箇所が {len(pc.diffs)} 件{width}あります（要確認）",
+        "受け取った docx が、著者校正を経た最終版ではない可能性があります。XML は docx の文字のままです（レポートの 13 章）。"
+        "PDF に合わせるときは、手順 2 で「出版版 PDF に合わせてから作る」を選んで変換し直すか、docx を直して手順 2 から"
+        "やり直してください。" + (f"\n{items}{more}" if items else ""))
 
 
 def unplaced_box(plan) -> str:
