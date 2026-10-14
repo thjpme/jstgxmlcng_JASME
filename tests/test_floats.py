@@ -4,7 +4,8 @@ import json
 import pytest
 from lxml import etree
 
-from conftest import DATA, FLOAT
+import make_fixtures as mf
+from conftest import DATA, FLOAT, FLOAT_TEXT
 from jasme_jats.ai_assist import AIOutcome, build_request, float_placements
 from jasme_jats.cli import main as cli_main
 from jasme_jats.model import Atom, Float, Layout, Para
@@ -167,6 +168,76 @@ def test_invalid_placements_are_rejected(journal, bad, why):
     out = AIOutcome(mode="manual")
     assert float_placements({"placements": [dict(bad, reason="", confidence="低")]}, plan, out) == {}
     assert why in out.rejected[0][1]
+
+
+def test_image_and_text_in_one_paragraph_of_a_float(journal, meta, tmp_path):
+    """図形の中で画像と文字が同じ段落にある図: 画像は図の <graphic> に入れ、段落の文字は図の直後の <p> に出す。
+    AI を使わない設定でも止まらない。キャプションのない図形は、これまでどおり画像も文字も 1 つの <p> に出す。"""
+    res = convert(FLOAT_TEXT, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    fid = res.fidelity
+    assert fid.ok and fid.final_ok and res.dtd_valid and res.jstage_issues == [], (fid.missing, fid.conflicts)
+    assert res.plan.unplaced_floats == [] and not any("説明文" in t for _, _, t in fid.excluded)
+    root = load(res)
+    mixed = next(p for p in res.plan.paras.values() if p.text_only().startswith("説明文：図1"))
+    fig = root.find(".//fig[@id='F1']")
+    assert [g.get(f"{{{XLINK}}}href") for g in fig.findall("graphic")] == [mixed.images[0].export_name]
+    assert "説明文" not in "".join(fig.itertext())
+    nxt = fig.getnext()
+    assert nxt.tag == "p" and "".join(nxt.itertext()) == "説明文：図1の画像と同じ段落にある文字。"
+    assert nxt.find("inline-graphic") is None                            # 画像は図に移した（段落の中に二重に出さない）
+    assert after(body_sequence(root), "試験（2024）", 3) == ["F1", "説明文：図1の画像と", "この段落に図1のテキ"]
+    assert any("画像と文字が同じ段落にある" in d.message and d.src == mixed.src for d in res.plan.decisions)
+    # キャプションのない図形: これまでどおり（画像も文字も 1 つの <p>。図にはしない）
+    p = next(p for p in root.iter("p") if "キャプションのない図形の文字" in "".join(p.itertext()))
+    assert p.find("inline-graphic") is not None and len(list(root.iter("fig"))) == 1
+    assert len(res.images) == 2
+
+
+def test_text_in_figure_image_paragraph_is_not_excluded(journal, meta):
+    """図の画像の段落に空白以外の文字があっても（構造の組み立ての誤り）、書き出しでは除外にせず、警告に記録する。
+    その文字は XML に出ないので、不変性チェックで出力漏れとして不合格になる（黙って落ちない）。"""
+    from jasme_jats.builder import build
+    from jasme_jats.fidelity import verify
+    from jasme_jats.structure import PNode
+    _, plan, _ = _mechanical(FLOAT_TEXT, journal)
+    mixed = next(p for p in plan.paras.values() if p.text_only().startswith("説明文：図1"))
+    # 0.18.1 の組み方を模す: 画像と文字が同じ段落を図 F1 の画像の段落にし、図の直後の段落からは外す
+    [fig] = [f for f in plan.figures if f.fid == "F1"]
+    fig.image_paras.append(mixed)
+    sec = next(s for s in plan.body if fig in s.children)
+    sec.children = [n for n in sec.children if not (isinstance(n, PNode) and n.para is mixed)]
+    root, info = build(plan, meta, journal)
+    assert not any(e.src == mixed.src for e in info.exclusions)
+    assert any(f"画像の段落 {mixed.src} に画像以外の文字がある" in w and "変換ツールの不具合" in w for w in info.warnings)
+    res = verify(FLOAT_TEXT, root, plan.exclusions + info.exclusions)
+    assert not res.ok and mixed.src in [s for s, _ in res.missing]
+
+
+@pytest.mark.parametrize("by", ["image", "paragraph"])
+def test_ai_placement_of_image_and_text_in_one_paragraph(journal, meta, tmp_path, by):
+    """位置を決められない図形で、画像と文字が同じ段落の画像（またはその段落）を AI が図の本体に指定した場合も、
+    画像は図に入れ、段落の文字は図の直後の <p> に出す。"""
+    path = tmp_path / "float_text_down.docx"
+    mf.make_float_text(path, down_cm=2)          # 図1 のテキストボックスをアンカー段落から 2 cm 下にずらす
+    with pytest.raises(AIRequiredError):
+        convert(path, meta, journal, Options(out_dir=tmp_path / "none", convert_metafiles=False))
+    doc, plan, _ = _mechanical(path, journal)
+    paras = list(plan.paras.values())
+    mixed = next(p for p in paras if p.text_only().startswith("説明文：図1"))
+    cap = next(p for p in paras if p.text_only().startswith("図1\u3000"))
+    anchor = next(p for p in paras if p.text_only().startswith("この段落に図1"))
+    body = [mixed.images[0].image_id] if by == "image" else [mixed.src]
+    resp = {"operations": [], "notes": [], "placements": [{"float": mixed.float_id, "after": anchor.src, "items": [
+        {"kind": "fig", "caption": [cap.src], "body": body}], "reason": "試験", "confidence": "中"}]}
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / by, ai_mode="manual",
+                                               ai_response=json.dumps(resp, ensure_ascii=False), convert_metafiles=False))
+    assert res.ai.rejected == [] and res.plan.unplaced_floats == []
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    root = load(res)
+    assert after(body_sequence(root), "この段落に図1", 2) == ["F1", "説明文：図1の画像と"]
+    fig = root.find(".//fig[@id='F1']")
+    assert len(fig.findall("graphic")) == 1 and fig.getnext().find("inline-graphic") is None
+    assert any(f"画像と文字が同じ段落 {mixed.src}" in d.message for _, d in res.ai.accepted)
 
 
 def test_estimate_top_left_counts_lines():

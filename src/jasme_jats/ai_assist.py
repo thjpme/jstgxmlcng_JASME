@@ -25,7 +25,7 @@ from lxml import etree
 from .floats import describe, estimate_top_left
 from .model import OBJ, LinkSpec, Para
 from .omml import MML_NS, OmmlConverter, math_display_text
-from .structure import ArticlePlan, Classifier, _para_text
+from .structure import ArticlePlan, _para_text
 
 DEFAULT_MODEL = "claude-opus-5-5"
 
@@ -890,8 +890,11 @@ def _placement_problem(pl, plan: ArticlePlan, body: set, done: dict) -> str:
             q = paras.get(x) or cells.get(x) or img_paras.get(x)
             if q is None:
                 return f"本体 {x} は図形 {fid} の中の表・画像・画像の段落ではない"
-            if not Classifier.is_image_para(q):
-                return f"本体 {x} の段落 {q.src} には画像以外の文字がある（文字はキャプションか、指定しない段落として残す）"
+            if not q.images:
+                return (f"本体 {x} の段落 {q.src} には画像がない（画像以外の文字だけの段落は、キャプションか、"
+                        "指定しない段落として残す）")
+            # 画像と文字が同じ段落（画像だけの段落でないもの）も本体にできる。画像は図に入り、段落は文字ごと図の直後に
+            # 本文の段落として出る（structure.Classifier.float_from_spec）
             if q.src in cell_table:
                 split.add(cell_table[q.src])
         for x in list(caps) + [img_paras[b].src if b in img_paras and b not in group_imgs else b for b in bodies]:

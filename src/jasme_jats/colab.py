@@ -137,6 +137,19 @@ def missing_images_box(res) -> str:
         f"{graphics_dir(res)} に入れます（レポートの冒頭と 9 章）。\n{items}")
 
 
+def lost_images_box(res) -> str:
+    """docx にあるのに XML に入らなかった画像（引用文献の段落の中の画像など）があるときの表示（赤い枠）。なければ空文字。"""
+    from .report import LOST_IMAGES_ACTION, LOST_IMAGES_WHY, lost_image_label
+    lost = res.lost_images
+    if not lost:
+        return ""
+    items = "\n".join(f"・{lost_image_label(li)}: {li.reason}" for li in lost)
+    return error_box(
+        f"XML に入らなかった画像が {len(lost)} 件あります（要対応）",
+        f"{LOST_IMAGES_WHY}{LOST_IMAGES_ACTION}変換し直すときは、Word で直した docx を手順 2 でアップロードし直し、そこから"
+        f"順にやり直してください（レポートの冒頭と 9 章）。\n{items}")
+
+
 def pdf_diff_box(res) -> str:
     """出版版 PDF との照合で確認が必要なことがあるときの表示（赤い枠）。なければ空文字。
 

@@ -8,8 +8,9 @@
   6. 文字の不変性チェック（fidelity）… AI 補完を行った場合も、必ずこの最終段階で行う
   7. 目印を取り除いた最終出力を作り、もう一度文字列を照合する（fidelity.final_check）
   8. J-STAGE 指定 DTD で検証する（validate）
-  9. J-STAGE のアップロード時のチェックのうち XML だけで判定できるものを再現する（jstage_rules）
- 10. 画像の書き出し、J-STAGE のフォルダ構成と ZIP、レポート（images, package, report）
+  9. docx の画像のうち XML に出力しなかったもの（画像を置けない場所・出力しなかった段落の中の画像）を調べる（lost_images）
+ 10. J-STAGE のアップロード時のチェックのうち XML だけで判定できるものを再現する（jstage_rules）
+ 11. 画像の書き出し、J-STAGE のフォルダ構成と ZIP、レポート（images, package, report）
 
 作り方は 2 通り（Options.route）:
   ルート1（docx）: docx から作る。docx の文字は 1 文字も変えない。記事の PDF があれば照合して、違いをレポートに載せるだけ（pdfmatch）
@@ -34,12 +35,13 @@ from .fidelity import final_check, verify
 from .images import ImageResult, export_images, user_image
 from .jstage_rules import check as jstage_check
 from .linker import cited_refs, link
-from .model import Decision
+from .model import Decision, LostImage
 from .package import article_dir, make_zip, write_package
 from .pdfdocx import DocxFix, make_fixed_docx
 from .pdfmatch import PdfCheck, check_pdf
 from .report import images_to_prepare, render, render_ai_only
 from .structure import classify
+from .tracking import SPAN
 from .validate import validate
 
 
@@ -123,6 +125,8 @@ class Result:
     output_note: str = ""
     forced_floats: list = field(default_factory=list)   # AI による補完でも位置が決まらず、本文の冒頭に仮に置いた図表の説明
     pdf_check: Optional[PdfCheck] = None                # 出版版 PDF との照合（PDF がなければ None）。ルート2 では直した docx との照合
+    lost_images: list = field(default_factory=list)     # docx にあるのに XML に出力しなかった画像（LostImage。要対応）
+    hidden_images: list = field(default_factory=list)   # 隠し文字の中の画像の ID（Word で表示されないので出力しない）
     route: str = "docx"
     docx_fix: Optional[DocxFix] = None                  # ルート2: PDF に合わせて直した docx と、直した箇所
     xml_path: Optional[Path] = None
@@ -162,6 +166,75 @@ def tool_version() -> str:
     except Exception:  # noqa: BLE001
         pass
     return __version__
+
+
+# 画像を置けない文脈（emit.Ctx の images=False）の要素。段落の文字をこの要素の中に出力していれば、その段落の画像は出力しない
+NO_IMAGE_PLACES = {"mixed-citation": "引用文献の段落の中にある（引用文献には画像を出力できない）",
+                   "title-group": "題目の段落の中にある（題目には画像を出力できない）",
+                   "contrib": "著者名の段落の中にある（著者名には画像を出力できない）",
+                   "aff": "所属の段落の中にある（所属には画像を出力できない）",
+                   "label": "図表・見出しの番号の中にある（番号には画像を出力できない）"}
+REGION_JA = {"front_ja": "和文の冒頭部", "authors": "著者表", "body": "本文", "notes": "付記", "ack": "謝辞", "fn": "注",
+             "refs": "引用文献", "back": "後付け", "front_en": "英文の部分", "app": "資料", "excluded": "出力しなかった段落"}
+# Word の脚注・文末脚注の段落（ID の頭文字。plan.locations と plan.region がないときの場所）
+NOTE_PARTS = {"f": "Word の脚注", "e": "Word の文末脚注"}
+
+
+def lost_images(doc, plan, root, info, exclusions) -> tuple:
+    """docx の画像のうち、XML に出力しなかったもの。戻り値: (LostImage の一覧, 隠し文字の中の画像の ID の一覧)。
+
+    不変性チェック（fidelity）は文字しか見ないので、画像を置けない文脈（題目・著者名・所属・引用文献・番号。emit の
+    images=False）の段落や、出力しなかった段落（除外）の中の画像は、ここで調べないと XML からも Graphics/ からも黙って消える。
+    root は組み立てた XML（jx:span の目印が残っているもの）、info はその組み立ての BuildInfo（出力した画像は info.images）。
+    理由は、画像のある段落の文字を XML のどこに出力したか（jx:span の祖先の要素）と、除外の記録から推定する。
+    隠し文字のランの中の画像（ImageRef.hidden）は、Word で表示されないので出力しない（隠し文字と同じ扱い）。別に返す。
+    """
+    out = {img.image_id for img in info.images}
+    holder = {}                                  # 画像の ID -> その画像のアトムがある段落
+    for p in plan.paras.values():
+        for img in p.images:
+            holder.setdefault(img.image_id, p)
+    places = {}                                  # 段落 ID -> その段落の文字を出力した場所（画像を置けない文脈の理由か ""）
+    for sp in root.iter(SPAN):
+        name = next((NO_IMAGE_PLACES[a.tag] for a in sp.iterancestors() if a.tag in NO_IMAGE_PLACES), "")
+        places.setdefault(sp.get("src"), []).append(name)
+    excluded = {}
+    for e in exclusions:
+        excluded.setdefault(e.src, e.reason)
+    floats = {fl.fid: fl for fl in doc.floats}
+    lost, hidden = [], []
+    for img in doc.images:
+        if img.image_id in out:
+            continue
+        if img.hidden:
+            hidden.append(img.image_id)
+            continue
+        p = holder.get(img.image_id)
+        if p is None:
+            lost.append(LostImage(img.image_id, "", "", "画像のある段落が見つからない（変換ツールの不具合の可能性）",
+                                  source=img.target))
+            continue
+        if any(places.get(p.src, [])):
+            reason = next(x for x in places[p.src] if x)
+        elif p.src in excluded:
+            reason = f"XML に出力しなかった段落（理由「{excluded[p.src]}」）の中にある"
+        elif p.src in places:
+            reason = "段落は XML に出力したが、画像を出力していない（変換ツールの不具合の可能性）"
+        else:
+            reason = "段落を XML に出力していない（変換ツールの不具合の可能性）"
+        fl = floats.get(img.float_id or p.float_id)
+        if fl is not None:
+            # 画像だけの段落でも Word で探せるように、図形が結び付いている段落（アンカー段落）の文字も示す
+            anchor = plan.paras.get(fl.anchor_src)
+            head = anchor.text_only().strip()[:20] if anchor is not None else ""
+            reason += (f"。テキストボックス・グループ図形 {fl.fid} の中の画像で、図形は段落 {fl.anchor_src}"
+                       f"{f'「{head}」' if head else ' '}に結び付いている")
+        elif p.in_textbox:
+            reason += "。テキストボックスの中の画像"
+        loc = (plan.locations.get(p.src) or REGION_JA.get(plan.region.get(p.src, ""), "")
+               or NOTE_PARTS.get(p.src[:1], ""))
+        lost.append(LostImage(img.image_id, p.src, loc, reason, text=p.text_only().strip()[:20], source=img.target))
+    return lost, hidden
 
 
 def _mechanical(docx_path, journal, overrides=None, placements=None):
@@ -279,6 +352,9 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         final_check(root, xml_bytes, fid)
         valid, errors = validate(xml_bytes)
 
+    # 画像の出力漏れ（不変性チェックは文字しか見ない）
+    lost, hidden_images = lost_images(doc, plan, root, info, plan.exclusions + info.exclusions)
+
     # ---------------------------------------------------------------- 出力
     adir = article_dir(out_dir, journal, meta)
     images = export_images(doc, info.images, adir / "Graphics", convert_metafiles=opts.convert_metafiles)
@@ -326,7 +402,8 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         link_counts=linker.count, unresolved_after=unresolved_after, images=images, warnings=warnings, ai=outcome,
         build_notes=build_notes, hidden_text=doc.hidden_text, tracked_changes=doc.tracked_changes,
         comments=doc.comments, has_pdf=has_pdf, output_note=output_note, xml_path=flat_xml, zip_path=zip_path,
-        prompt_path=prompt_path, forced_floats=forced_floats, pdf_check=pdf_check, route=opts.route, docx_fix=docx_fix)
+        prompt_path=prompt_path, forced_floats=forced_floats, pdf_check=pdf_check, route=opts.route, docx_fix=docx_fix,
+        lost_images=lost, hidden_images=hidden_images)
     report_path = out_dir / f"{aid}_変換レポート.md"
     report_path.write_text(render(res), encoding="utf-8")
     res.report_path = report_path

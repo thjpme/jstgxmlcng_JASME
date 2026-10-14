@@ -1,10 +1,11 @@
 """docx の読み取り: 中間表現の文字列が、独立に取り出した docx の文字列と一致すること。"""
 import pytest
 
-from conftest import ALL_DOCS, EDGE, FLOAT, FULL
+from conftest import ALL_DOCS, EDGE, FLOAT, FLOAT_TEXT, FULL, READER
 from jasme_jats.docx_reader import read_docx
+from jasme_jats.fidelity import source_texts
+from jasme_jats.model import Para, Table
 from jasme_jats.omml import math_plain, omml_to_mathml
-from jasme_jats.ooxml import DocxPackage, canonical_text, paragraph_ids
 
 
 def atoms_text(p):
@@ -17,15 +18,81 @@ def atoms_text(p):
     return "".join(out)
 
 
-@pytest.mark.parametrize("path", ALL_DOCS + [FLOAT], ids=lambda p: p.name)
+def read_paragraphs(doc):
+    """読み取った段落すべて（本文・表・テキストボックスと、Word の脚注・文末脚注）。"""
+    yield from doc.all_paragraphs()
+    for notes in (doc.footnotes, doc.endnotes):
+        for paras in notes.values():
+            yield from paras
+
+
+@pytest.mark.parametrize("path", ALL_DOCS + [FLOAT, FLOAT_TEXT], ids=lambda p: p.name)
 def test_reader_matches_canonical(path):
     doc = read_docx(path)
-    root = DocxPackage(path).xml("word/document.xml")
-    canon = {pid: canonical_text(p) for p, pid in paragraph_ids(root, "d").items()}
-    paras = list(doc.all_paragraphs())
+    # 検証側（不変性チェック）と同じく、本文・脚注・文末脚注のすべての w:p を数える
+    canon = source_texts(path)
+    paras = list(read_paragraphs(doc))
     assert paras
     for p in paras:
         assert atoms_text(p) == canon[p.src], p.src
+    # 逆向き: 文字のある段落は、すべて 1 回だけ読まれている（読み落とすと、不変性チェックで「出力漏れ」になる）
+    srcs = [p.src for p in paras]
+    read = set(srcs)
+    assert len(srcs) == len(read), sorted(s for s in read if srcs.count(s) > 1)
+    assert [(pid, text) for pid, text in canon.items() if text and pid not in read] == []
+
+
+def table_with(doc, text):
+    """セルに text の段落がある表（テキストボックスの中の表を含む）。"""
+    def tables(blocks):
+        for b in blocks:
+            if isinstance(b, Table):
+                yield b
+                for r in b.rows:
+                    for c in r.cells:
+                        yield from tables(c.blocks)
+    found = [t for t in tables(doc.blocks) if any(p.text_only() == text for p in t.paragraphs())]
+    assert len(found) == 1, text
+    return found[0]
+
+
+def cell_texts(t):
+    return [["".join(p.text_only() for p in c.blocks if isinstance(p, Para)) for c in r.cells] for r in t.rows]
+
+
+@pytest.mark.parametrize("wrapped, rows", [
+    # 行をコンテンツコントロール（w:sdt）に包む
+    ("SDTで包んだ行", [["区分", "内容"], ["前", "SDTの行の前"], ["包んだ行", "SDTで包んだ行"], ["後", "SDTの行の後"]]),
+    # 行を w:customXml に包む
+    ("XMLで包んだ行", [["区分", "内容"], ["前", "XMLの行の前"], ["包んだ行", "XMLで包んだ行"], ["後", "XMLの行の後"]]),
+    # 行の中のセルを w:customXml・w:sdt に包む
+    ("XMLで包んだセル", [["左", "中1", "中2", "右"], ["セルの左", "XMLで包んだセル", "SDTで包んだセル", "セルの右"]]),
+    # 入れ子の w:sdt（Word の繰り返しセクション）と、w:sdt の中の w:customXml に包んだ行
+    ("入れ子のSDTの1行目", [["区分", "内容"], ["入れ子1", "入れ子のSDTの1行目"], ["入れ子2", "入れ子のSDTの2行目"],
+                      ["入れ子3", "XMLを包んだSDTの行"], ["後", "入れ子の行の後"]]),
+    # テキストボックスの中で w:sdt に包んだ表
+    ("テキストボックスのSDTの表", [["観点", "内容"], ["包んだ表", "テキストボックスのSDTの表"]]),
+], ids=["sdt-row", "customXml-row", "wrapped-cells", "nested-sdt-rows", "textbox-sdt-table"])
+def test_wrapped_table_rows_and_cells(wrapped, rows):
+    """w:sdt・w:customXml に包まれた行・セルも、前後の行・セルと文書の順に読む。"""
+    t = table_with(read_docx(READER), wrapped)
+    assert len(t.rows) == len(rows)
+    assert cell_texts(t) == rows
+
+
+def test_textbox_paragraphs_inside_sdt():
+    """テキストボックスの中で w:sdt・w:customXml に包まれた段落も、テキストボックスの段落として読む。"""
+    doc = read_docx(READER)
+    paras = {p.text_only(): p for p in doc.all_paragraphs()}
+    image_para = next(p for p in doc.all_paragraphs() for a in p.atoms
+                      if a.kind == "image" and a.image.target == "word/media/reader_tb.png")
+    cap = paras["図1\u3000コンテンツコントロールに包んだキャプション"]
+    assert image_para.in_textbox and cap.in_textbox
+    assert cap.float_id and cap.float_id == image_para.float_id
+    # w:customXml に包んだ表キャプションと、w:sdt に包んだ表は、同じ図形の中身になる
+    tcap = paras["表5\u3000テキストボックスの中の包まれた表"]
+    t = table_with(doc, "テキストボックスのSDTの表")
+    assert tcap.in_textbox and tcap.float_id and tcap.float_id == t.float_id != cap.float_id
 
 
 def test_edge_cases():

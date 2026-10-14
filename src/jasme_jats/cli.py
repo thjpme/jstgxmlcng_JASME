@@ -15,7 +15,8 @@ from pathlib import Path
 from .ai_assist import API_KEY_NAMES, DEFAULT_MODEL
 from .config import ArticleMeta, JournalConfig
 from .pipeline import AIRequiredError, Options, add_images, convert
-from .report import graphics_dir, images_to_prepare, pdf_summary
+from .report import (LOST_IMAGES_ACTION, PROVISIONAL, graphics_dir, images_to_prepare, lost_image_label, pdf_summary,
+                     provisional_exclusions)
 
 
 def main(argv=None):
@@ -97,13 +98,22 @@ def main(argv=None):
         print(f"要対応: 画像ファイルを用意できなかった図 {len(need)} 件。画像を作り、同じ名前でフォルダに入れて --images で"
               f"指定するか、ZIP の中の {graphics_dir(res)} に入れること（レポートの冒頭と 9 章）: " + ", ".join(f"{name}（{(cap[:20] + '…' if len(cap) > 20 else cap) or 'キャプションなし'}）" for name, cap, _ in need),
               file=sys.stderr)
+    lost = res.lost_images
+    if lost:
+        print(f"要対応: XML に入らなかった画像 {len(lost)} 件（画像を出力できない引用文献・題目・著者名・所属の段落や、"
+              f"出力しなかった段落の中にある。レポートの冒頭と 9 章）。{LOST_IMAGES_ACTION}\n"
+              + "\n".join(f"  {lost_image_label(li)}: {li.reason}" for li in lost), file=sys.stderr)
+    # 文字だけのテキストボックスの段落・Word の文末脚注を XML に出力しなかったこと（暫定の知らせ。終了コードは変えない）
+    for kind, rows in provisional_exclusions(res):
+        what, detail, _ = PROVISIONAL[kind]
+        print(f"要確認: {what.format(n=len(rows))}を、XML に出力していません（レポートの冒頭と 6 章）。{detail}", file=sys.stderr)
     # AI の回答を反映した後（API、または手動モードで回答あり）も位置を決められない図表が残っている
     ai_applied = res.ai.mode == "api" or (res.ai.mode == "manual" and a.ai_response)
     if ai_applied and res.plan.unplaced_floats:
         print("位置を決められなかった図表を本文の冒頭に仮に置きました。XML の中で手作業で正しい位置に移してください（レポート 3 章）: "
               + ", ".join(res.plan.unplaced_floats), file=sys.stderr)
         return 1
-    return 0 if res.ok else 1
+    return 0 if res.ok and not lost else 1
 
 
 def user_images_in(folder: Path, need) -> dict:

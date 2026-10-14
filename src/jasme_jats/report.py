@@ -13,6 +13,7 @@ from pathlib import Path
 from .ai_assist import PROVIDERS
 from .linker import body_paragraphs, linked_ids
 from .package import article_dir
+from .structure import ENDNOTE_EXCLUDED, TEXTBOX_TEXT_EXCLUDED
 
 
 def esc(s, n=None) -> str:
@@ -92,6 +93,69 @@ def images_to_prepare(r) -> list:
             why = i.message
         out.append((i.name, caps.get(i.image_id, ""), why))
     return out
+
+
+LOST_IMAGES_WHY = ("docx にあるのに、画像を出力できない場所（引用文献・題目・著者名・所属の段落など）や、XML に出力しなかった"
+                   "段落の中にあるため、XML にも Graphics/ にも入っていません。このままでは、その画像は J-STAGE の画面に表示されません。")
+LOST_IMAGES_ACTION = ("本文に必要な画像なら、Word でその画像（テキストボックスなどの図形に入っているときは図形ごと）を本文の段落に"
+                      "移してから、変換し直してください。PDF にない装飾など、要らない画像なら、対応は要りません。")
+
+
+def lost_image_label(li) -> str:
+    """XML に入らなかった画像（pipeline.lost_images）1 件の見出し。例: img3（段落 d45「試験太郎（2020）」、引用文献 2件目）。
+
+    レポートの冒頭・9 章・14 章、Colab の枠、コマンドラインの表示で使う。
+    """
+    where = []
+    if li.src:
+        where.append(f"段落 {li.src}" + (f"「{li.text}」" if li.text else ""))
+    if li.location:
+        where.append(li.location)
+    return f"{li.image_id}（{'、'.join(where)}）" if where else li.image_id
+
+
+def provisional_exclusions(r) -> list:
+    """XML に出力しなかった、文字だけのテキストボックスの段落と Word の文末脚注の段落（要確認）。
+
+    どちらも今の版では XML に出力できないので、レポートの 6 章に載るだけだと見落とされる。出力できるようになるまで、
+    レポートの冒頭と 14 章で件数と対処を知らせる（暫定の知らせ）。
+    戻り値: [(種類 "textbox" / "endnote", [(段落, 文字)])]。該当がなければ、その種類は入らない。
+    """
+    out = []
+    for kind, reason in (("textbox", TEXTBOX_TEXT_EXCLUDED), ("endnote", ENDNOTE_EXCLUDED)):
+        rows = [(src, text) for src, why, text in r.fidelity.excluded if why == reason]
+        if rows:
+            out.append((kind, rows))
+    return out
+
+
+# 暫定の知らせ: 種類 -> (何を, 冒頭の説明と対処, 14 章の対処)
+PROVISIONAL = {
+    "textbox": ("テキストボックスの中の文字 {n} 段落",
+                "今の版では、図・表を含まないテキストボックス（囲み）の文字は、図の一部とみなして本文から除いています。"
+                "問題文などの囲みで本文に必要な文字なら、Word でその文字をテキストボックスの外（本文の段落）に出してから、"
+                "変換し直してください。",
+                "本文に必要か確かめ、問題文などの囲みなら Word でテキストボックスの外（本文の段落）に出して変換し直す"),
+    "endnote": ("Word の文末脚注 {n} 段落",
+                "今の版では、Word の文末脚注を XML に出力できません。注の内容を、本文の注（テンプレートの書き方: 本文に上付きの"
+                "「1)」を書き、注は「注」の節にまとめる）に移してから、変換し直してください。",
+                "本文の注（テンプレートの書き方: 本文に上付きの「1)」、注は「注」の節）に移して変換し直す"),
+}
+
+
+def _para_samples(rows, n=5) -> str:
+    """段落の例（例: d12「文字の冒頭」、d13「…」）。文字のない段落（画像だけの段落など）は「d14（文字なし）」と書く。"""
+    return ("、".join(f"{src}「{esc(text.strip(), 15)}」" if text.strip() else f"{src}（文字なし）" for src, text in rows[:n])
+            + ("ほか" if len(rows) > n else ""))
+
+
+def image_summary(r) -> str:
+    """1 章の要約の「画像」の行。XML に入らなかった画像があるときは、XML に出力した画像と分けて書く。"""
+    need = sum(1 for i in r.images if i.status in ("failed", "missing"))
+    if not r.lost_images:
+        return f"{len(r.images)} 件（要対応 {need} 件、9 章）"
+    return (f"XML に出力 {len(r.images)} 件（うち要対応 {need} 件）。ほかに XML に入らなかった画像が {len(r.lost_images)} 件あり、"
+            "要対応（9 章）")
 
 
 def graphics_dir(r) -> str:
@@ -272,7 +336,7 @@ def render(r) -> str:
         ("機械的に付けたリンク", links),
         ("AI が付けたリンク・判断（2 章）", f"採用 {len(ai_acc)} 件 / 不採用 {len(ai.rejected)} 件" if ai.mode != "none" else "AI 補完なし"),
         ("機械処理で解決できなかった箇所（3 章）", f"{len(r.unresolved_after)} 件"),
-        ("画像", f"{len(r.images)} 件（要対応 {sum(1 for i in r.images if i.status in ('failed', 'missing'))} 件、9 章）"),
+        ("画像", image_summary(r)),
         ("警告", f"{len(r.warnings)} 件（10 章）"),
         ("出版版 PDF との照合", pdf_summary(r)),
     ]
@@ -299,6 +363,13 @@ def render(r) -> str:
         for name, cap, why in need:
             L.append(f"> - `{name}`: {esc(cap, 40) or '（キャプションなし）'}（{esc(why)}）")
         L.append("")
+    lost = r.lost_images
+    if lost:
+        L.append(f"> **要対応: XML に入らなかった画像が {len(lost)} 件あります（9 章）。** {LOST_IMAGES_WHY}{LOST_IMAGES_ACTION}")
+        L.append(">")
+        for li in lost:
+            L.append(f"> - {esc(lost_image_label(li))}: {esc(li.reason)}")
+        L.append("")
     pc, fx = r.pdf_check, r.docx_fix
     if fx is not None:
         L.append(f"> **出版版 PDF に合わせて docx を直してから変換しました（13 章）。** 直した docx（{esc(fx.path.name)}）は "
@@ -310,6 +381,12 @@ def render(r) -> str:
         L.append(f"> **要確認: 出版版 PDF と文字が違う箇所が {len(pc.diffs)} 件、全角・半角の違いが {pc.width_count} 文字あります"
                  "（13 章）。** 受け取った docx が、著者校正を経た最終版ではない可能性があります。XML は docx の文字のままです。"
                  "PDF に合わせるときは、「出版版 PDF に合わせてから作る」で変換し直すか、docx を直して変換し直してください。")
+        L.append("")
+    provisional = provisional_exclusions(r)
+    for kind, prow in provisional:
+        title, detail, _ = PROVISIONAL[kind]
+        L.append(f"> **要確認: {title.format(n=len(prow))}を、XML に出力していません（6 章）。** {detail}"
+                 f"対象の段落: {_para_samples(prow)}")
         L.append("")
     if r.output_note:
         L.append(r.output_note)
@@ -403,6 +480,16 @@ def render(r) -> str:
         L.append("")
         L.append(table(["要素", "文字"], [(p, esc(t, 40)) for p, t in fid.stray[:50]]))
         L.append("")
+    if fid.conflicts:
+        L.append("XML に出力したのに、出力しない段落としても記録されている段落（変換ツールの不具合）:")
+        L.append("")
+        L.append(table(["段落", "除外の理由", "文字"], [(s, reason, esc(t, 80)) for s, reason, t in fid.conflicts]))
+        L.append("")
+    if fid.bad_excluded:
+        L.append("空白だけの段落として出力しなかったのに、docx では空白以外の文字がある段落（変換ツールの不具合）:")
+        L.append("")
+        L.append(table(["段落", "除外の理由", "docx の文字"], [(s, reason, esc(t, 80)) for s, reason, t in fid.bad_excluded]))
+        L.append("")
     if fid.duplicates or fid.unknown or fid.bad_drops:
         L.append(f"重複出力: {fid.duplicates} / 不明な段落: {fid.unknown} / 空白以外を落とした箇所: {fid.bad_drops}")
         L.append("")
@@ -420,6 +507,9 @@ def render(r) -> str:
     other = []
     if r.hidden_text:
         other.append("隠し文字（Word で非表示に設定された文字）: " + "、".join(f"［{s}］{esc(t, 40)}" for s, t in r.hidden_text))
+    if r.hidden_images:
+        other.append(f"隠し文字の中の画像 {len(r.hidden_images)} 件（{'、'.join(r.hidden_images)}）: Word で表示されないので、"
+                     "出力していません。")
     if r.tracked_changes:
         other.append(f"変更履歴が {r.tracked_changes} 箇所あります。挿入は反映し、削除は出力していません（Word で表示される最終版と同じ）。")
     if r.comments:
@@ -477,9 +567,24 @@ def render(r) -> str:
               "user": "利用者が用意"}
         L.append(table(["画像", "出力ファイル（Graphics/）", "docx 内のファイル", "状態", "備考"],
                        [(i.image_id, i.name, i.source, st.get(i.status, i.status), i.message) for i in r.images]))
+    elif lost or r.hidden_images:
+        L.append("XML に出力した画像はありません。")
     else:
         L.append("画像はありません。")
     L.append("")
+    if lost:
+        L.append("### XML に入らなかった画像（要対応）")
+        L.append("")
+        L.append(f"{LOST_IMAGES_WHY}{LOST_IMAGES_ACTION}")
+        L.append("")
+        L.append(table(["画像", "docx 内のファイル", "段落", "場所", "段落の文字", "出力しなかった理由（推定）"],
+                       [(li.image_id, li.source or "（Word の図形）", li.src or "-", li.location, li.text, li.reason)
+                        for li in lost]))
+        L.append("")
+    if r.hidden_images:
+        L.append(f"隠し文字（Word で非表示に設定された文字）の中の画像 {len(r.hidden_images)} 件（{'、'.join(r.hidden_images)}）は、"
+                 "Word で表示されないので出力していません（6 章）。")
+        L.append("")
 
     # ------------------------------------------------------------------ 10. 警告
     L.append("## 10. 警告")
@@ -565,8 +670,14 @@ def render(r) -> str:
     if need:
         L.append(f"- [ ] **画像ファイルを用意できなかった図 {len(need)} 件**の画像を作り、ZIP の中の `{graphics_dir(r)}` に入れる: "
                  + "、".join(f"`{name}`（{esc(cap, 20) or 'キャプションなし'}）" for name, cap, _ in need))
-    elif r.images:
+    elif r.images and not lost:
         L.append(f"- [x] 画像 {len(r.images)} 件はすべて Graphics/ に入っている（9 章）")
+    if lost:
+        L.append(f"- [ ] **XML に入らなかった画像 {len(lost)} 件**（9 章）が本文に必要か確かめ、必要なら Word でその画像を本文の段落に"
+                 "移して変換し直す: " + "、".join(esc(lost_image_label(li)) for li in lost))
+    for kind, prow in provisional:
+        title, _, todo = PROVISIONAL[kind]
+        L.append(f"- [ ] **{title.format(n=len(prow))}**（6 章。XML に出力していない）: {todo}")
     L.append("- [ ] 11 章の書誌情報（巻・号・頁・日付・DOI）を確認する")
     L.append(f"- [ ] J-STAGE 編集登載システムで、巻（{esc(m.volume or '?')}）・号（{esc(m.issue or '?')}）と、その号のセクション"
              "（目次の見出し。例: 論文）を作成しておく（ないとアップロード時に EMSGM181E「巻号が学会誌別巻号の設定に存在しません」・"

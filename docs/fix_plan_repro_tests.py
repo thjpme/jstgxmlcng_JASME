@@ -3,6 +3,10 @@
 このファイルは tests/ の外に置いてあり、通常のテスト（python -m pytest）では実行されない。
 各テストは「今の誤った振る舞い」を assert で固定している（名前に PROBLEM を付けたもの）。修正すると、その assert が失敗する。
 修正の作業では、該当するテストの期待を逆にして tests/ の正式なテストに取り込む（docs/FIX_PLAN.md の「計画全体で足した作業」）。
+直した単位のテストは、このファイルから取り除く。単位 A（0.19.0）で取り除いたもの: 表の行がコンテンツコントロールに入っている
+（逆は tests/test_reader.py・tests/test_pipeline.py の sample_reader.docx）、出力と除外の重なり（tests/test_fidelity.py）、
+N1（tests/test_lost_images.py）、N2（tests/test_structure.py）、N3（tests/test_pipeline.py の
+test_blank_paragraphs_in_textbox_and_endnote_are_excluded）。
 
 実行のしかた（tests/conftest.py のフィクスチャ journal・meta を使うため、tests/ に一時的に写して実行し、終わったら消す）:
 
@@ -138,23 +142,6 @@ def test_appendix_with_space_is_recognized(journal, meta, tmp_path):
     assert load(res).find(".//app-group/app") is not None
 
 
-# --------------------------------------------------------------------------- 6. 表の行がコンテンツコントロールに入っていると読まれない
-def test_PROBLEM_table_row_inside_sdt_is_not_read(journal, meta, tmp_path):
-    """w:sdt（コンテンツコントロール）で包まれた表の行（w:tr）は read_table が見ないので、その文字が XML に出ず、
-    不変性チェックが不合格になる（docx が正しくても変換結果を使えない）。"""
-    def parts(b):
-        tbl = ('<w:tbl><w:tblPr><w:tblStyle w:val="a5"/><w:tblW w:w="0" w:type="auto"/></w:tblPr>'
-               '<w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid>'
-               + "<w:tr>" + mf.cell("見える行") + "</w:tr>"
-               + "<w:sdt><w:sdtPr/><w:sdtContent><w:tr>" + mf.cell("コンテンツコントロールの行") + "</w:tr></w:sdtContent></w:sdt>"
-               + "</w:tbl>")
-        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["tab_cap"], "表1　検証"), tbl, mf.para(S["body"], "")]
-    path = make_doc(tmp_path / "sdt.docx", parts)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
-    assert not res.fidelity.ok
-    assert any("コンテンツコントロールの行" in t for _, t in res.fidelity.missing)
-
-
 # --------------------------------------------------------------------------- 7. 文末脚注は XML に出ない
 def test_PROBLEM_endnotes_are_excluded(journal, meta, tmp_path):
     """Word の文末脚注（注を末尾にまとめる機能。脚注より「注」の書き方に近い）は、本文の参照も注の本文も XML に出ない。"""
@@ -180,19 +167,6 @@ def test_PROBLEM_endnotes_are_excluded(journal, meta, tmp_path):
     assert "文末脚注の本文である" not in text(root)
     assert root.find(".//fn-group") is None
     assert any("文末脚注" in reason for _, reason, _ in res.fidelity.excluded)
-
-
-# --------------------------------------------------------------------------- 8. 不変性チェックの穴
-def test_PROBLEM_fidelity_does_not_flag_paragraph_both_output_and_excluded(journal, meta):
-    """出力した段落が除外にも登録されていても、不変性チェックは何も言わない（verify の pass 分岐）。"""
-    from jasme_jats.builder import build
-    from jasme_jats.fidelity import verify
-    from jasme_jats.model import Exclusion
-    doc, plan, _ = _mechanical(FULL, journal)
-    root, info = build(plan, meta, journal)
-    src = next(p.src for p in plan.paras.values() if p.role == "p" and len(p.plain()) > 10)
-    res = verify(FULL, root, plan.exclusions + info.exclusions + [Exclusion(src, "試験", "x")])
-    assert res.ok
 
 
 # --------------------------------------------------------------------------- 9. 図表参照の誤検出
@@ -239,50 +213,3 @@ def test_PROBLEM_deleted_paragraph_mark_keeps_two_paragraphs(journal, meta, tmp_
     assert res.fidelity.ok
     ps = [text(p) for p in load(res).iter("p")]
     assert "前半の文と" in ps and "後半の文。" in ps and "前半の文と後半の文。" not in ps
-
-
-# --------------------------------------------------------------------------- N1・N2・N3（計画づくりで見つけたもの）
-def test_PROBLEM_N3_blank_paragraph_in_textbox_fails_fidelity(journal, meta, tmp_path):
-    """文字だけのテキストボックスに全角空白だけの段落があると、除外にも出力にもならず、不変性チェックが不合格になる。"""
-    def parts(b):
-        return [mf.para(S["sec1"], "１．はじめに"),
-                mf.para(S["body"], "本文。", mf.textbox(mf.para(S["body"], "問1\u3000計算せよ。")
-                                                       + mf.para(S["body"], "\u3000"), 501))]
-    path = make_doc(tmp_path / "n3.docx", parts)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
-    assert not res.fidelity.ok
-    assert [t for _, t in res.fidelity.missing] == ["\u3000"]
-
-
-def test_PROBLEM_N2_textbox_style_switches_region(journal, meta, tmp_path):
-    """本文中のテキストボックスに「英文要旨」スタイルの段落が 1 つあると、以降の本文と引用文献がすべて英文要旨に入る。
-    不変性チェック・DTD・J-STAGE のチェックはすべて合格する。"""
-    def parts(b):
-        return [mf.para(S["sec1"], "１．はじめに"),
-                mf.para(S["body"], "本文一。", mf.textbox(mf.para(S["abs"], "Label in English"), 502)),
-                mf.para(S["sec1"], "２．方法"), mf.para(S["body"], "本文二。"),
-                mf.para(S["ref_head"], "引用および参考文献"), mf.para(S["ref"], "試験太郎（2020）．「題」．『誌』，1，1-2．")]
-    path = make_doc(tmp_path / "n2.docx", parts)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
-    assert res.fidelity.ok and res.dtd_valid
-    root = load(res)
-    assert len(root.findall(".//body/sec")) == 1          # 「２．方法」の章がない
-    assert root.find(".//ref") is None                     # 引用文献がない
-    abstract = [text(p) for p in root.findall(".//trans-abstract/p")]
-    assert "２．方法" in abstract and "本文二。" in abstract
-
-
-def test_PROBLEM_N1_image_in_reference_is_lost_silently(journal, meta, tmp_path):
-    """引用文献の段落にある画像は、XML にも Graphics にも出ず、警告もない（不変性チェックは文字しか見ない）。"""
-    def parts(b):
-        rid = b.add_image("refimg.png", mf.png_bytes("ref image"))
-        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "本文。"),
-                mf.para(S["ref_head"], "引用および参考文献"),
-                mf.para(S["ref"], "試験太郎（2020）．「題」．『誌』，1，1-2．"),
-                mf.para(S["ref"], mf.drawing(rid, 1800000, 1000000, 601))]
-    path = make_doc(tmp_path / "n1.docx", parts)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
-    assert res.fidelity.ok and res.images == []
-    root = load(res)
-    assert not list(root.iter("graphic")) and not list(root.iter("inline-graphic"))
-    assert not any("img" in w for w in res.warnings)
