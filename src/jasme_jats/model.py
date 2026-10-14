@@ -76,6 +76,7 @@ class ImageRef:
     export_name: str = ""       # 出力ファイル名（Graphics/ 配下）
     image_id: str = ""          # レポート・AI 用の識別子 (img1, img2, ...)
     float_id: str = ""          # 浮動配置の図形（Float）の中の画像なら、その図形の ID
+    hidden: bool = False        # 隠し文字（w:vanish）のランの中の画像。段落のアトムにしない（XML に出力しない）
 
     @property
     def height_cm(self) -> float:
@@ -143,6 +144,7 @@ class Table:
     style_name: str = ""
     role: str = ""
     float_id: str = ""          # 浮動配置の図形（Float）の中の表なら、その図形の ID
+    in_textbox: bool = False    # テキストボックスの中の表（浮動配置でない VML・行内の図形の中の表は、float_id が空でも True）
 
     def paragraphs(self):
         for r in self.rows:
@@ -188,10 +190,32 @@ class Layout:
 
 @dataclass
 class Exclusion:
-    """XML に出力しない docx の文字列。必ずレポートに一覧で出す。"""
+    """XML に出力しない docx の文字列。必ずレポートに一覧で出す。
+
+    blank: 空白だけの段落（の空白）として除外したもの。不変性チェックで、docx の文字が本当に空白だけかを確かめる
+    （空白以外の文字があれば不合格）。付けるのは structure.ArticlePlan.exclude_blank()（空白だけの段落）と
+    builder.Builder.fig（図の画像だけの段落にある空白）だけ。
+    """
     src: str
     reason: str
     text: str
+    blank: bool = False
+
+
+@dataclass
+class LostImage:
+    """docx にあるのに、XML に出力しなかった画像（pipeline が変換の後に調べる。要対応としてレポート・Colab・
+    コマンドラインで知らせる）。
+
+    不変性チェックは文字しか見ないので、画像を置けない場所（引用文献・題目・著者・所属の段落など）や、出力しなかった段落の
+    中にある画像は、ここで調べないと黙って XML からも Graphics/ からも消える。隠し文字の中の画像は対象にしない。
+    """
+    image_id: str
+    src: str            # 画像のある段落の ID（見つからなければ空）
+    location: str       # 段落の場所（plan.locations。なければ領域の名前）
+    reason: str         # 出力しなかった理由の推定
+    text: str = ""      # 段落の文字の冒頭（Word で探す手がかり。図形の中の画像なら、図形が結び付いている段落を reason に書く）
+    source: str = ""    # docx の中のファイル（word/media/...）。Word の図形なら空
 
 
 @dataclass

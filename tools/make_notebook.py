@@ -385,8 +385,8 @@ if AI == "none":
 #@title 5. 変換を実行
 """ + guard(1, 2, 3, 4) + """import shutil
 from IPython.display import HTML, Markdown, display
-from jasme_jats.colab import (ai_required_box, error_box, missing_images_box, no_ai_box, pdf_diff_box, prompt_box,
-                               unplaced_box)
+from jasme_jats.colab import (ai_required_box, error_box, lost_images_box, missing_images_box, no_ai_box, pdf_diff_box,
+                               prompt_box, unplaced_box)
 from jasme_jats.report import pdf_summary
 from jasme_jats.config import ArticleMeta, JournalConfig
 from jasme_jats.pipeline import AIRequiredError, Options, add_images, convert
@@ -453,6 +453,7 @@ if res.ai.error:
 if AI == "api":
     display(HTML(unplaced_box(res.plan)))
 display(HTML(missing_images_box(res)))
+display(HTML(lost_images_box(res)))
 display(HTML(pdf_diff_box(res)))
 display(Markdown(res.report_path.read_text(encoding="utf-8")))
 if manual_prompt:
@@ -496,6 +497,7 @@ if res.ai.error:
     display(HTML(error_box("貼り付けた回答を読み込めませんでした（AI による補完は反映されていません）", res.ai.error)))
 display(HTML(unplaced_box(res.plan)))
 display(HTML(missing_images_box(res)))
+display(HTML(lost_images_box(res)))
 display(HTML(pdf_diff_box(res)))
 display(Markdown(res.report_path.read_text(encoding="utf-8")))
 """, form=False),
@@ -545,7 +547,7 @@ if _missing:
 #@title 8. 結果をダウンロード
 #@markdown 「変換結果_巻_開始ページ.zip」の中に、J-STAGE にアップロードする jasme_巻_開始ページ.zip、XML、変換レポートが入っています。「出版版 PDF に合わせてから作る」では、PDF に合わせて直した docx（Word の変更履歴つき）も入っています。
 """ + guard(1, 2, 3, 4, 5) + """from IPython.display import HTML, display
-from jasme_jats.colab import missing_images_box
+from jasme_jats.colab import lost_images_box, missing_images_box
 from jasme_jats.report import images_to_prepare
 
 _missing = images_to_prepare(res)
@@ -561,6 +563,7 @@ files.download(archive)
 CONVERTED = {**globals().get("CONVERTED", {}), Path(archive).name: docx_path.name}
 print("ダウンロードしました:", Path(archive).name, "（" + docx_path.name + "）")
 display(HTML(missing_images_box(res)))
+display(HTML(lost_images_box(res)))
 print("続けて他の論文を変換するときは、下の手順 9 の ▶ を押してください。")
 """ + mark(8)),
     code("""

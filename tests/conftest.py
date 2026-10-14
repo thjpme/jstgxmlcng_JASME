@@ -13,7 +13,10 @@ FLOAT = FIXTURES / "sample_float.docx"   # 位置を決めるのに AI 補完が
 NOTES = FIXTURES / "sample_notes.docx"
 PDFCHECK = FIXTURES / "sample_pdfcheck.docx"
 PDFCHECK_PDF = FIXTURES / "sample_pdfcheck.pdf"   # 出版社が組版で直した想定の PDF（make_fixtures.py が LibreOffice で作る）
-ALL_DOCS = [FULL, EDGE, TEMPLATE, NOTES, PDFCHECK]
+READER = FIXTURES / "sample_reader.docx"   # 読み取りの境界ケース（sample_edge に入れていないもの）
+FLOAT_TEXT = FIXTURES / "sample_float_text.docx"   # 図形の中で画像と文字が同じ段落にある（ALL_DOCS には入れない）
+STRUCTURE = FIXTURES / "sample_structure.docx"   # 論文の構造（領域の分け方など）の境界ケース
+ALL_DOCS = [FULL, EDGE, TEMPLATE, NOTES, PDFCHECK, READER, STRUCTURE]
 
 
 @pytest.fixture(scope="session")

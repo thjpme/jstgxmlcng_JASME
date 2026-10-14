@@ -458,9 +458,14 @@ class Builder:
             self.caption_more(f, node.caption_more)
         graphics = 0
         for ip in node.image_paras:
-            ws = [a for a in ip.atoms if a.kind == "text" and a.text]
-            if ws:
-                self.info.exclusions.append(Exclusion(ip.src, "図の画像だけの段落にある空白", _para_text(ip)))
+            text = _para_text(ip)
+            if text and is_ws(text):
+                self.info.exclusions.append(Exclusion(ip.src, "図の画像だけの段落にある空白", text, blank=True))
+            elif text:
+                # 図の画像の段落は画像だけの段落に限る（structure）。万一ほかの文字があっても除外にはしない
+                # （不変性チェックで出力漏れとして不合格になる）
+                self.info.warnings.append(f"{node.fid or '図'}: 画像の段落 {ip.src} に画像以外の文字がある。"
+                                          "XML に出力していない（変換ツールの不具合）")
             for img in ip.images:
                 if node.formula is not None:
                     continue

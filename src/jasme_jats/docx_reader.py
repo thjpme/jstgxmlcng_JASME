@@ -178,30 +178,23 @@ class Reader:
         t = Table(tid=f"t{self._tcount}", style_id=sid or "",
                   style_name=self.styles[sid].name if sid in self.styles else (sid or ""),
                   float_id=self._float.fid if self._float else "")
-        for tr in tbl.findall(w("tr")):
+        # 行と、行の中のセルは、コンテンツコントロール（w:sdt）や w:customXml に包まれていることがある
+        for tr in _children(tbl, (w("tr"),)):
             trpr = tr.find(w("trPr"))
             row = Row(header=trpr is not None and on_off(trpr.find(w("tblHeader"))))
-            for tc in tr:
-                if tc.tag == w("sdt"):
-                    content = tc.find(w("sdtContent"))
-                    tcs = content.findall(w("tc")) if content is not None else []
-                elif tc.tag == w("tc"):
-                    tcs = [tc]
-                else:
-                    continue
-                for c in tcs:
-                    tcpr = c.find(w("tcPr"))
-                    cell = Cell()
-                    if tcpr is not None:
-                        gs = tcpr.find(w("gridSpan"))
-                        if gs is not None:
-                            cell.gridspan = int(wval(gs, "1") or 1)
-                        vm = tcpr.find(w("vMerge"))
-                        if vm is not None:
-                            cell.vmerge = "restart" if wval(vm) == "restart" else "continue"
-                    for ch in c:
-                        cell.blocks.extend(self.read_block(ch))
-                    row.cells.append(cell)
+            for c in _children(tr, (w("tc"),)):
+                tcpr = c.find(w("tcPr"))
+                cell = Cell()
+                if tcpr is not None:
+                    gs = tcpr.find(w("gridSpan"))
+                    if gs is not None:
+                        cell.gridspan = int(wval(gs, "1") or 1)
+                    vm = tcpr.find(w("vMerge"))
+                    if vm is not None:
+                        cell.vmerge = "restart" if wval(vm) == "restart" else "continue"
+                for ch in c:
+                    cell.blocks.extend(self.read_block(ch))
+                row.cells.append(cell)
             t.rows.append(row)
         return t
 
@@ -402,7 +395,8 @@ class Reader:
             # 入れ子のテキストボックスは外側の処理で読む
             if _in_textbox(tx, container):
                 continue
-            for el in tx:
+            # 段落と表も、コンテンツコントロール（w:sdt）や w:customXml に包まれていることがある
+            for el in _children(tx, (w("p"), w("tbl"))):
                 if el.tag == w("p"):
                     sub, extra = self._read_nested_paragraph(el)
                     self._extra.append(sub)
@@ -420,10 +414,12 @@ class Reader:
         # セルの段落を読むと read_paragraph が _extra を作り直すため、外側の段落の分を退避しておく
         saved = (self._extra, self._fields)
         t = self.read_table(tbl)
+        t.in_textbox = True
         self._extra, self._fields = saved
         return t
 
     def _graphic(self, el, para, hidden):
+        """画像・図形。隠し文字のランの中の画像も doc.images に入れる（ImageRef.hidden）が、段落のアトムにはしない。"""
         if el.tag == w("drawing"):
             holder = el.find(f"{{{WP_NS}}}inline")
             inline = holder is not None
@@ -452,13 +448,14 @@ class Reader:
                 rid = blip.get(f"{{{R_NS}}}embed") if blip is not None else None
                 ext = pic.find(f".//{{{A_NS}}}ext")
                 pcx, pcy = (int(ext.get("cx", "0")), int(ext.get("cy", "0"))) if (ext is not None and len(pics) > 1) else (cx, cy)
-                img = self._new_image(rid, "drawing", cx_emu=pcx, cy_emu=pcy, inline=inline, descr=descr)
+                img = self._new_image(rid, "drawing", cx_emu=pcx, cy_emu=pcy, inline=inline, descr=descr,
+                                      hidden=hidden)
                 if not hidden:
                     para.atoms.append(Atom(kind="image", image=img))
             if not pics:
                 if not has_tx or "wordprocessingGroup" in uri or "wordprocessingCanvas" in uri or "chart" in uri:
                     img = self._new_image(None, "drawing", cx_emu=cx, cy_emu=cy, inline=inline, descr=descr,
-                                          shape_only=True)
+                                          shape_only=True, hidden=hidden)
                     if not hidden:
                         para.atoms.append(Atom(kind="image", image=img))
             if has_tx:
@@ -482,12 +479,13 @@ class Reader:
         for d in imgdata:
             rid = d.get(f"{{{R_NS}}}id")
             img = self._new_image(rid, "ole" if el.tag == w("object") else "vml",
-                                  cx_emu=cx, cy_emu=cy, ole_progid=progid)
+                                  cx_emu=cx, cy_emu=cy, ole_progid=progid, hidden=hidden)
             if not hidden:
                 para.atoms.append(Atom(kind="image", image=img))
         has_tx = any(True for _ in el.iter(w("txbxContent")))
         if not imgdata and not has_tx:
-            img = self._new_image(None, "vml", cx_emu=cx, cy_emu=cy, shape_only=True, ole_progid=progid)
+            img = self._new_image(None, "vml", cx_emu=cx, cy_emu=cy, shape_only=True, ole_progid=progid,
+                                  hidden=hidden)
             if not hidden:
                 para.atoms.append(Atom(kind="image", image=img))
         if has_tx:
@@ -566,6 +564,24 @@ def _body_font_pt(pkg) -> float:
         return int(size) / 2.0 if size else 10.5
     except ValueError:
         return 10.5
+
+
+def _children(el, tags):
+    """el の子のうち、タグが tags のものを文書の順に返す。
+
+    コンテンツコントロール（w:sdt）なら w:sdtContent の中を、w:customXml ならその中を、入れ子も再帰でたどる。
+    表の行、行の中のセル、テキストボックスの段落と表は、これらに包まれていることがある。直下の子だけを見ると
+    包まれたものを読み落とす（検証側の ooxml.paragraph_ids はすべての w:p を数えるので、不変性チェックで「出力漏れ」になる）。
+    """
+    for ch in el:
+        if ch.tag in tags:
+            yield ch
+        elif ch.tag == w("sdt"):
+            content = ch.find(w("sdtContent"))
+            if content is not None:
+                yield from _children(content, tags)
+        elif ch.tag == w("customXml"):
+            yield from _children(ch, tags)
 
 
 def _in_textbox(el, container) -> bool:

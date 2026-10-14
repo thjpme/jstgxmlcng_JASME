@@ -17,24 +17,24 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
 | ファイル | 役割 |
 |---|---|
 | `ooxml.py` | docx の低水準処理。**文字ポリシー**（何を docx の文字とみなすか）と、検証用の独立した文字列取り出し `canonical_text()` |
-| `docx_reader.py` | docx → 中間表現（`model.py` の `Document` / `Para` / `Atom`） |
+| `docx_reader.py` | docx → 中間表現（`model.py` の `Document` / `Para` / `Atom`）。コンテンツコントロール（`w:sdt`）・`w:customXml` に包まれた表の行・セル、テキストボックスの段落・表も、文書の順にたどって読む（`_children()`） |
 | `numbering.py` | Word の自動段落番号を表示どおりの文字列にする |
 | `omml.py` | Word の数式（OMML）→ MathML 2.0 |
-| `structure.py` | 段落の役割の決定と論文の構造（`ArticlePlan`）の組み立て |
+| `structure.py` | 段落の役割の決定と論文の構造（`ArticlePlan`）の組み立て。出力しない段落の記録（`ArticlePlan.exclude()`、空白だけの段落は `exclude_blank()`） |
 | `linker.py` | 図・表・数式・注・URL・DOI の機械的リンク、アトムにリンクを付ける共通関数 `apply_span()` |
 | `refparse.py` | 引用文献の解析と著者・年方式の引用の抽出・照合（先行ツール「文献チェック」refcheck.py から移植） |
 | `ai_assist.py` | AI 補完（依頼文の作成、API 呼び出し（Claude・ChatGPT・Gemini・Sakana AI）、回答の検証と適用） |
 | `emit.py` / `builder.py` | XML の組み立て（文字は必ず `jx:span` の中に書く） |
 | `tracking.py` | 変換途中の目印の定義 |
-| `fidelity.py` | 文字の不変性チェック |
+| `fidelity.py` | 文字の不変性チェック（出力した段落が除外にも記録されていないか、空白だけとした除外が本当に空白だけか、も確かめる） |
 | `validate.py` | DTD 検証（`dtd/` に J-STAGE 指定 DTD を同梱） |
 | `floats.py` | 浮動配置の図形（テキストボックス・グループ図形）の位置: 機械的に配置できるかの判定、AI に渡す位置の説明と行数の推定 |
 | `pdfmatch.py` | 出版版 PDF との照合（段落ごとの対応付けと、全角・半角の違い・それ以外の違い・Word が付ける番号の違いの一覧） |
 | `pdfdocx.py` | ルート2: 出版版 PDF に合わせて直した docx（Word の変更履歴つき）を作る。書き込んだ後に文字列と構造を確かめる |
 | `jstage_rules.py` | J-STAGE のアップロード時チェック（記事アップロードメッセージ一覧）のうち XML だけで判定できるものの再現 |
 | `images.py` / `package.py` / `report.py` | 画像の書き出し、ZIP、レポート |
-| `pipeline.py` / `cli.py` | 全体の流れとコマンドライン |
-| `colab.py` | Colab ノートブックの表示部品（手動モードの依頼文の枠など）と、続けて変換するときの入力の確認 |
+| `pipeline.py` / `cli.py` | 全体の流れ（画像の出力漏れの検出 `lost_images()` を含む）とコマンドライン |
+| `colab.py` | Colab ノートブックの表示部品（手動モードの依頼文の枠、XML に入らなかった画像などの赤い枠）と、続けて変換するときの入力の確認 |
 | `data/jasme.toml` | 本誌の設定（誌名・ISSN・DOI 形式・スタイル名の対応表など） |
 
 ## 守るべき原則
@@ -42,6 +42,10 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
 1. **文字列を書き換えるコードを書かない。** 構造はアトムに `LinkSpec` を付けるか、段落の役割を変えることで表す。
 2. XML に段落の文字を書くときは必ず `Emitter.span()` を通す（`jx:span` で囲まれない文字は不変性チェックで「追加」とみなされる）。
 3. 出力しない段落は `plan.exclude()` か `BuildInfo.exclusions` に理由付きで記録する（記録しないと「出力漏れ」になる）。
+   空白だけの段落（全角空白だけのものも）は `plan.exclude_blank()` で記録する（不変性チェックが、docx の文字が本当に空白だけかを確かめる）。
+   出力した段落を除外にも記録すると、不変性チェックは不合格になる。
+   不変性チェックは文字しか見ないので、画像は、変換の後に `pipeline.lost_images()` が、docx の画像のうち XML に出力しなかったもの
+   （引用文献など画像を出力できない段落や、除外した段落の中の画像）を調べ、要対応として知らせる（隠し文字の中の画像を除く）。
 4. 構造の区切りとして空白を落とす場合は `Emitter.drop()` を使う（空白以外は落とせない）。
 5. 新しい種類の docx の要素に対応するときは、`ooxml.canonical_text()`（検証側）と `docx_reader.py`（変換側）の両方を同じ文字ポリシーで直し、
    その要素を含む docx を `tests/make_fixtures.py` に加えてテストする。
@@ -52,13 +56,34 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
 ## テスト
 
 - `tests/make_fixtures.py` がテスト用の docx（`tests/fixtures/sample_full.docx`, `sample_edge.docx`, `sample_float.docx`, `sample_notes.docx`,
-  `sample_pdfcheck.docx`）と、照合用の PDF（`sample_pdfcheck.pdf`。LibreOffice が要る。なければ作り直さない）を生成する。内容は架空。
-  変更したら `python tests/make_fixtures.py` で作り直してコミットする（中身の変わらない docx も作り直されるので、差分は確かめてから）。
-- `tests/test_fidelity.py`: 不変性チェックがわざと壊した XML を確実に検出することのテスト。チェックの処理を変えたら必ず通すこと。
+  `sample_pdfcheck.docx`, `sample_reader.docx`, `sample_float_text.docx`, `sample_structure.docx`）と、照合用の PDF（`sample_pdfcheck.pdf`。
+  LibreOffice が要る。なければ作り直さない）を生成する。内容は架空。変更したら `python tests/make_fixtures.py` で作り直してコミットする
+  （中身の変わらない docx も作り直されるので、差分は確かめてから）。1 つの docx だけを作り直すときは、その関数だけを呼ぶ
+  （例: `cd tests && python -c "import make_fixtures as mf; mf.make_reader(mf.HERE / 'fixtures' / 'sample_reader.docx')"`）。
+  新しい docx を足したら、`__main__` とモジュールの docstring にも加える。読み取りの境界ケースを足すときは、件数で確かめるテストがある
+  `sample_edge.docx` ではなく、`sample_reader.docx` の節（`READER_SECTIONS`）に足す。構造（領域の分け方など）の境界ケースは
+  `sample_structure.docx` の節（`STRUCTURE_SECTIONS`）に足す。`make_article()` は小さな論文を作る関数で、テストの中で境界ケースの docx を
+  その場で作るのにも使う（`tests/test_floats.py`・`tests/test_pipeline.py`・`tests/test_lost_images.py`。文末脚注は `endnote()`、
+  引用文献の段落は `refs` で足せる）。
+- `tests/test_reader.py`: 読み取った段落の文字が、検証側（`ooxml.canonical_text()`）と一致すること。逆向きに、文字のある段落
+  （本文・表・テキストボックス・Word の脚注・文末脚注）がすべて 1 回だけ読まれていること。`sample_reader.docx` の、コンテンツコントロール
+  （`w:sdt`）や `w:customXml` に包まれた表の行・セル、テキストボックスの段落と表も。
+- `tests/test_fidelity.py`: 不変性チェックがわざと壊した XML を確実に検出することのテスト（出力と除外の重なり、文字のある
+  空白だけの除外も）。チェックの処理を変えたら必ず通すこと。
 - `tests/test_ai.py`: AI の回答の検証と適用（実際の API は呼ばない。`tests/data/ai_response_sample_full.json` が模擬回答。
   Claude・ChatGPT・Gemini・Sakana AI の呼び出しは、それぞれ偽のクライアントに置き換えて確かめる）。
 - `tests/test_floats.py`: 浮動配置の図表（`tests/fixtures/sample_float.docx` と模擬回答 `tests/data/ai_response_sample_float.json`）。
-  AI を使わない設定での中止、機械的な配置、`placements` の検証と適用。
+  AI を使わない設定での中止、機械的な配置、`placements` の検証と適用。`sample_float_text.docx`（ALL_DOCS には入れない）で、
+  図形の中で画像と文字が同じ段落にあるとき、画像を図に入れ、文字を図の直後の段落に出すこと。
+- `tests/test_structure.py`: 論文の構造。図形（テキストボックス・グループ図形）の中の段落・表では領域（冒頭・本文・後付け・英文の部分）を
+  変えないこと（`sample_structure.docx` の、本文中のテキストボックスにある「英文要旨」スタイルの段落や「注」だけの段落で、章・引用文献・
+  英文要旨・注の一覧が、テキストボックスがない場合と同じになること）。和文の冒頭の最後の段落（セクション区切り）に結び付いた図は
+  本文の図になること、題目がテキストボックスの中にあっても冒頭の最後で本文に切り替わること。
+- `tests/test_lost_images.py`: 画像の出力漏れの検出（`pipeline.lost_images()`）。引用文献の段落の画像、引用文献の段落に結び付いた
+  テキストボックスの画像、冒頭の除外した段落の中の画像、Word の文末脚注の中の画像が、レポートの冒頭・9 章・14 章、コマンドライン
+  （終了コード 1）、Colab の枠に出ること。隠し文字の中の画像は対象にしないこと、既存の fixture（AI の模擬回答・ルート2 を含む）では
+  0 件であること。文字だけのテキストボックスと Word の文末脚注を除外したときの、暫定の知らせ（冒頭と 14 章の「要確認」、
+  コマンドラインの表示）も。
 - `tests/test_notes.py`: テンプレートの規定と違う書き方の注（`sample_notes.docx` の本文の大きさの「（注1）」・引用文献の後ろの注の節・
   番号の書き方が想定外の注、`sample_edge.docx` の Word の脚注機能）。AI による注の区切りの指定（`fn_start`）も。
 - `tests/test_pdfmatch.py`: 出版版 PDF との照合（`sample_pdfcheck.docx` と `.pdf`）。ルート1 で docx の文字を変えずに違いを報告すること、
@@ -100,7 +125,9 @@ python -m jasme_jats tests/private/論文.docx --meta examples/meta_example.toml
   入れ直す（手順 2 で論文を選び直すと捨てる）。手順 8（ダウンロード）は、足りない画像が残っていれば一度止めて手順 7 を案内する。
 - 手順 9 は、続けて他の論文を変換するための片付け（`DONE = {1}` に戻し、前の論文を `PREVIOUS` に記録する）。手順 3 は `PREVIOUS` と
   比べて書き換え忘れを知らせ（`colab.same_first_page()` / `carried_over()`）、手順 6 は前の論文の AI の回答が残っていれば止まる。
-- 手動モードの依頼文の表示（コピーボタン付きの枠）とエラーの枠は `src/jasme_jats/colab.py`。
+- 手動モードの依頼文の表示（コピーボタン付きの枠）とエラーの枠は `src/jasme_jats/colab.py`。手順 5・6 では、画像を用意できなかった図
+  （`missing_images_box`）と XML に入らなかった画像（`lost_images_box`）を、レポートの前に赤い枠で出す（手順 8 でも、ダウンロードの後に
+  もう一度出す）。
 - Colab ではどのセルも押せてしまうため、各手順の最初で前の手順が済んでいるかを確かめる（変数 `DONE`）。
   ある手順をやり直すと、それより後の手順は未実行に戻る。
 
@@ -165,4 +192,5 @@ Claude Code の環境の作り方）を読む。
 | 出版版 PDF との照合・ルート2 | 照合は 0.16.0、2 通りの作り方は 0.18.0 で追加（`docs/DESIGN.md` の 4.4）。実際の論文 1 本と、LibreOffice で作った試験用の PDF でのみ確かめている。出版社の組版ソフトで作った別の PDF（文字の取り出し方が違う場合）や、英文の論文では、誤検出や照合できない段落が出ないか、試験運用で確かめる。ルート2 で直した docx は LibreOffice では変更履歴として読めたが、Word で開いて承諾・却下できるかは利用者の環境で確かめる |
 | テキストボックス・グループ図形の中の図 | 位置を機械的に決められない図表は AI に位置と組み合わせを指定させる（`docs/DESIGN.md` の 6.1。0.14.0）。`placements` は模擬回答でのみ確かめていて、実際の AI（どの会社のものも）ではまだ試していない。表で組んだ図（`fig` の中の `table-wrap`）が J-STAGE の画面でどう表示されるかも、試験登載で確認が必要 |
 | テンプレートと違う書き方の注 | 0.15.0 で、Word の脚注機能・本文の大きさの「（注1）」・引用文献の後ろの注の節に対応（`docs/DESIGN.md` の 6 章）。番号の書き方が想定外の注（「※1」など）は AI に区切りを指定させる（`fn_start`）が、模擬回答でのみ確かめていて、実際の AI ではまだ試していない。補った見出し「注」と「1)」の番号が J-STAGE の画面でどう表示されるかも、試験登載で確認する |
+| 画像を出力できない場所の画像・文字だけのテキストボックス・Word の文末脚注 | 0.19.0 で、XML に入らなかった画像（引用文献の段落の画像など）を要対応として知らせ（`pipeline.lost_images()`）、文字だけのテキストボックスと文末脚注を除外したときは、件数と対処をレポートの冒頭と 14 章に「要確認」として出す（暫定）。これらを XML に出力できるようにするのは、修正計画（`docs/FIX_PLAN.md`）の E（文末脚注）と F（囲みと、本文の外に結び付いた図形） |
 | 正式リリース | 試験運用で問題がなければ、版を 1.0.0 にする |

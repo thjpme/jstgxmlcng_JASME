@@ -4,8 +4,10 @@ import zipfile
 import pytest
 from lxml import etree
 
+import make_fixtures as mf
 from conftest import ALL_DOCS, FULL, TEMPLATE
-from jasme_jats.pipeline import Options, convert
+from jasme_jats.builder import build
+from jasme_jats.pipeline import Options, _mechanical, convert
 
 XLINK = "http://www.w3.org/1999/xlink"
 XML_LANG = "{http://www.w3.org/XML/1998/namespace}lang"
@@ -20,6 +22,7 @@ def test_fidelity_and_dtd(path, split, journal, meta, tmp_path):
     assert fid.final_ok, fid.final_detail
     assert res.dtd_valid, res.dtd_errors[:5]
     assert res.jstage_issues == [], res.jstage_issues
+    assert res.lost_images == [] and res.hidden_images == [], res.lost_images   # 画像の出力漏れがない
     if not split:
         assert all(reason == "姓と名の間の空白" for _, _, reason in fid.drops)
 
@@ -313,6 +316,98 @@ def test_textbox_figures_and_captions(journal, meta, tmp_path):
     mech = [d.message for d in res.plan.decisions if d.stage == "mechanical"]
     assert any("「図3　テキストボックス内の画像」を図キャプションと推定" in m for m in mech)
     assert any("「表1　テキストボックス内の表」を表キャプションと推定" in m for m in mech)
+
+
+def test_wrapped_rows_cells_and_textbox_paragraphs(journal, meta, tmp_path):
+    # コンテンツコントロール（w:sdt）・w:customXml に包まれた表の行・セルとテキストボックスの段落も、
+    # XML の表・図の中に、文書の順に入る（不変性チェックの合格だけでは、入った場所までは分からない）
+    from conftest import READER
+    res = convert(READER, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    assert res.fidelity.ok and res.dtd_valid
+    root = load(res)
+
+    def rows(caption):
+        tw = next(t for t in root.iter("table-wrap") if "".join(t.find("caption").itertext()) == caption)
+        return [["".join(c.itertext()) for c in r] for r in tw.iter("tr")]
+    assert rows("表1　コンテンツコントロールに包んだ行")[1:] == [["前", "SDTの行の前"], ["包んだ行", "SDTで包んだ行"],
+                                                         ["後", "SDTの行の後"]]
+    assert rows("表2　カスタムXMLに包んだ行")[2] == ["包んだ行", "XMLで包んだ行"]
+    assert rows("表3　カスタムXMLとコンテンツコントロールに包んだセル")[1] == ["セルの左", "XMLで包んだセル", "SDTで包んだセル",
+                                                                "セルの右"]
+    assert [r[1] for r in rows("表4　入れ子のコンテンツコントロールに包んだ行")[1:]] == [
+        "入れ子のSDTの1行目", "入れ子のSDTの2行目", "XMLを包んだSDTの行", "入れ子の行の後"]
+    assert rows("表5　テキストボックスの中の包まれた表") == [["観点", "内容"], ["包んだ表", "テキストボックスのSDTの表"]]
+    # テキストボックスの中で w:sdt に包んだキャプションも、同じテキストボックスの画像と組になり、機械的に置かれる
+    fig = root.find(".//fig[@id='F1']")
+    assert "".join(fig.find("caption").itertext()) == "図1　コンテンツコントロールに包んだキャプション"
+    assert len(list(fig.iter("graphic"))) == 1
+    assert {i.mode for i in res.plan.floats.values()} == {"mechanical"}
+
+
+def test_blank_paragraphs_in_textbox_and_endnote_are_excluded(journal, meta, tmp_path):
+    # 文字だけのテキストボックスと Word の文末脚注の中の、空白だけの段落（全角空白・半角空白）も、除外として記録する
+    # （記録しないと、出力にも除外にもならず、不変性チェックが「出力漏れ」で不合格になる）
+    S = mf.S
+
+    def parts(b):
+        img = b.add_image("blank.png", mf.png_bytes("Blank", size=(400, 240)))
+        return [mf.para(S["sec1"], "１．はじめに"),
+                mf.para(S["body"], "試験（2024）の問題を枠で囲んだ。", mf.textbox(
+                    mf.para(S["body"], "問1\u3000枠の中の問題文である。") + mf.para(S["body"], "\u3000")
+                    + mf.para(S["body"], " "), 903, cx=5000000)),
+                mf.para(S["body"], "文末脚注を付けた文", mf.endnote_ref(4), "。"),
+                # 図の画像の段落にある空白（書き出しの段階で、空白だけの除外として記録する）
+                mf.para(S["body"], mf.drawing(img, 1800000, 1080000, 904), "\u3000"),
+                mf.para(S["fig_cap"], "図1\u3000画像の後ろに空白がある図")]
+    path = tmp_path / "blank.docx"
+    mf.make_article(path, "空白だけの段落の検証用文書", parts,
+                    endnotes=[mf.endnote(4, " 文末脚注の本文。", mf.para(None, "\u3000"), mf.para(None, " "))])
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    fid = res.fidelity
+    assert fid.ok and fid.final_ok and res.dtd_valid, (fid.missing, fid.bad_excluded)
+    # 本文（テキストボックス）の段落 d… と文末脚注の段落 e… の、全角空白・半角空白だけの段落
+    blank = sorted((s[0], t) for s, reason, t in fid.excluded if reason == "空白のみの段落")
+    assert blank == [("d", " "), ("d", "\u3000"), ("e", " "), ("e", "\u3000")]
+    assert all(e.blank for e in res.plan.exclusions if e.reason == "空白のみの段落") and fid.bad_excluded == []
+    _, plan, _ = _mechanical(path, journal)
+    assert [(e.reason, e.text, e.blank) for e in build(plan, meta, journal)[1].exclusions] == [
+        ("図の画像だけの段落にある空白", "\u3000", True)]
+    reasons = {t: reason for _, reason, t in fid.excluded}
+    assert reasons["問1\u3000枠の中の問題文である。"].startswith("テキストボックス内の文字")
+    assert reasons[" 文末脚注の本文。"].startswith("Word の文末脚注")
+
+
+def test_blank_paragraphs_in_front_and_back_tables_are_excluded(journal, meta, tmp_path):
+    # 著者名スタイルの段落・冒頭のテキストボックスの表・引用文献の節の表・注の節の表・英文の部分の表（著者表以外）の、
+    # 全角空白だけの段落も、空白だけの除外として記録する（記録しないと、不変性チェックが「出力漏れ」で不合格になる）
+    S = mf.S
+
+    def tbl(text):
+        return mf.table([[mf.cell(text), mf.cell("\u3000")]])
+    b = mf.Builder()
+    front = mf.front_ja(b, "表の空白の検証用文書", "―副題―", [("架空大学", "試験\u3000六郎")])
+    front.insert(len(front) - 3, mf.para(S["author_ja"], "\u3000"))                 # 著者名スタイルの全角空白
+    front[3].append(b.frag(mf.para(None, mf.textbox(tbl("冒頭の囲みの表"), 905, cx=5000000)))[0][0])
+    body = front + [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "試験（2024）の本文である。"),
+                    mf.para(S["ref_head"], "引用および参考文献"),
+                    mf.para(S["ref"], "試験六郎（2024）．「小さな論文」．『架空誌』，第5巻，pp.9-10．"), tbl("文献の表"),
+                    mf.para(S["fn_head"], "注"), mf.para(S["body"], "1）注の本文。"), tbl("注の表")]
+    english = mf.front_en(b, "A Small Article", "For Checking", [("Rokuro SHIKEN", "Fictional University")],
+                          ["Small article abstract."])
+    english.insert(4, tbl("English table"))                                          # 英文の著者表の前の表
+    path = tmp_path / "blank_tables.docx"
+    b.save(path, body + english + mf.tail(b))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    fid = res.fidelity
+    assert fid.ok and fid.final_ok and res.dtd_valid, (fid.missing, fid.bad_excluded)
+    assert fid.bad_excluded == [] and fid.conflicts == []
+    blank = [e for e in res.plan.exclusions if e.reason == "空白のみの段落"]
+    assert [e.text for e in blank] == ["\u3000"] * 5 and all(e.blank for e in blank)
+    reasons = {t: reason for _, reason, t in fid.excluded}
+    assert reasons["冒頭の囲みの表"] == "冒頭部の表（著者表以外）の文字"
+    assert reasons["注の表"] == "後付けの位置づけが不明な表の文字"
+    assert reasons["English table"] == "英文部分の表（著者表以外）の文字"
+    assert "文献の表" in [r.para.plain() for r in res.plan.refs]                    # 引用文献の表の文字は引用文献のまま
 
 
 def test_textbox_caption_pattern():

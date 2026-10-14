@@ -7,6 +7,8 @@ docx の各段落の文字列を ooxml.canonical_text() で独立に取り出し
     （出力しない段落は Exclusion としてレポートに全文を載せる）
   ・XML に、docx にない文字が追加されていないか（追跡の目印の外に文字がないか）
   ・構造の区切りとして落とした文字は空白だけか
+  ・出力した段落が、出力しなかった段落（除外）にも登録されていないか
+  ・空白だけとして除外した段落（Exclusion.blank）の docx の文字は、本当に空白だけか
 
 さらに final_check() で、目印を取り除いた最終出力の文字列が、検証済みの木と一致することを確かめる。
 """
@@ -45,6 +47,8 @@ class FidelityResult:
     units: int = 0                 # docx の段落数（空でないもの）
     mapped: int = 0
     excluded: list = field(default_factory=list)      # (src, reason, text)
+    conflicts: list = field(default_factory=list)     # (src, reason, text) 出力したのに除外にも登録されている段落
+    bad_excluded: list = field(default_factory=list)  # (src, reason, text) 空白だけとして除外したのに空白以外の文字がある
     mismatches: list = field(default_factory=list)    # Mismatch
     missing: list = field(default_factory=list)       # (src, text)
     duplicates: list = field(default_factory=list)    # src
@@ -112,6 +116,7 @@ def _diff(expected: str, got: str) -> str:
 def verify(docx_path, tracked_root, exclusions) -> FidelityResult:
     res = FidelityResult()
     src = source_texts(docx_path)
+    exclusions = list(exclusions)
     excl = {}
     for e in exclusions:
         excl.setdefault(e.src, e)
@@ -148,9 +153,10 @@ def verify(docx_path, tracked_root, exclusions) -> FidelityResult:
                 res.mismatches.append(Mismatch(s, text, got, _diff(text, got)))
             else:
                 res.mapped += 1
-            if s in excl and text.strip():
-                # 出力したのに除外にも登録されている（図の段落の空白などは除外の対象外）
-                pass
+            if s in excl:
+                # 出力したのに除外にも登録されている（レポートの「出力しなかった文字」と食い違う。変換処理の誤り）
+                reasons = "／".join(dict.fromkeys(e.reason for e in exclusions if e.src == s))
+                res.conflicts.append((s, reasons, text))
         elif s in excl:
             e = excl[s]
             res.excluded.append((s, e.reason, text))
@@ -161,10 +167,15 @@ def verify(docx_path, tracked_root, exclusions) -> FidelityResult:
     for s in pieces:
         if s not in src:
             res.unknown.append(s)
+    # 空白だけとして除外したもの（blank）は、docx の文字が本当に空白だけかを確かめる。
+    # 同じ段落に除外が 2 件以上あることもあるので、最初の 1 件だけでなく、すべての除外を確かめる
+    for e in exclusions:
+        if e.blank and not is_ws(src.get(e.src, "")):
+            res.bad_excluded.append((e.src, e.reason, src.get(e.src, "")))
 
     res.stray = stray_text(tracked_root)
     res.ok = not (res.mismatches or res.missing or res.duplicates or res.stray or res.bad_drops or res.unknown
-                  or nested)
+                  or res.conflicts or res.bad_excluded or nested)
     if nested:
         res.mismatches.append(Mismatch(",".join(nested), "", "", "追跡用の目印が入れ子になっている（変換処理の誤り）"))
     return res

@@ -12,6 +12,14 @@ tests/fixtures/sample_notes.docx : テンプレートの規定と違う書き方
 tests/fixtures/sample_pdfcheck.docx / .pdf : 出版版 PDF との照合。PDF は、出版社が組版で直した想定の文字（全角のかっこ・
                                    句読点、「資料」→「付録」など）の docx を LibreOffice で PDF にしたもの（LibreOffice が
                                    なければ PDF は作り直さない）
+tests/fixtures/sample_reader.docx : 読み取りの境界ケースのうち sample_edge に入れていないもの（コンテンツコントロール
+                                   〈w:sdt〉や w:customXml に包まれた表の行・セル、テキストボックスの段落と表）
+tests/fixtures/sample_float_text.docx : テキストボックスの中で、画像と文字が同じ段落にある図形（キャプションのある図と、
+                                   キャプションのない図形）。位置は機械的に決まる
+tests/fixtures/sample_structure.docx : 論文の構造（領域の分け方など）の境界ケース（本文中のテキストボックスにある
+                                   「英文要旨」スタイルの段落や「注」だけの段落）
+
+make_article() は小さな論文を作る。テストの中で、境界ケースの docx をその場で作るのにも使う。
 
 内容は架空のもので、実在の論文ではない。
 """
@@ -195,6 +203,7 @@ class Builder:
         self.media = {}
         self.rels_extra = []
         self.footnotes_extra = []
+        self.endnotes_extra = []        # Word の文末脚注（endnote() の XML）
         self._rid = 900
 
     def add_image(self, name, data):
@@ -248,6 +257,10 @@ class Builder:
                     fx = self.zin.read(item.filename).decode("utf-8")
                     fx = fx.replace("</w:footnotes>", "".join(self.footnotes_extra) + "</w:footnotes>")
                     zout.writestr(item, fx)
+                elif item.filename == "word/endnotes.xml" and self.endnotes_extra:
+                    ex = self.zin.read(item.filename).decode("utf-8")
+                    ex = ex.replace("</w:endnotes>", "".join(self.endnotes_extra) + "</w:endnotes>")
+                    zout.writestr(item, ex)
                 elif item.filename == "[Content_Types].xml":
                     ct = self.zin.read(item.filename).decode("utf-8")
                     if 'Extension="png"' not in ct:
@@ -635,6 +648,211 @@ def make_pdfcheck_pdf(pdf_path):
     return True
 
 
+# ----------------------------------------------------------------------------- sample_reader
+def sdt(inner):
+    """コンテンツコントロール（w:sdt）で包む。"""
+    return f"<w:sdt><w:sdtPr/><w:sdtContent>{inner}</w:sdtContent></w:sdt>"
+
+
+def custom_xml(inner, element="item"):
+    """カスタム XML（w:customXml）で包む。"""
+    return f'<w:customXml w:element="{element}">{inner}</w:customXml>'
+
+
+def tr(*cells):
+    """表の行。cells は cell() の XML か文字列（文字列は本文の段落 1 つのセルにする）。"""
+    return "<w:tr>" + "".join(c if c.startswith("<") else cell(c) for c in cells) + "</w:tr>"
+
+
+def table_of_rows(rows, ncol, style="a5"):
+    """行の XML（w:sdt などで包んだ行を含む）を、そのまま並べた表。"""
+    return (f'<w:tbl><w:tblPr><w:tblStyle w:val="{style}"/><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid>'
+            + '<w:gridCol w:w="2000"/>' * ncol + "</w:tblGrid>" + "".join(rows) + "</w:tbl>")
+
+
+def reader_wrapped_rows(b: Builder):
+    """表の行・セルが、コンテンツコントロールや w:customXml に包まれている。包まれた行・セルは前後の行・セルの間にある。"""
+    return [
+        para(S["body"], "試験（2023）にならい，行やセルがコンテンツコントロールなどに包まれた表を表1，表2，表3，表4に示す。"),
+        para(S["tab_cap"], "表1\u3000コンテンツコントロールに包んだ行"),
+        table_of_rows([tr("区分", "内容"), tr("前", "SDTの行の前"), sdt(tr("包んだ行", "SDTで包んだ行")),
+                       tr("後", "SDTの行の後")], 2),
+        para(S["tab_cap"], "表2\u3000カスタムXMLに包んだ行"),
+        table_of_rows([tr("区分", "内容"), tr("前", "XMLの行の前"), custom_xml(tr("包んだ行", "XMLで包んだ行"), "row"),
+                       tr("後", "XMLの行の後")], 2),
+        para(S["tab_cap"], "表3\u3000カスタムXMLとコンテンツコントロールに包んだセル"),
+        table_of_rows([tr("左", "中1", "中2", "右"),
+                       tr("セルの左", custom_xml(cell("XMLで包んだセル"), "cell"), sdt(cell("SDTで包んだセル")),
+                          "セルの右")], 4),
+        # Word の「繰り返しセクション」と同じく、外側のコンテンツコントロールの中に、行ごとのコンテンツコントロールがある
+        para(S["tab_cap"], "表4\u3000入れ子のコンテンツコントロールに包んだ行"),
+        table_of_rows([tr("区分", "内容"),
+                       sdt(sdt(tr("入れ子1", "入れ子のSDTの1行目")) + sdt(tr("入れ子2", "入れ子のSDTの2行目"))),
+                       sdt(custom_xml(tr("入れ子3", "XMLを包んだSDTの行"), "row")),
+                       tr("後", "入れ子の行の後")], 2),
+        para(S["body"], "以上の表では，包まれた行やセルも前後の行やセルと同じ順に並ぶ。"),
+    ]
+
+
+def reader_textbox_sdt(b: Builder):
+    """テキストボックスの中の段落と表が、コンテンツコントロールや w:customXml に包まれている。
+
+    図は、画像の段落とキャプションが組になる単純な形で、図の位置は機械的に決まる。
+    """
+    img = b.add_image("reader_tb.png", png_bytes("Caption in a content control", size=(400, 240)))
+    return [
+        para(S["body"], "図1はテキストボックスの中のキャプションがコンテンツコントロールに包まれた例。", textbox(
+            para(S["body"], drawing(img, 1800000, 1100000, 412, name="図"))
+            + sdt(para(S["fig_cap"], "図1\u3000コンテンツコントロールに包んだキャプション")), 411, cy=1500000)),
+        para(S["body"], "表5はテキストボックスの中のキャプションと表が包まれた例。", textbox(
+            custom_xml(para(S["tab_cap"], "表5\u3000テキストボックスの中の包まれた表"), "caption")
+            + sdt(table_of_rows([tr("観点", "内容"), tr("包んだ表", "テキストボックスのSDTの表")], 2)),
+            413, cy=1000000)),
+        para(S["body"], "以上が読み取りの確かめである。"),
+    ]
+
+
+ZEN_DIGITS = str.maketrans("0123456789", "０１２３４５６７８９")
+
+# sample_reader の節（見出し, 部品を作る関数）。ケースを足すときは、部品を作る関数を足してここに加える。
+# 節の見出しの番号は make_reader が付ける。テストは段落の文字で対象を選ぶ（件数や段落の ID に頼らない）
+READER_SECTIONS = [
+    ("包まれた表の行とセル", reader_wrapped_rows),
+    ("テキストボックスの中の包まれた段落と表", reader_textbox_sdt),
+]
+
+
+def make_reader(path):
+    """読み取りの境界ケース。sample_edge は件数で確かめるテストがあるので、新しいケースはこちらに足す。"""
+    b = Builder()
+    body = []
+    body += front_ja(b, "読み取りの検証用文書", "―包まれた要素を読み落とさない―", [("架空大学", "試験\u3000五郎")])
+    for k, (heading, section) in enumerate(READER_SECTIONS, 1):
+        body.append(para(S["sec1"], f"{str(k).translate(ZEN_DIGITS)}．{heading}"))
+        body += section(b)
+    body.append(para(S["ref_head"], "引用および参考文献"))
+    body.append(para(S["ref"], "試験五郎（2023）．「読み取りの検証」．『架空誌』，第4巻，pp.7-8．"))
+    body += front_en(b, "Reading Wrapped Elements", "Checking the Reader", [("Goro SHIKEN", "Fictional University")],
+                     ["Reader abstract."])
+    body += tail(b)
+    b.save(path, body)
+
+
+# ----------------------------------------------------------------------------- 小さな論文
+def endnote_ref(nid):
+    """本文の中の、Word の文末脚注の参照。"""
+    return f'<w:r><w:rPr><w:rStyle w:val="a9"/></w:rPr><w:endnoteReference w:id="{nid}"/></w:r>'
+
+
+def endnote(nid, text, *more):
+    """Word の文末脚注（Builder.endnotes_extra に足す）。1 段落目は文末脚注の番号と text、more は 2 段落目以降の段落の XML。"""
+    first = f'<w:p><w:r><w:rPr><w:rStyle w:val="a9"/></w:rPr><w:endnoteRef/></w:r>{run(text)}</w:p>'
+    return f'<w:endnote w:id="{nid}">{first}{"".join(more)}</w:endnote>'
+
+
+def make_article(path, title, body_parts, endnotes=(), refs=None):
+    """題目・著者・本文・引用文献 1 件・英文要旨だけの小さな論文。
+
+    body_parts(b) は本文の段落（章見出しから）の XML の一覧を返す。本文で「試験（2024）」を引用すると、引用文献にリンクされる。
+    endnotes は Word の文末脚注の XML（endnote()）の一覧。
+    refs(b) は、引用文献 1 件の後ろに足す段落（引用文献の段落など）の XML の一覧を返す（省略すると足さない）。
+    """
+    b = Builder()
+    b.endnotes_extra.extend(endnotes)
+    body = []
+    body += front_ja(b, title, "―検証用の小さな論文―", [("架空大学", "試験\u3000六郎")])
+    body += body_parts(b)
+    body.append(para(S["ref_head"], "引用および参考文献"))
+    body.append(para(S["ref"], "試験六郎（2024）．「小さな論文」．『架空誌』，第5巻，pp.9-10．"))
+    if refs is not None:
+        body += refs(b)
+    body += front_en(b, "A Small Article", "For Checking", [("Rokuro SHIKEN", "Fictional University")],
+                     ["Small article abstract."])
+    body += tail(b)
+    b.save(path, body)
+
+
+# ----------------------------------------------------------------------------- sample_float_text
+def float_text_parts(b: Builder, down_cm=0):
+    """テキストボックスの中で、画像と文字（説明文）が同じ段落にある図形。図1 はキャプションあり、もう 1 つはキャプションなし。
+
+    down_cm: 図1 のテキストボックスを、アンカー段落から下にずらす量（cm）。0 なら位置は機械的に決まる。
+    0 より大きければ位置を決められない図表になる（AI による配置の指定を試すため）。
+    """
+    img1 = b.add_image("float_text_1.png", png_bytes("Picture with text", size=(400, 240)))
+    img2 = b.add_image("float_text_2.png", png_bytes("No caption", size=(400, 240)))
+    cm = 360000
+    return [
+        para(S["sec1"], "１．画像と文字が同じ段落の図"),
+        para(S["body"], "試験（2024）にならい，図1では画像と説明文を同じ段落に置いた。"),
+        para(S["body"], "この段落に図1のテキストボックスが結び付いている。", textbox(
+            para(S["body"], drawing(img1, 1800000, 1080000, 512), "説明文：図1の画像と同じ段落にある文字。")
+            + para(S["fig_cap"], "図1\u3000画像と文字が同じ段落の図"), 511, cx=8 * cm, cy=4 * cm,
+            v=("paragraph", int(down_cm * cm)), wrap="wrapTopAndBottom")),
+        para(S["body"], "以上が図1である。"),
+        para(S["sec1"], "２．キャプションのない図形"),
+        para(S["body"], "この段落にキャプションのないテキストボックスが結び付いている。", textbox(
+            para(S["body"], drawing(img2, 1800000, 1080000, 522), "説明文：キャプションのない図形の文字。"),
+            521, cx=8 * cm, cy=4 * cm, wrap="wrapTopAndBottom")),
+        para(S["body"], "以上のように，図形の中の文字も落とさない。"),
+    ]
+
+
+def make_float_text(path, down_cm=0):
+    """テキストボックスの中で、画像と文字が同じ段落にある図形の原稿（ALL_DOCS には入れない）。"""
+    make_article(path, "図形の中の画像と文字の検証用文書", lambda b: float_text_parts(b, down_cm))
+
+
+# ----------------------------------------------------------------------------- sample_structure
+def structure_textbox_regions(b: Builder, textboxes=True):
+    """本文中のテキストボックスに、本文の外で使うスタイル・文字の段落がある。
+
+    「注」だけのテキストボックスの後ろに番号で始まる本文の段落が、「英文要旨」スタイルの英語の段落のテキストボックスの
+    後ろに本文・章見出し・引用文献が続く。図形の中の段落では領域が変わらないので、どちらのテキストボックスの段落も
+    本文の領域に入り、以降の本文は注にも英文要旨にもならない。
+    textboxes=False なら、テキストボックスを除いた同じ原稿（テキストボックスがない場合と比べるため）。
+    """
+    def tb(inner, pid, cx):
+        return textbox(inner, pid, cx=cx, cy=300000) if textboxes else ""
+    return [
+        para(S["body"], "試験（2025）にならい，図形の中の文字で論文の構造が変わらないことを確かめる。",
+             tb(para(S["body"], "注"), 611, 600000)),
+        para(S["body"], "1) 番号で始まる本文の段落も，注にはならない。"),
+        para(S["body"], "英語の語を囲みに入れた。", tb(para(S["abs"], "Area model"), 612, 900000)),
+        para(S["body"], "囲みの後の本文も，本文のまま続く。"),
+    ]
+
+
+# sample_structure の節（見出し, 部品を作る関数）。ケースを足すときは、部品を作る関数を足してここに加える。
+# 節の見出しの番号は make_structure が付ける。テストは段落の文字で対象を選ぶ（件数や段落の ID に頼らない）
+STRUCTURE_SECTIONS = [
+    ("テキストボックスの中の別の領域のスタイル", structure_textbox_regions),
+]
+
+
+def make_structure(path, sections=None):
+    """論文の構造（領域の分け方など）の境界ケース。
+
+    sections は（見出し, 部品を作る関数）の一覧で、省略すると STRUCTURE_SECTIONS。最後の節「おわりに」と引用文献は
+    make_structure が付ける（ケースの後ろにも章見出し・本文・引用文献があるようにするため）。
+    """
+    b = Builder()
+    body = []
+    body += front_ja(b, "構造の検証用文書", "―図形の中の文字で領域を変えない―", [("架空大学", "試験　七郎")])
+    k = 0
+    for k, (heading, section) in enumerate(STRUCTURE_SECTIONS if sections is None else sections, 1):
+        body.append(para(S["sec1"], f"{str(k).translate(ZEN_DIGITS)}．{heading}"))
+        body += section(b)
+    body.append(para(S["sec1"], f"{str(k + 1).translate(ZEN_DIGITS)}．おわりに"))
+    body.append(para(S["body"], "以上のように，章と引用文献は図形の中の文字に左右されない。"))
+    body.append(para(S["ref_head"], "引用および参考文献"))
+    body.append(para(S["ref"], "試験七郎（2025）．「構造の検証」．『架空誌』，第6巻，pp.11-12．"))
+    body += front_en(b, "Checking the Structure", "Regions and Shapes", [("Shichiro SHIKEN", "Fictional University")],
+                     ["Structure abstract."])
+    body += tail(b)
+    b.save(path, body)
+
+
 if __name__ == "__main__":
     out = HERE / "fixtures"
     make_full(out / "sample_full.docx")
@@ -642,8 +860,12 @@ if __name__ == "__main__":
     make_float(out / "sample_float.docx")
     make_notes(out / "sample_notes.docx")
     make_pdfcheck(out / "sample_pdfcheck.docx")
+    make_reader(out / "sample_reader.docx")
+    make_float_text(out / "sample_float_text.docx")
+    make_structure(out / "sample_structure.docx")
     pdf_done = make_pdfcheck_pdf(out / "sample_pdfcheck.pdf")
     print("written:", out / "sample_full.docx", out / "sample_edge.docx", out / "sample_float.docx",
-          out / "sample_notes.docx", out / "sample_pdfcheck.docx",
+          out / "sample_notes.docx", out / "sample_pdfcheck.docx", out / "sample_reader.docx",
+          out / "sample_float_text.docx", out / "sample_structure.docx",
           out / "sample_pdfcheck.pdf" if pdf_done else "（LibreOffice がないので sample_pdfcheck.pdf は作り直していない）")
     sys.exit(0)

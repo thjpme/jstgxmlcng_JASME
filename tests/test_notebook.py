@@ -143,3 +143,20 @@ def test_step2_route_defaults_to_published_pdf():
     body = src.split("from google.colab import files\n", 1)[1].split("WORK = ", 1)[0]
     with pytest.raises(SystemExit, match="「docx から作る」"):
         exec(body, ns)
+
+
+def test_steps5_and_6_show_lost_images_box():
+    """XML に入らなかった画像（引用文献の段落の中の画像など）の赤い枠を、手順 5 と手順 6（AI の回答で再変換）で出す。"""
+    for prefix in ("#@title 5.", "AI_RESPONSE = r'''"):
+        src = cell_source(prefix)
+        assert "display(HTML(lost_images_box(res)))" in src
+        # 画像の枠は、レポートの表示より前に出す
+        assert src.index("lost_images_box(res)") < src.index("display(Markdown(res.report_path")
+    assert "lost_images_box" in cell_source("#@title 5.").split("api_key = None")[0]   # 手順 5 で import する
+
+
+def test_step8_shows_lost_images_box():
+    """手順 8（ダウンロード）でも、ダウンロードの後に XML に入らなかった画像の赤い枠を出す（手順 5・6 の枠を読み飛ばしたとき用）。"""
+    src = cell_source("#@title 8.")
+    assert "from jasme_jats.colab import lost_images_box, missing_images_box" in src
+    assert src.index("files.download(archive)") < src.index("display(HTML(lost_images_box(res)))")

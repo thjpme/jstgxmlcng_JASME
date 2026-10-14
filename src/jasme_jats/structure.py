@@ -22,6 +22,11 @@ FRONT_EN_ROLES = {"title_en", "subtitle_en", "author_en", "aff_en", "abstract_he
 BACK_HEADINGS = {"notes_heading": "notes", "ack_heading": "ack", "fn_heading": "fn", "ref_heading": "refs"}
 HEADING_LEVEL = {"sec1": 1, "sec2": 2, "sec3": 3}
 
+# 文字だけのテキストボックスの段落と、Word の文末脚注を除外したときの理由。レポートは、この理由の除外の件数を、冒頭と
+# 14 章に「要確認」として出す（文字だけのテキストボックスと文末脚注を XML に出力できるようになるまでの暫定の知らせ）
+TEXTBOX_TEXT_EXCLUDED = "テキストボックス内の文字（図の一部とみなして本文から除外）"
+ENDNOTE_EXCLUDED = "Word の文末脚注（未対応。内容を確認して本文の注に移してください）"
+
 # 想定外スタイルの段落から役割を推定する規則
 RE_HEAD1 = re.compile(r"^[0-9０-９]{1,2}[．.](?![0-9０-９])\s*\S.{0,40}$")
 RE_HEAD2 = re.compile(r"^[(（][0-9０-９]{1,2}[)）]\s*\S.{0,40}$")
@@ -229,9 +234,23 @@ class ArticlePlan:
         text = _para_text(para)
         self.exclusions.append(Exclusion(src=para.src, reason=reason, text=text))
 
+    def exclude_blank(self, para: Para):
+        """空白だけの段落を、理由「空白のみの段落」で除外に記録する（文字がまったくない段落は記録しない）。
+
+        理由「空白のみの段落」の除外は、ここだけで作る（blank=True を付ける）。不変性チェック（fidelity.verify）は、blank の除外の
+        docx の文字が本当に空白だけかを確かめる（空白以外の文字があれば、変換ツールの不具合として不合格）。
+        """
+        if para.plain():
+            self.exclusions.append(Exclusion(src=para.src, reason="空白のみの段落", text=_para_text(para), blank=True))
+
 
 def _para_text(para: Para) -> str:
     return "".join(a.text for a in para.atoms if a.kind == "text")
+
+
+def in_shape(b) -> bool:
+    """図形（テキストボックス・グループ図形）の中の段落・表か（Para・Table の in_textbox または float_id）。"""
+    return b.in_textbox or bool(b.float_id)
 
 
 # ----------------------------------------------------------------------------- roles
@@ -323,10 +342,24 @@ class Classifier:
         return {self.role_of(p) for p in t.paragraphs()}
 
     def split_regions(self, flat):
+        """ブロックを領域（和文の冒頭・本文・後付け・英文の部分）に分ける。
+
+        領域は、段落の役割（スタイル）と文字から、図形の外のブロックだけで決める。図形（テキストボックス・グループ図形）の
+        中の段落・表では状態を変えず（図形の中のセクション区切りでも切り替えず）、その時点の領域に入れる。テキストボックスの
+        中の「英文要旨」スタイルの段落や「注」だけの段落で、以降の本文と引用文献が英文要旨や注に入るのを防ぐため。
+        図形の中身は結び付いている段落（アンカー段落）の後ろに並ぶので、アンカー段落と同じ領域に入る。ただし、アンカー段落が
+        和文の冒頭の最後の段落（セクション区切り）なら、切り替えた後の本文に入る（テンプレートの冒頭に図形はないので、本文の
+        中身とみなす）。図形の中の題目の段落は「題目を見た」ことにする（題目をテキストボックスに入れた原稿でも、冒頭の最後の
+        セクション区切りで本文に切り替えるため）。
+        """
         regions = {"front_ja": [], "body": [], "back": [], "front_en": []}
         state = "front_ja"
         seen_title = False
         for b, role in flat:
+            if in_shape(b):
+                seen_title = seen_title or (state == "front_ja" and role == "title")
+                regions[state].append((b, role))
+                continue
             troles = self.table_roles(b) if isinstance(b, Table) else set()
             if role in FRONT_EN_ROLES or troles & {"author_en", "aff_en"}:
                 state = "front_en"
@@ -373,7 +406,9 @@ class Classifier:
                     self.read_author_table_ja(b)
                 else:
                     for p in b.paragraphs():
-                        if not p.is_blank:
+                        if p.is_blank:
+                            plan.exclude_blank(p)
+                        else:
                             plan.exclude(p, "冒頭部の表（著者表以外）の文字")
                 continue
             plan.region[b.src] = "front_ja"
@@ -386,8 +421,7 @@ class Classifier:
             elif role in ("aff_ja", "author_ja"):
                 self.author_paragraph_ja(b, role)
             elif b.is_blank:
-                if b.plain():
-                    plan.exclude(b, "空白のみの段落")
+                plan.exclude_blank(b)
             else:
                 plan.locations[b.src] = "冒頭部"
                 plan.exclude(b, "冒頭部のテンプレート装飾・誌名行など（題目・著者以外の段落）")
@@ -405,8 +439,7 @@ class Classifier:
                         self.plan.region[p.src] = "authors"
                         p.role = p.role or r
                         if p.is_blank:
-                            if p.plain():
-                                self.plan.exclude(p, "空白のみの段落")
+                            self.plan.exclude_blank(p)
                             continue
                         if r == "aff_ja":
                             row_affs.append(p)
@@ -423,6 +456,7 @@ class Classifier:
         if not hasattr(self, "_loose_affs"):
             self._loose_affs = []
         if p.is_blank:
+            self.plan.exclude_blank(p)
             return
         if role == "aff_ja":
             self._loose_affs = [p]
@@ -470,8 +504,10 @@ class Classifier:
             if b.in_textbox and role not in ("fig_caption", "table_caption") and not b.images:
                 cap = self.textbox_caption(b)
                 if cap is None:
-                    if not b.is_blank:
-                        plan.exclude(b, "テキストボックス内の文字（図の一部とみなして本文から除外）")
+                    if b.is_blank:
+                        plan.exclude_blank(b)      # 全角空白だけの段落も記録する（記録しないと出力漏れになる）
+                    else:
+                        plan.exclude(b, TEXTBOX_TEXT_EXCLUDED)
                     continue
                 role = cap
                 b.role_origin = "heuristic"
@@ -480,8 +516,7 @@ class Classifier:
                             f"テキストボックス内のスタイル「{b.style_name}」の段落「{_para_text(b)[:30]}」を"
                             f"{kind}キャプションと推定（「{kind}N」で始まる）")
             if b.is_blank:
-                if b.plain():
-                    plan.exclude(b, "空白のみの段落")
+                plan.exclude_blank(b)
                 continue
             if role in ("normal", None) or role not in BODY_ROLES | {"table"}:
                 guessed = self.guess_heading(b, strict=False)
@@ -672,11 +707,14 @@ class Classifier:
 
     def _drop_blank(self, p: Para):
         self.plan.region[p.src] = "body"
-        if p.plain():
-            self.plan.exclude(p, "空白のみの段落")
+        self.plan.exclude_blank(p)
 
     def float_mechanical(self, info, groups, others):
-        """位置が機械的に決まる浮動配置の図形の中身を組む。中身が単純でなければ None（AI に任せる）。"""
+        """位置が機械的に決まる浮動配置の図形の中身を組む。中身が単純でなければ None（AI に任せる）。
+
+        画像と文字が同じ段落は、図に組むときは画像を図に移し、段落は文字ごと図の直後に本文の段落として出す。
+        キャプションのない図形は図にしないので、これまでどおり画像も文字も段落のまま出す。
+        """
         image_paras = [q for q in info.paras if q.images]
         if len(groups) > 1 or others or len(info.tables) > 1 or (info.tables and (image_paras or info.images)):
             return None
@@ -702,9 +740,18 @@ class Classifier:
             return [("node", TableNode(table=info.tables[0], caption=caps[0], caption_more=caps[1:]))]
         if not (image_paras or info.images or info.tables):
             return [(role, q) for q in caps]     # キャプションだけ（隣の画像と組にする。これまでの扱い）
-        self.plan.moved_images.update(i.image_id for i in info.images)
-        return [("node", FigNode(image_paras=image_paras, caption=caps[0], caption_more=caps[1:],
-                                 tables=list(info.tables), extra_images=list(info.images)))]
+        # 画像と文字が同じ段落（画像だけの段落でないもの）は、画像を図に移し（段落の中では出さない）、
+        # 段落は文字ごと図の直後に本文の段落として出す
+        mixed = [q for q in image_paras if not self.is_image_para(q)]
+        extra = list(info.images) + [i for q in mixed for i in q.images]
+        for q in mixed:
+            self.plan.decide("mechanical", "figure", q.src,
+                             f"テキストボックス・グループ図形 {info.float.fid} の段落「{_para_text(q).strip()[:20]}」は、"
+                             "画像と文字が同じ段落にある。画像は図に入れ、段落の文字は図の直後に本文の段落として出した")
+        self.plan.moved_images.update(i.image_id for i in extra)
+        return ([("node", FigNode(image_paras=[q for q in image_paras if q not in mixed], caption=caps[0],
+                                  caption_more=caps[1:], tables=list(info.tables), extra_images=extra))]
+                + [("p", q) for q in mixed])
 
     def float_from_spec(self, info, spec):
         """AI が指定した組み合わせ（ai_assist.float_placements で検証済み）で、浮動配置の図形の中身を組む。"""
@@ -726,7 +773,7 @@ class Classifier:
                 self._take(q, role, "ai")
                 caps.append(q)
                 used.add(q.src)
-            image_paras, extra, tbls = [], [], []
+            image_paras, extra, tbls, mixed = [], [], [], []
             for x in item["body"]:
                 if x in tables:
                     tbls.append(tables[x])
@@ -738,7 +785,14 @@ class Classifier:
                     q = paras.get(x) or cell_paras.get(x) or img_para[x]
                     if q.src in cells:
                         dissolved.add(cells[q.src].tid)
-                    if q not in image_paras:
+                    if not self.is_image_para(q):
+                        # 画像と文字が同じ段落: 画像は図に移し、段落は文字ごと図の直後に本文の段落として出す
+                        if q not in mixed:
+                            mixed.append(q)
+                            extra.extend(q.images)
+                            self._take(q, "p")
+                            used.add(q.src)
+                    elif q not in image_paras:
                         image_paras.append(q)
                         self._take(q, "p")
                         used.add(q.src)
@@ -749,8 +803,12 @@ class Classifier:
             else:
                 entries.append(("node", FigNode(image_paras=image_paras, caption=cap, caption_more=more,
                                                 tables=tbls, extra_images=extra)))
+                entries.extend(("p", q) for q in mixed)
             what = "表" if item["kind"] == "table" else "図"
             body = "表" if tbls else "画像"
+            if mixed:
+                body += (f"。画像と文字が同じ段落 {', '.join(q.src for q in mixed)} は、画像を図に入れ、"
+                         "文字は図の直後に本文の段落として出した")
             descs.append(f"{what}「{_para_text(cap)[:20] if cap else 'キャプションなし'}」（本体: {body}）")
         # 指定に含まれなかった中身は、図表の後にそのまま出す（文字を落とさないため）
         for q in info.paras:
@@ -981,7 +1039,9 @@ class Classifier:
             if isinstance(b, Table):
                 if state == "refs":
                     for p in b.paragraphs():
-                        if not p.is_blank:
+                        if p.is_blank:
+                            plan.exclude_blank(p)
+                        else:
                             plan.refs.append(RefNode(para=p))
                     continue
                 target = {"notes": plan.notes, "ack": plan.ack}.get(state)
@@ -989,7 +1049,9 @@ class Classifier:
                     target.children.append(TableNode(table=b))
                 else:
                     for p in b.paragraphs():
-                        if not p.is_blank:
+                        if p.is_blank:
+                            plan.exclude_blank(p)
+                        else:
                             plan.exclude(p, "後付けの位置づけが不明な表の文字")
                 continue
             heading = role if role in BACK_HEADINGS else self.back_heading_by_text(b, role)
@@ -1018,8 +1080,7 @@ class Classifier:
                 continue
             plan.region[b.src] = state or "back"
             if b.is_blank:
-                if b.plain():
-                    plan.exclude(b, "空白のみの段落")
+                plan.exclude_blank(b)
                 continue
             if state == "refs":
                 plan.refs.append(RefNode(para=b))
@@ -1075,8 +1136,7 @@ class Classifier:
                         plan.region[p.src] = "authors"
                         p.role = p.role or r
                         if p.is_blank:
-                            if p.plain():
-                                plan.exclude(p, "空白のみの段落")
+                            plan.exclude_blank(p)
                             continue
                         if r == "author_en":
                             pending_name = self.add_author_en(p)
@@ -1092,13 +1152,14 @@ class Classifier:
                     app.children.append(TableNode(table=b))
                 else:
                     for p in b.paragraphs():
-                        if not p.is_blank:
+                        if p.is_blank:
+                            plan.exclude_blank(p)
+                        else:
                             plan.exclude(p, "英文部分の表（著者表以外）の文字")
                 continue
             plan.region[b.src] = "front_en"
             if b.is_blank:
-                if b.plain():
-                    plan.exclude(b, "空白のみの段落")
+                plan.exclude_blank(b)
                 continue
             text = _para_text(b)
             if (in_abstract or app is not None) and RE_APPENDIX.match(text):
@@ -1201,8 +1262,10 @@ class Classifier:
                         f"注は「注」の節にまとめる）。本文と注の一覧の番号、注の見出しは補った（8 章）")
         for p in self.doc.endnotes.values():
             for q in p:
-                if not q.is_blank:
-                    plan.exclude(q, "Word の文末脚注（未対応。内容を確認して本文の注に移してください）")
+                if q.is_blank:
+                    plan.exclude_blank(q)          # 全角空白だけの段落も記録する（記録しないと出力漏れになる）
+                else:
+                    plan.exclude(q, ENDNOTE_EXCLUDED)
 
     def assign_ids(self):
         plan = self.plan

@@ -8,7 +8,9 @@
 
 - **docx の本文の文字を 1 文字も変えない**（誤字脱字も直さない）。文字列を書き換えるコードを書かない。
   構造はアトムに `LinkSpec` を付けるか段落の役割を変えることで表し、XML の段落の文字は必ず `Emitter.span()` を通して書く。
-- 出力しない段落は理由付きで記録し（`plan.exclude()` / `BuildInfo.exclusions`）、落とせるのは空白だけ（`Emitter.drop()`）。
+- 出力しない段落は理由付きで記録し（`plan.exclude()` / `BuildInfo.exclusions`。空白だけの段落は `plan.exclude_blank()`）、
+  落とせるのは空白だけ（`Emitter.drop()`）。出力した段落を除外にも記録すると、不変性チェックは不合格になる。
+- 不変性チェックは文字しか見ない。XML に入らなかった画像は `pipeline.lost_images()` が検出し、要対応として知らせる。
 - 作り方は 2 通り（`Options.route`。最初に利用者が選ぶ。Colab の初期値とコマンドラインの `--pdf` があるときの既定はルート2）。
   どちらも docx → XML の処理は同じで、上の原則はそのまま守る。
   - ルート1「docx から作る」: docx の文字のまま XML にする。記事の PDF があれば照合して、違いをレポートに載せるだけ（`pdfmatch.py`）。
