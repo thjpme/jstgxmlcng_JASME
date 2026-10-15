@@ -156,6 +156,7 @@ def pdf_diff_box(res) -> str:
     ルート1（docx から作る）: docx と PDF で文字が違う箇所。ルート2（出版版 PDF に合わせてから作る）: 直せなかった箇所と、
     直した後も残る違い（直した docx は変換結果の ZIP に入る）。
     """
+    from .report import WHY_MARK
     pc, fx = res.pdf_check, res.docx_fix
     if pc is None or not pc.ok:
         return ""
@@ -176,7 +177,7 @@ def pdf_diff_box(res) -> str:
             "照らして確認してください。XML は直した docx の文字のままです。" + (f"\n{items}{more}" if items else ""))
     if not pc.diffs and not pc.width_count:
         return ""
-    items = "\n".join(f"・{d.context}（docx「{d.docx}」/ PDF「{d.pdf}」）" for d in pc.diffs[:10])
+    items = "\n".join(f"・{d.context}（docx「{d.docx}」/ PDF「{d.pdf}」{WHY_MARK if d.why else ''}）" for d in pc.diffs[:10])
     more = f"\n…ほか {len(pc.diffs) - 10} 件" if len(pc.diffs) > 10 else ""
     width = f"、全角・半角の違いが {pc.width_count} 文字" if pc.width_count else ""
     return error_box(
