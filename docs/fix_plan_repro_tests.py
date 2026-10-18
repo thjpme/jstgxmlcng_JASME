@@ -6,7 +6,8 @@
 直した単位のテストは、このファイルから取り除く。単位 A（0.19.0）で取り除いたもの: 表の行がコンテンツコントロールに入っている
 （逆は tests/test_reader.py・tests/test_pipeline.py の sample_reader.docx）、出力と除外の重なり（tests/test_fidelity.py）、
 N1（tests/test_lost_images.py）、N2（tests/test_structure.py）、N3（tests/test_pipeline.py の
-test_blank_paragraphs_in_textbox_and_endnote_are_excluded）。
+test_blank_paragraphs_in_textbox_and_endnote_are_excluded）。単位 B（0.20.0。U7・N9）に当たるテストは、このファイルには
+もともとない（U7・N9 のテストは tests/test_pdfmatch.py に足した）。
 
 実行のしかた（tests/conftest.py のフィクスチャ journal・meta を使うため、tests/ に一時的に写して実行し、終わったら消す）:
 

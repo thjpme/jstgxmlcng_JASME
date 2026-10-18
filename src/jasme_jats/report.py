@@ -13,6 +13,7 @@ from pathlib import Path
 from .ai_assist import PROVIDERS
 from .linker import body_paragraphs, linked_ids
 from .package import article_dir
+from .pdfmatch import HEAD_WHY, LINE_MARK, LONG_WHY, RE_PAGE_NO
 from .structure import ENDNOTE_EXCLUDED, TEXTBOX_TEXT_EXCLUDED
 
 
@@ -182,6 +183,8 @@ def pdf_summary(r) -> str:
         parts = [f"PDF に合わせて docx を直した {len(fx.applied)} 箇所（変更履歴: 挿入 {ins}・削除 {dels}）"]
         if fx.skipped:
             parts.append(f"直せなかった {len(fx.skipped)} 箇所（要確認）")
+        if ignored_lines(r):
+            parts.append(ignored_summary(r))
         if pc.number_edits:
             parts.append(f"Word が付けた番号を PDF に合わせた {len(pc.number_edits)} 件")
         if pc.diffs or pc.width_count:
@@ -190,10 +193,77 @@ def pdf_summary(r) -> str:
         parts = [f"文字の違い {len(pc.diffs)} 件" + ("（要確認）" if pc.diffs else "")]
         if pc.width_count:
             parts.append(f"全角・半角の違い {pc.width_count} 文字（docx のまま）")
+        if ignored_lines(r):
+            parts.append(ignored_summary(r))
     if unmatched:
         parts.append(f"PDF に見つからない段落 {len(unmatched)} 件"
                      + ("（半分以上の段落が見つからない。別の記事の PDF ではないか確認）" if len(unmatched) * 2 > pc.checked else ""))
     return " / ".join(parts) + "（13 章）"
+
+
+def ignored_lines(r) -> list:
+    """組版で入る文字（誌名の行・柱・投稿受付日など）や図・表の中の文字とみなして、照合に使わなかった PDF の文字
+    [(段落 ID, 行または投稿受付日の文字列)]。
+
+    ルート2 では、元の docx と PDF の照合（直す箇所を決めたもの）から。
+    """
+    fx = r.docx_fix
+    pc = fx.check if fx is not None and fx.check is not None else r.pdf_check
+    return list(pc.ignored_lines) if pc is not None and pc.ok else []
+
+
+IGNORED_TITLE = "照合に使わなかった PDF の文字（誌名の行・投稿受付日・表や図の中の文字など）"
+IGNORED_NOTE = ("段落の途中にあった PDF の文字のうち、組版で入る文字（誌名の行・柱・投稿受付日など）や、docx にない図・表の中の"
+                "文字（表のセルの数字、図の中の語句など）とみなして、照合に使わなかったものです（ページの端の行・ページの途中の"
+                "数字だけの行・短い行などで、docx のどの段落の文字とも一致しなかったもの）。表・図の中の文字や、docx のほかの段落に"
+                "すでにある文字なら、対応は要りません。PDF では本文なのに docx にない文字（校正で足された一文など）があったときだけ、"
+                "docx を手で直してから変換し直してください。")
+# ルート2 で添える文。段落の後ろが照合の窓の外に出る不具合（DEVELOPMENT.md の「残っている課題」）で、同じ文字を元の段落から
+# 消していることがあるので、ほかの段落にある文字でも 13.1 を確かめてもらう
+IGNORED_NOTE_ROUTE2 = ("これらの文字は、PDF に合わせて直した docx にも入れていません。docx のほかの段落にある文字のときは、その文字を"
+                       " 13.1 で元の段落から消していないかも確かめてください（消していれば、直した docx を Word で開いてその変更を"
+                       "却下し、却下して保存した docx を「docx から作る」で変換し直します）。")
+IGNORED_NUMBERS = 8      # 数字だけの行を一覧に並べる数（それより多ければ「…」）
+
+
+def ignored_summary(r) -> str:
+    """1 章の要約（とコマンドライン・Colab の表示）の、照合に使わなかった PDF の文字の件数。"""
+    rows = ignored_lines(r)
+    return (f"照合に使わなかった PDF の文字 {len(rows)} 件（{len({s for s, _ in rows})} 段落。誌名の行・投稿受付日・表や図の"
+            "中の文字などとみなしたもの。本文が混じっていないか確認）")
+
+
+def ignored_rows(rows, loc_of) -> list:
+    """照合に使わなかった PDF の文字を、段落ごとに 1 行にする: [(段落, 場所, 行数, PDF の文字)]。
+
+    PDF の文字は、数字だけの行（表のセルの数字など）以外の行を先に LINE_MARK（行の変わり目の記号）でつなぎ、数字だけの行は
+    件数と最初のいくつかにまとめる（表が段落の途中に入ると、セルの数字が何十行も並ぶため）。
+    """
+    by_src = {}
+    for s, t in rows:
+        by_src.setdefault(s, []).append(t)
+    out = []
+    for s, ts in by_src.items():
+        nums = [t for t in ts if RE_PAGE_NO.match(t)]
+        parts = [esc(t, 60) for t in ts if not RE_PAGE_NO.match(t)]
+        if nums:
+            parts.append(f"数字だけの行 {len(nums)} 件: " + "、".join(esc(t) for t in nums[:IGNORED_NUMBERS])
+                         + ("…" if len(nums) > IGNORED_NUMBERS else ""))
+        out.append((s, loc_of(s), str(len(ts)), LINE_MARK.join(parts)))
+    return out
+
+
+def _ignored_section(L, r, number, loc_of):
+    """13 章の、照合に使わなかった PDF の文字の一覧（段落ごとに 1 行）。"""
+    rows = ignored_lines(r)
+    L.append(f"### 13.{number} {IGNORED_TITLE}")
+    L.append("")
+    if not rows:
+        L.append("ありません。")
+        return
+    L.append(IGNORED_NOTE + (IGNORED_NOTE_ROUTE2 if r.docx_fix is not None else ""))
+    L.append("")
+    L.append(table(["段落", "場所", "行数", f"PDF の文字（{LINE_MARK} は行の変わり目）"], ignored_rows(rows, loc_of)))
 
 
 def _clean(t) -> str:
@@ -665,6 +735,10 @@ def render(r) -> str:
     elif pc is not None and pc.ok and (pc.diffs or pc.width_count):
         L.append(f"- [ ] **13 章の、出版版 PDF との違い**（文字の違い {len(pc.diffs)} 件・全角・半角の違い {pc.width_count} 文字）を"
                  "確認する（docx が最終版でなければ、docx を直すか「出版版 PDF に合わせてから作る」で変換し直す）")
+    if ignored_lines(r):
+        L.append(f"- [ ] 13 章の最後の「照合に使わなかった PDF の文字」（{len(ignored_lines(r))} 件）に、docx にない本文"
+                 "（校正で足された一文など）が混じっていないか確かめる（表・図の中の文字や、docx のほかの段落にすでにある文字なら"
+                 "対応は要らない。本文が足りなければ docx を手で直して変換し直す）")
     if r.forced_floats:
         L.append("- [ ] 本文の冒頭に仮に置いた図表（3 章の「図表の位置」）を、XML の中で手作業で正しい位置に移す")
     if need:
@@ -688,9 +762,25 @@ def render(r) -> str:
     return "\n".join(L)
 
 
+# 直せない違い（why のあるもの）の PDF の文字に添える文（レポートの表と Colab の枠）
+WHY_MARKS = {HEAD_WHY: f"（PDF の側は照合に使わなかった文字だけ。13 章の最後の一覧。{LINE_MARK} は PDF の行の変わり目）",
+             LONG_WHY: f"（PDF にだけある 20 文字以上の文字。図や表の中の文字かもしれない。{LINE_MARK} は PDF の行の変わり目）"}
+WHY_MARK = WHY_MARKS[HEAD_WHY]
+PDF_COLUMN = f"PDF（{LINE_MARK} は行の変わり目）"     # 直せない違いのある表の、PDF の列の見出し
+
+
+def why_mark(why) -> str:
+    """直せない違いの理由 why に添える文（why がなければ空）。"""
+    return WHY_MARKS.get(why, "（直せない違い）") if why else ""
+
+
 def _diff_table(L, plan, diffs):
-    L.append(table(["段落", "場所", "docx", "PDF", "docx の前後（［］が違う部分）"],
-                   [(d.src, plan.locations.get(d.src, ""), esc(d.docx, 40), esc(d.pdf, 40), esc(d.context, 60)) for d in diffs]))
+    """文字の違いの表。直せない理由のある違い（PDF の側に照合に使わなかった文字しかないもの、PDF にだけある長い文字）は、
+    PDF の文字を長めに出し（行の変わり目は LINE_MARK）、その旨を添える。"""
+    L.append(table(["段落", "場所", "docx", PDF_COLUMN if any(d.why for d in diffs) else "PDF", "docx の前後（［］が違う部分）"],
+                   [(d.src, plan.locations.get(d.src, ""), esc(d.docx, 40),
+                     esc(d.pdf, 80) + why_mark(d.why) if d.why else esc(d.pdf, 40), esc(d.context, 60))
+                    for d in diffs]))
 
 
 def _unmatched_table(L, srcs, text_of, loc_of):
@@ -742,6 +832,8 @@ def render_route1(L, r, pc):
         _unmatched_table(L, pc.unmatched, lambda s: plan.paras[s].plain(), lambda s: plan.locations.get(s, ""))
     else:
         L.append("ありません。")
+    L.append("")
+    _ignored_section(L, r, 4, lambda s: plan.locations.get(s, ""))
 
 
 def render_route2(L, r, pc, fx):
@@ -767,8 +859,12 @@ def render_route2(L, r, pc, fx):
     L.append("### 13.2 PDF と違うが直さなかった箇所（要確認）")
     L.append("")
     if fx.skipped:
-        L.append(table(["段落", "場所", "docx", "PDF", "直さなかった理由"],
-                       [(f.src, fx.locations.get(f.src, ""), esc(f.old, 30), esc(f.new, 30), f.reason) for f in fx.skipped]))
+        # PDF の側に照合に使わなかった文字しかない箇所と、PDF にだけある長い文字は、PDF のその位置の本文の行が見えるように、
+        # PDF の文字を長めに出す（行の変わり目は LINE_MARK）
+        long = any(f.reason in WHY_MARKS for f in fx.skipped)
+        L.append(table(["段落", "場所", "docx", PDF_COLUMN if long else "PDF", "直さなかった理由"],
+                       [(f.src, fx.locations.get(f.src, ""), esc(f.old, 30), esc(f.new, 80 if f.reason in WHY_MARKS else 30),
+                         f.reason) for f in fx.skipped]))
     else:
         L.append("ありません。")
     L.append("")
@@ -800,6 +896,8 @@ def render_route2(L, r, pc, fx):
         _unmatched_table(L, fx.unmatched, lambda s: fx.texts.get(s, ""), lambda s: fx.locations.get(s, ""))
     else:
         L.append("ありません。")
+    L.append("")
+    _ignored_section(L, r, 6, lambda s: fx.locations.get(s, ""))
 
 
 def render_ai_only(r) -> str:
