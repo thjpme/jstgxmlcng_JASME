@@ -8,7 +8,9 @@ docx の段落と PDF の照合（pdfmatch.py）の結果から、段落ごと�
     （大文字・小文字、引用符、「資料」→「付録」など）
   ・直さないもの: 表のセル・数式・図の中の文字（照合しない）、PDF の中に見つからない段落、数式・Word が付ける番号・
     リンクの文字にかかる違い、フィールドの結果・タブ・記号などの文字、空白だけの違い（PDF の空白は信頼できない）、
-    段落の文字列を読み取り（docx_reader）と同じに組み立てられない段落（図形を含む段落など）
+    段落の文字列を読み取り（docx_reader）と同じに組み立てられない段落（図形を含む段落など）、PDF のページ番号・誌名の行・
+    柱・投稿受付日などや、docx にない図・表の中の文字とみなした文字（docx に足さない。PDF の側にその文字しかない位置の
+    docx の文字も消さない）
 
 できた docx は Word で開いて、変更を 1 つずつ承諾・却下できる。本ツールの読み取りは、挿入を残し削除を除いた文字
 （すべて承諾した状態）を読むので、この docx をルート1 と同じ処理で変換すると、PDF に合わせた文字の XML になる。
@@ -53,7 +55,8 @@ class DocxFix:
     fixes: list = field(default_factory=list)        # Fix（直したもの・直さなかったもの）
     unmatched: list = field(default_factory=list)    # PDF の中に見つからなかった段落
     check: object = None                             # 元の docx と PDF の照合（pdfmatch.PdfCheck）
-    texts: dict = field(default_factory=dict)        # 元の docx の段落の文字列（直した段落・見つからない段落。レポート用）
+    texts: dict = field(default_factory=dict)        # 元の docx の段落の文字列（直した段落・見つからない段落・照合に
+    #                                                  使わなかった PDF の文字のある段落。レポート用）
     locations: dict = field(default_factory=dict)    # 元の docx の段落の場所（レポート用）
 
     @property
@@ -80,7 +83,7 @@ def plan_fixes(plan, check) -> list:
         old = text[d.start:d.end]
         if not d.fixable:
             fixes.append(Fix(d.src, d.start, d.end, d.pdf, "text", old,
-                             reason="数式・Word が付ける番号・リンクの文字にかかる、または足す位置を決められない"))
+                             reason=d.why or "数式・Word が付ける番号・リンクの文字にかかる、または足す位置を決められない"))
             continue
         # 違う部分の中でも、文字ごとに最小限の変更にする（大文字・小文字の違いなど）
         for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, old, d.pdf, autojunk=False).get_opcodes():
@@ -419,7 +422,7 @@ def make_fixed_docx(docx_path, pdf_path, out_path, journal) -> DocxFix:
     if not check.ok:            # PDF の文字を読めない: docx は作らない（呼び出し側が元の docx を変換する）
         return fix
     fix.fixes = plan_fixes(plan, check)
-    for s in {f.src for f in fix.fixes} | set(fix.unmatched):
+    for s in {f.src for f in fix.fixes} | set(fix.unmatched) | {src for src, _ in check.ignored_lines}:
         fix.texts[s] = plan.paras[s].plain()
         fix.locations[s] = plan.locations.get(s, "")
     reasons = {id(f): f.reason for f in fix.fixes}      # 照合の段階で直さないと決めたもの
