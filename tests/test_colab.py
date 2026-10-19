@@ -53,6 +53,27 @@ def test_missing_images_box(journal, meta, tmp_path):
     assert missing_images_box(convert(FULL, meta, journal, Options(out_dir=tmp_path / "f", convert_metafiles=False))) == ""
 
 
+def test_pdf_diff_box_shows_formula_and_insert_marks():
+    """ルート2 の赤い枠の直せなかった箇所の docx の文字は、レポートの 13.2 と同じ形にする（docx の数式・画像は「〓」、PDF に
+    だけある文字は、足す位置の前後の docx の文字と「［］」）。同じ記号の 2 つの意味（docx の数式と、PDF で読み取れない部分）を
+    一覧の前に添える（MATH_WHY の行。docx の数式の位置の行と、PDF にだけある文字の行）。"""
+    from pathlib import Path
+    from types import SimpleNamespace
+    from jasme_jats.colab import pdf_diff_box
+    from jasme_jats.pdfdocx import DocxFix, Fix
+    from jasme_jats.pdfmatch import MATH_WHY, PdfCheck
+    text = "値の組（￼，￼）を順に調べ，その確率を表に記録した。"
+    at = text.index("を表")
+    fx = DocxFix(Path("31_1_PDFに合わせた原稿.docx"), texts={"d12": text},
+                 fixes=[Fix("d12", 4, 5, "〓，〓", "text", old="￼", reason=MATH_WHY),
+                        Fix("d12", at, at, "（〓，…，〓とおく）", "text", reason=MATH_WHY)])
+    html = pdf_diff_box(SimpleNamespace(pdf_check=PdfCheck(), docx_fix=fx))
+    assert "￼" not in html and "・d12: 「〓」→「〓，〓」" in html
+    assert "・d12: 「…に調べ，その確率［］を表に記録した。」→「（〓，…，〓とおく）」" in html
+    assert "docx の側の「〓」は docx の数式・画像、PDF の側の「〓」は PDF で数式など文字として読み取れない部分です。" in html
+    assert "docx の側の「［］」は、docx に文字がなく PDF にだけ文字がある位置です" in html
+
+
 def test_ai_required_and_unplaced_boxes():
     from types import SimpleNamespace
     from jasme_jats.colab import ai_required_box, unplaced_box

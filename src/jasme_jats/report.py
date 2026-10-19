@@ -13,7 +13,8 @@ from pathlib import Path
 from .ai_assist import PROVIDERS
 from .linker import body_paragraphs, linked_ids
 from .package import article_dir
-from .pdfmatch import HEAD_WHY, LINE_MARK, LONG_WHY, RE_PAGE_NO
+from .pdfmatch import (DISPLACED_WHY, EDGE_WHY, FORMULA_MARK, HEAD_WHY, LINE_MARK, LONG_WHY, MATH_WHY, RE_PAGE_NO, UNSURE_WHY,
+                       WHOLE_WHY)
 from .structure import ENDNOTE_EXCLUDED, TEXTBOX_TEXT_EXCLUDED
 
 
@@ -218,8 +219,8 @@ IGNORED_NOTE = ("段落の途中にあった PDF の文字のうち、組版で�
                 "数字だけの行・短い行などで、docx のどの段落の文字とも一致しなかったもの）。表・図の中の文字や、docx のほかの段落に"
                 "すでにある文字なら、対応は要りません。PDF では本文なのに docx にない文字（校正で足された一文など）があったときだけ、"
                 "docx を手で直してから変換し直してください。")
-# ルート2 で添える文。段落の後ろが照合の窓の外に出る不具合（DEVELOPMENT.md の「残っている課題」）で、同じ文字を元の段落から
-# 消していることがあるので、ほかの段落にある文字でも 13.1 を確かめてもらう
+# ルート2 で添える文。照合に使わなかった文字が docx のほかの段落にある文字なら、照合がその段落の文字を取り違えて、元の段落から
+# 消していないか（隣り合う段落に同じ文がくり返す形など。docs/DESIGN.md の 4.4 の「限界」）も 13.1 で確かめてもらう
 IGNORED_NOTE_ROUTE2 = ("これらの文字は、PDF に合わせて直した docx にも入れていません。docx のほかの段落にある文字のときは、その文字を"
                        " 13.1 で元の段落から消していないかも確かめてください（消していれば、直した docx を Word で開いてその変更を"
                        "却下し、却下して保存した docx を「docx から作る」で変換し直します）。")
@@ -313,6 +314,30 @@ def fix_rows(fx) -> list:
     return [(src, fx.locations.get(src, ""), str(len(fs)), "、".join(_snippets(fx.texts[src], [(f.start, f.end, f.new)
                                                                                          for f in fs])))
             for src, fs in by_src.items()]
+
+
+INSERT_AT = "［］"      # ルート2 の 13.2 の docx の欄で、PDF にだけある文字の位置を示す記号
+# 13 章の表（と Colab の枠）の「〓」の説明。docx の側（docx・前後の欄）では docx の数式・画像、PDF の側では PDF で文字として
+# 読み取れない数式などの位置（同じ記号なので、表に「〓」があるときは、表の前に必ず添える）
+FORMULA_NOTE = (f"表の「{FORMULA_MARK}」は、docx の欄と前後の欄では docx の数式・画像、PDF の欄では PDF で数式など文字として"
+                "読み取れない部分です。")
+
+
+def _formula_note(L, cells):
+    """表の文字 cells のどれかに FORMULA_MARK があれば、表の前に FORMULA_NOTE を添える。"""
+    if any(FORMULA_MARK in (c or "") for c in cells):
+        L.append(FORMULA_NOTE)
+        L.append("")
+
+
+def _skipped_docx(f, text, n=8) -> str:
+    """ルート2 の 13.2 の docx の欄: 直さなかった箇所の docx の文字（数式・画像は 〓）。docx の側に文字がない箇所（PDF にだけある
+    文字。f.start == f.end）は、docx の段落の文字 text の、その位置の前後 n 文字（「…確率［］が…」）。"""
+    if f.start != f.end or not text:
+        return esc(f.old.replace(chr(0xFFFC), "〓"), 30)
+    q = f.start
+    return _clean(("…" if q > n else "") + text[max(0, q - n):q] + INSERT_AT + text[q:q + n]
+                  + ("…" if q + n < len(text) else ""))
 
 
 def number_rows(r) -> list:
@@ -764,7 +789,15 @@ def render(r) -> str:
 
 # 直せない違い（why のあるもの）の PDF の文字に添える文（レポートの表と Colab の枠）
 WHY_MARKS = {HEAD_WHY: f"（PDF の側は照合に使わなかった文字だけ。13 章の最後の一覧。{LINE_MARK} は PDF の行の変わり目）",
-             LONG_WHY: f"（PDF にだけある 20 文字以上の文字。図や表の中の文字かもしれない。{LINE_MARK} は PDF の行の変わり目）"}
+             LONG_WHY: f"（PDF にだけある 20 文字以上の文字。図や表の中の文字かもしれない。{LINE_MARK} は PDF の行の変わり目）",
+             EDGE_WHY: f"（段落の最初・最後の、どこまでが段落の文字か決められない PDF の文字。{LINE_MARK} は PDF の行の変わり目）",
+             UNSURE_WHY: f"（PDF のこの位置には、どの段落とも一致しない文字が続く。{LINE_MARK} は PDF の行の変わり目）",
+             WHOLE_WHY: f"（段落の途中の、どの段落とも一致しない行まるごと。図や表の中の文字かもしれない。{LINE_MARK} は PDF の"
+                        "行の変わり目）",
+             DISPLACED_WHY: f"（分断された段落の、図や表の中の文字に挟まれた部分か、キャプションのすぐ隣の部分。{LINE_MARK} は"
+                            " PDF の行の変わり目）",
+             MATH_WHY: f"（PDF の文字の {FORMULA_MARK} は、PDF で数式など文字として読み取れない部分。{LINE_MARK} は PDF の"
+                       "行の変わり目）"}
 WHY_MARK = WHY_MARKS[HEAD_WHY]
 PDF_COLUMN = f"PDF（{LINE_MARK} は行の変わり目）"     # 直せない違いのある表の、PDF の列の見出し
 
@@ -776,7 +809,8 @@ def why_mark(why) -> str:
 
 def _diff_table(L, plan, diffs):
     """文字の違いの表。直せない理由のある違い（PDF の側に照合に使わなかった文字しかないもの、PDF にだけある長い文字）は、
-    PDF の文字を長めに出し（行の変わり目は LINE_MARK）、その旨を添える。"""
+    PDF の文字を長めに出し（行の変わり目は LINE_MARK）、その旨を添える。表に FORMULA_MARK があれば、表の前に説明を添える。"""
+    _formula_note(L, [x for d in diffs for x in (d.docx, d.pdf, d.context)])
     L.append(table(["段落", "場所", "docx", PDF_COLUMN if any(d.why for d in diffs) else "PDF", "docx の前後（［］が違う部分）"],
                    [(d.src, plan.locations.get(d.src, ""), esc(d.docx, 40),
                      esc(d.pdf, 80) + why_mark(d.why) if d.why else esc(d.pdf, 40), esc(d.context, 60))
@@ -860,11 +894,16 @@ def render_route2(L, r, pc, fx):
     L.append("")
     if fx.skipped:
         # PDF の側に照合に使わなかった文字しかない箇所と、PDF にだけある長い文字は、PDF のその位置の本文の行が見えるように、
-        # PDF の文字を長めに出す（行の変わり目は LINE_MARK）
+        # PDF の文字を長めに出す（行の変わり目は LINE_MARK）。docx の側に文字がない箇所（PDF にだけある文字）は、docx の欄に
+        # 足す位置の前後の文字を出す（同じ段落の同じ PDF の文字の行を見分けられるように）
         long = any(f.reason in WHY_MARKS for f in fx.skipped)
-        L.append(table(["段落", "場所", "docx", PDF_COLUMN if long else "PDF", "直さなかった理由"],
-                       [(f.src, fx.locations.get(f.src, ""), esc(f.old, 30), esc(f.new, 80 if f.reason in WHY_MARKS else 30),
-                         f.reason) for f in fx.skipped]))
+        if any(f.start == f.end for f in fx.skipped):
+            L.append(f"docx の欄の「{INSERT_AT}」は、docx に文字がなく PDF にだけ文字がある位置です（前後は docx の文字）。")
+            L.append("")
+        rows = [(f.src, fx.locations.get(f.src, ""), _skipped_docx(f, fx.texts.get(f.src, "")),
+                 esc(f.new, 80 if f.reason in WHY_MARKS else 30), f.reason) for f in fx.skipped]
+        _formula_note(L, [x for row in rows for x in row[2:4]])
+        L.append(table(["段落", "場所", "docx", PDF_COLUMN if long else "PDF", "直さなかった理由"], rows))
     else:
         L.append("ありません。")
     L.append("")
