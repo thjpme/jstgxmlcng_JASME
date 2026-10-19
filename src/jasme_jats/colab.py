@@ -150,6 +150,23 @@ def lost_images_box(res) -> str:
         f"順にやり直してください（レポートの冒頭と 9 章）。\n{items}")
 
 
+def _marks_note(docx_texts, pdf_texts, insert=False) -> str:
+    """赤い枠の一覧の前に添える、記号の説明（一覧に「〓」〈と、insert なら「［］」〉があるときだけ。レポートの 13 章の表と同じ
+    意味。docx の側と PDF の側で「〓」の意味が違う）。"""
+    from .pdfmatch import FORMULA_MARK
+    from .report import INSERT_AT
+    in_docx = any(FORMULA_MARK in (t or "") for t in docx_texts)
+    in_pdf = any(FORMULA_MARK in (t or "") for t in pdf_texts)
+    notes = []
+    if in_docx or in_pdf:
+        parts = ([f"docx の側の「{FORMULA_MARK}」は docx の数式・画像"] if in_docx else []) + \
+            ([f"PDF の側の「{FORMULA_MARK}」は PDF で数式など文字として読み取れない部分"] if in_pdf else [])
+        notes.append("、".join(parts) + "です。")
+    if insert and any(INSERT_AT in (t or "") for t in docx_texts):
+        notes.append(f"docx の側の「{INSERT_AT}」は、docx に文字がなく PDF にだけ文字がある位置です（前後は docx の文字）。")
+    return "".join(n + "\n" for n in notes)
+
+
 def pdf_diff_box(res) -> str:
     """出版版 PDF との照合で確認が必要なことがあるときの表示（赤い枠）。なければ空文字。
 
@@ -157,7 +174,7 @@ def pdf_diff_box(res) -> str:
     直した後も残る違い（直した docx は変換結果の ZIP に入る）。
     """
     from .pdfmatch import LINE_MARK
-    from .report import why_mark
+    from .report import _skipped_docx, why_mark
     pc, fx = res.pdf_check, res.docx_fix
     if pc is None or not pc.ok:
         return ""
@@ -167,7 +184,10 @@ def pdf_diff_box(res) -> str:
             return ""
         def line_note(f):       # 直せない理由のある箇所の PDF の文字は、行の変わり目に LINE_MARK が入る
             return f"。{LINE_MARK} は PDF の行の変わり目" if LINE_MARK in f.new else ""
-        items = "\n".join(f"・{f.src}: 「{f.old}」→「{f.new}」（{f.reason}{line_note(f)}）" for f in fx.skipped[:10])
+        # docx の文字はレポートの 13.2 と同じ形（数式・画像は FORMULA_MARK、PDF にだけある文字は INSERT_AT と前後の文字）
+        shown = [(f, _skipped_docx(f, fx.texts.get(f.src, ""))) for f in fx.skipped[:10]]
+        items = _marks_note([d for _, d in shown], [f.new for f, _ in shown], insert=True) + \
+            "\n".join(f"・{f.src}: 「{d}」→「{f.new}」（{f.reason}{line_note(f)}）" for f, d in shown)
         more = f"\n…ほか {len(fx.skipped) - 10} 件" if len(fx.skipped) > 10 else ""
         head = []
         if fx.skipped:
@@ -180,7 +200,8 @@ def pdf_diff_box(res) -> str:
             "照らして確認してください。XML は直した docx の文字のままです。" + (f"\n{items}{more}" if items else ""))
     if not pc.diffs and not pc.width_count:
         return ""
-    items = "\n".join(f"・{d.context}（docx「{d.docx}」/ PDF「{d.pdf}」{why_mark(d.why)}）" for d in pc.diffs[:10])
+    items = _marks_note([x for d in pc.diffs[:10] for x in (d.context, d.docx)], [d.pdf for d in pc.diffs[:10]]) + \
+        "\n".join(f"・{d.context}（docx「{d.docx}」/ PDF「{d.pdf}」{why_mark(d.why)}）" for d in pc.diffs[:10])
     more = f"\n…ほか {len(pc.diffs) - 10} 件" if len(pc.diffs) > 10 else ""
     width = f"、全角・半角の違いが {pc.width_count} 文字" if pc.width_count else ""
     return error_box(

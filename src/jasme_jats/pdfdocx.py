@@ -10,7 +10,9 @@ docx の段落と PDF の照合（pdfmatch.py）の結果から、段落ごと�
     リンクの文字にかかる違い、フィールドの結果・タブ・記号などの文字、空白だけの違い（PDF の空白は信頼できない）、
     段落の文字列を読み取り（docx_reader）と同じに組み立てられない段落（図形を含む段落など）、PDF のページ番号・誌名の行・
     柱・投稿受付日などや、docx にない図・表の中の文字とみなした文字（docx に足さない。PDF の側にその文字しかない位置の
-    docx の文字も消さない）
+    docx の文字も消さない）、照合で直し方を決められなかった違い（pdfmatch.TextDiff.why。段落の最初・最後の、どこまでが
+    段落の文字か決められない文字、文字として取り出せない数式の位置にかかるものなど）。1 つの違いを分けた直す箇所の一部が
+    ほかの直す箇所と重なるときは、その違いの直す箇所をすべて直さない
 
 できた docx は Word で開いて、変更を 1 つずつ承諾・却下できる。本ツールの読み取りは、挿入を残し削除を除いた文字
 （すべて承諾した状態）を読むので、この docx をルート1 と同じ処理で変換すると、PDF に合わせた文字の XML になる。
@@ -78,7 +80,8 @@ def plan_fixes(plan, check) -> list:
     for src, ds in check.drops.items():
         text = plan.paras[src].plain()
         fixes += [Fix(src, q, q + 1, "", "space", text[q]) for q in ds]
-    for d in check.diffs:
+    group = {}       # id(Fix) -> 違い（TextDiff）の番号。1 つの違いを分けた直す箇所は、まとめて直すか、まとめて直さない
+    for gi, d in enumerate(check.diffs):
         text = plan.paras[d.src].plain()
         old = text[d.start:d.end]
         if not d.fixable:
@@ -98,18 +101,29 @@ def plan_fixes(plan, check) -> list:
             if not o.strip() and not n.strip():
                 continue
             fixes.append(Fix(d.src, d.start + i1, d.start + i2, n, "text", o))
+            group[id(fixes[-1])] = gi
     order = {src: i for i, src in enumerate(plan.paras)}
     fixes.sort(key=lambda f: (order.get(f.src, len(order)), f.start, f.end))
-    # 重なるものは後のものを直さない
-    last = {}
-    for f in fixes:
-        if f.reason:
-            continue
-        prev = last.get(f.src)
-        if prev is not None and (f.start < prev.end or (f.start == f.end == prev.end and prev.start == prev.end)):
-            f.reason = "ほかの直す箇所と重なる"
-            continue
-        last[f.src] = f
+    # 重なるものは後のものを直さない。1 つの違い（TextDiff）を分けた直す箇所の一部が重なるときは、その違いの直す箇所をすべて
+    # 直さない（一部だけを当てはめると、docx にも PDF にもない文字になる。「pp.45－58」を「pp.46-5-58」にするなど）。直さないことに
+    # した箇所が増えなくなるまで繰り返す
+    overlap = "ほかの直す箇所と重なる"
+    while True:
+        last = {}
+        for f in fixes:
+            if f.reason:
+                continue
+            prev = last.get(f.src)
+            if prev is not None and (f.start < prev.end or (f.start == f.end == prev.end and prev.start == prev.end)):
+                f.reason = overlap
+                continue
+            last[f.src] = f
+        bad = {group[id(f)] for f in fixes if f.reason == overlap and id(f) in group}
+        more = [f for f in fixes if not f.reason and group.get(id(f)) in bad]
+        if not more:
+            break
+        for f in more:
+            f.reason = overlap
     return fixes
 
 
@@ -153,7 +167,8 @@ def _dropped_by_preprocess(el) -> bool:
 def paragraph_units(p) -> list:
     """段落の文字を [(文字, w:t 要素または None, w:t の中の位置)] で返す。読み取り（docx_reader）の文字ポリシーと同じ。
 
-    直せるのは w:t の文字だけ（タブ・改行・記号・フィールドの結果・数式・脚注番号などは None）。
+    直せるのは w:t の文字と、Word の改行なしハイフン（w:noBreakHyphen。要素そのものと位置 0。要素ごと変更履歴の削除にして、
+    PDF の「-」を足せる）だけ（タブ・改行・記号・フィールドの結果・数式・脚注番号などは None）。
     図形・ルビを含む段落は _Complex。
     """
     out = []
@@ -228,7 +243,9 @@ def paragraph_units(p) -> list:
             elif tag == w("cr"):
                 out.append(("\n", None, 0))
             elif tag == w("noBreakHyphen"):
-                out.append(("‑", None, 0))
+                # Word の改行なしハイフン（U+2011 として読む）。PDF の「-」に合わせて直せるように、要素ごと消せるようにする
+                # （ダッシュ・ハイフンの仲間を PDF に合わせる。pdfmatch.HYPHENS）
+                out.append(("‑", ch if editable else None, 0))
             elif tag == w("softHyphen"):
                 out.append(("­", None, 0))
             elif tag == w("sym"):
@@ -273,7 +290,8 @@ class _Writer:
         return m
 
     def rebuild(self, r, plans):
-        """ラン r を、直す w:t ごとに、そのままの文字・削除・挿入のランに分けて置き換える。"""
+        """ラン r を、直す w:t ごとに、そのままの文字・削除・挿入のランに分けて置き換える。直す Word の改行なしハイフン
+        （w:noBreakHyphen。paragraph_units）は、要素ごと、そのまま残すか削除のランにし、その前後に挿入のランを置く。"""
         rpr = r.find(w("rPr"))
         parent = r.getparent()
         idx = parent.index(r)
@@ -281,7 +299,17 @@ class _Writer:
         for ch in list(r):
             if ch is rpr:
                 continue
-            if ch in plans:
+            if ch in plans and ch.tag != w("t"):
+                dels, ins_after = plans[ch]
+                new += [self.text_node(r, rpr, "ins", s) for s in ins_after.get(-1, [])]
+                if 0 in dels:
+                    m = self.mark("del")
+                    m.append(self.run(r, rpr, ch))
+                    new.append(m)
+                else:
+                    new.append(self.run(r, rpr, ch))
+                new += [self.text_node(r, rpr, "ins", s) for s in ins_after.get(0, [])]
+            elif ch in plans:
                 dels, ins_after = plans[ch]
                 segs = []
 
