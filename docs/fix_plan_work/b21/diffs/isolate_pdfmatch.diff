@@ -1,0 +1,778 @@
+--- /tmp/claude-0/-home-user-jstgxmlcng-JASME/fb4d86bb-6ffb-5369-990a-10fe830c8789/scratchpad/b21/base021_src/jasme_jats/pdfmatch.py	2026-10-19 13:09:36.161937927 +0000
++++ /tmp/claude-0/-home-user-jstgxmlcng-JASME/fb4d86bb-6ffb-5369-990a-10fe830c8789/scratchpad/b21/judge/isolate_src/jasme_jats/pdfmatch.py	2026-10-19 18:05:05.983997157 +0000
+@@ -69,9 +69,23 @@
+     段落の行ほどの幅のその行の前か後ろに PDF の文字が続くときは、校正で足された長い語句の行かもしれないので、残りの文字でも
+     直さない）
+   ・PDF の中で、図・表の文字に挟まれた位置にある、分断された段落の部分（DISPLACED_WHY。図の中の原稿の写しかもしれない）。
+-    段落の最後（最初）の行と並べた行が、図の中の文字とキャプションの間などにあり、段落の文字とよく似た図の中の語句かもしれない
+-    ときも同じ（_Joint.figure_edge_lines。その行の文字と、分断する表・図の中の文字とみなした位置の文字に並べた docx の文字は、
+-    全角・半角・大文字・小文字・行末のダッシュの違いも直さない）
++    分断する表・図の中の文字とみなした位置の文字に並べた docx の文字は、全角・半角・大文字・小文字・行末のダッシュの違いも
++    直さない
++  ・PDF の中で段落が分断されていて、段落の本体から離れた最初・最後の部分にかかる違い（FAR_WHY。_isolate）。照合で一致した
++    文字を、本文の行の流れが切れるところで分け、いちばん長い部分から、その前後の、本文の行（段落の行の幅いっぱいの行）のある
++    部分のいちばん遠いものまでを本体とする。流れが切れるのは、PDF の中の順が docx と逆になるところ、間にほかの段落の塊の文字か、
++    どの段落にも当たらない行（図・表の中の文字・キャプションなど）があるところ、前の行が段落の終わりの行（行の幅より短く文の
++    終わりで終わる行）のところと、図・表の中の行かもしれない行（行の幅より短く文の終わりで終わらない行で、すぐ隣が図・表の
++    キャプションなどの行か、どの段落にも当たらない和文の行のもの。_figure_line）の前後。受付日の行・ページの端の柱の候補の行
++    （ページの区切りの組版の文字）、MIN_CHARS 文字未満の行、段落の行の幅いっぱいの行（校正で足された文の行かもしれない）は、
++    流れを切らない。本体の最後（最初）の行のすぐ向こうが図・表のキャプションなどで、その向こうに段落の最後（最初）の行らしい、
++    どの段落にも当たらない行（最後なら文の終わりで終わる行、最初なら行の幅いっぱいの行）があれば、その行は図の中の語句の行
++    かもしれないので、本体から外す（_edge_alternative）。本体から離れた最初・最後の部分は、段落の本文の続きか、段落の文字と
++    よく似た図の中の語句か、隣の段落の行かを PDF から決められないので、全角・半角・大文字・小文字・行末のダッシュの違いも
++    含めて直さない（足さず、消さず、置き換えない）。段落の最初（最後）の docx の文字がどの塊にも入らず、PDF の中でほかの段落の
++    塊か、2 行以上にわたる、どの段落にも当たらない文字（docx にない表・図の文字など）の向こうに、どの段落にも当たらない文字が
++    続くとき（段落の最後の文字では、すぐ後ろの段落の塊のすぐ後ろに、文の終わりで終わる、どの段落にも当たらない行があるときも）
++    は、その文字を消さない（_Joint.hole_beyond。UNSURE_WHY）
+   ・文字として取り出せない数式の位置にかかるもの（MATH_WHY。校正で足された数式を含む語句は、PDF の文字では数式の欠けた語句に
+     なる。docx の数式の位置に、PDF では数式の空白の並びと文字が並ぶ〈校正で数式の間に足された「，」〉ときも）
+ 
+@@ -164,11 +178,16 @@
+ WHOLE_WHY = ("PDF の段落の途中に、どの段落とも一致しない行がまるごとあり、図や表の中の文字か、校正で足された語句かを決められない"
+              "（足していない）。PDF のその位置の本文と見比べ、docx に語句が足りなければ手で直してから変換し直す")
+ # ルート2 で直さない理由（PDF の中で分断された段落の部分で、前と後ろの両方が図・表の文字に挟まれたもの。図の中の原稿の写しと
+-# 並べたものかもしれない。段落の最後〈最初〉の行と並べた、図の中の文字とキャプションの間の行〈段落の文字とよく似た図の中の
+-# 語句〉と、キャプションと受付日の行の間の、隣の段落の行かもしれない行も。_Joint.figure_edge_lines）
++# 並べたものかもしれない。分断する表・図の中の文字とみなした位置〈floaty〉の文字と並べた docx の文字も）
+ DISPLACED_WHY = ("PDF の中でこの段落が分断されていて、この部分は図や表の中の文字に挟まれた位置か、図や表のキャプションのすぐ隣に"
+                  "ある（図の中の原稿の写しか、段落の文字とよく似た図の中の語句か、隣の段落の行かもしれない）ので、違いを直さない。"
+                  "PDF のその位置の本文と見比べ、違っていれば手で直してから変換し直す")
++# ルート2 で直さない理由（PDF の中で段落が分断されていて、段落の本体〈いちばん長い塊と、それと本文の行の流れで続く塊〉から、
++# ほかの段落の塊・どの段落にも当たらない行〈図・表の中の文字・キャプションなど〉をはさんで離れた最初・最後の部分か、目に見えて
++# 短い行〈段落の終わり〉の後ろの部分の違い。段落の本文の続きか、段落の文字とよく似た図の中の語句かを決められない。_isolate）
++FAR_WHY = ("PDF の中でこの段落が分断されていて、この部分（段落の最初・最後の部分）は、段落の本体から図・表・キャプション・ほかの"
++           "段落などをはさんで離れた位置か、段落の終わりの短い行の後ろにあり、段落の本文の続きか、図や表の中の文字かを決められない"
++           "ので、違いを直さない。PDF のその位置の本文と見比べ、違っていれば手で直してから変換し直す")
+ # ルート2 で直さない理由（違う部分の PDF の文字の間や両隣に、文字として取り出せない数式の位置〈PdfStream.formula〉がある。校正で
+ # 足された数式を含む語句は、PDF の文字では数式の欠けた語句になる）
+ MATH_WHY = ("PDF のこの位置には、数式など文字として読み取れない部分があるようで（PDF の文字では空白の並び。〓 の位置）、"
+@@ -578,6 +597,8 @@
+     heads = {p.src for p, where in body_paragraphs(plan) if where == "title"} | \
+         {p.src for p in [*plan.title, *plan.subtitle, *plan.title_en, *plan.subtitle_en]}     # 題目・見出し
+     short_end = {}             # 段落 ID -> 段落の最後に一致した文字の行が目に見えて短いか（_classify）
++    # 本文の流れでない段落（図・表のキャプション・表のセル・図形の中の段落。_isolate で、図・表の中の行を見分けるのに使う）
++    nonflow = {p.src for (p, _, _), u in zip(paras, jt.unsure) if not u["flow"]}
+     for n, (p, seq, gens) in enumerate(paras):
+         for (kind, ident, k, _) in gens.values():
+             res.original.setdefault((kind, ident), (p.autonum or "") if kind == "auto" else fn_marks[ident])
+@@ -588,7 +609,7 @@
+             res.unmatched.append(p.src)
+             continue
+         short_end[p.src] = _classify(*aligned[p.src], st, owner, owned_lines, res, dense_lines, (shorts[n], shorts[n + 1]),
+-                                     p.src in heads)
++                                     p.src in heads, nonflow)
+         _contested_edges(res, p, seq, aligned[p.src][5], st)
+     # 4. docx で隣り合う 2 つの段落の間（間に docx の段落がないもの）にある、どの段落にも当たらない PDF の行（校正で足された
+     # 一文かもしれない）は、照合に使わなかった文字として前の段落に記録する（13 章の最後の一覧）。前の段落の最後の行のすぐ後ろに
+@@ -676,6 +697,11 @@
+ # 大きいと、次の段落の書き出しの 1 文字〈行の最後の「話」〉を前の段落のものにして、ルート2 でその文字を消していた）
+ LINE_BONUS = 0.5
+ JOINT_EDGE = 5       # 段落の最後（最初）の穴の、最後（最初）からまったく同じに続く部分だけを置くときの最小の長さ
++# 段落の本体から離れた最初・最後の部分（_isolate）を決めるときに、段落の行の幅いっぱいとみなす割合。両端そろえの段落の行は
++# 行の幅いっぱいになるので、これより短く文の終わりで終わる行で段落の本文の行の流れが終わるとみなし（_ends_flow）、これより
++# 短く文の終わりで終わらない行は、図・表の中の行かもしれないとする（_figure_line）。これ以上の幅の、どの段落にも当たらない
++# 行は流れを切らない（_flow_breaks）
++FULL_LINE = 0.9
+ SENTENCE_END = "。．.!?！？」』）)"     # 段落の最後に足す文字がこれで終わっていれば、文が終わっているとみなす
+ # 文の終わり（句点・疑問符など。半角の「.」は英数字が続かないものだけ〈「pp.11」「3.5」の「.」は文の終わりでない〉）と、その
+ # 後ろの閉じかっこ・かぎかっこ。SENTENCE_END と違い、閉じかっこだけ（図の中の「時間（分）」の「）」など）では文の終わりとしない
+@@ -711,9 +737,10 @@
+     windows: 段落ごとの窓（列の位置のリスト）。見つからなければ None。
+     unsure: 段落ごとの印の辞書。head・tail: 段落の最初・最後の docx の文字の位置を決められないか（UNSURE_WHY）。flow: 本文の
+     流れの段落か（図・表のキャプション・表のセル・図形の中の段落でない）。floaty: 列の位置のうち、段落を分断する表・図の中の
+-    文字とみなすもの。doubt: 図の中の文字に挟まれた、分断された部分の行と、図の中の行と偶然一致したかもしれない段落の
+-    最後（最初）の行の番号（DISPLACED_WHY）。edge_doubt: doubt のうち、後ろの行（_Joint.figure_edge_lines）だけ（その行と
+-    並べた docx の文字は、全角・半角などの違いも直さない。_classify）。head_free・tail_free: 窓の
++    文字とみなすもの。doubt: 図の中の文字に挟まれた、分断された部分の行の番号（図の中の原稿の写しかもしれない。
++    DISPLACED_WHY）。head_beyond・tail_beyond: 段落の最初・最後の docx の文字がどの塊にも入らず、PDF の中でほかの段落の塊の
++    向こうに、どの段落にも当たらない文字が続くか（_Joint.hole_beyond。その位置に同じ行の PDF の文字がなければ、消さない。
++    UNSURE_WHY）。head_free・tail_free: 窓の
+     すぐ前（後ろ）の行が、どの段落の塊の文字もなく、照合に使わない文字だけでもない行か。tail_free_end: さらに、窓のすぐ後ろの
+     その行が、文の終わりの記号（SENTENCE_END）で終わるか（段落の最後の行が、校正で直されて docx の文字と一致しなくなった
+     ものかもしれない）。
+@@ -1072,9 +1099,7 @@
+         (1) 穴のすぐ隣の塊の、すぐ隣（はじめは穴の長さ + 4 文字、だめなら + 40 文字の中。校正で足された文字を挟んでもよい）。
+         (2) 段落の最後（最初）の穴なら、塊の後ろ（前）の、どの段落にも当たらない文字の続きのうち、すぐ後ろ（前）が docx で
+         後ろ（前）の本文の段落であるものの最後（最初）。間の図・表の文字・ほかの段落の塊は飛ばす。5 文字未満の穴は、
+-        まったく同じ文字のときだけ。ただし、続きが行まるごとで、すぐ後ろ（前）が docx ですぐ後ろ（前）の本文の段落の塊なら、
+-        穴の文字の一部が校正で直されたものでも置く（_loose_edge。表の後ろに出た最後の行「持った。」と docx の「取った。」。
+-        続きの最後〈最初〉の照合に使わない行だけの行を飛ばした後も。穴が docx で一文まるごとのときは置かない）。
++        まったく同じ文字のときだけ（置いた部分が段落の本体から離れていれば、その違いは直さない。_isolate）。
+         (3) wide のとき、長い穴は、アンカー（単調な対応に入らなかったものも含む）で PDF 全体から。ほぼ続いて一致した部分
+         だけを使い（分断された段落の一部分でもよい。残りは次の回に探す）、前後の両方が図・表の文字のもの（図の中の原稿の写し
+         かもしれない）は、使うが直さない（doubt）。
+@@ -1104,13 +1129,6 @@
+             # 5 文字未満の穴（まったく同じ文字のときだけ置く）は、docx ですぐ後ろ（前）の本文の段落を越えた先は探さない
+             # （引用文献の最初の 1 文字「試」が、前の文献を越えた先の柱「試験六郎」と並べられないように）
+             nb = adj if need < JOINT_EDGE else None
+-            # 穴が docx で一文まるごと（段落の最後の穴なら、文の終わりの直後から始まる。段落の最初の穴なら、文の終わりか読点で
+-            # 終わる〈校正で消されることの多い、書き出しの「そこで，」「まず，」など〉）: 校正で消された文かもしれないので、
+-            # 一致した文字だけで置くこと（_loose_edge）はしない。すぐ後ろ（前）の図の中の文字の行が似ていると、図の中の文字で
+-            # docx の文字を置き換えてしまう（「…取った。その問題を示す。」と図の中の「問題を解きなさい。」）。置けなければ、
+-            # stray_edge で決められない違いになる（docx を消さない）
+-            sentence = _ends_sentence(self.hole_text(n, max(0, i0 - 4), i0)) if step > 0 else \
+-                (_ends_sentence(H) or H[-1:] in ("、", ","))
+             seen, x = 0, c + step
+             while 0 <= x < len(self.P) and seen < 3000:
+                 if self.own[x] >= 0:
+@@ -1134,18 +1152,13 @@
+                 if o is not None and o != n and 0 <= near < len(self.P) and self.own[near] == o:
+                     continue
+                 # 続きの最後（最初）の、照合に使わない行だけの行（次のページの最初の柱、1 ページ目の最後の投稿受付日の行など）は、
+-                # 3 行まで飛ばしてもよい（飛ばした後も、_loose_edge で置けるかを見る）
++                # 3 行まで飛ばしてもよい（そこに置いた部分が段落の本体から離れていれば、その違いは直さない。isolate）
+                 for t in range(4):
+                     cs = run[-(len(H) + 6):] if step > 0 else run[-(len(H) + 6):][::-1]
+                     m = _match(H, cs, self.P)
+                     end_ok = m and ((m[-1][1] >= cs[-1] - 1) if step > 0 else (m[0][1] <= cs[0] + 1))
+                     if cs and len(m) >= max(1, 0.85 * need) and end_ok and (need >= 5 or len(m) == need):
+                         return [(i0 + a, c) for a, c in m]
+-                    loose = self._loose_edge(n, run, H, step) if o is not None and o == adj and not sentence else None
+-                    if loose:
+-                        # 続きの最後（最初）の行まるごとが、校正で一部を直された段落の最後（最初）の行で、すぐ後ろ（前）が
+-                        # docx ですぐ後ろ（前）の本文の段落の塊: 一致した文字だけを置く（残りは段落ごとの照合で違いになる）
+-                        return [(i0 + a, c) for a, c in loose]
+                     # 穴の最後（最初）の JOINT_EDGE 文字以上が、続きの最後（最初）とまったく同じに続いて一致する（穴の残りは
+                     # 校正で直された文字。docx「資料に見いだした。」、PDF「付」〈受付日〉「録に見いだした。」）: その部分だけを置く
+                     # （残りは次の回に探すか、段落ごとの照合で違いになる）
+@@ -1187,98 +1200,6 @@
+                 return [(i0 + a, c) for a, c in m]
+         return None
+ 
+-    def _loose_edge(self, n, run, H, step):
+-        """find_hole の (2) で、本文の流れの段落 n の最後（step = 1。-1 なら最初）の穴 H を、どの段落にも当たらない文字の続き
+-        run（find_hole の走査の順）の、docx ですぐ後ろ（前）の本文の段落の塊の側の行まるごとに、一致した文字だけで置くなら、
+-        その一致（(H の位置, core の位置) のリスト）。置かないなら None。穴の文字の一部が校正で直されたもの（表の後ろに出た
+-        段落の最後の行「持った。」と docx の「取った。」。表のセルは 4 文字未満の段落なので、run に入る）。
+-
+-        run のすぐ後ろ（前）が docx ですぐ後ろ（前）の本文の段落の塊であること（呼ぶ側で確かめる）に加えて、その側の 1 行
+-        以上の行まるごと（PDF の行の最初から行の終わりまで。長さが穴の半分以上になるまで行を足す）が、受付日の文字を含まず、
+-        長さが穴 + 2 文字以下で、穴の文字の半分以上が一致し、穴の最後（最初）の文字がその行の最後（最初）の文字と一致する
+-        もの。"""
+-        need = len(H)
+-        part = self._edge_part(n, run, need, step)
+-        if not need <= 2 * len(part) <= 2 * need + 4:
+-            return None
+-        st = self.st
+-        k0, k1 = self.core[part[0]], self.core[part[-1]]
+-        if (k0 > 0 and st.line[k0 - 1] == st.line[k0]) or (k1 + 1 < len(st.chars) and st.line[k1 + 1] == st.line[k1]) \
+-                or any(st.date[self.core[c]] >= 0 for c in part):
+-            return None
+-        m = _match(H, part, self.P)
+-        if not m or 2 * len(m) < need or (step > 0 and m[-1] != (need - 1, part[-1])) or \
+-                (step < 0 and m[0] != (0, part[0])):
+-            return None
+-        return m
+-
+-    def _edge_part(self, n, run, need, step) -> list:
+-        """どの段落にも当たらない文字の続き run（find_hole の走査の順）の、docx ですぐ後ろ（前）の本文の段落の塊の側から、
+-        行ごとに、長さが need の半分以上になるまで取った部分（core の位置を順に。本文の流れの段落でなければ空）。"""
+-        if not self.flow[n] or not run:
+-            return []
+-        lines = []                       # run の行ごとの core の位置（列の順）
+-        for c in (run if step > 0 else run[::-1]):
+-            if lines and self.line_of[lines[-1][-1]] == self.line_of[c]:
+-                lines[-1].append(c)
+-            else:
+-                lines.append([c])
+-        part = []
+-        for ln in (lines[::-1] if step > 0 else lines):
+-            part = ln + part if step > 0 else part + ln
+-            if 2 * len(part) >= need:
+-                break
+-        return part
+-
+-    def edge_run(self, n, step) -> list:
+-        """段落 n の最後（step = 1。-1 なら最初）の塊の後ろ（前）で、docx ですぐ後ろ（前）の本文の段落の塊のすぐ前（後ろ）に
+-        続く、どの段落にも当たらない文字の続き（core の位置。find_hole の走査の順。間の表・図・ほかの段落の塊は飛ばす。なければ
+-        空）。"""
+-        adj = self.neighbor(n, step)
+-        if adj is None:
+-            return []
+-        run, x = [], (self.kept[n][-1][1] if step > 0 else self.kept[n][0][1]) + step
+-        for _ in range(3000):
+-            if not 0 <= x < len(self.P):
+-                break
+-            o = self.own[x]
+-            if o == adj:
+-                return run
+-            run = [] if o >= 0 else run + [x]
+-            x += step
+-        return []
+-
+-    def stray_edge(self, n, step) -> bool:
+-        """本文の流れの段落 n の最後（step = 1。-1 なら最初）の穴（どの塊にも入らなかった docx の文字）が、PDF の中で表・図・
+-        ほかの段落の後ろ（前）に出て、校正で大きく直されたもの（穴として置けなかった）かもしれないか（result。消さない）。
+-
+-        docx ですぐ後ろ（前）の本文の段落の塊のすぐ前（後ろ）に、どの段落にも当たらない文字の続きがあり（edge_run）、その
+-        段落の側の行（_edge_part。その側の、投稿受付日かページの端の行〈柱など〉の文字だけの行は 3 行まで飛ばす）と穴の文字が、
+-        穴の 3 分の 1 以上一致するもの。表のセル（4 文字未満の段落なので、どの段落にも当たらない）・図の中の文字が続くだけなら、
+-        穴の文字は校正で消されたものとして今までどおり消す。"""
+-        holes = self.holes(n)
+-        if not holes:
+-            return False
+-        hole = holes[-1] if step > 0 else holes[0]
+-        if (step > 0 and hole[-1] != self.real[n][-1]) or (step < 0 and hole[0] != self.real[n][0]):
+-            return False
+-        H = self.hole_text(n, hole[0], hole[-1] + 1)
+-        run = self.edge_run(n, step)
+-        for _ in range(4):
+-            part = self._edge_part(n, run, len(H), step)
+-            m = _match(H, part, self.P) if part else []
+-            if m and 3 * len(m) >= len(H):
+-                return True
+-            # 続きの、docx ですぐ後ろ（前）の本文の段落の側の、投稿受付日の文字かページの端の行（柱など）の文字だけの行
+-            # （1 ページ目の最後の投稿受付日の行、次のページの最初の柱など）は、3 行まで飛ばして見る（find_hole の (2) と同じ。
+-            # ただし、図の中の短い行〈「↓」など。柱の候補の行〉は飛ばさない: 一致が穴の 3 分の 1 でよいので、飛ばして図の中に
+-            # 入ると、図の中の文字との偶然の一致で決められない違いにしてしまう）
+-            line = [c for c in run if self.line_of[c] == self.line_of[run[-1]]] if run else []
+-            if not line or not all(self.st.edge[self.core[c]] or self.st.date[self.core[c]] >= 0 for c in line):
+-                return False
+-            run = [c for c in run if self.line_of[c] != self.line_of[line[0]]]
+-        return False
+-
+     def fill_holes(self):
+         """段落の、どの塊にも入らなかった部分（穴）を探す（見つかった部分は段落の塊に加える）。
+ 
+@@ -1379,120 +1300,73 @@
+     def contests(self):
+         self.contested = _contests(self.paras, self.kept, self.own, self.P, self.core, self.line_of, self.st)
+ 
+-    def facing_hole(self, n, step) -> bool:
+-        """docx で段落 n の後ろ（step = 1。-1 なら前）の、塊のある本文の段落の、段落 n に向かい合う端（最初〈最後〉）の docx の
+-        文字が、どの塊にも入っていないか（隣り合う段落に同じ文があり、その段落の最後〈最初〉の行を段落 n が取ったかもしれない）。"""
+-        m = self.neighbor(n, step)
+-        if m is None or not self.real[m]:
+-            return False
+-        end = self.real[m][0] if step > 0 else self.real[m][-1]
+-        return end not in {i for i, _ in self.kept[m]}
++    # ------------------------------------------------------------------ 本体から離れた端の部分（isolate）
++    def hole_beyond(self, n, step) -> bool:
++        """本文の流れの段落 n の最後（step = 1。-1 なら最初）の穴（どの塊にも入らなかった docx の文字）が、PDF の中で表・図・
++        ほかの段落の後ろ（前）にあるかもしれないか（result。消さない）。
+ 
+-    def better_line(self, n, step, e_ln, y, inner, gap) -> bool:
+-        """figure_edge_lines の (A) で、段落 n の最後（step = 1。-1 なら最初）の塊の行 e_ln（L）と内側の塊 inner の間（gap。core の
+-        位置）か、L のすぐ外の、本文の流れでない段落（キャプションなど）の塊の向こう（次〈前〉の本文の流れの段落の塊の文字まで）に、
+-        行まるごとがどの段落にも当たらない行で、段落の最後（最初）の docx の文字（inner より外のもの。最後〈最初〉の側の 80 文字）と、
+-        L より多く並ぶ行があるか（L は小さな図の中の行で、本当の段落の最後〈最初〉の行は、キャプションの向こうか、図の中の文字の
+-        隣にあるかもしれない。次のページの最初〈前のページの最後〉に小さな図があるとき、図の中の文字の行はページの端の行になり、
+-        柱と見分けられない）。"""
+-        lo, seq = self.line_of, self.paras[n][1]
+-        rng = range(inner[0] + 1, len(seq)) if step > 0 else range(0, inner[0])
+-        H = [key(seq[i][0]) for i in rng if seq[i][0] != SKIP]
+-        H = H[-80:] if step > 0 else H[:80]                # 段落の最後（最初）の側の 80 文字
+-        mine = _lcs_prefix(H, [self.P[c] for c in range(bisect.bisect_left(lo, e_ln), bisect.bisect_right(lo, e_ln))])[-1]
+-        lines = {}
+-        for c in gap:
+-            lines.setdefault(lo[c], []).append(c)
+-        x = y
+-        while 0 <= x < len(self.P) and len(lines) <= 40:
++        docx ですぐ後ろ（前）の本文の段落の塊のすぐ前（後ろ）に、どの段落にも当たらない文字（受付日の文字は除く。ページの端の
++        行は、柱か段落の行か決められないので数える）の続きが穴の 3 分の 1 以上あり、段落の塊との間にほかの段落の塊の文字が
++        あるか、その続きが 2 行以上にわたるもの（docx にない表・図の文字の向こうに、段落の最後〈最初〉の行が出ているかも
++        しれない。その続きが穴の文字かどうかは決めない）。段落の最後の穴では、docx ですぐ後ろの本文の段落の塊のすぐ後ろ（2 段組みの読み順のずれで、段落の最後の行が
++        次の段落の後ろに出る形）に、行まるごとどの段落にも当たらない、文の終わりで終わる和文の行（段落の最後の行らしい行）が
++        あるときも同じ（_tail_line_after）。"""
++        if not self.flow[n]:
++            return False
++        holes = self.holes(n)
++        if not holes:
++            return False
++        hole = holes[-1] if step > 0 else holes[0]
++        if (step > 0 and hole[-1] != self.real[n][-1]) or (step < 0 and hole[0] != self.real[n][0]):
++            return False
++        adj = self.neighbor(n, step)
++        if adj is None:
++            return False
++        x = (self.kept[n][-1][1] if step > 0 else self.kept[n][0][1]) + step
++        run, other = [], False
++        for _ in range(3000):
++            if not 0 <= x < len(self.P):
++                return False
+             o = self.own[x]
+-            if o >= 0 and self.flow[o]:
++            if o == adj:
+                 break
+-            lines.setdefault(lo[x], []).append(x)
++            if o >= 0:
++                other = other or o != n
++                run = []
++            else:
++                run.append(x)
+             x += step
+-        for cs in lines.values():           # 行まるごとが、どの段落にも当たらない行
+-            if len(cs) <= 60 and len(cs) == self.line_len[lo[cs[0]]] and all(self.own[c] < 0 for c in cs) and \
+-                    _lcs_prefix(H, [self.P[c] for c in sorted(cs)])[-1] > mine:
++        else:
++            return False
++        st = self.st
++        free = [c for c in run if st.date[self.core[c]] < 0]
++        other = other or len({self.line_of[c] for c in free}) >= 2
++        if other and free and 3 * len(free) >= len(hole):
++            return True
++        return step > 0 and self._tail_line_after(x, adj)
++
++    def _tail_line_after(self, x, adj) -> bool:
++        """core の位置 x から続く段落 adj の塊のすぐ後ろの、どの段落にも当たらない文字の続き（3 行まで）に、行まるごとどの段落にも
++        当たらない、文の終わりで終わる和文の行（受付日の行・ページの端の柱の候補の行・MIN_CHARS 文字未満の行を除く）があるか
++        （hole_beyond）。"""
++        st = self.st
++        while 0 <= x < len(self.P) and self.own[x] == adj:
++            x += 1
++        run = []
++        while x < len(self.P) and self.own[x] < 0 and len({self.line_of[c] for c in run}) <= 3:
++            run.append(x)
++            x += 1
++        for ln in sorted({self.line_of[c] for c in run}):
++            ks = range(bisect.bisect_left(st.line, ln), bisect.bisect_right(st.line, ln))
++            body = [k for k in ks if not st.soft[k] and st.date[k] < 0]
++            if not body or any(self.cidx[k] >= 0 and self.own[self.cidx[k]] >= 0 for k in body) or \
++                    (st.edge[body[0]] and st.head[body[0]]) or _visible_count(st.lines[ln]) < MIN_CHARS:
++                continue
++            s = "".join(st.chars[k] for k in body)
++            if sum(1 for c in s if unicodedata.east_asian_width(c) in "FWA") * 2 >= len(s) and _ends_sentence(s):
+                 return True
+         return False
+ 
+-    def figure_edge_lines(self, n) -> set:
+-        """本文の流れの段落 n の最後（最初）の docx の文字の塊の行が、図の中の文字の行と偶然一致したものかもしれないなら、その行の
+-        番号（result が doubt に入れる。その行の違いは直さない。DISPLACED_WHY）。
+-
+-        段落の最後（最初）の docx の文字の塊が 1 行だけにあり（その行 L）、L と、docx でその内側の塊の行との間に、本文の流れの
+-        段落の塊の文字がなく、次のどちらかのとき。
+-          (A) 間がどの段落にも当たらない文字（図の中の文字など）だけで、L のすぐ後ろ（前）が、本文の流れでない段落（図・表の
+-              キャプションなど）の塊の文字。段落の最後の行が、小さな図の後ろ（キャプションの後ろ）に出ると、図の中のキャプションの
+-              すぐ前の行（「時間を見る」）が段落の最後の docx の文字（「時間を取った。」）と最初の数文字が同じなら、単調な対応が
+-              その行を段落の最後の行と並べる（docx では段落のすぐ後ろにキャプションがあるので）。直すと、図の中の文字（「見る」）で
+-              docx の文字を置き換え、PDF の本文の最後の行（キャプションの後ろの「時間を取った。」）の文字を消してしまう。本当の
+-              段落の行は、図の中の文字とキャプションの間には出ない。ただし、間が投稿受付日の文字と、柱が出る位置（ページの最初の
+-              端の行）の文字だけのときは、本当の段落の最後（最初）の 1 行が、受付日の行・柱の後ろ（前）に出て、そのすぐ後ろ（前）が
+-              表のキャプションなどだっただけかもしれない（1 ページ目の最後の受付日の行の後ろ〈次のページ・次の段の最初〉の、段落の
+-              最後の行と表のキャプション）ので、外側の本文の段落の、向かい合う端の docx の文字が塊に入っていない（その段落の行を、
+-              この段落が取ったかもしれない。facing_hole）か、間かキャプションの向こうに、段落の最後（最初）の docx の文字と L より
+-              よく並ぶ、どの段落にも当たらない行がある（L は次のページの最初の小さな図の中の行で、本当の行はキャプションの向こうに
+-              あるかもしれない。better_line）ときだけにする。L と内側の塊の行の間に行がない（次のページの最初の、1 行だけの
+-              小さな図の中の行が、前のページの最後の行のすぐ後ろにある）ときも、better_line のときだけ (A) にする。
+-          (B) 間に本文の流れでない段落（キャプションなど）の塊があり、L のすぐ外の行が、どの段落にも当たらない行（受付日でない）
+-              で、docx で L の文字と内側の塊の文字の間にある文字（穴）の半分より多くが、その行の文字と並ぶ（PDF の中の順と docx の
+-              順が交差する）。段落の最初の行（「議論の中で，あ」）の後ろに小さな図があり、図の中の最初の行（「話し合いの場面」）が
+-              docx の段落の最初の文字（「話し合いの中で，あ」）とよく似ていると、その行を段落の最初の行と並べ、穴（「中で，あ」）を
+-              図の中の文字（「場面」）で置き換えてしまう（本当の最初の行は、そのすぐ前にある）。L のすぐ外の、受付日の行と、穴の
+-              文字と並ばないページの端の行（柱など）は、3 行まで飛ばしてその外の行を見る（本当の最初の行がページの最後にあり、
+-              1 ページ目の最後の受付日の行か次のページの最初の柱の後ろに図があるとき）。"""
+-        pairs = self.kept[n]
+-        if not self.flow[n] or not pairs:
+-            return set()
+-        lo, st, seq = self.line_of, self.st, self.paras[n][1]
+-        out = set()
+-        for step, run in ((1, pairs[::-1]), (-1, pairs)):        # 段落の最後（最初）の docx の文字から内へ
+-            e_ln = lo[run[0][1]]
+-            k = next((x for x, (_, c) in enumerate(run) if lo[c] != e_ln), None)
+-            if k is None or (e_ln - lo[run[k][1]]) * step <= 0:
+-                continue                 # 1 行だけの段落か、PDF の中の順が docx の順と逆
+-            edge, inner = run[:k], run[k]
+-            a, b = sorted((e_ln, lo[inner[1]]))
+-            gap = range(bisect.bisect_right(lo, a), bisect.bisect_left(lo, b))     # 間の行の core の位置
+-            y = bisect.bisect_right(lo, e_ln) if step > 0 else bisect.bisect_left(lo, e_ln) - 1   # L のすぐ外
+-            if not 0 <= y < len(self.P) or any(self.own[c] >= 0 and self.flow[self.own[c]] for c in gap):
+-                continue
+-            if not gap:
+-                # L が内側の塊の行のすぐ外の行（次のページの最初の、1 行だけの小さな図の中の行など）: 本当の段落の行のことも
+-                # 多いので、すぐ外がキャプションなどで、その向こうに L よりよく並ぶ行があるときだけ (A)
+-                if self.own[y] >= 0 and not self.flow[self.own[y]] and self.better_line(n, step, e_ln, y, inner, gap):
+-                    out.add(e_ln)                                   # (A)
+-                continue
+-            if all(self.own[c] < 0 for c in gap):
+-                if self.own[y] >= 0 and not self.flow[self.own[y]] and (
+-                        # 間に図の中の文字（受付日の文字でも、柱が出る位置〈ページの最初の端の行〉の文字でもない文字）がある
+-                        any(st.date[self.core[c]] < 0 and not st.top[self.core[c]] for c in gap)
+-                        or self.facing_hole(n, step) or self.better_line(n, step, e_ln, y, inner, gap)):
+-                    out.add(e_ln)                                   # (A)
+-                continue
+-            hole = range(inner[0] + 1, min(i for i, _ in edge)) if step > 0 else \
+-                range(max(i for i, _ in edge) + 1, inner[0])
+-            H = [key(seq[i][0]) for i in hole if seq[i][0] != SKIP]
+-            if not 2 <= len(H) <= 40:
+-                continue
+-            # L のすぐ外の行。受付日の行と、穴の文字と並ばないページの端の行（柱など）は、3 行まで飛ばしてその外の行を見る
+-            # （段落の最初の行がページの最後にあり、1 ページ目の最後の受付日の行か次のページの最初の柱の後ろに小さな図がある形）
+-            for _ in range(4):
+-                if not 0 <= y < len(self.P):
+-                    break
+-                xs = range(bisect.bisect_left(lo, lo[y]), bisect.bisect_right(lo, lo[y]))
+-                if any(self.own[c] >= 0 for c in xs):
+-                    break
+-                date = any(st.date[self.core[c]] >= 0 for c in xs)
+-                if not date and len(xs) <= 60 and 2 * _lcs_prefix(H, [self.P[c] for c in xs])[-1] > len(H):
+-                    out.add(e_ln)                                   # (B)
+-                    break
+-                if not date and not st.edge[self.core[xs[0]]]:
+-                    break
+-                y = xs[-1] + 1 if step > 0 else xs[0] - 1
+-        return out
+-
+     def result(self) -> _JointResult:
+         windows, unsure = [], []
+         line_start, line_end = {}, {}         # 行の番号 -> 列の最初・最後の位置
+@@ -1503,8 +1377,9 @@
+         for n in range(len(self.paras)):
+             if not self.kept[n]:
+                 windows.append(None)
+-                unsure.append({"head": False, "tail": False, "flow": self.flow[n], "floaty": set(), "doubt": set(),
+-                               "edge_doubt": set(), "head_free": False, "tail_free": False, "tail_free_end": False,
++                unsure.append({"head": False, "tail": False, "head_beyond": False, "tail_beyond": False,
++                               "flow": self.flow[n], "floaty": set(), "doubt": set(),
++                               "head_free": False, "tail_free": False, "tail_free_end": False,
+                                "head_contested": False, "tail_contested": False, "contested": set()})
+                 continue
+             win, floaty, edges = _window_lines(n, self.kept[n], self.own, self.st, self.core, self.cidx, self.flow,
+@@ -1516,23 +1391,24 @@
+             # PDF の別の位置（表の後ろなど）にあるのか決められない
+             # （docx で段落の後ろ〈前〉に図・表などがなければ、PDF のその位置の図・表の文字〈ページの途中の短い行も〉も数える。
+             # docx にあれば、その図・表の文字とみなす）
+-            # 本文の流れの段落で、docx ですぐ後ろ（前）の本文の段落の塊のすぐ前（後ろ）に、どの段落にも当たらない文字の続きが
+-            # あり、その文字が docx のその文字と 3 分の 1 以上一致するときも同じ（stray_edge。表の後ろに出た段落の最後の行が
+-            # 校正で大きく直されて、穴として置けなかったもの〈「時間を取った。」と「場を設けて話し合わせた。」〉かもしれない）
+-            head = any(i < first[0] for i in self.real[n]) and (max(
++            # 本文の流れの段落で、docx ですぐ後ろ（前）の本文の段落の塊のすぐ前（後ろ）に、ほかの段落の塊をはさんで、どの段落にも
++            # 当たらない文字の続きがあるときも同じ（hole_beyond。表の後ろに出た段落の最後の行が校正で大きく直されて、穴として
++            # 置けなかったもの〈「時間を取った。」と「場を設けて話し合わせた。」〉かもしれない）
++            # hole_beyond は、段落の最初（最後）の PDF の同じ行に、docx の文字の代わりになる文字がないときだけ使う（_classify）
++            head_hole = any(i < first[0] for i in self.real[n])
++            tail_hole = any(i > last[0] for i in self.real[n])
++            head = head_hole and (max(
+                 self.free_before(first[1]),
+-                0 if self.material_before[n] else self.figure_ctx(first[1], -1, short=True)) >= JOINT_FREE
+-                or self.stray_edge(n, -1))
+-            tail = any(i > last[0] for i in self.real[n]) and (max(
++                0 if self.material_before[n] else self.figure_ctx(first[1], -1, short=True)) >= JOINT_FREE)
++            tail = tail_hole and (max(
+                 self.free_after(last[1]),
+-                0 if self.material_after[n] else self.figure_ctx(last[1], 1, short=True)) >= JOINT_FREE
+-                or self.stray_edge(n, 1))
+-            # 図の中の原稿の写しかもしれない行（recheck_runs・find_hole）と、図の中の文字の行と偶然一致したかもしれない段落の
+-            # 最後（最初）の行（figure_edge_lines。edge_doubt にも別に持つ）の違いは直さない（DISPLACED_WHY）
+-            edge_doubt = self.figure_edge_lines(n)
+-            doubt = {self.line_of[c] for _, c in self.kept[n] if c in self.doubt} | edge_doubt
+-            unsure.append({"head": head, "tail": tail, "flow": self.flow[n], "floaty": floaty, "doubt": doubt,
+-                           "edge_doubt": edge_doubt, **edges,
++                0 if self.material_after[n] else self.figure_ctx(last[1], 1, short=True)) >= JOINT_FREE)
++            head_beyond = head_hole and not head and self.hole_beyond(n, -1)
++            tail_beyond = tail_hole and not tail and self.hole_beyond(n, 1)
++            # 図の中の原稿の写しかもしれない行（recheck_runs・find_hole）の違いは直さない（DISPLACED_WHY）
++            doubt = {self.line_of[c] for _, c in self.kept[n] if c in self.doubt}
++            unsure.append({"head": head, "tail": tail, "head_beyond": head_beyond, "tail_beyond": tail_beyond,
++                           "flow": self.flow[n], "floaty": floaty, "doubt": doubt, **edges,
+                            "head_contested": n in heads_c, "tail_contested": n in tails_c,
+                            "contested": chars_c.get(n, set())})
+         return _JointResult(windows, unsure)
+@@ -2050,8 +1926,217 @@
+     return sum(1 if unicodedata.east_asian_width(c) in "FWA" else 0.5 for c in line)
+ 
+ 
++def _flow_breaks(src, ka, kb, st: PdfStream, owner, width, figure=None) -> bool:
++    """段落 src の、PDF の列の位置 ka の文字（照合で一致した文字）から kb の文字（次に一致した文字）へ、本文の行の流れが続かないか。
++
++    続くのは、PDF の中の順が docx の順と同じで、ka の行が段落の終わりの行（_ends_flow）でなく、間に、ほかの段落に当たった文字も、
++    どの段落にも当たらない行（図・表の中の文字・キャプションなど）もないとき。ka の行と kb の行の中の、どの段落にも当たらない
++    文字（校正の直し）と、間の次の行はあってもよい: 受付日の行・ページの端の柱の候補の行（ページの区切りの組版の文字）、
++    MIN_CHARS 文字未満の行（図の目盛りの数字・矢印など。段落の文字の代わりにならない）、段落の行の幅 width の FULL_LINE 以上の
++    行（校正で足された文の行かもしれない）。ka の行か kb の行が図・表の中の行かもしれない行（figure。_figure_line）なら、続かない。"""
++    if kb <= ka:
++        return True
++    la, lb = st.line[ka], st.line[kb]
++    if kb == ka + 1 and la == lb:
++        return False
++    if la != lb and (_ends_flow(st, la, width) or (figure is not None and (figure(la) or figure(lb)))):
++        return True
++    full = {}
++    for k in range(ka + 1, kb):
++        o = owner.get(k)
++        if o == src or st.soft[k]:
++            continue
++        if o is not None:
++            return True
++        ln = st.line[k]
++        if ln in (la, lb):
++            continue
++        if st.date[k] >= 0 or (st.edge[k] and st.head[k]):
++            continue              # 受付日の行と、ページの端の柱の候補の行（ページの区切りの組版の文字）
++        if 0 < _visible_count(st.lines[ln]) < MIN_CHARS:
++            continue              # 目に見えて短い行（図の目盛りの数字・矢印・点の名前など。段落の文字の代わりにならない）
++        if width:
++            if ln not in full:
++                full[ln] = _line_width(st.lines[ln]) >= FULL_LINE * width
++            if full[ln]:
++                continue          # 段落の行の幅いっぱいの、どの段落にも当たらない行（校正で足された文の行かもしれない）
++        return True
++    return False
++
++
++def _ends_flow(st: PdfStream, ln, width) -> bool:
++    """PDF の行 ln で、段落の本文の行の流れが終わるか。段落の行は両端そろえで行の幅いっぱいになるので、段落の行の幅 width より
++    短く（FULL_LINE）、文の終わりで終わる行で、段落が終わる。行の幅は、受付日の文字を除いて測る（pdfium は、段の下の受付日を
++    本文の行につなげることがある）。和文の文字が半分に満たない行（英文など。文字の数で幅を測ると誤差が大きい）は見ない。"""
++    if not width:
++        return False
++    ks = range(bisect.bisect_left(st.line, ln), bisect.bisect_right(st.line, ln))
++    body = "".join(st.chars[k] for k in ks if st.date[k] < 0 and not st.soft[k])
++    if not body or sum(1 for c in body if unicodedata.east_asian_width(c) in "FWA") * 2 < len(body):
++        return False
++    w = _line_width(st.lines[ln]) - _line_width("".join(st.chars[k] for k in ks if st.date[k] >= 0))
++    return w < FULL_LINE * width and _ends_sentence(body)
++
++
++def _isolate(src, seq, win, ops, st: PdfStream, owner, width, doubt=(), nonflow=frozenset()):
++    """本文の流れの段落 src の、照合（ops）で一致した文字のうちの本体と、本体から離れた最初・最後の部分（その違いは、全角・半角
++    なども含めて直さない。FAR_WHY）。
++
++    一致した文字を、本文の行の流れが続かないところ（_flow_breaks。図・表の中の行かもしれない行〈_figure_line〉の前後も）で
++    分け、いちばん多いものから、その前後の、本文の行のある部分（_solid）のいちばん遠いものまでを本体にする。本体の最後（最初）の
++    行のすぐ向こうが図・表のキャプションなどで、その向こうに段落の最後（最初）の行らしい行があれば、その行は本体から外す
++    （_edge_alternative）。戻り値:
++    (b, e, head_far, tail_far)。b・e: 本体の docx の範囲（seq の [b, e)。本体から離れた最初〈最後〉の部分がなければ 0〈len(seq)〉）。
++    head_far・tail_far: 本体から離れた最初（最後）の部分があれば、(本体の最初〈最後〉の行, その部分の行の集合)、なければ None。"""
++    pairs = [(i1 + k, win[j1 + k]) for tag, i1, i2, j1, j2 in ops if tag == "equal" for k in range(i2 - i1)]
++    if not pairs:
++        return 0, len(seq), None, None
++    seen = {}
++
++    def figure(ln):
++        if ln not in seen:
++            seen[ln] = _figure_line(st, ln, owner, nonflow, width)
++        return seen[ln]
++    segs = [[pairs[0]]]
++    for x, y in zip(pairs, pairs[1:]):
++        if _flow_breaks(src, x[1], y[1], st, owner, width, figure):
++            segs.append([])
++        segs[-1].append(y)
++    m = max(range(len(segs)), key=lambda x: len(segs[x]))
++    # 本文の行（段落の行の幅いっぱいの行で、文字の半分以上がこの段落の文字と一致するもの）のある部分は、図・表などを
++    # はさんでいても段落の本文の続き（本体）とみなす（図・表は本文の行の流れの外に置かれる）。間の、本文の行のない部分
++    # （別行立ての式の前の短い行など）も本体に入れる
++    # （図の中の文字に挟まれた部分〈doubt。図の中の原稿の写しかもしれない〉は除く）
++    solid = [x for x in range(len(segs)) if x != m and _solid(segs[x], st, width, doubt)]
++    lo, hi = min([m, *solid]), max([m, *solid])
++    # 本体の最後（最初）の行のすぐ向こうが図・表のキャプションなどで、その向こうに、段落の最後（最初）の行らしい、どの段落にも
++    # 当たらない行がある: 本体の最後（最初）の行は、段落の文字とよく似た図の中の語句の行で、本当の段落の行はキャプションの向こう
++    # かもしれない。その行を本体から外す（_edge_alternative）
++    if _edge_alternative(st, st.line[segs[hi][-1][1]], 1, owner, nonflow, src, width):
++        ln = st.line[segs[hi][-1][1]]
++        cut = next(x for x, (_, k) in enumerate(segs[hi]) if st.line[k] == ln)
++        if cut:
++            segs[hi:hi + 1] = [segs[hi][:cut], segs[hi][cut:]]
++        elif hi > lo:
++            hi -= 1
++    if _edge_alternative(st, st.line[segs[lo][0][1]], -1, owner, nonflow, src, width):
++        ln = st.line[segs[lo][0][1]]
++        cut = max(x for x, (_, k) in enumerate(segs[lo]) if st.line[k] == ln) + 1
++        if cut < len(segs[lo]):
++            segs[lo:lo + 1] = [segs[lo][:cut], segs[lo][cut:]]
++            lo += 1
++            hi += 1
++        elif lo < hi:
++            lo += 1
++    main_lines = {st.line[k] for s in segs[lo:hi + 1] for _, k in s}
++    head_far = tail_far = None
++    if lo > 0:
++        head_far = (st.line[segs[lo][0][1]], {st.line[k] for s in segs[:lo] for _, k in s} - main_lines)
++    if hi + 1 < len(segs):
++        tail_far = (st.line[segs[hi][-1][1]], {st.line[k] for s in segs[hi + 1:] for _, k in s} - main_lines)
++    b = segs[lo][0][0] if lo > 0 else 0
++    e = segs[hi][-1][0] + 1 if hi + 1 < len(segs) else len(seq)
++    return b, e, head_far, tail_far
++
++
++def _line_kind(st: PdfStream, ln, owner, nonflow) -> str:
++    """_figure_line で見る、PDF の行 ln の種類。"figure": 本文の流れでない段落（図・表のキャプション・表のセルなど）の文字のある
++    行か、どの段落にも当たらない和文の行（図・表の中の文字）。"text": どれかの本文の流れの段落の文字のある行。"skip": 受付日の
++    文字だけの行・ページの端の柱の候補の行・MIN_CHARS 文字未満の行・和文の文字のない行（数式・数字だけの行など）。"""
++    ks = range(bisect.bisect_left(st.line, ln), bisect.bisect_right(st.line, ln))
++    body = [k for k in ks if not st.soft[k] and st.date[k] < 0]
++    if not body:
++        return "skip"
++    owners = {owner.get(k) for k in body} - {None}
++    if owners & nonflow:
++        return "figure"
++    if owners:
++        return "text"
++    if (st.edge[body[0]] and st.head[body[0]]) or _visible_count(st.lines[ln]) < MIN_CHARS or \
++            not any(unicodedata.east_asian_width(st.chars[k]) in "FW" for k in body):
++        return "skip"
++    return "figure"
++
++
++def _edge_alternative(st: PdfStream, ln, step, owner, nonflow, src, width) -> bool:
++    """段落 src の本体の最後（step = 1。-1 なら最初）の行 ln のすぐ後ろ（前）が、図・表のキャプションなど（本文の流れでない
++    段落の文字の行。間の、_line_kind が "skip" の行は飛ばす）で、その向こうの、次（前）の本文の段落の行より手前に、段落の最後
++    （最初）の行らしい、どの段落にも当たらない和文の行（最後なら文の終わりで終わる行、最初なら段落の行の幅いっぱいの行。
++    受付日の文字だけの行・ページの端の柱の候補の行・MIN_CHARS 文字未満の行を除く）があるか（_isolate）。"""
++    if not width:
++        return False
++    x, sep = ln + step, False
++    for _ in range(80):
++        if not 0 <= x < len(st.lines):
++            return False
++        ks = range(bisect.bisect_left(st.line, x), bisect.bisect_right(st.line, x))
++        body = [k for k in ks if not st.soft[k] and st.date[k] < 0]
++        owners = {owner.get(k) for k in body} - {None}
++        if owners & nonflow:
++            sep = True
++        elif owners - {src}:
++            return False                 # 次（前）の本文の段落の行
++        elif not sep:
++            if owners or _line_kind(st, x, owner, nonflow) != "skip":
++                return False             # 本体の端の行のすぐ向こうが、キャプションなどでない
++        elif body and not owners and not (st.edge[body[0]] and st.head[body[0]]) and \
++                _visible_count(st.lines[x]) >= MIN_CHARS:
++            s = "".join(st.chars[k] for k in body)
++            if sum(1 for c in s if unicodedata.east_asian_width(c) in "FWA") * 2 >= len(s) and (
++                    _ends_sentence(s) if step > 0 else _line_width(st.lines[x]) >= FULL_LINE * width):
++                return True
++        x += step
++    return False
++
++
++def _figure_line(st: PdfStream, ln, owner, nonflow, width) -> bool:
++    """PDF の行 ln が、段落の本文の行でなく、図・表の中の行かもしれないか（_isolate。その行の一致は、前後の行と本文の行の流れで
++    続けない）。段落の行は両端そろえで行の幅いっぱいになり、段落の最後の行は文の終わりで終わるので、行の幅 width の FULL_LINE
++    より短く、文の終わりで終わらない行は本文の行らしくない（図の中の語句「時間を見る」が、段落の続きの docx の文字「時間を
++    取った。」と最初の数文字が同じだと、照合はその行を段落の行と並べる）。そのような行で、すぐ前かすぐ後ろの行（_line_kind が
++    "skip" の行は 5 行まで飛ばす）が、図・表のキャプションなどの行か、どの段落にも当たらない和文の行のもの。和文の文字が半分に
++    満たない行（英文など）は見ない。行の幅は、受付日の文字を除いて測る。"""
++    if not width:
++        return False
++    ks = range(bisect.bisect_left(st.line, ln), bisect.bisect_right(st.line, ln))
++    body = "".join(st.chars[k] for k in ks if st.date[k] < 0 and not st.soft[k])
++    if not body or sum(1 for c in body if unicodedata.east_asian_width(c) in "FWA") * 2 < len(body):
++        return False
++    w = _line_width(st.lines[ln]) - _line_width("".join(st.chars[k] for k in ks if st.date[k] >= 0))
++    if w >= FULL_LINE * width or _ends_sentence(body):
++        return False
++    for step in (-1, 1):
++        x = ln + step
++        for _ in range(6):
++            if not 0 <= x < len(st.lines):
++                break
++            kind = _line_kind(st, x, owner, nonflow)
++            if kind == "figure":
++                return True
++            if kind == "text":
++                break
++            x += step
++    return False
++
++
++def _solid(seg, st: PdfStream, width, doubt=()) -> bool:
++    """一致した文字の部分 seg（(seq の位置, 列の位置) のリスト）に、本文の行（段落の行の幅 width の FULL_LINE 以上の行で、行の
++    文字の半分以上が seg の文字）があるか（図の中の文字に挟まれた行〈doubt〉が 1 つでもあれば、ないとみなす）。"""
++    if not width:
++        return False
++    cnt = Counter(st.line[k] for _, k in seg)
++    if any(ln in doubt for ln in cnt):
++        return False
++    for ln, n in cnt.items():
++        ks = range(bisect.bisect_left(st.line, ln), bisect.bisect_right(st.line, ln))
++        size = sum(1 for k in ks if not st.soft[k] and st.date[k] < 0)
++        if 2 * n >= size and _line_width(st.lines[ln]) >= FULL_LINE * width:
++            return True
++    return False
++
++
+ def _classify(p, seq, gens, win, ops, unsure, st: PdfStream, owner, owned_lines, res: PdfCheck, dense_lines,
+-              beside=((), ()), heading=False):
++              beside=((), ()), heading=False, nonflow=frozenset()):
+     """段落の照合（_align の opcodes。PDF の側の位置は窓 win の上の位置）の違う部分を、全角・半角の違い（res.width・drops）、
+     Word が付ける番号の違い（res.numbers）、それ以外の違い（res.diffs。直せる違いと、直さない違い〈TextDiff.why〉）に分ける。
+ 
+@@ -2096,6 +2181,17 @@
+     tail_short = last_sure and bool(solid - {last_ln}) and _line_width(st.lines[last_ln]) < SHORT_LINE * own_width
+ 
+     floaty = {j for j, k in enumerate(win) if k in unsure["floaty"]}   # 分断する表・図の中の文字とみなす位置（_joint）
++    # 段落の本体から離れた最初・最後の部分（_isolate）。docx の seq の [0, fb) と [fe, len)、PDF のその側の行
++    fb, fe, head_far, tail_far = _isolate(p.src, seq, win, ops, st, owner, 0 if heading else own_width,
++                                          unsure["doubt"], nonflow) if unsure["flow"] else (0, len(seq), None, None)
++
++    def far_pos(j):   # 窓の中の位置 j の PDF の文字が、本体から離れた部分の側の行にあるか
++        ln = st.line[win[j]]
++        return bool((head_far and (ln < head_far[0] or ln in head_far[1])) or
++                    (tail_far and (ln > tail_far[0] or ln in tail_far[1])))
++
++    def far_docx(i1, i2):   # docx の seq[i1:i2]（i1 == i2 なら、その位置に足す文字）が、本体から離れた部分にかかるか
++        return bool((head_far and (i1 < fb or i1 == i2 == fb)) or (tail_far and (i2 > fe or i1 == i2 == fe)))
+ 
+     def mine(j):      # PDF の文字が、ほかの段落に当たっていない（この段落の違いとして扱ってよい）か
+         return owner.get(win[j], p.src) == p.src and not st.soft[win[j]]
+@@ -2159,13 +2255,14 @@
+                     regions.append((i1 + k, i1 + k, j1 + k, j1 + k, MATH_WHY))
+                 if dc == pc:
+                     continue
+-                # 図の中の行と偶然一致したかもしれない段落の最後（最初）の行（figure_edge_lines）と、分断する表・図の中の文字と
+-                # みなした位置（floaty）の PDF の文字と並べた docx の文字は、全角・半角・大文字・小文字・行末のダッシュの違いも
+-                # 図の中の文字に合わせず、直さない違い（DISPLACED_WHY）にする（本文の最後の行「時間を２回取った。」がキャプションの
+-                # 後ろに出て、その前の図の中の行「時間を2回見る」と並べたとき、「２」を「2」にしない）。図の中の原稿の写しかもしれない
+-                # 行（recheck_runs・find_hole の doubt）は、本当に分断された段落の部分のこともあるので、今までどおり合わせる
+-                fig = st.line[win[j1 + k]] in unsure["edge_doubt"] or j1 + k in floaty
+-                why = DISPLACED_WHY if fig else ""
++                # 段落の本体から離れた最初・最後の部分（_isolate。FAR_WHY）と、分断する表・図の中の文字とみなした位置（floaty。
++                # DISPLACED_WHY）の PDF の文字と並べた docx の文字は、全角・半角・大文字・小文字・行末のダッシュの違いも図の中の
++                # 文字に合わせず、直さない違いにする（本文の最後の行「時間を２回取った。」がキャプションの後ろに出て、その前の図の
++                # 中の行「時間を2回見る」と並べたとき、「２」を「2」にしない）。図の中の原稿の写しかもしれない行（recheck_runs・
++                # find_hole の doubt）は、本当に分断された段落の部分のこともあるので、本体の中なら今までどおり合わせる
++                far = far_docx(i1 + k, i1 + k + 1) or far_pos(j1 + k)
++                fig = far or j1 + k in floaty
++                why = FAR_WHY if far else DISPLACED_WHY if fig else ""
+                 if st.soft[win[j1 + k]] and (dc in DASHES or (dc in HYPHENS and not is_width_pair(dc, pc))):
+                     # docx のダッシュ（en dash・em dash など）・ハイフンの仲間（「‐」、Word の改行なしハイフン「‑」など）と、
+                     # PDF の英数字の後の行末の、docx と違う「-」「‐」: PDF に合わせて直す（docx のダッシュを消さない。行の途中の
+@@ -2223,14 +2320,19 @@
+             # その文字を足すことにならないように）
+             regions.append((i1, i2, js_all[0] if js_all else j1, js_all[-1] + 1 if js_all else j1, EDGE_WHY))
+             continue
++        # 段落の本体から離れた最初・最後の部分（_isolate）にかかる違いか。段落の本文の続きか、図・表の中の文字か決められない
++        # ので、下の分け方で直す違いになっても直さない（FAR_WHY。足さず、消さず、置き換えない）
++        far = far_docx(i1, i2) or any(far_pos(j) for j in js_all)
+         # 照合に使わない文字（どの段落にも当たらない、ページの端の行・数字だけの行などと、投稿受付日など）を除く。分断する
+         # 表・図の中の文字とみなした行（_joint）も同じ（照合に使わなかった文字として記録する）
+         dropped = [st.ignored(win[j], owner, owned_lines) or (st.lines[st.line[win[j]]] if j in floaty else "")
+                    for j in js_all]
+         docx_side = any(c != SKIP for c, _ in seq[i1:i2])
+-        if docx_side and ((i1 == 0 and unsure["head"]) or (i2 == len(seq) and unsure["tail"])):
+-            # 段落の最初（最後）の docx の文字が PDF のどこにも見つからず、PDF ではそのすぐ前（後ろ）に、どの段落とも一致しない
+-            # 文字が続く（図の中の文字など）: 校正で消されたのか、別の位置にあるのか決められないので、消さない
++        if docx_side and ((i1 == 0 and (unsure["head"] or (unsure["head_beyond"] and not js_all))) or
++                          (i2 == len(seq) and (unsure["tail"] or (unsure["tail_beyond"] and not js_all)))):
++            # 段落の最初（最後）の docx の文字が PDF のどこにも見つからず、PDF ではそのすぐ前（後ろ）か、ほかの段落の塊の向こう
++            # （head_beyond・tail_beyond。同じ行に PDF の文字がないときだけ）に、どの段落とも一致しない文字が続く（図の中の文字
++            # など）: 校正で消されたのか、別の位置にあるのか決められないので、消さない
+             regions.append((i1, i2, js_all[0] if js_all else j1, js_all[-1] + 1 if js_all else j1, UNSURE_WHY))
+             continue
+         if docx_side and not js_all and (i1 == 0 or i2 == len(seq)):
+@@ -2405,7 +2507,7 @@
+             # 違いは直さない
+             regions.append((i1, i2, js[0] if js else j1, js[-1] + 1 if js else j1, DISPLACED_WHY))
+             continue
+-        regions.append((i1, i2, js[0] if js else j1, js[-1] + 1 if js else j1, ""))
++        regions.append((i1, i2, js[0] if js else j1, js[-1] + 1 if js else j1, FAR_WHY if far else ""))
+     regions = _join_long(regions)
+     # 段落の最初（最後）の、その行の中だけの 1〜2 文字の一致（偶然の一致かもしれない。weak_start・weak_end）で、その外側の
+     # 違う部分を EDGE_WHY にしたときは、その一致の全角・半角も PDF に合わせない（文献の最後の「2018」の「1」を、すぐ後ろの
+@@ -2468,7 +2570,7 @@
+     while changed:
+         changed = False
+         for x, (i1, i2, j1, j2, why) in enumerate(out):
+-            if why not in (LONG_WHY, WHOLE_WHY):
++            if why not in (LONG_WHY, WHOLE_WHY, FAR_WHY):
+                 continue
+             for y, r in enumerate(out):
+                 if r[4] or y == x:
+@@ -2652,7 +2754,7 @@
+         if num:
+             dtext = f"（Word が付けた番号「{num}」）" + dtext
+         dk, pk = re.sub(r"\s", "", (num + text[a:b].replace(OBJ, ""))), re.sub(r"\s", "", ptext)
+-        if fold_str(dk) == fold_str(pk) and not (why == DISPLACED_WHY and dk != pk):
++        if fold_str(dk) == fold_str(pk) and not (why in (DISPLACED_WHY, FAR_WHY) and dk != pk):
+             # 全角・半角だけの違いは、違いにしない（res.width で扱う）。ただし、図の中の文字の行と並べたために直さなかった
+             # 全角・半角の違い（DISPLACED_WHY。_classify）は、黙って捨てずに直さない違いとして出す
+             continue

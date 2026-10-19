@@ -1,0 +1,202 @@
+{
+ "sample_full_manual": {
+  "xml": "bbc466ce7cbc46a3",
+  "report": "74e055195896d429",
+  "prompt": "9b5a3afc3f7866a6",
+  "ok": [
+   true,
+   true,
+   true,
+   0
+  ]
+ },
+ "sample_full_split": {
+  "xml": "696e326b2d446d76",
+  "report": "f8e88e58b67cc7b3",
+  "ok": [
+   true,
+   true,
+   true,
+   0
+  ]
+ },
+ "sample_edge_manual": {
+  "xml": "5daf656ad22bbce3",
+  "report": "825475769a42b96c",
+  "prompt": "805cd63cb505e409",
+  "ok": [
+   true,
+   true,
+   true,
+   0
+  ]
+ },
+ "sample_edge_split": {
+  "xml": "5344a026f922ed0f",
+  "report": "70a983456cffebbd",
+  "ok": [
+   true,
+   true,
+   true,
+   0
+  ]
+ },
+ "JASME_template_20261009_manual": {
+  "xml": "21cbd5fe4472277b",
+  "report": "b3bd4f75e99ce408",
+  "prompt": "d19d739179868e41",
+  "ok": [
+   true,
+   true,
+   true,
+   0
+  ]
+ },
+ "JASME_template_20261009_split": {
+  "xml": "53b710d78690173e",
+  "report": "aa01a0d8a90b8038",
+  "ok": [
+   true,
+   true,
+   true,
+   0
+  ]
+ },
+ "sample_notes_manual": {
+  "xml": "8c4ecc78efac99b6",
+  "report": "508d7f753a472288",
+  "prompt": "037e544c26a1b1da",
+  "ok": [
+   true,
+   true,
+   true,
+   0
+  ]
+ },
+ "sample_notes_split": {
+  "xml": "fe8dae7838eb98d7",
+  "report": "092d20c3a6aed85e",
+  "ok": [
+   true,
+   true,
+   true,
+   0
+  ]
+ },
+ "sample_pdfcheck_manual": {
+  "xml": "588ef9bde8dfc758",
+  "report": "1da66de647b0b80f",
+  "prompt": "6f18c98d9ffc7224",
+  "ok": [
+   true,
+   true,
+   true,
+   0
+  ]
+ },
+ "sample_pdfcheck_split": {
+  "xml": "6c82ca8d17189d0a",
+  "report": "6c702e10133a0c02",
+  "ok": [
+   true,
+   true,
+   true,
+   0
+  ]
+ },
+ "sample_reader_manual": {
+  "xml": "5904291370b46362",
+  "report": "a65bbe02850db4d8",
+  "prompt": "069a71d73ab458de",
+  "ok": [
+   true,
+   true,
+   true,
+   0
+  ]
+ },
+ "sample_reader_split": {
+  "xml": "d1cb5f251e28a61f",
+  "report": "9ae16eedcbc84908",
+  "ok": [
+   true,
+   true,
+   true,
+   0
+  ]
+ },
+ "sample_structure_manual": {
+  "xml": "7ec04e3501406662",
+  "report": "404b602cb1e8af8b",
+  "prompt": "32dc174b0d43d980",
+  "ok": [
+   true,
+   true,
+   true,
+   0
+  ]
+ },
+ "sample_structure_split": {
+  "xml": "1363a246167162a3",
+  "report": "c5ec702c9ab32f43",
+  "ok": [
+   true,
+   true,
+   true,
+   0
+  ]
+ },
+ "sample_full_ai": {
+  "xml": "bdd6ee4432b5b40d",
+  "report": "85d09079d3765c2a",
+  "prompt": "9b5a3afc3f7866a6",
+  "ok": [
+   true,
+   true,
+   true,
+   0
+  ]
+ },
+ "sample_float_ai": {
+  "xml": "a93b3c463b910c9d",
+  "report": "a7417a21760a8bb1",
+  "prompt": "f43c083a64dc5726",
+  "ok": [
+   true,
+   true,
+   true,
+   0
+  ]
+ },
+ "sample_float_manual": {
+  "xml": "d0ecf6c0c0591c50",
+  "report": "6179e0500bfbc797",
+  "prompt": "f43c083a64dc5726",
+  "ok": [
+   true,
+   true,
+   true,
+   0
+  ]
+ },
+ "pdfcheck_route1": {
+  "xml": "588ef9bde8dfc758",
+  "report": "5198fb72d89801c7",
+  "ok": [
+   true,
+   true,
+   true,
+   0
+  ]
+ },
+ "pdfcheck_route2": {
+  "xml": "411295b2d41d995f",
+  "report": "21fe7300a26ae288",
+  "ok": [
+   true,
+   true,
+   true,
+   0
+  ]
+ }
+}

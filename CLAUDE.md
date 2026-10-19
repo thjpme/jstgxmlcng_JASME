@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+> **作業中の控え（このブランチだけ。main には入れない）: 最初に `docs/fix_plan_work/README.md` を読むこと。**
+
 論文の docx を J-STAGE 全文 XML（JATS 1.1）に変換するツール（『全国数学教育学会誌 数学教育学研究』用）。
 作業の前に `docs/DEVELOPMENT.md`（コードの構成・守るべき原則・反映の流れ）と `docs/DESIGN.md`（設計）を読むこと。
 新しく引き継いだ人向けの環境の作り方は `docs/HANDOFF.md`。
