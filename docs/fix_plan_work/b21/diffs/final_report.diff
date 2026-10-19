@@ -1,0 +1,21 @@
+--- b021_src/jasme_jats/report.py	2026-10-19 18:06:44.363964570 +0000
++++ final_src/jasme_jats/report.py	2026-10-19 19:36:24.884378366 +0000
+@@ -13,8 +13,8 @@
+ from .ai_assist import PROVIDERS
+ from .linker import body_paragraphs, linked_ids
+ from .package import article_dir
+-from .pdfmatch import (DISPLACED_WHY, EDGE_WHY, FORMULA_MARK, HEAD_WHY, LINE_MARK, LONG_WHY, MATH_WHY, RE_PAGE_NO, UNSURE_WHY,
+-                       WHOLE_WHY)
++from .pdfmatch import (DISPLACED_WHY, EDGE_WHY, FAR_WHY, FORMULA_MARK, HEAD_WHY, LINE_MARK, LONG_WHY, MATH_WHY, RE_PAGE_NO,
++                       UNSURE_WHY, WHOLE_WHY)
+ from .structure import ENDNOTE_EXCLUDED, TEXTBOX_TEXT_EXCLUDED
+ 
+ 
+@@ -796,6 +796,7 @@
+                         "行の変わり目）",
+              DISPLACED_WHY: f"（分断された段落の、図や表の中の文字に挟まれた部分か、キャプションのすぐ隣の部分。{LINE_MARK} は"
+                             " PDF の行の変わり目）",
++             FAR_WHY: f"（分断された段落の、本体から離れた最初・最後の部分。{LINE_MARK} は PDF の行の変わり目）",
+              MATH_WHY: f"（PDF の文字の {FORMULA_MARK} は、PDF で数式など文字として読み取れない部分。{LINE_MARK} は PDF の"
+                        "行の変わり目）"}
+ WHY_MARK = WHY_MARKS[HEAD_WHY]

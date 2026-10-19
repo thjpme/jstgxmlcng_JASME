@@ -13,8 +13,8 @@ from pathlib import Path
 from .ai_assist import PROVIDERS
 from .linker import body_paragraphs, linked_ids
 from .package import article_dir
-from .pdfmatch import (DISPLACED_WHY, EDGE_WHY, FORMULA_MARK, HEAD_WHY, LINE_MARK, LONG_WHY, MATH_WHY, RE_PAGE_NO, UNSURE_WHY,
-                       WHOLE_WHY)
+from .pdfmatch import (DISPLACED_WHY, EDGE_WHY, FAR_WHY, FORMULA_MARK, HEAD_WHY, LINE_MARK, LONG_WHY, MATH_WHY, RE_PAGE_NO,
+                       UNSURE_WHY, WHOLE_WHY)
 from .structure import ENDNOTE_EXCLUDED, TEXTBOX_TEXT_EXCLUDED
 
 
@@ -796,6 +796,7 @@ WHY_MARKS = {HEAD_WHY: f"（PDF の側は照合に使わなかった文字だけ
                         "行の変わり目）",
              DISPLACED_WHY: f"（分断された段落の、図や表の中の文字に挟まれた部分か、キャプションのすぐ隣の部分。{LINE_MARK} は"
                             " PDF の行の変わり目）",
+             FAR_WHY: f"（分断された段落の、本体から離れた最初・最後の部分。{LINE_MARK} は PDF の行の変わり目）",
              MATH_WHY: f"（PDF の文字の {FORMULA_MARK} は、PDF で数式など文字として読み取れない部分。{LINE_MARK} は PDF の"
                        "行の変わり目）"}
 WHY_MARK = WHY_MARKS[HEAD_WHY]

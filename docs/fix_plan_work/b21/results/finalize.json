@@ -1,0 +1,16 @@
+{
+ "changed_files": [
+  "/home/user/jstgxmlcng_JASME/pyproject.toml",
+  "/home/user/jstgxmlcng_JASME/src/jasme_jats/__init__.py",
+  "/home/user/jstgxmlcng_JASME/notebooks/JASME_docx_to_JSTAGE_XML.ipynb",
+  "/home/user/jstgxmlcng_JASME/docs/FIX_PLAN.md",
+  "/home/user/jstgxmlcng_JASME/docs/DEVELOPMENT.md",
+  "/home/user/jstgxmlcng_JASME/docs/fix_plan_repro_tests.py",
+  "/home/user/jstgxmlcng_JASME/README.md"
+ ],
+ "summary": "B2.1（0.21.1）の仕上げを終えた。commit・push・ブランチの切り替えはしていない。\n\n1. 版: pyproject.toml と src/jasme_jats/__init__.py を 0.21.1 にした。python tools/make_notebook.py でノートブックを作り直した（変わったのは版の表示 3 か所だけ）。\n2. docs/FIX_PLAN.md:\n   - 冒頭の追記に、B2.1 の実装と記録を足した。\n   - N20 の行を実装に合わせて書き直した（キャプション・ほかの段落、「113点」、B2.1 で FAR_WHY の一般的な規則にまとめて止めたこと）。\n   - 反映の順序の表の B2.1 を「（実装済み）」にした。\n   - B2 の 4 回目の記録にあった「B2.1 で扱う」（113点）に、B2.1 で 2 つとも直さず 13 章に出すようにしたことを書いた。\n   - 「同じファイルを触る順」の pdfmatch.py と report.py に B2.1 を入れた。\n   - B2.1 の節に次の 5 つを足した。\n     - 設計の要点: 3 案 A・B・C を試作で比べ、A に 4 つの直しを加えた F を選んだこと。規則 _isolate・FAR_WHY と、消した規則。\n     - テスト: 172 件・23 関数（566 → 738 件。0.21.0 で 81 件、0.20.0 で 102 件落ちる）。N20 の項目ごとの対応と、書き換えた 1 件とその理由。\n     - 実装で決めたこと: _typeset_line、_plain_tail は最後の側だけ、行の一致の割合の数え方、字下げの区切り、tail_beyond、report.py の添え書き、3 桁目にした理由。\n     - 確かめた数: 実装担当の報告と DESIGN_B21.md の数を使った。守りの代償として、13.2 に回る本当の直しの数も書いた。\n     - 残る限界 (1)〜(7)。\n3. 文書と実装の突き合わせ:\n   - DESIGN.md 4.4: 実装担当が N20 の限界の項目を「分断された段落の端のまれな配置（B2.1。0.21.1）」の項（止めた形と残る形）に書き直していた。中に出てくる名前（_isolate・_plain_tail・_typeset_line・_edge_alternative・_figure_line・line_indent・line_range・_edges_near_unused_lines・tail_beyond・FULL_LINE・WHY_MARKS の FAR_WHY）が src にあること、figure_edge_lines・edge_doubt が src・tests から消えていることを確かめた。\n   - DEVELOPMENT.md: コードの構成の表の pdfmatch.py の理由の一覧に FAR_WHY を足した。\n   - README.md: ルート2 の説明に、本体から離れた最初・最後の部分は全角・半角も含めて直さずに 13 章に載せること（押し出されただけの最後の部分は直すこと）を、利用者向けの言葉で足した。\n   - docs/fix_plan_repro_tests.py: 冒頭の説明に B2.1（N20）を足した。\n   - CLAUDE.md・HANDOFF.md は、版や規則の名前を書いていないので変えていない。\n4. 確かめ:\n   - git status: 変更は 11 ファイルで、すべて意図したもの。tests/ に一時ファイルはない（pytest で出た tests/__pycache__ は消した）。\n   - 実際の論文の文字が入っていないか: tests/private の docx・PDF 12 本の文字から作った 12 文字の並び（和文を含むもの）と、git diff で足した行を突き合わせ、一致は 0。\n   - pytest は 3.13・3.10 とも通った。\n   - ディスクの空きは 4.5GB。scratchpad に残したのは、編集に使ったスクリプトと B2.1 の節の下書き（b21/fp_edit.py・fp_b21.md）だけ。",
+ "tests_added": [],
+ "pytest_result": "作業ツリーで、Python 3.13 は 738 passed（24.7 秒）、Python 3.10（PYTHONPATH=src、venv310）は 738 passed（27.4 秒）。どちらも -p no:cacheprovider で流した。版を 0.21.1 にし、ノートブックを作り直した後に流した。その後に変えたのは FIX_PLAN.md の空行 1 つだけ。",
+ "deviations": "- 担当の範囲を少し広げ、次の 2 つも直した。docs/fix_plan_repro_tests.py の冒頭の説明に B2.1 を足したこと（どの単位のテストをどこに足したかの記録をそろえるため）。FIX_PLAN.md の「同じファイルを触る順」に B2.1 を入れたこと。\n- DESIGN.md 4.4 の N20 の項目は、実装担当がすでに実装に合わせて書き直していたので、名前と内容が src と合うことを確かめるだけにして、手は入れていない。\n- B2.1 の節の数は、自分では測り直していない。実装担当の報告（タグ impl21）と DESIGN_B21.md の数を書き写した。自分で流したのは pytest だけ。",
+ "open_issues": "- commit・push はまとめ役に残した。\n- 速さ: 実装担当によると、本誌の出版版 PDF 7 通りの照合の合計は、1 回だけ 0.21.0 の 1.11 倍になった（測り直しの平均は 1.07 倍）。FIX_PLAN には「1.8〜2.0 秒・平均 1.07 倍」と書いた。厳しく見るなら、同じ条件でもう一度測るとよい。\n- 残る限界（FIX_PLAN の B2.1・DESIGN.md 4.4・DEVELOPMENT.md に書いたもの）:\n  - キャプションのない画像だけの図の中にある、消された最後の文の写しにごく近い行・同じ行。\n  - キャプションの上・下にある、消された文と同じ文字の図の中の行。\n  - 本当の直しが 13.2 に回る数（反例集 17・生成例 473・fuzz8 60・quick 16 段落）。\n  - 字下げの区切りと、行の幅で見分けることの限界。"
+}

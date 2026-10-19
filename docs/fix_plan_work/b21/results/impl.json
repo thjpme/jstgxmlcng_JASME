@@ -1,0 +1,39 @@
+{
+ "changed_files": [
+  "/home/user/jstgxmlcng_JASME/src/jasme_jats/pdfmatch.py",
+  "/home/user/jstgxmlcng_JASME/src/jasme_jats/report.py",
+  "/home/user/jstgxmlcng_JASME/tests/test_pdfmatch.py",
+  "/home/user/jstgxmlcng_JASME/docs/DESIGN.md",
+  "/home/user/jstgxmlcng_JASME/docs/DEVELOPMENT.md"
+ ],
+ "summary": "B2.1（0.21.1）の実装担当。DESIGN_B21.md で選ばれた試作 F（b21/judge/final_src）を作業ツリーの src に入れ、本体の書き方に合わせて整え、テストと文書を足した。commit・push・ブランチの切り替えはしていない（版の番号・ノートブック・FIX_PLAN はまとめ役に残した。版は 0.21.0 のまま）。\n\n【src（pdfmatch.py +約 420 行・report.py）】\n- 新しい直さない理由 FAR_WHY と FULL_LINE = 0.9。PdfStream.line_indent（行の最初が全角の空白か。pdf_stream が、空白を除く前の行で埋める）と PdfStream.line_range（行の文字の位置の範囲。bisect の式が何か所にも重なっていたのをまとめた）。\n- 足した関数: _flow_breaks・_ends_flow・_isolate・_line_kind・_edge_alternative・_figure_line・_solid・_line_owners・_typeset_line・_plain_tail・_line_width・_mostly_wide・_body_text、_edges_near_unused_lines（消さない守り）、_Joint.tail_beyond・_tail_line_after。\n- 消したもの: _Joint.figure_edge_lines・facing_hole・better_line と印 edge_doubt（0.21.0 の形ごとの規則）。_loose_edge・stray_edge は 0.21.0 のまま残した。\n- _classify: 本体の範囲は _isolate と _plain_tail で決める。離れた部分の違いは FAR_WHY にする（全角・半角などの違いも）。題目・見出しは行の幅で見分けない（flow_width = 0）。UNSURE_WHY の条件に tail_beyond を足した。_join_long と _report_regions は FAR_WHY を DISPLACED_WHY と同じに扱う。compare は nonflow を作って渡す。\n- report.py: FAR_WHY を import し、WHY_MARKS に添え書きを足した。\n- モジュールの冒頭の文書を書き直した（UNSURE_WHY の 4 つの場合、DISPLACED_WHY、FAR_WHY と _plain_tail）。コメント・docstring は本体の分量と書き方に合わせた。\n- 整えた後の版（src_r2）が F と同じ動きをすることを確かめた。反例集 19 組 1,478 件で、反例ごとの判定・直した後の段落の文字・13 章が F（jdH）と 1 件も違わない。ほかの物差しの数もすべて F と同じ。\n\n【テスト（tests/test_pdfmatch.py）】7.1 の書き換え 1 関数（docstring に理由）と、7.2 の 23 関数 172 件（架空の文字）を足した。新しいテストは 0.21.0 で 81 件、0.20.0 で 102 件が落ちる。F ではすべて通る。\n\n【文書】\n- DESIGN.md 4.4: _loose_edge の注、UNSURE_WHY の守り 2 つ（tail_beyond・_edges_near_unused_lines）、DISPLACED_WHY から figure_edge_lines を外した、FAR_WHY の項（流れの区切り・_edge_alternative・_plain_tail・規則をまとめた経緯）、限界の文の書き直し、「分断された段落の端のまれな配置（B2.1。0.21.1）」の項（止めた形と残る形 4 つ）、試験の段落に 0.21.1 の決め方の一文を足した。\n- DEVELOPMENT.md の残っている課題: 2 行を 0.21.1 に合わせた。直った形を外し、残る形と 13.2 に回る直しを足し、比べる基準を 0.21.1 にした。\n- 限界の文は、版ごとの実験で確かめてから書いた（b21/impl/limits.py と fixB2r4/exp/e3_bpage.py）。次のページの最初の柱の形は 0.21.0 では docx のまま 13 章、0.21.1 では直す。L1・L3・L5・L6・L7 の形は 0.21.1 では docx のまま 13 章に出る。\n\n【7.4 の合格の条件（すべて満たす。作業ツリーの src と同じ src_r2、タグ impl21）】\n- pytest: 3.13・3.10 とも 738 passed。\n- golden: 19 件とも 0.20.0 と同じ。\n- 本誌の出版版 PDF 7 通り（ルート1・2）: 照合の違い・直す箇所・使わなかった文字・見つからない段落・XML・13 章が 0.21.0 と同じ。\n- テストデータ 1〜3:\n  - 直す箇所 252・1,216・412\n  - 直さない箇所 6・0・0\n  - 照合に使わなかった文字 11・21・13\n  - 変換は 3 本とも合格。\n- 反例集 19 組 1,478 件:\n  - 段落ごと: VIOL 11・SILENT 6・MISS 388。0.21.0 より VIOL か SILENT に悪くなった段落は 0。\n  - 反例ごと: OK 1,075・REPORTED 370・FAIL 33。0.21.0 で FAIL でない反例が FAIL になったものは 0。\n  - cases_b21 は 89・30・1、cases_judge21 は 38・21・4、w は 11・8・0、v は 3・8・0。\n- 生成例 29 種: 段落で OK 3,743・REP 2,850・SILENT 30・FAIL 0。\n- quick: 0.21.0 より悪い段落 16（うち VIOLATION 0）。\n- fuzz4: OK 20,310・VIOLATION 1（0.21.0 と同じ段落）。\n- fuzz8: OK 211,436・VIOLATION（13 章）47・（黙って）393。0.21.0 から VIOLATION になった段落は 0。\n- 210 件: 0.21.0 と違うのは「113点」の形の 4 件（num3/mid_13・pb_13・mid_fw13・pb_fw13）だけ。\n- 速さ（どの組も 0.21.0 と交互に測った）:\n  - 出版版 PDF 7 通りの合計: 1.79〜1.97 秒（0.21.0 は 1.75〜1.78 秒、F は 1.83〜1.86 秒）。平均で 1.07 倍、最小どうしで 1.03 倍。\n  - 小さな論文 100 本（5 回の最小）: 1.09〜1.27 秒（0.21.0 は 1.02〜1.23 秒）。最小どうしで 1.07 倍。\n- 結果: b21/impl/logs/summary_impl21.txt・speed_impl21.log（scratchpad）。",
+ "tests_added": [
+  "書き換え（7.1）: test_heavily_edited_tail_after_split_is_not_deleted（paragraph の 3 件。0.21.1 では FAR_WHY で 13 章に出るので、13 章の docx の側に「時間を取っ」があることを確かめる。docstring に理由）",
+  "test_figure_line_before_caption_is_not_used_as_first_line（12。N20 の反映を止めるもの）",
+  "test_last_line_after_date_line_is_fixed_when_next_head_is_edited（12。N20 の (1)）",
+  "test_first_line_before_date_line_is_fixed_when_prev_tail_is_edited（4。N20 の (4)）",
+  "test_deleted_last_sentence_with_similar_figure_at_next_page_top（18。N20 の (2)）",
+  "test_rewritten_last_line_before_caption_above_similar_figure_is_not_mixed（6。N20 の (3)）",
+  "test_number_next_to_caption_digit_is_not_mixed（8。任意の「113点」）",
+  "test_tail_taken_by_next_paragraph_with_same_sentence_is_not_deleted（1。消さない守り）",
+  "test_matched_line_inside_figure_before_continuation_is_not_used（18）",
+  "test_rewritten_last_sentence_after_table_is_not_deleted（2）",
+  "test_deleted_last_sentence_before_table_is_still_deleted（1。対照）",
+  "test_near_copy_of_last_line_in_figure_does_not_change_paragraph（21。cases_judge21 の P none）",
+  "test_edited_last_line_after_near_copy_in_figure（21。P rep）",
+  "test_edits_in_ordinary_split_are_fixed（7。M）",
+  "test_deleted_last_sentence_with_near_copy_next_to_caption（2。Z の capabove・capbelow の near）",
+  "test_edited_first_line_after_near_copy_in_figure（3。cases_b21 の H と字下げの区切り）",
+  "test_edited_last_line_next_to_similar_figure_line（14。cases_b21 の T 群）",
+  "test_deleted_last_sentence_before_small_figure（7。cases_b21 の D 群）",
+  "test_edited_last_line_and_next_head_around_similar_figure（1。cases_b21 の K・F・E の rep）",
+  "test_edited_last_line_after_figure_under_similar_running_head（1。cases_b21 の K・F・E の rep）",
+  "test_dash_on_last_line_after_figure_with_wave_dash（1。cases_b21 の K・F・E の rep）",
+  "test_rewritten_last_line_after_figure_at_page_end_is_not_mixed（6。生成例 nostop_k7_figsim の形）",
+  "test_full_width_space_at_line_start_inside_paragraph（4。字下げの区切りの対照）",
+  "test_short_first_line_before_indented_line_is_fixed（2。字下げの区切りの対照）"
+ ],
+ "pytest_result": "作業ツリーで、Python 3.13 は 738 passed（26.5 秒）、Python 3.10 は 738 passed（30.8 秒。src は作業ツリー、版の表示は 0.21.0）。新しいテスト 23 関数 172 件のうち、0.21.0 では 81 件、0.20.0 では 102 件が落ち、F（judge/final_src）ではすべて通る。書き換える前のテストを F で流すと、7.1 の 3 件（paragraph-none・paragraph-date-page-end・paragraph-head-next-page）が落ちる（書き換えの理由どおり）。7.1 の書き換え後のテストは 0.21.0 でも通る。",
+ "deviations": "- 7.1 の期待を、設計の d.docx.endswith(old[:-2]) ではなく old[:-2] in d.docx にした。同じテストの表の後ろの形（split=table）では、13 章の違いの docx の側が「時間を取った。」まるごと（UNSURE_WHY）のままで、endswith(old[:-2]) では落ちる。paragraph の形（docx「…時間を取っ」）と表の形の両方を確かめられる書き方にし、理由をコメントと docstring に書いた。\n- F の bisect.bisect_left(st.line, ln)…bisect_right の式は、何か所にも重なっていたので PdfStream.line_range にまとめた。ほかの関数の名前と動きは F のまま。書き方（コメントの分量・日本語の説明）だけを整えた。動きが同じことは、反例集 1,478 件の判定・文字・13 章とすべての物差しの数で確かめた。\n- 7.2 の cases_b21 の K・F・E の rep は、関数を 3 つに分けた（similar_figure・running_head・wave_dash、各 1 件）。\n- DESIGN.md の触った 2 か所の長い行を、文字を変えずに折り返し直した（つないだ文字が同じことを確かめた）。\n- 物差しの道具は judge の写し（b21/impl/tools）で、出力先だけを b21/impl に変えた。速さを測り直すために、小さな論文 100 本を 5 回の最小で測る t_small.py を足した。",
+ "open_issues": "- まとめ役の作業として残したもの:\n  - 版を 0.21.1 に上げる（src/jasme_jats/__init__.py・pyproject.toml。出力の形は 13 章の理由が増えるだけなので 3 桁目）。\n  - ノートブックを作り直す。\n  - docs/FIX_PLAN.md の B2.1 の項を書く。数は上と DESIGN_B21.md のもの。\n- 残る限界（DESIGN.md 4.4 の B2.1 の項と DEVELOPMENT.md に書いた。どれも DESIGN_B21.md の 8 章のとおり）:\n  - キャプションのない画像だけの図の中の、消された最後の文の写しにごく近い行（図の中の文字で置き換える）・同じ行（docx のままで 13 章に出ない）。\n  - キャプションの上・下の、消された文と同じ文字の図の中の行（docx のままで 13 章に出ない）。\n  - 本当の直しが 13.2 に回る（反例集で 17 段落・生成例で 473 段落・fuzz8 で 60 段落・quick で 16 段落）。\n  - 字下げの区切りと、行の幅で見分けることの限界。\n  - 0.20.0 からの限界（反例集の FAIL 33 件はどれも 0.21.0 でも FAIL）。\n- 速さ: 出版版 PDF 7 通りの合計は、1 回だけ 0.21.0 の 1.11 倍になった。測り直すと平均 1.07 倍で、F も同じ時に 1.83〜1.86 秒だった。ゆらぎの範囲とみたが、厳しく見るなら同じ条件でもう一度測るとよい。\n- scratchpad の後片付け:\n  - 消した: 自分が作った大きな出力（td の変換結果、realpdf の run_after_impl21 と run_route1、golden の XML など）、途中の src の写し（src_r1）、文書の写し。\n  - 残した: oracle/_work には自分のものは残っていない。fixB2r4/realpdf/out/docx は t_speed.py が読む確かめ用の docx なので残した。scratchpad/oracle/wt_head の git worktree は前の担当のものなので触っていない。\n  - 結果の JSON・ログ・スクリプトと、測った版の src の写し b21/impl/src_r2（作業ツリーの src と同じ）は残した。\n- tests/ に一時ファイルはない（tests/__pycache__ も消した）。ディスクの空きは 4.7GB。"
+}
