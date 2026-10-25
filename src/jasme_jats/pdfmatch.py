@@ -697,12 +697,18 @@ def _end_rows_diff(res: PdfCheck, p, seq, gens, unsure, short, rows):
     res.diffs.append(TextDiff(p.src, "", LINE_MARK.join(rows), ctx, n, n, False, EDGE_WHY))
 
 
+DOC_WIDTH_LINES = 5   # 文書の本文の行の幅（_document_width）とみなすのに要る、その幅の行の数
+
+
 def _document_width(st: PdfStream, owner, nonflow) -> float:
     """compare の手順 2 の後: 文書の本文の行の幅（本文の流れの段落の文字が半分以上当たった和文の行の、いちばん多い幅。字下げの
     全角の空白も数える）。段落の行の幅（_classify の own_width。段落の行のいちばん長い行の幅）の上限にする（_isolate・_plain_tail）。
     約物の詰め・半角の文字・pdfium が 2 段の行をつないだ行で、1 行だけ幅が大きく出ると（本誌の出版版 PDF で 26〜47。ふつうの行は
     23〜24）、幅いっぱいのふつうの行が FULL_LINE に届かず、段落の終わりの行・図の中の行とみなされ、本文の行とも認められないので、
-    分断されていないふつうの段落の端が本体から離れた部分になり、本当の直しを 13 章に回していた。"""
+    分断されていないふつうの段落の端が本体から離れた部分になり、本当の直しを 13 章に回していた。
+    いちばん多い幅の行が DOC_WIDTH_LINES 本に満たなければ 0（上限にしない）: 行の幅がそろっていない小さな文書で、たまたま多い
+    短い行の幅を上限にすると、段落の行より短い行が幅いっぱいとみなされ、表の後ろに出た段落の続きの短い行を本体に入れて、表の
+    キャプションの「１」と並べた docx の「1」を残したまま隣の「2」を「13」に直す（「113点」）。"""
     widths = Counter()
     for ln in range(len(st.lines)):
         ks = [k for k in st.line_range(ln) if not st.soft[k] and st.date[k] < 0]
@@ -710,7 +716,8 @@ def _document_width(st: PdfStream, owner, nonflow) -> float:
         if ks and owners and not (owners & nonflow) and 2 * sum(1 for k in ks if k in owner) >= len(ks) and \
                 _mostly_wide("".join(st.chars[k] for k in ks)):
             widths[round(_shown_width(st, ln))] += 1
-    return widths.most_common(1)[0][0] if widths else 0
+    width, n = widths.most_common(1)[0] if widths else (0, 0)
+    return width if n >= DOC_WIDTH_LINES else 0
 
 
 def _edges_near_unused_lines(aligned, st: PdfStream, owner):

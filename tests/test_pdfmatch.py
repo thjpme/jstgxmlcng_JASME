@@ -3469,6 +3469,26 @@ def test_number_next_to_caption_digit_is_not_mixed(cap, new, brk, journal, tmp_p
     fixed_or_reported(plan, compare(plan, pages), src[SCORE_BODY], SCORE_BODY, pub)
 
 
+SHORT_LEADS = ["（１）調査の目的", "（２）調査の方法"]        # 1 行だけの短い本文の段落（行の幅は「引用および参考文献」の行と同じ 9）
+
+
+@pytest.mark.parametrize("new", ["13点", "１３点"])
+def test_number_next_to_caption_digit_is_not_mixed_in_unwrapped_document(new, journal, tmp_path):
+    """「113点」の形で、PDF の行が 24 文字で折り返されていない小さな文書（表の前の本文が 1 行 26 文字、表の後ろの続きが 1 行
+    19 文字。いちばん多い幅の行は、短い段落・見出しの 9 文字の行 3 本）。文書の本文の行の幅（_document_width）は、いちばん多い幅の
+    行が 5 本以上あるときだけ段落の行の幅の上限にする。たまたま多い短い行の幅を上限にすると、表の後ろの続きの行が幅いっぱいと
+    みなされて本体に入り、キャプションの「１」と並べた docx の「1」を残したまま隣の「2」を「13」に直して「113点」にする（1 回目の
+    点検の直しの途中で、点検の例 210 件の 4 件で起きた）。"""
+    pub = SCORE_BODY.replace("12点", new)
+    cap = "表１　架空の組ごとの得点"
+    plan, src = n10_article(tmp_path, journal, [*[("body", x) for x in SHORT_LEADS], ("body", SCORE_BODY), ("tab_cap", cap),
+                                                ("table", SCORE_NAMED_ROWS), ("body", NEXT_BODY)])
+    cut = pub.index(new)
+    pages = n10_pages([*SMALL_FRONT, *["　" + x for x in SHORT_LEADS], pub[:cut], cap, *[c for row in SCORE_NAMED_ROWS for c in row],
+                       pub[cut:], NEXT_BODY, *N10_TAIL])
+    fixed_or_reported(plan, compare(plan, pages), src[SCORE_BODY], SCORE_BODY, pub)
+
+
 def test_tail_taken_by_next_paragraph_with_same_sentence_is_not_deleted(journal, tmp_path):
     """段落 A の最後の行（「時間を取った。」。docx は「取った．」）がページの最後にあり、次の段落 B が同じ文（「説明し合う時間を
     取った。…」）で始まり、B の書き出しが校正で直されている（「取った」→「設けた」）。まとめての照合が A の最後の行を B に置き、
