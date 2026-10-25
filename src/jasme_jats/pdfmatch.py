@@ -703,7 +703,7 @@ DOC_WIDTH_LINES = 5   # 文書の本文の行の幅（_document_width）とみ�
 
 def _document_width(st: PdfStream, owner, nonflow) -> float:
     """compare の手順 2 の後: 文書の本文の行の幅（本文の流れの段落の途中の行のうち、和文の行の、いちばん多い幅。字下げの全角の
-    空白も数える）。段落がその幅で組まれているとき（_classify）、段落の行の幅（_classify の own_width。段落の行のいちばん長い行の
+    空白も数える）。段落がその幅で組まれているとき（_classify）、段落の行の幅（_classify の own_shown。段落の行のいちばん長い行の
     幅）の上限にする（_isolate・_plain_tail）。約物の詰め・半角の文字・pdfium が 2 段の行をつないだ行で、1 行だけ幅が大きく出ると
     （本誌の出版版 PDF で 26〜47。ふつうの行は 23〜24）、幅いっぱいのふつうの行が FULL_LINE に届かず、段落の終わりの行・図の中の
     行とみなされ、本文の行とも認められないので、分断されていないふつうの段落の端が本体から離れた部分になり、本当の直しを 13 章に
@@ -2289,7 +2289,9 @@ def _edge_alternative(st: PdfStream, ln, step, owner, nonflow, src, width) -> bo
     """_isolate: 段落 src の本体の最後（step = 1。-1 なら最初）の行 ln のすぐ後ろ（前）が、図・表のキャプションなど（本文の流れで
     ない段落の文字の行。間の、_line_kind が "skip" の行は飛ばす）で、その向こうの、次（前）の本文の段落の行より手前（80 行まで）
     に、段落の最後（最初）の行らしい、どの段落にも当たらない和文の行（最後なら文の終わりで終わる行、最初なら段落の行の幅
-    いっぱいの行。受付日の文字だけの行・ページの端の柱の候補の行・MIN_CHARS 文字未満の行を除く）があるか。"""
+    いっぱいの行。受付日の文字だけの行・ページの最初の端の柱の候補の行〈柱の位置〉・MIN_CHARS 文字未満の行を除く。ページの最後の
+    端の行は柱の位置でないので除かない: 校正で書き換えられた本当の 1 行目がページの最後にあり、次のページの最初に図の上の
+    キャプションと、docx の 1 行目の写しにごく近い図の中の行があるとき）があるか。"""
     if not width:
         return False
     x, sep = ln + step, False            # sep: キャプションなどの行を越えたか
@@ -2305,7 +2307,7 @@ def _edge_alternative(st: PdfStream, ln, step, owner, nonflow, src, width) -> bo
         elif not sep:
             if owners or _line_kind(st, x, owner, nonflow) != "skip":
                 return False             # 本体の端の行のすぐ向こうが、キャプションなどでない
-        elif body and not owners and not (st.edge[body[0]] and st.head[body[0]]) and \
+        elif body and not owners and not (st.top[body[0]] and st.head[body[0]]) and \
                 _visible_count(st.lines[x]) >= MIN_CHARS:
             s = "".join(st.chars[k] for k in body)
             if _mostly_wide(s) and (_ends_sentence(s) if step > 0 else _shown_width(st, x) >= FULL_LINE * width):
@@ -2479,12 +2481,16 @@ def _classify(p, seq, gens, win, ops, unsure, st: PdfStream, owner, owned_lines,
     # 最後の行か、そのすぐ後ろの、段落の文字とよく似た図の中の行。段落の途中の行と違って幅いっぱいとは限らない）を除いた、その幅の
     # FULL_LINE 以上の行（その幅で組まれていれば幅いっぱいの行）の半分より多くが、その幅 + 1 を超えないとき。そうでなければ
     # （ほかの幅で組まれた段落、短い本文の段落ばかりの小さな文書で文書の本文の行の幅が短い行の幅になったとき、行の少ない段落で
-    # 決められないとき）、上限にしない（決められないときは、離れた部分を直さない側に倒す）
+    # 決められないとき）、上限にしない（決められないときは、離れた部分を直さない側に倒す）。段落の行の幅は、本体を見分けるときに
+    # 比べる行の幅（_shown_width）と同じく、行の最初の字下げの全角の空白も数えて測る（own_width は数えないので、字下げの 1 行目が
+    # いちばん長い段落〈2 行の段落など〉では 1 小さくなり、段落の終わりの行らしい短い最後の行が幅いっぱいとみなされて、すぐ後ろの、
+    # 消された最後の文の写しにごく近い図の中の行が本体に入っていた）
     if doc_width:
         full = [w for w in (_shown_width(st, ln) for ln in sorted(solid)[:-1]) if w >= FULL_LINE * doc_width]
         if 2 * sum(1 for w in full if round(w) <= doc_width + 1) <= len(full):
             doc_width = 0
-    flow_width = 0 if heading else min(own_width, doc_width) if doc_width else own_width
+    own_shown = max((_shown_width(st, ln) for ln in solid), default=0)
+    flow_width = 0 if heading else min(own_shown, doc_width) if doc_width else own_shown
     fb, fe, head_far, tail_far = _isolate(p.src, seq, win, ops, st, owner, flow_width, unsure["doubt"], nonflow) \
         if unsure["flow"] else (0, len(seq), None, None)
     if tail_far and _plain_tail(p.src, seq, fe, tail_far, st, owner, nonflow, flow_width, unsure["doubt"]):
