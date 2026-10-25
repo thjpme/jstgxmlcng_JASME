@@ -317,6 +317,10 @@ def fix_rows(fx) -> list:
 
 
 INSERT_AT = "［］"      # ルート2 の 13.2 の docx の欄で、PDF にだけある文字の位置を示す記号
+# 13.2 の docx の欄で、違う部分を前後の docx の文字とともに出す（「［…］」で囲む）、直さなかった理由（分断された段落の、本体から
+# 離れた部分・図や表の中の文字に挟まれた部分。隣の文字との 1〜2 文字の偶然の一致で違いが短く区切られることがあり〈「12点」の
+# 「2」→「13」〉、表のとおりに置き換えると docx にも PDF にもない文字になる）
+CONTEXT_WHYS = (FAR_WHY, DISPLACED_WHY)
 # 13 章の表（と Colab の枠）の「〓」の説明。docx の側（docx・前後の欄）では docx の数式・画像、PDF の側では PDF で文字として
 # 読み取れない数式などの位置（同じ記号なので、表に「〓」があるときは、表の前に必ず添える）
 FORMULA_NOTE = (f"表の「{FORMULA_MARK}」は、docx の欄と前後の欄では docx の数式・画像、PDF の欄では PDF で数式など文字として"
@@ -332,12 +336,13 @@ def _formula_note(L, cells):
 
 def _skipped_docx(f, text, n=8) -> str:
     """ルート2 の 13.2 の docx の欄: 直さなかった箇所の docx の文字（数式・画像は 〓）。docx の側に文字がない箇所（PDF にだけある
-    文字。f.start == f.end）は、docx の段落の文字 text の、その位置の前後 n 文字（「…確率［］が…」）。"""
-    if f.start != f.end or not text:
+    文字。f.start == f.end）は、docx の段落の文字 text の、その位置の前後 n 文字（「…確率［］が…」）。分断された段落の部分の
+    違い（CONTEXT_WHYS）も、違う部分を「［…］」で囲んで前後 n 文字とともに出す（「…平均は１［2］点であり…」）。"""
+    if not text or (f.start != f.end and f.reason not in CONTEXT_WHYS):
         return esc(f.old.replace(chr(0xFFFC), "〓"), 30)
-    q = f.start
-    return _clean(("…" if q > n else "") + text[max(0, q - n):q] + INSERT_AT + text[q:q + n]
-                  + ("…" if q + n < len(text) else ""))
+    a, b = f.start, f.end
+    return esc(_clean(("…" if a > n else "") + text[max(0, a - n):a] + "［" + text[a:b] + "］" + text[b:b + n]
+                      + ("…" if b + n < len(text) else "")), 60)
 
 
 def number_rows(r) -> list:
@@ -900,6 +905,10 @@ def render_route2(L, r, pc, fx):
         long = any(f.reason in WHY_MARKS for f in fx.skipped)
         if any(f.start == f.end for f in fx.skipped):
             L.append(f"docx の欄の「{INSERT_AT}」は、docx に文字がなく PDF にだけ文字がある位置です（前後は docx の文字）。")
+            L.append("")
+        if any(f.start != f.end and f.reason in CONTEXT_WHYS for f in fx.skipped):
+            L.append("docx の欄の「［…］」で囲んだ文字は、docx の違う部分です（前後は docx の文字）。分断された段落の部分の違いは、"
+                     "隣の文字との偶然の一致で短く区切られることがあるので、表のとおりに置き換えず、PDF の本文と見比べてください。")
             L.append("")
         rows = [(f.src, fx.locations.get(f.src, ""), _skipped_docx(f, fx.texts.get(f.src, "")),
                  esc(f.new, 80 if f.reason in WHY_MARKS else 30), f.reason) for f in fx.skipped]

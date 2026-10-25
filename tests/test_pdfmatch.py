@@ -3415,13 +3415,10 @@ def test_deleted_last_sentence_with_similar_figure_at_next_page_top(fig, materia
     fixed_or_reported(plan, compare(plan, pages), src[docx], docx, LESSON)
 
 
-@pytest.mark.parametrize("brk", ["direct", "page", "head-next-page"])
-@pytest.mark.parametrize("figline", ["説明し合う時間を取る", "説明し合う時間を取った"])
-def test_rewritten_last_line_before_caption_above_similar_figure_is_not_mixed(figline, brk, journal, tmp_path):
-    """N20 の (3): 本当の最後の行が校正で大きく書き換えられ（「で説明し合う時間を取った。」→「で議論する場を設けた。」）、すぐ
-    後ろに図の上のキャプション、その下に docx の最後の語句とよく似た図の中の行がある。図の中の行の文字を段落に足さず、本当の最後の
-    行と図の中の行の文字を混ぜない（0.20.0 は足していた）。図の中の行と並べた docx の最後の語句は、キャプションをはさんで段落の
-    本体から離れているので、直さずに 13 章に出してよい（0.21.0 と同じ）。"""
+def _rewritten_last_line_before_cap_above(tmp_path, journal, figline, brk):
+    """N20 の (3) の形: 本当の最後の行が校正で大きく書き換えられ（「で説明し合う時間を取った。」→「で議論する場を設けた。」）、すぐ
+    後ろに図の上のキャプション、その下に docx の最後の語句とよく似た図の中の行 figline がある。brk: 最後の行の前のページの
+    区切り（なし・ページの区切り・次のページの最初の柱）。"""
     pub = LESSON.replace("で説明し合う時間を取った。", "で議論する場を設けた。")
     plan, src = n10_article(tmp_path, journal, [("body", LESSON), ("fig_cap", SMALL_FIG_CAP), ("image", "fig"),
                                                 ("body", TALK), ("body", SURVEY)])
@@ -3430,7 +3427,25 @@ def test_rewritten_last_line_before_caption_above_similar_figure_is_not_mixed(fi
     pages = {"direct": lambda: n10_pages([*SMALL_FRONT, *lines, *rest]),
              "page": lambda: n10_pages([*SMALL_FRONT, *lines[:-1]], [lines[-1], *rest]),
              "head-next-page": lambda: n10_pages([*SMALL_FRONT, *lines[:-1]], ["試験　六郎", lines[-1], *rest])}[brk]()
-    fixed_or_reported(plan, compare(plan, pages), src[LESSON], LESSON, pub)
+    return plan, src[LESSON], compare(plan, pages), pub
+
+
+@pytest.mark.parametrize("brk", ["direct", "page", "head-next-page"])
+def test_rewritten_last_line_before_caption_above_near_figure_line_is_fixed(brk, journal, tmp_path):
+    """N20 の (3): 本当の最後の行が校正で大きく書き換えられ、すぐ後ろに図の上のキャプション、その下に docx の最後の語句とよく似た
+    （写しではない）図の中の行「説明し合う時間を取る」がある。本当の最後の行の直しを直す（0.21.0 は、間に行がなくても図の中の行を
+    本当の最後の行とみなし、直さずに 13.2 に回していた〈better_line〉。0.20.0 は図の中の行の文字を足していた）。"""
+    plan, src, pc, pub = _rewritten_last_line_before_cap_above(tmp_path, journal, "説明し合う時間を取る", brk)
+    assert changed_paragraphs(plan, pc, {src: pub}) == {}
+
+
+@pytest.mark.parametrize("brk", ["direct", "page", "head-next-page"])
+def test_rewritten_last_line_before_caption_above_similar_figure_is_not_mixed(brk, journal, tmp_path):
+    """N20 の (3) の形で、図の中の行が docx の最後の語句の写し（「説明し合う時間を取った」）のとき: 図の中の行の文字を段落に足さず、
+    本当の最後の行と図の中の行の文字を混ぜない（0.20.0 は足していた）。写しと並べた docx の最後の語句は、キャプションをはさんで
+    段落の本体から離れているので、直さずに 13 章に出してよい（0.21.0 と同じ）。"""
+    plan, src, pc, pub = _rewritten_last_line_before_cap_above(tmp_path, journal, "説明し合う時間を取った", brk)
+    fixed_or_reported(plan, pc, src, LESSON, pub)
 
 
 SCORE_NAMED_ROWS = [["組の名前", "一回目の得点", "二回目の得点"], ["第一の組", "31", "27"], ["第二の組", "14", "23"]]
@@ -3511,7 +3526,11 @@ def test_rewritten_last_sentence_after_table_is_not_deleted(new, journal, tmp_pa
     cells = [" ".join(r) for r in SHORT_CELLS]
     pages = n10_pages([*SMALL_FRONT, *body_lines(head), SHORT_CAP, *cells, *wrap_lines(FAR_NEW[new]), *body_lines(TALK),
                        *body_lines(SURVEY), *N10_TAIL])
-    fixed_or_reported(plan, compare(plan, pages), src[LESSON], LESSON, pub)
+    pc = compare(plan, pages)
+    if fixed_or_reported(plan, pc, src[LESSON], LESSON, pub) == LESSON:
+        # 13.2 の行の PDF の欄は空（docx の文字が PDF のどこにも並ばない）なので、理由の文は「PDF にない＝消された」と読めない
+        # ように、校正で消されたのか PDF の別の位置で書き換えられているのか決められない、と言う
+        assert any(d.src == src[LESSON] and not d.fixable and d.pdf == "" and "校正で消された" in d.why for d in pc.diffs)
 
 
 def test_deleted_last_sentence_before_table_is_still_deleted(journal, tmp_path):
@@ -3824,3 +3843,181 @@ def test_short_first_line_before_indented_line_is_fixed(lead_pub, journal, tmp_p
     lines = ["　" + lead_pub, *body_lines(pub_body)]
     pc = compare(plan, n10_pages([*SMALL_FRONT, *lines, *body_lines(TALK), *body_lines(SURVEY), *N10_TAIL]))
     assert changed_paragraphs(plan, pc, {src[docx]: pub}) == {}
+
+
+# ---------------------------------------------------------------------------- B2.1 の 1 回目の点検で直した形（0.21.1）
+# 点検（原則・回帰・利用者の観点）の指摘を直したときに足したテスト。文字はすべて架空。
+TRIAL_DELETED_FULL = TRIAL_FULL + "その時間は短かった。"      # 最後の文が校正で消された段落（最後の行は行の幅いっぱいで「。」で終わる）
+NEAR_DELETED = {"c1": "この時間は短かった。", "ins1": "その時間は短かったか。"}   # 消された文の写しにごく近い（同じではない）図の中の行
+FLOW_SHORT = ["導入", "↓", "展開", "↓"]                           # MIN_CHARS 文字未満の短い行だけの流れ図
+FULL_FIG_LINE = "問い　赤い玉が出る割合を調べて，表に書いてみよう"   # 行の幅いっぱい（24）の図の中の行
+
+
+@pytest.mark.parametrize("gap", ["short", "one-short", "date-short", "page-bottom", "full"])
+@pytest.mark.parametrize("copy", list(NEAR_DELETED))
+def test_near_copy_of_deleted_sentence_after_skipped_lines_before_caption(copy, gap, journal, tmp_path):
+    """校正で消された段落の最後の文（「その時間は短かった。」）の写しにごく近い図の中の行（「この時間は短かった。」）のすぐ後ろが
+    キャプション（図の下）で、段落の最後の行（行の幅いっぱいで「。」で終わる）とその行の間に、本文の行の流れを切らない行（短い行
+    だけの流れ図、「↓」1 行、受付日の行と短い行、ページの最後の端の図の中の行〈キャプションは次のページ〉、行の幅いっぱいの図の
+    中の行）しかない。図の中の文字で docx の文字を置き換えない（「そ」→「こ」、「か」を足す）: 間に飛ばした行があり、着く側の行の
+    すぐ隣がキャプションなら、本文の行の流れを切る（_flow_breaks。図の中の文字とキャプションの間に本当の段落の行は出ない）。消すか、
+    docx のまま 13 章に出す（0.21.0 は 13 章に出していた。B2.1 の最初の版は図の中の文字で置き換えていた）。"""
+    plan, src = n10_article(tmp_path, journal, [("body", TRIAL_DELETED_FULL), ("image", "fig"), ("fig_cap", SHEET_CAP),
+                                                ("body", TRIAL_TALK), ("body", TRIAL_NEXT)])
+    body, fig = [*SMALL_FRONT, *body_lines(TRIAL_FULL)], NEAR_DELETED[copy]
+    pages = {"short": lambda: n10_pages([*body, *FLOW_SHORT, fig, SHEET_CAP, *TRIAL_REST]),
+             "one-short": lambda: n10_pages([*body, "↓", fig, SHEET_CAP, *TRIAL_REST]),
+             "date-short": lambda: n10_pages([*body, R1, *FLOW_SHORT, fig, SHEET_CAP, *TRIAL_REST]),
+             "page-bottom": lambda: n10_pages([*body, SHEET_LINES[1], fig], [SHEET_CAP, *TRIAL_REST]),
+             "full": lambda: n10_pages([*body, FULL_FIG_LINE, fig, SHEET_CAP, *TRIAL_REST])}[gap]()
+    fixed_or_reported(plan, compare(plan, pages), src[TRIAL_DELETED_FULL], TRIAL_DELETED_FULL, TRIAL_FULL)
+
+
+def test_real_last_line_after_short_figure_lines_before_next_caption(journal, tmp_path):
+    """上の対照: 段落の本当の最後の行（直しあり。「取った」→「設けた」）が、短い行だけの流れ図（キャプションなし）の後ろに出て、
+    そのすぐ後ろが次の図のキャプション（図の上）。直すか、docx のまま 13 章に出す（図・キャプションの文字を足さない）。"""
+    plan, src = n10_article(tmp_path, journal, [("body", TRIAL), ("image", "flow"), ("fig_cap", SHEET_CAP), ("image", "fig"),
+                                                ("body", TRIAL_TALK), ("body", TRIAL_NEXT)])
+    p = body_lines(TRIAL_EDIT)
+    pc = compare(plan, n10_pages([*SMALL_FRONT, *p[:-1], *FLOW_SHORT, p[-1], SHEET_CAP, *SHEET_LINES, *TRIAL_REST]))
+    fixed_or_reported(plan, pc, src[TRIAL], TRIAL, TRIAL_EDIT)
+
+
+TALK_LINE1 = body_lines(TRIAL_TALK)[0][1:]                       # 段落 TRIAL_TALK の docx の 1 行目「班の話し合いでは，ある生徒が回数を増やすと割合」
+TALK_LINE1_COPY = TALK_LINE1.replace("増やすと", "増すと")           # その写しにごく近い（1 文字少ない）図の中の行
+TALK_NEW_LINE1 = "グループの対話では，一人の子が試行を重ねると比"    # 校正で全面的に書き換えられた本当の 1 行目（字下げを含めて行の幅いっぱい）
+TALK_REWRITTEN = TALK_NEW_LINE1 + "".join(body_lines(TRIAL_TALK)[1:])
+
+
+@pytest.mark.parametrize("gap", [[], FLOW_SHORT], ids=["direct", "short-lines"])
+def test_full_width_copy_after_caption_above_is_not_used_as_first_line(gap, journal, tmp_path):
+    """段落の書き出しの行が校正で全面的に書き換えられ（行の幅いっぱい）、PDF ではその前に、図の上のキャプションと、docx の 1 行目の
+    写しにごく近い図の中の行（1 文字少ない「…回数を増すと割合」。行の幅いっぱい）、短い行だけの流れ図がある。図の中の行に合わせて
+    「や」を消さない: 写しの行は行の幅いっぱいでも、キャプションのすぐ隣で、本体との間に飛ばした行（書き換えられた 1 行目・短い
+    行）しかないので、本体に入れない（_isolate。0.21.0 は 13 章に出していた）。書き出しを出版版に直すか、docx のまま 13 章に出す。"""
+    assert body_lines(TALK_REWRITTEN) == ["　" + TALK_NEW_LINE1, *body_lines(TRIAL_TALK)[1:]]
+    plan, src = n10_article(tmp_path, journal, [("body", TRIAL), ("fig_cap", SHEET_CAP), ("image", "fig"), ("body", TRIAL_TALK),
+                                                ("body", TRIAL_NEXT)])
+    pages = n10_pages([*SMALL_FRONT, *body_lines(TRIAL), SHEET_CAP, TALK_LINE1_COPY, *gap, "　" + TALK_NEW_LINE1,
+                       *body_lines(TRIAL_TALK)[1:], *body_lines(TRIAL_NEXT), *N10_TAIL])
+    fixed_or_reported(plan, compare(plan, pages), src[TRIAL_TALK], TRIAL_TALK, TALK_REWRITTEN)
+
+
+# 図も表もないふつうの段落で、1 行だけ約物の詰め（「，」「（」「）」などが半角ほどに詰められ、1 行に 24 文字より多く入る）で幅が
+# 大きく出る形（PDF の行をそのまま書く。3 行目は 28）。2 行目は「。」で終わる行の幅いっぱいの行
+WIDE_LINES = ["　授業の初めに，教師は前の時間に作った表を黒板に", "掲げ，水の深さの変化を全員で丁寧に振り返らせた。",
+              "続いて，班ごとに（Ａ）・（Ｂ）の二つの容器を全て配って，", "水を入れる時間と深さの関係を表に書き込ませた。最",
+              "後に，各班の表を並べて全体で比べる時間を取った。"]
+WIDE_BODY = "".join(WIDE_LINES)[1:]
+WIDE_EDITS = {"line1": ("前の時間に", "前時に"), "line2": ("全員で丁寧に", "全体で丁寧に"), "line4": ("書き込ませた", "記入させた"),
+              "line5": ("比べる時間を取った", "比べる場を設けた")}
+
+
+@pytest.mark.parametrize("after_caption", [False, True], ids=["plain", "after-caption"])
+@pytest.mark.parametrize("edit", list(WIDE_EDITS))
+def test_edits_in_paragraph_with_one_wider_line_are_fixed(edit, after_caption, journal, tmp_path):
+    """分断されていないふつうの段落（図も表もない。図の下のキャプションのすぐ後ろのこともある）で、1 行だけ約物の詰めで幅が大きく出る
+    （28。ふつうの行は 24）。段落の 1 行目（字下げ）・「。」で終わる行の幅いっぱいの 2 行目・その後ろの行・最後の行の校正の直しを
+    直す。段落の行の幅を、1 行だけ大きく出た幅でなく文書の本文の行の幅（_document_width）で測り、字下げの全角の空白も行の幅に
+    数えるので、幅いっぱいのふつうの行が段落の終わりの行・図の中の行とみなされず、本体から離れた部分にならない（B2.1 の最初の版は
+    1 行目・2 行目の直しを 13.2 に回していた。0.21.0 は直す）。"""
+    old, new = WIDE_EDITS[edit]
+    pub, lines = WIDE_BODY.replace(old, new), [ln.replace(old, new) for ln in WIDE_LINES]
+    blocks, pre = [("body", LESSON), ("body", WIDE_BODY), ("body", TALK)], [*SMALL_FRONT, *body_lines(LESSON)]
+    if after_caption:
+        blocks = [("body", LESSON), ("image", "fig"), ("fig_cap", SMALL_FIG_CAP), ("body", WIDE_BODY), ("body", TALK)]
+        pre = [*pre, *SMALL_FIG_STEPS, "まとめ", SMALL_FIG_CAP]
+    plan, src = n10_article(tmp_path, journal, blocks)
+    pc = compare(plan, n10_pages([*pre, *lines, *body_lines(TALK), *N10_TAIL]))
+    assert changed_paragraphs(plan, pc, {src[WIDE_BODY]: pub}) == {}
+
+
+@pytest.mark.parametrize("order", ["forward", "reverse"])
+def test_edit_in_body_is_fixed_when_rewritten_tail_is_far(order, journal, tmp_path):
+    """段落の最後の語句（「時間を取った。」）が校正で大きく書き換えられ（「場を設けて話し合わせた。」）、PDF では小さな図と
+    キャプションの後ろに出る（本体から離れた部分。直さずに 13 章に出す）。2 段組みの読み順のずれで、段落の前半（最初の 3 行）が
+    PDF では後半・図・最後の語句・次の段落の後ろに出ることもある（reverse）。前半の中の直し（「教師はまず」→「教師は初め」）は、
+    本体の文字の行なので直す（本体の一部が PDF の中で前後逆の位置にあっても、離れた部分の側とみなさない。_classify の far_pos。
+    0.21.0 は直す。B2.1 の最初の版は reverse で直さなかった）。"""
+    old, new = "時間を取った。", "場を設けて話し合わせた。"
+    pub_a = LESSON.replace("教師はまず", "教師は初め")
+    pub = pub_a[:-len(old)] + new
+    lines = body_lines(pub_a[:-len(old)])
+    a, b, c = lines[:3], lines[3:], wrap_lines(new)
+    fig = [*SMALL_FIG_STEPS, "まとめ", SMALL_FIG_CAP]
+    plan, src = n10_article(tmp_path, journal, [("body", LESSON), ("image", "fig"), ("fig_cap", SMALL_FIG_CAP), ("body", TALK),
+                                                ("body", SURVEY)])
+    body = [*b, *fig, *c, *body_lines(TALK), *a, *body_lines(SURVEY)] if order == "reverse" else \
+        [*a, *b, *fig, *c, *body_lines(TALK), *body_lines(SURVEY)]
+    pc = compare(plan, n10_pages([*SMALL_FRONT, *body, *N10_TAIL]))
+    got = fixed_texts(plan, pc)[src[LESSON]]
+    assert got in (pub_a, pub), got
+    assert changed_paragraphs(plan, pc, {src[LESSON]: got}) == {}
+    if got == pub_a:
+        assert any(d.src == src[LESSON] and not d.fixable for d in pc.diffs)
+
+
+OTHER_BODY = "この点は次の節で改めて詳しく述べる。"
+
+
+@pytest.mark.parametrize("new", ["話し合わせた。", "議論が深まる場面もみられる。"])
+def test_rewritten_last_sentence_after_next_paragraph_is_not_deleted(new, journal, tmp_path):
+    """段落の最後の語句（「時間を取った。」）が、2 段組みの読み順のずれで次の段落の後ろに出て、校正で大きく書き換えられている
+    （docx の文字と 3 分の 1 も似ていない）。docx の文字を校正で消されたものとして消さない（_Joint.tail_beyond。直すか、docx の
+    まま 13 章に出す。0.21.0・0.20.0 は消していた）。"""
+    head = LESSON[:-len("時間を取った。")]
+    pub = head + new
+    plan, src = n10_article(tmp_path, journal, [("body", LESSON), ("body", TALK), ("body", OTHER_BODY), ("body", SURVEY)])
+    pages = n10_pages([*SMALL_FRONT, *body_lines(head), *body_lines(TALK), *wrap_lines(new), *body_lines(OTHER_BODY),
+                       *body_lines(SURVEY), *N10_TAIL])
+    fixed_or_reported(plan, compare(plan, pages), src[LESSON], LESSON, pub)
+
+
+def test_copy_with_half_width_digit_of_deleted_last_sentence_in_long_figure(journal, tmp_path):
+    """段落の最後の文（「最後に，教師は時間が３倍に…取った。」）が校正で消され、段落の後ろの 200 文字ほどの図の中の文字の途中に、
+    その文の写し（句点が「．」、数字が半角の「3倍」）がある。写しに合わせて「３」を「3」にせず、「．」を足さない（図の中の文字に
+    挟まれた行〈doubt〉のある部分は本文の行とみなさない。_solid。0.21.0 は「3」を、0.20.0 は「3」と「．」を足していた）。消すか、
+    docx のまま 13 章に出す。"""
+    docx = LESSON_HEAD + LESSON_TAIL
+    copy = wrap_lines(LESSON_TAIL.replace("。", "．").replace("３", "3"))
+    half = len(FLOW_LINES) // 2
+    fig = [*FLOW_LINES[:half], *copy, *FLOW_LINES[half:]]
+    plan, src = n10_article(tmp_path, journal, [("body", docx), ("image", "fig"), ("fig_cap", FLOW_LINES[-1]),
+                                                ("body", TALK), ("body", SURVEY)])
+    pc = compare(plan, n10_pages([*SMALL_FRONT, *body_lines(LESSON_HEAD), *fig, *body_lines(TALK), *body_lines(SURVEY),
+                                  *N10_TAIL]))
+    fixed_or_reported(plan, pc, src[docx], docx, LESSON_HEAD)
+
+
+def test_all_reasons_have_report_marks():
+    """pdfmatch の直さない理由（*_WHY）は、すべてレポートの添え書き（report.WHY_MARKS）にある（添え書きのない理由が増えると、
+    ルート1 の 13.1 の PDF の欄が「（直せない違い）」になり、ルート2 の 13.2 の PDF の欄が 30 文字で切られる）。"""
+    from jasme_jats import pdfmatch
+    from jasme_jats.report import WHY_MARKS
+    whys = {v for k, v in vars(pdfmatch).items() if k.endswith("_WHY") and isinstance(v, str)}
+    assert len(whys) >= 8 and whys <= set(WHY_MARKS)
+
+
+@pytest.mark.parametrize("route", ["docx", "pdf"])
+def test_far_part_is_listed_in_report(route, journal, meta, tmp_path, monkeypatch):
+    """段落の本体から離れた部分の違い（FAR_WHY。段落のすぐ前の図の中の行が書き出しとよく似ていて、書き出しが校正で直された形）は、
+    ルート2 では直さずに 13.2 に理由とともに、ルート1 では 13.1 にその旨（WHY_MARKS）を添えて載せる（PDF の欄は長めに出す）。
+    図の中の文字は XML に入らない。"""
+    from jasme_jats.pdfmatch import FAR_WHY
+    from jasme_jats.report import WHY_MARKS
+    pub = TALK.replace("話し合いの中で", "議論の中で", 1)
+    n10_article(tmp_path, journal, [("body", LESSON), ("image", "fig"), ("fig_cap", SMALL_FIG_CAP), ("body", TALK),
+                                    ("body", SURVEY)])
+    pages = n10_pages([*SMALL_FRONT, *body_lines(LESSON), *HEAD_FIGS["step"], SMALL_FIG_CAP, *body_lines(pub),
+                       *body_lines(SURVEY), *N10_TAIL])
+    res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, route, docx=tmp_path / "n10.docx")
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    assert not any(HEAD_FIGS["step"][2] in t for t in texts(load(res)))       # 図の中の行「話し合いの中で考える」を足さない
+    ch13 = chapters(res)[1]
+    if route == "docx":
+        section = ch13.split("### 13.1")[1].split("### 13.2")[0]
+        assert WHY_MARKS[FAR_WHY] in section and "| PDF（⏎ は行の変わり目） |" in section
+    else:
+        assert any(f.reason == FAR_WHY for f in res.docx_fix.skipped)
+        assert FAR_WHY in ch13.split("### 13.2")[1].split("### 13.3")[0]
+
