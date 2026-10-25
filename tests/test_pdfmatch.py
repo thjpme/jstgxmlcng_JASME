@@ -3482,11 +3482,14 @@ def test_number_next_to_caption_digit_is_not_mixed_in_document_with_short_paragr
     """「113点」の形で、1 行だけの短い本文の段落（幅 9）が 2・4・6 個ある文書（見出しの「引用および参考文献」と合わせて、幅 9 の
     行が 3・5・7 本）。unwrapped は PDF の行が 24 文字で折り返されていない小さな文書（表の前の本文が 1 行 26 文字、表の後ろの続きが
     1 行 19 文字）、wrapped は表の前の本文を 24 文字で折り返したもの、wrapped-same-width は、表のすぐ前の行の幅が短い段落の行と
-    同じ 9 のもの。文書の本文の行の幅（_document_width）は、段落の途中の行（次の行も同じ段落の行）だけで数えるので、短い段落の
-    行・表のすぐ前の短い行の幅にならず、段落にその幅の行がなければ段落の行の幅の上限にしない（_classify）。短い行の幅を上限に
-    すると、表の後ろの続きの行が幅いっぱいとみなされて本体に入り、キャプションの「１」と並べた docx の「1」を残したまま隣の「2」を
-    「13」に直して「113点」にする（B2.1 の 1 回目の点検の直しで、文書のいちばん多い幅の行で数えていたときは、短い段落が 4 つ以上で
-    起きた。表のすぐ前の行が同じ幅のときは、段落にその幅の行があるかだけを見ても起きる）。直すか、docx のまま 13 章に出す。"""
+    同じ 9 のもの。短い行の幅を段落の行の幅の上限にすると、表の後ろの続きの行が幅いっぱいとみなされて本体に入り、キャプションの
+    「１」と並べた docx の「1」を残したまま隣の「2」を「13」に直して「113点」にする（B2.1 の 1 回目の点検の直しで、文書のいちばん
+    多い幅の行で数えていたときは、短い段落が 4 つ以上で起きた）。次の 3 つの守りのどれか 1 つでも「113点」にならない（3 つとも
+    外すと落ちる。それぞれを外すと落ちるテストは、test_number_next_to_caption_digit_is_not_mixed_before_full_continuation_line・
+    test_near_copy_after_short_last_line_with_misleading_document_width など）: 一致がキャプションの行だけの部分の向こうを本体に
+    入れない（_isolate）、文書の本文の行の幅を段落の途中の行だけで数える（_document_width。短い段落の行・表のすぐ前の短い行の幅に
+    しない）、段落がその幅で組まれているときだけ上限にする（_classify。段落の最後の行を除いた幅いっぱいの行で見る）。直すか、
+    docx のまま 13 章に出す。"""
     body = SCORE_BODY_W9 if layout == "wrapped-same-width" else SCORE_BODY
     pub = body.replace("12点", new)
     cap = "表１　架空の組ごとの得点"
@@ -3495,8 +3498,9 @@ def test_number_next_to_caption_digit_is_not_mixed_in_document_with_short_paragr
     cut = pub.index(new)
     head = [pub[:cut]] if layout == "unwrapped" else body_lines(pub[:cut])
     assert layout != "wrapped-same-width" or head[-1] == "その結果，全平均は"
-    pages = n10_pages([*SMALL_FRONT, *["　" + x for x in SHORT_LEADS[:leads]], *head, cap, *[c for row in SCORE_NAMED_ROWS for c in row],
-                       *wrap_lines(pub[cut:]), NEXT_BODY, *N10_TAIL])
+    cells = [c for row in SCORE_NAMED_ROWS for c in row]
+    pages = n10_pages([*SMALL_FRONT, *["　" + x for x in SHORT_LEADS[:leads]], *head, cap, *cells, *wrap_lines(pub[cut:]), NEXT_BODY,
+                       *N10_TAIL])
     fixed_or_reported(plan, compare(plan, pages), src[body], body, pub)
 
 
@@ -3514,9 +3518,10 @@ SCORE_BODY_W18 = "今回の架空の調査の結果を表１にまとめて示�
 @pytest.mark.parametrize("new", ["13点", "１３点"])
 def test_number_next_to_caption_digit_is_not_mixed_with_english_paragraph(new, journal, tmp_path):
     """「113点」の形で、英文の本文の段落（1 行 37 文字までで折り返した 18 行。いちばん多い幅は 18）があり、表のすぐ前の行の幅も
-    18。英文の行は、文字の数で測る幅の誤差が大きく和文の行の幅と違うので、文書の本文の行の幅（_document_width）に数えない。数えると、
-    和文の段落の行の幅の上限が 18 になり、表の後ろの続きの行が幅いっぱいとみなされて本体に入り、「113点」にする。直すか、docx の
-    まま 13 章に出す。"""
+    18。和文の段落の行の幅の上限が 18 になると、表の後ろの続きの行が幅いっぱいとみなされて本体に入り、「113点」にする。上の
+    in_document_with_short_paragraphs と同じく、3 つの守りのどれか 1 つでも「113点」にならない（英文の行を文書の本文の行の幅
+    〈_document_width〉に数えない守りを外すと落ちるテストは、test_near_copy_after_short_last_line_with_misleading_document_width の
+    english）。直すか、docx のまま 13 章に出す。"""
     import textwrap
     pub = SCORE_BODY_W18.replace("12点", new)
     cap = "表１　架空の組ごとの得点"
@@ -3536,8 +3541,11 @@ SCORE_BODY_WIDE = "架空の調査の結果を表１に示す。各組の得点�
 
 def test_number_next_to_caption_digit_is_not_mixed_in_wider_paragraph(journal, tmp_path):
     """「113点」の形で、表の前の段落だけが、文書の本文の行の幅（24。ほかの段落の途中の行）より広い幅（30）で組まれていて、表の
-    後ろの続きの行の幅が 23。段落の照合に使った行に文書の本文の行の幅の行がないので、その幅を段落の行の幅の上限にしない（_classify）。
-    上限にすると、表の後ろの続きの行が幅いっぱいとみなされて本体に入り、「113点」にする。直すか、docx のまま 13 章に出す。"""
+    後ろの続きの行の幅が 23。段落の照合に使った行のうち、段落の最後の行（表の後ろの続き）を除いた幅いっぱいとみなせる行が 30 だけ
+    なので、文書の本文の行の幅を段落の行の幅の上限にしない（_classify）。上限にすると、表の後ろの続きの行が幅いっぱいとみなされて
+    本体に入り、「113点」にする。一致がキャプションの行だけの部分の向こうを本体に入れない守り（_isolate）と、どちらか一方でも
+    「113点」にならない（上限の条件を外すと落ちるテストは、test_near_copy_after_short_last_line_with_misleading_document_width の
+    wider・wider-24・wider-split）。直すか、docx のまま 13 章に出す。"""
     pub = SCORE_BODY_WIDE.replace("12点", "13点")
     cap = "表１　架空の組ごとの得点"
     plan, src = n10_article(tmp_path, journal, [("body", LESSON), ("body", SURVEY), ("body", SCORE_BODY_WIDE), ("tab_cap", cap),
@@ -3545,8 +3553,8 @@ def test_number_next_to_caption_digit_is_not_mixed_in_wider_paragraph(journal, t
     cut = pub.index("13点")
     head, tail = wrap_lines("　" + pub[:cut], 30), wrap_lines(pub[cut:], 30)
     assert [len(x) for x in head] == [30, 18] and len(tail) == 1 and len(tail[0]) == 24     # 「13」は幅 1
-    pages = n10_pages([*SMALL_FRONT, *body_lines(LESSON), *body_lines(SURVEY), *head, cap, *[c for row in SCORE_NAMED_ROWS for c in row],
-                       *tail, NEXT_BODY, *N10_TAIL])
+    cells = [c for row in SCORE_NAMED_ROWS for c in row]
+    pages = n10_pages([*SMALL_FRONT, *body_lines(LESSON), *body_lines(SURVEY), *head, cap, *cells, *tail, NEXT_BODY, *N10_TAIL])
     fixed_or_reported(plan, compare(plan, pages), src[SCORE_BODY_WIDE], SCORE_BODY_WIDE, pub)
 
 
@@ -3591,10 +3599,12 @@ TWO_LINE_CELLS = [[f"第{n}の組の得点の記", "録と所見"] for n in "一
 @pytest.mark.parametrize("new", ["13点", "１３点"])
 def test_number_next_to_caption_digit_is_not_mixed_with_few_short_middle_lines(new, kind, journal, tmp_path):
     """「113点」の形（表のすぐ前の行の幅 9。上の wrapped-same-width）で、段落の途中の行で幅 9 のものが、2 行の短い本文の段落の
-    1 行目の 2 本だけ（two-line-leads）か、後ろの表の 2 行のセルの 1 行目の 6 本（two-line-cells）。文書の本文の行の幅
-    （_document_width）は、その幅の段落の途中の行が DOC_WIDTH_LINES 本に満たなければ決められないとして使わず、表のセル・
-    キャプションなど（本文の流れでない段落）の行は数えない。どちらかで幅 9 にすると、段落の行の幅の上限が 9 になり、表の後ろの
-    続きの行が幅いっぱいとみなされて本体に入り、「113点」にする。直すか、docx のまま 13 章に出す。"""
+    1 行目の 2 本だけ（two-line-leads）か、後ろの表の 2 行のセルの 1 行目の 6 本（two-line-cells）。段落の行の幅の上限が 9 になると、
+    表の後ろの続きの行が幅いっぱいとみなされて本体に入り、「113点」にする。上の in_document_with_short_paragraphs と同じく、3 つの
+    守りのどれか 1 つでも「113点」にならない（文書の本文の行の幅〈_document_width〉を、その幅の段落の途中の行が DOC_WIDTH_LINES 本に
+    満たなければ決められないとして使わない守りと、表のセル・キャプションなど〈本文の流れでない段落〉の行を数えない守りを外すと
+    落ちるテストは、test_near_copy_after_short_last_line_with_misleading_document_width の few-middle-lines・two-line-cells）。
+    直すか、docx のまま 13 章に出す。"""
     pub = SCORE_BODY_W9.replace("12点", new)
     cap = "表１　架空の組ごとの得点"
     blocks = [("body", SCORE_BODY_W9), ("tab_cap", cap), ("table", SCORE_NAMED_ROWS), ("body", NEXT_BODY)]
@@ -3611,6 +3621,56 @@ def test_number_next_to_caption_digit_is_not_mixed_with_few_short_middle_lines(n
     pages = n10_pages([*pre, *body_lines(pub[:cut]), cap, *[c for row in SCORE_NAMED_ROWS for c in row], *wrap_lines(pub[cut:]),
                        NEXT_BODY, *post, *N10_TAIL])
     fixed_or_reported(plan, compare(plan, pages), src[SCORE_BODY_W9], SCORE_BODY_W9, pub)
+
+
+# 表（図）の前が 1 行で、表の後ろの続き（3 行）が段落のいちばん長い部分になる段落
+SCORE_BODY_TAIL = ("架空の調査の結果を表１に示す。生徒の平均は12点であり，前回の調査の平均よりも二点ほど高かった。各組の得点の差も"
+                   "前回より小さくなり，一回目と二回目の得点の開きも全体として縮まっていた。")
+
+
+@pytest.mark.parametrize("brk", ["same-page", "next-page"])
+@pytest.mark.parametrize("new", ["13点", "１３点"])
+@pytest.mark.parametrize("cap", ["表１　架空の組ごとの得点", "表1　架空の組ごとの得点"], ids=["cap-zen", "cap-han"])
+@pytest.mark.parametrize("kind", ["table", "figure"])
+def test_number_next_to_caption_digit_is_not_mixed_when_continuation_is_longest(kind, cap, new, brk, journal, tmp_path):
+    """「113点」の形で、表（図。キャプションは図の下）の前の部分が 1 行だけで、表の後ろの段落の続き（3 行）がいちばん多くの文字が
+    一致した部分になる（上の before_full_continuation_line の、本体の前後が逆の形）。キャプションの「１」と並べた docx の「1」の
+    部分は、一致がキャプションの行だけの部分なので、その向こうの表の前の部分を本体に入れず（_isolate）、隣の「2」を「13」に直して
+    「113点」にしない（キャプション・セルの行だけの部分の守りを表の後ろの側だけにした版、0.21.0・0.20.0 は「113点」などにしていた）。
+    直すか、docx のまま 13 章に出す。"""
+    pub = SCORE_BODY_TAIL.replace("12点", new)
+    if kind == "table":
+        blocks = [("body", SCORE_BODY_TAIL), ("tab_cap", cap), ("table", SCORE_NAMED_ROWS), ("body", NEXT_BODY)]
+        mid = [cap, *[c for row in SCORE_NAMED_ROWS for c in row]]
+    else:
+        cap = cap.replace("表", "図")
+        blocks = [("body", SCORE_BODY_TAIL), ("image", "fig"), ("fig_cap", cap), ("body", NEXT_BODY)]
+        mid = ["導入", "まとめ", cap]
+    plan, src = n10_article(tmp_path, journal, blocks)
+    cut = pub.index(new)
+    assert len(body_lines(pub[:cut])) == 1 and len(wrap_lines(pub[cut:])) == 3
+    head, rest = [*SMALL_FRONT, *body_lines(pub[:cut]), *mid], [*wrap_lines(pub[cut:]), *body_lines(NEXT_BODY), *N10_TAIL]
+    pages = n10_pages([*head, *rest]) if brk == "same-page" else n10_pages(head, rest)
+    fixed_or_reported(plan, compare(plan, pages), src[SCORE_BODY_TAIL], SCORE_BODY_TAIL, pub)
+
+
+@pytest.mark.parametrize("brk", ["same-page", "next-page"])
+@pytest.mark.parametrize("body", [SCORE_BODY, SCORE_BODY_LONG], ids=["short", "full"])
+@pytest.mark.parametrize("num", ["表１", "表1"])
+def test_number_next_to_caption_number_only_line_is_not_mixed(num, body, brk, journal, tmp_path):
+    """「113点」の形で、表のキャプション「表１　架空の組ごとの得点」の番号「表１」だけが PDF の 1 行になり、題名は次の行に出る。
+    番号の行は、行の文字の半分（「１」）がこの段落の文字と一致するので、表の後ろの続きを押し出された段落の続き（_plain_tail）と
+    みなすと、キャプションの「１」と並べた docx の「1」を残したまま隣の「2」を「13」に直して「113点」にする（「表1」なら 13 章にも
+    出ない）。離れた部分の行にキャプション・セルの文字のある行があれば、押し出された段落の続きとみなさない（0.21.0・0.20.0・B2.1 の
+    3 回目の点検の前の版は「113点」・「１13点」にしていた）。直すか、docx のまま 13 章に出す。"""
+    cap = num + "　架空の組ごとの得点"
+    pub = body.replace("12点", "13点")
+    plan, src = n10_article(tmp_path, journal, [("body", body), ("tab_cap", cap), ("table", SCORE_NAMED_ROWS), ("body", NEXT_BODY)])
+    cut = pub.index("13点")
+    head = [*SMALL_FRONT, *body_lines(pub[:cut]), num, "架空の組ごとの得点", *[c for row in SCORE_NAMED_ROWS for c in row]]
+    tail = [*wrap_lines(pub[cut:]), *body_lines(NEXT_BODY), *N10_TAIL]
+    pages = n10_pages([*head, *tail]) if brk == "same-page" else n10_pages(head, tail)
+    fixed_or_reported(plan, compare(plan, pages), src[body], body, pub)
 
 
 def test_tail_taken_by_next_paragraph_with_same_sentence_is_not_deleted(journal, tmp_path):
@@ -4095,6 +4155,177 @@ def test_edits_in_paragraph_with_one_wider_line_are_fixed(edit, after_caption, j
     plan, src = n10_article(tmp_path, journal, blocks)
     pc = compare(plan, n10_pages([*pre, *lines, *body_lines(TALK), *N10_TAIL]))
     assert changed_paragraphs(plan, pc, {src[WIDE_BODY]: pub}) == {}
+
+
+# 行に英語の語・半角の文字があり（PDF では語の間の空白が除かれる）、どの行の幅も文書の本文の行の幅（24）にならず（21.5〜23）、
+# 1 行だけ約物の詰めで幅が大きく出るふつうの段落（PDF の行をそのまま書く）。f5 は 3 行目が 28 で、2 行目が「。」で終わる。f5b は
+# 1 行目が 28 で、2 行目と 4 行目が「。」で終わる
+NO24_LINES = {"f5": ["　授業の初めに，教師は前時の表（table）を黒", "板に掲げ，水の深さ（depth）の変化を確かめた。",
+                     "続いて，班ごとに（Ａ）・（Ｂ）の二つの容器を全て配って，", "水を入れる時間（time）と深さの関係を書き込ませ",
+                     "た。最後に，各班の表を並べて比べた。"],
+              "f5b": ["　授業の初めに，教師は前時の表を黒板に掲げて，全員に見せ", "た。水の深さ（depth）の変化を全員で確かめた。",
+                      "続いて，班ごとに容器（Ａ）・（Ｂ）を配って，水", "を入れる時間（time）と深さの関係を記入させた。",
+                      "最後に，各班の表を並べて比べた。"]}
+NO24_EDITS = {"f5": {"line1": ("初めに", "最初に"), "line2": ("確かめた", "確認した"), "line4": ("書き込ませ", "記入させ"),
+                     "line5": ("比べた", "比較した")},
+              "f5b": {"line1": ("初めに", "最初に"), "line2": ("確かめた", "確認した"), "line4": ("記入させた", "書かせた"),
+                      "line5": ("比べた", "比較した")},
+              "f25": {"line1": ("初めに", "最初に"), "line2": ("確かめた", "確認した"), "line4": ("書き込ませ", "記入させ"),
+                      "line5": ("比べた", "比較した")}}
+# 行に半角の数字があり、ふつうの行の幅が 25・25・24（四捨五入）で、3 行目が 30 の段落。2 行目は「。」で終わる
+NO24_LINES["f25"] = ["　授業の初めに，教師は前時の10回の結果を表にして黒", "板に掲げ，水の深さの変化を全員で10分ほど確かめた。",
+                     "続いて，班ごとに（Ａ）・（Ｂ）の二つの容器を全て配って，水を", "入れる時間と深さの関係を20秒ごとに表に書き込ませ",
+                     "た。最後に，各班の表を並べて比べた。"]
+
+
+@pytest.mark.parametrize("split", [False, True], ids=["plain", "split"])
+@pytest.mark.parametrize("edit", ["line1", "line2", "line4", "line5"])
+@pytest.mark.parametrize("form", list(NO24_LINES))
+def test_edits_in_paragraph_without_document_width_line_are_fixed(form, edit, split, journal, tmp_path):
+    """上の形で、どの行の幅も文書の本文の行の幅（24）にならない段落（f25 は、ふつうの行の多くが 25。split は、段落の途中に図
+    〈キャプションは図の下〉がある）。段落の 1 行目・2 行目・4 行目・最後の行の校正の直しを直す。段落の照合に使った行（最後の行を
+    除く）のうち、文書の本文の行の幅の FULL_LINE 以上の行の半分より多くが、その幅 + 1 を超えないので、段落はその幅で組まれていると
+    みなして、段落の行の幅の上限にする（_classify）。上限にしないと、段落の行の幅が 28〜30 のままになり、幅いっぱいのふつうの行が
+    段落の終わりの行・図の中の行とみなされ、「。」で終わる行で本文の行の流れが切れて、直しを 13.2 に回す（B2.1 の 2 回目の点検の
+    直しで、段落にその幅の行があるときだけ上限にしていたときは、f5 の 1・2 行目、f5b の 4・5 行目の直しを 13.2 に回していた。
+    + 1 がないと f25 の 1・2 行目。0.21.0 は直す）。"""
+    lines = NO24_LINES[form]
+    new, old = NO24_EDITS[form][edit]
+    pub = "".join(lines)[1:]
+    docx = pub.replace(new, old, 1)
+    blocks, mid = [("body", LESSON), ("body", docx), ("body", TALK)], []
+    if split:
+        blocks = [("body", LESSON), ("body", docx), ("image", "fig"), ("fig_cap", SMALL_FIG_CAP), ("body", TALK)]
+        mid = [*SMALL_FIG_STEPS, "まとめ", SMALL_FIG_CAP]
+    k = len(lines) // 2 if split else len(lines)
+    plan, src = n10_article(tmp_path, journal, blocks)
+    pc = compare(plan, n10_pages([*SMALL_FRONT, *body_lines(LESSON), *lines[:k], *mid, *lines[k:], *body_lines(TALK), *N10_TAIL]))
+    assert changed_paragraphs(plan, pc, {src[docx]: pub}) == {}
+
+
+# 文書の本文の行の幅（_document_width）の数え方と、上限をかける段落の条件（_classify）を、キャプションの数字の偶然の一致のない形で
+# 確かめる部品。校正で消された最後の文（幅 10・18）と、その写しにごく近い図の中の行（キャプションのない画像だけの図）
+NEAR18 = {"c1": "この後，各班の考えを全体で確かめた。", "ins1": "その後，各班の考えを全体で確かめたか。"}
+DELETED18 = "その後，各班の考えを全体で確かめた。"
+PUB_9 = TRIAL[:23] + "皆で確かめ合った。"                       # 2 行（24・9）の段落
+PUB_10 = TRIAL[:23] + "全員で確かめ合った。"                     # 2 行（24・10）
+PUB_18 = TRIAL[:23] + "生徒どうしで説明し合う時間を取った。"        # 2 行（24・18）
+PUB_W30 = ("授業の後半では，各班の結果を黒板に並べて全体で比べた。教師は割合の変化に注目するよう促し，生徒が気づいたことを班の中で"
+           "互いに説明し合い，全体にも発表し合う時間を取った。")      # 30 文字の幅で組むと 30・30・25
+PUB_SPLIT30 = ("授業の後半では，各班の結果を黒板に並べて全体で比べた。教師は割合の変化に注目するよう",
+               "促し，気づいたことを説明し合う時間を取った。")     # 30 文字の幅で組むと、図の前が 30・13、図の後ろが 22
+THREE_LEADS = [*TWO_LINE_LEADS, ("（３）分析の観点", "と手順")]     # 2 行の短い本文の段落（1 行目の幅 9）
+LEADS10 = [("（１）調査の目的と", "方法"), ("（２）調査の対象と", "時期"), ("（３）分析の観点と", "手順"), ("（４）結果の整理と", "表示"),
+           ("（５）考察の視点と", "範囲"), ("（６）今後の課題と", "展望"), ("（７）倫理の配慮と", "同意"), ("（８）資料の扱いと", "保存")]
+NEXT_ONE = "次の時間には予想を立ててから実験した。"                 # 1 行だけの次の段落
+
+
+def _misleading_width_article(form, copy):
+    """test_near_copy_after_short_last_line_with_misleading_document_width の (docx の段落の並び, PDF の行, docx, 出版版)。"""
+    pre_b, pre_l, post_b, post_l = [], [], [], []
+    rest_b, rest_l = [("body", TRIAL_TALK), ("body", TRIAL_NEXT)], [*body_lines(TRIAL_TALK), *body_lines(TRIAL_NEXT)]
+    pub, deleted, near, lines, figs = PUB_9, "その時間は短かった。", NEAR_DELETED[copy], None, [("image", "fig")]
+    if form == "short-leads":
+        pre_b, pre_l = [("body", x) for x in SHORT_LEADS], ["　" + x for x in SHORT_LEADS]
+    elif form == "english":
+        import textwrap
+        pub, deleted, near = PUB_18, DELETED18, NEAR18[copy]
+        pre_b, pre_l = [("body", LESSON), ("body", EN_BODY)], [*body_lines(LESSON), *textwrap.wrap(EN_BODY, 37)]
+    elif form == "two-line-cells":
+        post_b = [("tab_cap", "表２　架空の記録"), ("table", [["".join(c) for c in TWO_LINE_CELLS[:3]],
+                                                          ["".join(c) for c in TWO_LINE_CELLS[3:]]])]
+        post_l = ["表２　架空の記録", *[x for c in TWO_LINE_CELLS for x in c]]
+    elif form == "few-middle-lines":
+        pre_b, pre_l = [("body", a + b) for a, b in THREE_LEADS], [x for a, b in THREE_LEADS for x in ("　" + a, b)]
+        rest_b, rest_l = [("body", NEXT_ONE)], body_lines(NEXT_ONE)
+    elif form.startswith("wider"):
+        pre_b, pre_l = [("body", LESSON), ("body", SURVEY)], [*body_lines(LESSON), *body_lines(SURVEY)]
+        if form == "wider-split":      # 段落の途中にキャプションのない図（図の前の行は短い）
+            pub, figs = "".join(PUB_SPLIT30), [("image", "fig1"), *figs]
+            lines = [*wrap_lines("　" + PUB_SPLIT30[0], 30), "導入", "まとめ", *wrap_lines(PUB_SPLIT30[1], 30)]
+        else:
+            pub = PUB_W30 if form == "wider" else PUB_W30[:52] + "。"
+            lines = wrap_lines("　" + pub, 30)
+        assert [len(x) for x in lines] == {"wider": [30, 30, 25], "wider-24": [30, 24], "wider-split": [30, 13, 2, 3, 22]}[form]
+    elif form in ("short-paragraphs", "two-line-paragraphs"):
+        pub = TRIAL + "その後，全員で確かめ合った。" if form == "short-paragraphs" else PUB_10
+        pre_b, pre_l = [("body", a + b) for a, b in LEADS10], [x for a, b in LEADS10 for x in ("　" + a, b)]
+    blocks = [*pre_b, ("body", pub + deleted), *figs, *rest_b, *post_b]
+    pages = n10_pages([*SMALL_FRONT, *pre_l, *(lines or body_lines(pub)), near, *rest_l, *post_l, *N10_TAIL])
+    return blocks, pages, pub + deleted, pub
+
+
+def compare_with_document_width(plan, pages, monkeypatch):
+    """compare の結果と、compare が使った文書の本文の行の幅（_document_width）。"""
+    from jasme_jats import pdfmatch
+    widths, orig = [], pdfmatch._document_width
+
+    def spy(*args):
+        widths.append(orig(*args))
+        return widths[-1]
+    monkeypatch.setattr(pdfmatch, "_document_width", spy)
+    return compare(plan, pages), widths[0]
+
+
+# 形 -> 文書の本文の行の幅（_document_width）。0 は、段落の途中の行が DOC_WIDTH_LINES 本に満たず決められないもの
+MISLEADING_WIDTHS = {"short-leads": 0, "english": 24, "two-line-cells": 0, "few-middle-lines": 0, "wider": 24, "wider-24": 24,
+                     "wider-split": 24, "short-paragraphs": 10, "two-line-paragraphs": 10, "plain": 0}
+
+
+@pytest.mark.parametrize("copy", list(NEAR_DELETED))
+@pytest.mark.parametrize("form", list(MISLEADING_WIDTHS))
+def test_near_copy_after_short_last_line_with_misleading_document_width(form, copy, journal, tmp_path, monkeypatch):
+    """校正で消された段落の最後の文の写しにごく近い図の中の行（キャプションのない画像だけの図）が、段落の終わりの短い行（「。」で
+    終わる）のすぐ後ろにある形（DESIGN 4.4 の「段落の終わりの行らしい短い最後の行の後ろなら、13.2 に出る」形）で、文書の本文の行の
+    幅を短い行の幅にしてしまいそうな行がある文書。段落の行の幅の上限が短い行の幅になると、段落の最後の行が幅いっぱいとみなされて
+    写しの行が本体に入り、図の中の文字で docx の文字を置き換える（「そ」→「こ」、「か」を足す）。消すか、docx のまま 13 章に出す。
+    守りは 2 重: 文書の本文の行の幅（_document_width）を短い行の幅にしない（MISLEADING_WIDTHS の幅になることも確かめる）、段落が
+    その幅で組まれているとき（段落の最後の行を除いた、その幅いっぱいとみなせる行の半分より多くが、その幅 + 1 を超えないとき）だけ
+    上限にする（_classify）。形ごとに、どれか 1 つの条件を外すと落ちる:
+      short-leads（1 行だけの短い本文の段落〈幅 9〉が 6 つ。段落の途中の行でないので数えない）、english（英文の段落〈11 行が幅 18〉。
+      和文の行でないので数えない）、two-line-cells（2 行のセル〈1 行目の幅 9〉が 6 つの表。セルの行を数えない）、few-middle-lines
+      （段落の途中の行で幅 9 のものが、2 行の短い段落の 1 行目 3 本と、写しも段落に当たる目的の段落の最後の行の 4 本だけ。
+      DOC_WIDTH_LINES 本に満たない）、wider・wider-24（この段落だけ 30 文字の幅で組まれ、最後の行の幅が 25・24。段落に 24 の行が
+      あるかで決めると、wider-24 で上限にしていた）、wider-split（同じく 30 文字の幅で、段落の途中に図があり、図の前の行が 13、
+      最後の行が 22。幅いっぱいとみなせない短い行も数えると上限にする）、short-paragraphs・two-line-paragraphs（2 行の短い本文の
+      段落〈1 行目の幅 10〉が 8 つで、文書の本文の行の幅が 10。目的の段落は 4 行・2 行〈24・10〉。段落に 10 の行があるかで決める
+      と、段落の最後の行の後ろの写しの行も数えると、上限にしていた）、plain（対照）。
+    0.21.0・0.20.0 は 20 件とも、B2.1 の 3 回目の点検の前の版は wider-24・short-paragraphs・two-line-paragraphs の 6 件で置き換える。"""
+    blocks, pages, docx, pub = _misleading_width_article(form, copy)
+    plan, src = n10_article(tmp_path, journal, blocks)
+    pc, width = compare_with_document_width(plan, pages, monkeypatch)
+    assert width == MISLEADING_WIDTHS[form]
+    fixed_or_reported(plan, pc, src[docx], docx, pub)
+
+
+@pytest.mark.parametrize("copy", list(NEAR_DELETED))
+@pytest.mark.parametrize("kind", ["table", "figure"])
+def test_near_copy_with_caption_digit_lines_not_counted(kind, copy, journal, tmp_path, monkeypatch):
+    """上の few-middle-lines の形（段落の途中の行で幅 9〈figure は 10〉のものが 4 本）に、「113点」の形の段落を加える。table は、
+    表のすぐ前の短い行（幅 9）の次の行が、キャプション「表１…」の「１」がその段落の文字と偶然一致した行。figure は、「１」が段落の
+    文字と偶然一致した図の下のキャプション「図１…」（幅 10）の次の行が、段落の続きの行。キャプション・セルの文字のある行と、その
+    すぐ前の行は、段落の途中の行に数えない（_document_width。数えると 5 本になり、文書の本文の行の幅が短い行の幅になる。文書の
+    本文の行の幅が 0〈決められない〉になることを確かめる）。table はキャプションの行のすぐ前の行を、figure はキャプションの行を
+    数えると落ちる。どちらの段落も、直すか docx のまま（0.21.0・0.20.0 は、目的の段落の文字を写しの文字で置き換え、「113点」の形の
+    段落も docx にも PDF にもない文字にする）。"""
+    if kind == "table":
+        body, cap, leads, pub = SCORE_BODY_W9, "表１　架空の組ごとの得点", THREE_LEADS, PUB_9
+        mid_b, mid_l = [("tab_cap", cap), ("table", SCORE_NAMED_ROWS)], [cap, *[c for row in SCORE_NAMED_ROWS for c in row]]
+    else:
+        body, cap, leads, pub = SCORE_BODY_LONG, "図１　架空の組の得点", LEADS10[:3], PUB_10
+        mid_b, mid_l = [("image", "fig1"), ("fig_cap", cap)], ["導入", "まとめ", cap]
+    pub113 = body.replace("12点", "13点")
+    cut = pub113.index("13点")
+    docx = pub + "その時間は短かった。"
+    plan, src = n10_article(tmp_path, journal, [*[("body", a + b) for a, b in leads], ("body", body), *mid_b, ("body", docx),
+                                                ("image", "fig"), ("body", NEXT_ONE)])
+    pages = n10_pages([*SMALL_FRONT, *[x for a, b in leads for x in ("　" + a, b)], *body_lines(pub113[:cut]), *mid_l,
+                       *wrap_lines(pub113[cut:]), *body_lines(pub), NEAR_DELETED[copy], *body_lines(NEXT_ONE), *N10_TAIL])
+    pc, width = compare_with_document_width(plan, pages, monkeypatch)
+    assert width == 0                            # 幅 9（10）の段落の途中の行は 4 本で、決められない
+    got = fixed_texts(plan, pc)
+    assert got[src[docx]] in (docx, pub), got[src[docx]]
+    assert got[src[body]] in (body, pub113), got[src[body]]
 
 
 @pytest.mark.parametrize("order", ["forward", "reverse"])
