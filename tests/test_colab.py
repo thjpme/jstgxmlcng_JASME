@@ -74,6 +74,24 @@ def test_pdf_diff_box_shows_formula_and_insert_marks():
     assert "docx の側の「［］」は、docx に文字がなく PDF にだけ文字がある位置です" in html
 
 
+def test_pdf_diff_box_shows_context_of_far_replacement():
+    """ルート2 の赤い枠の直せなかった箇所のうち、分断された段落の部分の置き換え（FAR_WHY・DISPLACED_WHY）の docx の文字は、
+    レポートの 13.2 と同じく、違う部分を「［…］」で囲んで前後の docx の文字とともに出し（表のキャプションの「１」と並べた「12点」の
+    「2」→「13」。そのとおりに置き換えると「113点」になる）、一覧の前にその意味を添える。"""
+    from pathlib import Path
+    from types import SimpleNamespace
+    from jasme_jats.colab import pdf_diff_box
+    from jasme_jats.pdfdocx import DocxFix, Fix
+    from jasme_jats.pdfmatch import FAR_WHY, PdfCheck
+    text = "架空の調査の結果を表１に示す。その結果，生徒の平均は12点であり，前回の調査より高かった。"
+    at = text.index("2点")
+    fx = DocxFix(Path("31_1_PDFに合わせた原稿.docx"), texts={"d12": text},
+                 fixes=[Fix("d12", at, at + 1, "13", "text", old="2", reason=FAR_WHY)])
+    html = pdf_diff_box(SimpleNamespace(pdf_check=PdfCheck(), docx_fix=fx))
+    assert "・d12: 「…，生徒の平均は1［2］点であり，前回の…」→「13」" in html
+    assert "docx の側の「［…］」で囲んだ文字は docx の違う部分です" in html
+
+
 def test_ai_required_and_unplaced_boxes():
     from types import SimpleNamespace
     from jasme_jats.colab import ai_required_box, unplaced_box
