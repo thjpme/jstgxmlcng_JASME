@@ -3487,6 +3487,7 @@ def test_number_next_to_caption_digit_is_not_mixed_in_document_with_short_paragr
     「１」と並べた docx の「1」を残したまま隣の「2」を「13」に直して「113点」にする（B2.1 の 1 回目の点検の直しで、文書のいちばん
     多い幅の行で数えていたときは、短い段落が 4 つ以上で起きた）。次の 3 つの守りのどれか 1 つでも「113点」にならない（3 つとも
     外すと落ちる。それぞれを外すと落ちるテストは、test_number_next_to_caption_digit_is_not_mixed_before_full_continuation_line・
+    test_near_copy_after_short_line_paragraph_with_misleading_document_width・
     test_near_copy_after_short_last_line_with_misleading_document_width など）: 一致がキャプションの行だけの部分の向こうを本体に
     入れない（_isolate）、文書の本文の行の幅を段落の途中の行だけで数える（_document_width。短い段落の行・表のすぐ前の短い行の幅に
     しない）、段落がその幅で組まれているときだけ上限にする（_classify。段落の最後の行を除いた幅いっぱいの行で見る）。直すか、
@@ -3521,8 +3522,8 @@ def test_number_next_to_caption_digit_is_not_mixed_with_english_paragraph(new, j
     """「113点」の形で、英文の本文の段落（1 行 37 文字までで折り返した 18 行。いちばん多い幅は 18）があり、表のすぐ前の行の幅も
     18。和文の段落の行の幅の上限が 18 になると、表の後ろの続きの行が幅いっぱいとみなされて本体に入り、「113点」にする。上の
     in_document_with_short_paragraphs と同じく、3 つの守りのどれか 1 つでも「113点」にならない（英文の行を文書の本文の行の幅
-    〈_document_width〉に数えない守りを外すと落ちるテストは、test_near_copy_after_short_last_line_with_misleading_document_width の
-    english）。直すか、docx のまま 13 章に出す。"""
+    〈_document_width〉に数えない守りを外すと落ちるテストは、test_near_copy_after_short_line_paragraph_with_misleading_document_width
+    の english）。直すか、docx のまま 13 章に出す。"""
     pub = SCORE_BODY_W18.replace("12点", new)
     cap = "表１　架空の組ごとの得点"
     plan, src = n10_article(tmp_path, journal, [("body", EN_BODY), ("body", SCORE_BODY_W18), ("tab_cap", cap),
@@ -3603,7 +3604,7 @@ def test_number_next_to_caption_digit_is_not_mixed_with_few_short_middle_lines(n
     表の後ろの続きの行が幅いっぱいとみなされて本体に入り、「113点」にする。上の in_document_with_short_paragraphs と同じく、3 つの
     守りのどれか 1 つでも「113点」にならない（文書の本文の行の幅〈_document_width〉を、その幅の段落の途中の行が DOC_WIDTH_LINES 本に
     満たなければ決められないとして使わない守りと、表のセル・キャプションなど〈本文の流れでない段落〉の行を数えない守りを外すと
-    落ちるテストは、test_near_copy_after_short_last_line_with_misleading_document_width の few-middle-lines・two-line-cells）。
+    落ちるテストは、test_near_copy_after_short_line_paragraph_with_misleading_document_width の few・cells）。
     直すか、docx のまま 13 章に出す。"""
     pub = SCORE_BODY_W9.replace("12点", new)
     cap = "表１　架空の組ごとの得点"
@@ -4130,14 +4131,14 @@ def test_full_width_copy_after_caption_above_is_not_used_as_first_line(gap, betw
 
 @pytest.mark.parametrize("between", ["none", "date", "arrow", "page"])
 def test_first_line_before_caption_above_with_near_copy_is_not_replaced(between, journal, tmp_path):
-    """上の形の、図が段落の 1 行目と 2 行目の間に入った形: 段落 TRIAL_TALK の書き出しの行が校正で全面的に書き換えられ（本当の 1 行目）、
-    PDF ではそのすぐ後ろに図の上のキャプションと、docx の 1 行目の写しにごく近い図の中の行（「や」が 1 文字少ない。キャプションの
-    すぐ後ろ）があり、そのすぐ後ろに段落の 2 行目以降が続く。写しの行を本体の最初の行にして「や」を消さない: 本体の最初の行の
-    すぐ前がキャプションで、その向こうに段落の 1 行目らしい行（行の幅いっぱいの、どの段落にも当たらない行）があるので、本体から
-    外す（_edge_alternative の最初の側）。本当の 1 行目とキャプションの間に受付日の行があっても、キャプションと写しの行の間に
-    「↓」1 行（_line_kind が "skip" の行）があっても、本当の 1 行目がページの最後の端の行（キャプションは次のページの最初）でも
-    同じ（ページの最後の端の行は柱の位置でないので、1 行目らしい行の候補にする）。直すか docx のまま 13 章に出す（0.21.0・0.20.0 は 4 件とも、B2.1 の 4 回目の点検の
-    前の版は page で「や」を消していた）。"""
+    """上の形の、図が段落の 1 行目と 2 行目の間に入った形: 段落 TRIAL_TALK の書き出しの行が校正で全面的に書き換えられ（本当の
+    1 行目）、PDF ではそのすぐ後ろに図の上のキャプションと、docx の 1 行目の写しにごく近い図の中の行（「や」が 1 文字少ない。
+    キャプションのすぐ後ろ）があり、そのすぐ後ろに段落の 2 行目以降が続く。写しの行を本体の最初の行にして「や」を消さない: 本体の
+    最初の行のすぐ前がキャプションで、その向こうに段落の 1 行目らしい行（行の幅いっぱいの、どの段落にも当たらない行）があるので、
+    本体から外す（_edge_alternative の最初の側）。本当の 1 行目とキャプションの間に受付日の行があっても、キャプションと写しの行の
+    間に「↓」1 行（_line_kind が "skip" の行）があっても、本当の 1 行目がページの最後の端の行（キャプションは次のページの最初）
+    でも同じ（ページの最後の端の行は柱の位置でないので、1 行目らしい行の候補にする）。直すか docx のまま 13 章に出す（0.21.0・
+    0.20.0 は 4 件とも、B2.1 の 4 回目の点検の前の版は page で「や」を消していた）。"""
     plan, src = n10_article(tmp_path, journal, [("body", LESSON), ("body", SURVEY), ("body", TRIAL), ("fig_cap", SHEET_CAP),
                                                 ("image", "fig"), ("body", TRIAL_TALK), ("body", TRIAL_NEXT)])
     pre = [*SMALL_FRONT, *body_lines(LESSON), *body_lines(SURVEY), *body_lines(TRIAL), "　" + TALK_NEW_LINE1]
@@ -4354,9 +4355,10 @@ def test_near_copy_with_caption_digit_lines_not_counted(kind, copy, journal, tmp
     （幅 9）の次の行が、キャプション「表１…」の「１」がその段落の文字と偶然一致した行。figure は、「１」が段落の文字と偶然一致した
     図の下のキャプション「図１…」（幅 10）の次の行が、段落の続きの行。キャプション・セルの文字のある行（混じった行も）と、その
     すぐ前の行は、段落の途中の行に数えない（_document_width。数えると、段落の途中の行で幅 9〈10〉のものが 5 本以上になり、文書の
-    本文の行の幅が短い行の幅になって、目的の段落の最後の行が幅いっぱいとみなされ、写しの行で docx の文字を置き換える）。どちらの
-    段落も、直すか docx のまま（docx のままなら 13 章に出し、ほかの段落は変えない。0.21.0・0.20.0 は、目的の段落の文字を写しの文字で
-    置き換え、「113点」の形の段落も docx にも PDF にもない文字にする）。"""
+    本文の行の幅が短い行の幅になって、目的の段落の最後の行が幅いっぱいとみなされ、写しの行で docx の文字を置き換える。table は
+    キャプションの行のすぐ前の行を、figure はキャプションの行を、どちらもキャプション・セルの文字の混じった行を数えると
+    落ちる）。どちらの段落も、直すか docx のまま（docx のままなら 13 章に出し、ほかの段落は変えない。0.21.0・0.20.0 は、目的の
+    段落の文字を写しの文字で置き換え、「113点」の形の段落も docx にも PDF にもない文字にする）。"""
     if kind == "table":
         body, cap, leads, lines = SCORE_BODY_W9, "表１　架空の組ごとの得点", THREE_LEADS, SHORT_LINES
         mid_b, mid_l = [("tab_cap", cap), ("table", SCORE_NAMED_ROWS)], [cap, *[c for row in SCORE_NAMED_ROWS for c in row]]
@@ -4380,7 +4382,8 @@ def test_near_copy_with_caption_digit_lines_not_counted(kind, copy, journal, tmp
     assert changed_paragraphs(plan, pc, {src[docx]: got[src[docx]], src[body]: got[src[body]]}) == {}
 
 
-TWO_LINE_BODY = "影の長さの記録は，晴れた日と曇りの日で分けて整理し，各班の結果を学級全体で一つの表にまとめた。その表から，時刻と長さの関係を読み取った。"
+TWO_LINE_BODY = ("影の長さの記録は，晴れた日と曇りの日で分けて整理し，各班の結果を学級全体で一つの表にまとめた。"
+                 "その表から，時刻と長さの関係を読み取った。")
 
 
 @pytest.mark.parametrize("copy", list(NEAR_DELETED))
@@ -4465,16 +4468,18 @@ def test_copy_with_half_width_digit_of_deleted_last_sentence_in_long_figure(jour
 # （_Joint.tail_beyond）の条件が効く形（B2.1 の 4 回目の点検の後、外してもテストが落ちなかった条件に足した）。段落 TRIAL_FULL
 # （最後の行は行の幅いっぱいで「。」で終わる）の最後の文「その時間は短かった。」が校正で消された docx（TRIAL_DELETED_FULL）
 PT_FIG_LINE = "グラフの縦軸は時間を表す"                                  # 小さな図（キャプションなし）の中の行
-PT_LIKE = {"no-stop": "その時間は短かったが", "dissimilar": "その時間は皆で長く話し合った。"}   # 消された文とよく似た図の中の行
+PT_LIKE = {"no-stop": "その時間は短かったが", "no-stop-short": "その時間は短く",          # 消された文とよく似た図の中の行
+           "dissimilar": "その時間は皆で長く話し合った。", "dissimilar-day": "その日の時間は短めにして終えた。"}
 
 
 @pytest.mark.parametrize("like", list(PT_LIKE))
 def test_figure_line_like_deleted_sentence_is_not_taken_as_pushed_continuation(like, journal, tmp_path):
-    """消された最後の文「その時間は短かった。」とよく似た図の中の行 X が、段落のすぐ後ろの小さな図（キャプションなし）の中の行の
-    後ろにあり、X のすぐ後ろが次の段落。照合は消された文を X と並べる。X は本体から離れた最後の部分（間の図の中の行で本文の行の
-    流れが切れる）で、すぐ後ろが次の段落でも、押し出された段落の続き（_plain_tail）とみなさない: no-stop は、docx の最後の文は文の
-    終わりで終わるのに X は文の終わりで終わらない、dissimilar は、X の文字と docx の最後の文の最長共通部分列が長いほうの 0.6 に
-    満たない。図の中の文字で docx の文字を置き換えない。消すか、docx のまま 13 章に出す（0.21.0・0.20.0 は X で置き換えていた）。"""
+    """消された最後の文「その時間は短かった。」とよく似た図の中の行 X が、段落のすぐ後ろの小さな図（キャプションなし）の中の
+    行の後ろにあり、X のすぐ後ろが次の段落。照合は消された文を X と並べる。X は本体から離れた最後の部分（間の図の中の行で本文の
+    行の流れが切れる）で、すぐ後ろが次の段落でも、押し出された段落の続き（_plain_tail）とみなさない: no-stop・no-stop-short は、
+    docx の最後の文は文の終わりで終わるのに X は文の終わりで終わらない、dissimilar・dissimilar-day は、X の文字と docx の最後の
+    文の最長共通部分列が長いほうの 0.6 に満たない。図の中の文字で docx の文字を置き換えない。消すか、docx のまま 13 章に出す
+    （0.21.0・0.20.0 は X で置き換えていた）。"""
     plan, src = n10_article(tmp_path, journal, [("body", TRIAL_DELETED_FULL), ("image", "fig"), ("body", TRIAL_TALK),
                                                 ("body", TRIAL_NEXT)])
     pages = n10_pages([*SMALL_FRONT, *body_lines(TRIAL_FULL), PT_FIG_LINE, PT_LIKE[like], *body_lines(TRIAL_TALK),
