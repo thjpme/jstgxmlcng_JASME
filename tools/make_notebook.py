@@ -387,8 +387,7 @@ if AI == "none":
 #@title 5. 変換を実行
 """ + guard(1, 2, 3, 4) + """import shutil
 from IPython.display import HTML, Markdown, display
-from jasme_jats.colab import (ai_required_box, error_box, figure_body_box, lost_images_box, missing_images_box, no_ai_box,
-                               pdf_diff_box, prompt_box, unplaced_box)
+from jasme_jats.colab import ai_required_box, no_ai_box, prompt_box, result_boxes
 from jasme_jats.report import pdf_summary, upload_issues
 from jasme_jats.config import ArticleMeta, JournalConfig
 from jasme_jats.pipeline import AIRequiredError, Options, add_images, convert
@@ -435,6 +434,8 @@ for mid, msg in upload_issues(res):
 print("出版版 PDF との照合:", pdf_summary(res))
 if res.docx_fix is not None:
     print("PDF に合わせて直した docx（変更履歴つき。手順 8 でダウンロードする ZIP に入ります）:", res.docx_fix.path.name)
+elif res.pdf_fallback:
+    print("出版版 PDF に合わせられませんでした（PDF の文字を読めませんでした）。docx を直さずに変換しています（下の赤い枠）。")
 if globals().get("USER_IMAGES"):
     _again = add_images(res, USER_IMAGES, skip_unneeded=True)
     if _again:
@@ -450,16 +451,8 @@ if AI == "manual" and res.prompt_path:
         files.download(str(attach / n))
     manual_prompt = res.prompt_path.read_text(encoding="utf-8")
     display(HTML(prompt_box(manual_prompt, image_names)))
-if res.ai.error:
-    display(HTML(error_box("AI による補完ができませんでした", res.ai.error)))
-if res.ai.partial:
-    display(HTML(error_box("AI の回答が途中で切れていました（図表の位置の一部だけを反映しました）", res.ai.partial)))
-if AI == "api":
-    display(HTML(unplaced_box(res.plan, res.ai.partial)))
-display(HTML(missing_images_box(res)))
-display(HTML(lost_images_box(res)))
-display(HTML(figure_body_box(res)))
-display(HTML(pdf_diff_box(res)))
+# 要対応・要確認の赤い枠（report.actions）。手動モードの「AI の回答をまだ反映していません」は、上の依頼文の枠があるので出さない
+display(HTML(result_boxes(res, skip=("ai_pending",))))
 display(Markdown(res.report_path.read_text(encoding="utf-8")))
 if manual_prompt:
     display(HTML(prompt_box(manual_prompt, compact=True)))
@@ -501,15 +494,7 @@ print("文字の不変性チェック:", fid.summary(), "/ 最終出力の再チ
       "/ DTD 検証:", "合格" if res.dtd_valid else "不合格",
       "/ J-STAGE のアップロード時チェック:", "問題なし" if not upload_issues(res) else f"要対応 {len(upload_issues(res))} 件",
       "/ 出版版 PDF との照合:", pdf_summary(res))
-if res.ai.error:
-    display(HTML(error_box("貼り付けた回答を読み込めませんでした（AI による補完は反映されていません）", res.ai.error)))
-if res.ai.partial:
-    display(HTML(error_box("AI の回答が途中で切れていました（図表の位置の一部だけを反映しました）", res.ai.partial)))
-display(HTML(unplaced_box(res.plan, res.ai.partial)))
-display(HTML(missing_images_box(res)))
-display(HTML(lost_images_box(res)))
-display(HTML(figure_body_box(res)))
-display(HTML(pdf_diff_box(res)))
+display(HTML(result_boxes(res)))      # 要対応・要確認の赤い枠（report.actions）
 display(Markdown(res.report_path.read_text(encoding="utf-8")))
 """, form=False),
     code("""
@@ -556,25 +541,34 @@ if _missing:
 """ + mark(7)),
     code("""
 #@title 8. 結果をダウンロード
-#@markdown 「変換結果_巻_開始ページ.zip」の中に、J-STAGE にアップロードする jasme_巻_開始ページ.zip、XML、変換レポートが入っています。「出版版 PDF に合わせてから作る」では、PDF に合わせて直した docx（Word の変更履歴つき）も入っています。
+#@markdown 「変換結果_巻_開始ページ.zip」の中に、J-STAGE にアップロードする jasme_巻_開始ページ.zip、XML、変換レポートが入っています。「出版版 PDF に合わせてから作る」では、（PDF の文字を読めたとき）PDF に合わせて直した docx（Word の変更履歴つき）も入っています。
+#@markdown 要対応（赤い枠）が残っているときは、ダウンロードの前に一度止まります。直してから変換し直すか、そのままダウンロードするときは、もう一度 ▶ を押します。
 """ + guard(1, 2, 3, 4, 5) + """from IPython.display import HTML, display
-from jasme_jats.colab import lost_images_box, missing_images_box
-from jasme_jats.report import images_to_prepare
+from jasme_jats.colab import result_boxes
+from jasme_jats.report import NEEDS_ACTION, actions, images_to_prepare
 
 _missing = images_to_prepare(res)
-_key = str(docx_path) + "|" + ",".join(n for n, _, _ in _missing)
-if _missing and globals().get("_NO_IMAGES_OK") != _key:
-    _NO_IMAGES_OK = _key
-    display(HTML(missing_images_box(res)))
-    raise SystemExit(f"画像を用意できなかった図が {len(_missing)} 件あります。手順 7 で画像をアップロードしてから、もう一度この ▶ を押して"
-                     "ください。画像を入れずにダウンロードするときは、そのままもう一度この ▶ を押します（後で ZIP の Graphics/ に"
-                     "入れることもできます）。")
+_todo = [a for a in actions(res) if a.level == NEEDS_ACTION]
+# 止めたかどうかの記録。要対応の中身（枠の見出しと本文）が変われば、変換し直した同じ docx でももう一度止める
+_key = str(docx_path) + "|" + repr([(a.key, a.box_title, a.box_detail) for a in _todo]) + "|" + ",".join(n for n, _, _ in _missing)
+if _todo and globals().get("_NEEDS_ACTION_OK") != _key:
+    _NEEDS_ACTION_OK = _key
+    display(HTML(result_boxes(res, level=NEEDS_ACTION)))
+    if [a.key for a in _todo] == ["images"]:
+        raise SystemExit(f"画像を用意できなかった図が {len(_missing)} 件あります。手順 7 で画像をアップロードしてから、もう一度この ▶ を押して"
+                         "ください。画像を入れずにダウンロードするときは、そのままもう一度この ▶ を押します（後で ZIP の Graphics/ に"
+                         "入れることもできます）。")
+    raise SystemExit(f"要対応が {len(_todo)} 件あります（上の赤い枠: " + "／".join(a.box_title for a in _todo) + "）。"
+                     + ("画像を用意できなかった図は、手順 7 で画像をアップロードしてから、もう一度この ▶ を押してください。" if _missing else "")
+                     + ("手動モードで AI の回答をまだ貼り付けていなければ、手順 6 で貼り付けてください。"
+                        if "ai_pending" in [a.key for a in _todo] else "")
+                     + "枠の説明に従って直してから変換し直すか、このままダウンロードするときは（結果を確かめるときなど）、"
+                       "もう一度この ▶ を押します。")
 archive = shutil.make_archive(str(WORK / f"変換結果_{res.xml_path.stem}"), "zip", OUT)
 files.download(archive)
 CONVERTED = {**globals().get("CONVERTED", {}), Path(archive).name: docx_path.name}
 print("ダウンロードしました:", Path(archive).name, "（" + docx_path.name + "）")
-display(HTML(missing_images_box(res)))
-display(HTML(lost_images_box(res)))
+display(HTML(result_boxes(res)))      # ダウンロードした結果に残っている要対応・要確認
 print("続けて他の論文を変換するときは、下の手順 9 の ▶ を押してください。")
 """ + mark(8)),
     code("""
@@ -596,7 +590,7 @@ if "docx_path" in globals():
     PREVIOUS = {"docx": docx_path.name, "meta": dict(globals().get("meta_input") or {}),
                 "ai_response": globals().get("LAST_AI_RESPONSE", "")}
 for _name in ("docx_path", "pdf_path", "meta_input", "meta", "res", "manual_prompt", "LAST_AI_RESPONSE", "_DISCARD_OK",
-              "_SAME_PAGE_OK", "USER_IMAGES", "_NO_IMAGES_OK"):
+              "_SAME_PAGE_OK", "USER_IMAGES", "_NEEDS_ACTION_OK"):
     globals().pop(_name, None)
 _work = Path("/content/jasme_work")
 shutil.rmtree(_work / "input", ignore_errors=True)

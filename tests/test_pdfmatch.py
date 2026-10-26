@@ -180,6 +180,12 @@ def test_wrong_pdf_changes_nothing(journal, meta, tmp_path):
     assert pc.diffs == [] and pc.unmatched and res.fidelity.ok
     assert paragraphs(fx.path) == paragraphs(NOTES)
     assert "別の記事の PDF ではないか確認" in res.report_path.read_text(encoding="utf-8")
+    # 別の記事の PDF の疑いは、Colab の赤い枠・レポートの冒頭でも知らせる（要確認。終了コードは変えない。修正計画 D の M4）
+    from jasme_jats.colab import pdf_diff_box
+    from jasme_jats.report import TO_CHECK, actions, pdf_suspect
+    assert pdf_suspect(res) and "別の記事の PDF かもしれません" in pdf_diff_box(res)
+    assert {a.level for a in actions(res) if a.key == "pdf_suspect"} == {TO_CHECK}
+    assert "要確認: 別の記事の PDF かもしれません" in res.report_path.read_text(encoding="utf-8").split("## 2.")[0]
 
 
 def test_word_footnote_numbers_follow_pdf(journal, meta, tmp_path, monkeypatch):
@@ -297,17 +303,23 @@ def test_colab_box_and_cli_route(journal, meta, tmp_path, capsys):
     f.applied, f.reason = False, "ほかの直す箇所と重なる"
     html = pdf_diff_box(res)
     assert "直せなかった箇所 1 件" in html and "ほかの直す箇所と重なる" in html and res.docx_fix.path.name in html
+    from jasme_jats.report import TO_CHECK, actions
+    assert {a.key: a.level for a in actions(res)} == {"pdf_unfixed": TO_CHECK}     # 直せなかった箇所は要確認（終了コード 0）
+    assert not res.needs_action
 
     with pytest.raises(SystemExit):
         main([str(PDFCHECK), "--out", str(tmp_path / "c"), "--route", "pdf"])
     assert "--pdf で記事の PDF を指定してください" in capsys.readouterr().err
-    # --pdf があれば、既定は「出版版 PDF に合わせてから作る」
-    assert main([str(PDFCHECK), "--out", str(tmp_path / "c"), "--pdf", str(PDFCHECK_PDF), "--no-metafile-conversion"]) == 0
+    # --pdf があれば、既定は「出版版 PDF に合わせてから作る」（--meta がないと J-STAGE のアップロード時チェックで要対応になり 1）
+    from conftest import META_EXAMPLE
+    meta_args = ["--meta", str(META_EXAMPLE)]
+    assert main([str(PDFCHECK), "--out", str(tmp_path / "c"), "--pdf", str(PDFCHECK_PDF), "--no-metafile-conversion"]
+                + meta_args) == 0
     out = capsys.readouterr().out
     assert "出版版 PDF との照合: PDF に合わせて docx を直した 44 箇所" in out
     assert "PDF に合わせて直した docx（変更履歴つき）:" in out and "_PDFに合わせた原稿.docx" in out
     assert main([str(PDFCHECK), "--out", str(tmp_path / "d"), "--pdf", str(PDFCHECK_PDF), "--route", "docx",
-                 "--no-metafile-conversion"]) == 0
+                 "--no-metafile-conversion"] + meta_args) == 0     # ルート1 の PDF との違いは要確認（0）
     out = capsys.readouterr().out
     assert "出版版 PDF との照合: 文字の違い 1 件" in out and "PDF に合わせて直した docx" not in out
 
@@ -338,9 +350,11 @@ def test_route2_keeps_note_marks_when_fixing_breaks_notes(journal, meta, tmp_pat
     assert "注の番号（直すと注を認識できなくなるので" in res.report_path.read_text(encoding="utf-8")
 
 
-def test_route2_with_unreadable_pdf_converts_original(journal, meta, tmp_path, monkeypatch):
+def test_route2_with_unreadable_pdf_converts_original(journal, meta, tmp_path, monkeypatch, capsys):
     """PDF の文字を読めなければ、docx を直さずに変換する（直した docx は作らない）。"""
     from jasme_jats import pdfmatch
+    from jasme_jats.cli import main
+    from jasme_jats.colab import pdf_diff_box
     monkeypatch.setattr(pdfmatch, "extract_pages", lambda path: ["", "\n"])
     (tmp_path / "dummy.pdf").write_bytes(b"%PDF-1.4\n")
     res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, pdf_path=tmp_path / "dummy.pdf", route="pdf",
@@ -350,6 +364,27 @@ def test_route2_with_unreadable_pdf_converts_original(journal, meta, tmp_path, m
     report = res.report_path.read_text(encoding="utf-8")
     assert "（PDF の文字を読めなかったので、docx を直さずに変換した）" in report
     assert "照合できなかった" in report.split("## 2.")[0]
+    # 要対応として知らせる（修正計画 D の M4。決定事項 4: 変換は続けて知らせる）: Colab の赤い枠、レポートの冒頭・14 章、
+    # コマンドラインの終了コード 1 と標準エラー
+    assert res.pdf_fallback and res.needs_action
+    html = pdf_diff_box(res)
+    assert "#dc2626" in html and "出版版 PDF に合わせられませんでした" in html and "画像だけの PDF" in html
+    assert "要対応: 出版版 PDF に合わせられませんでした" in report.split("## 2.")[0]
+    assert "docx を PDF に合わせていない" in report.split("## 14.")[1]
+    from conftest import META_EXAMPLE
+    assert main([str(PDFCHECK), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli"), "--pdf",
+                 str(tmp_path / "dummy.pdf"), "--no-metafile-conversion"]) == 1
+    err = capsys.readouterr().err
+    assert "要対応: 出版版 PDF に合わせられませんでした" in err and "PDF から文字を取り出せなかった" in err
+    # ルート1 で読めないときは要確認（照合できなかっただけで、XML は docx の文字のまま。終了コード 0）
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "r1", pdf_path=tmp_path / "dummy.pdf", route="docx",
+                                                   convert_metafiles=False))
+    assert not res.pdf_fallback and not res.needs_action
+    html = pdf_diff_box(res)
+    assert "出版版 PDF と照合できませんでした（要確認）" in html and "出版版 PDF に合わせられませんでした" not in html
+    assert "要確認: 出版版 PDF と照合できませんでした" in res.report_path.read_text(encoding="utf-8").split("## 2.")[0]
+    assert main([str(PDFCHECK), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli1"), "--pdf",
+                 str(tmp_path / "dummy.pdf"), "--route", "docx", "--no-metafile-conversion"]) == 0
 
 
 def test_route2_keeps_reference_when_fixing_breaks_citation(journal, meta, tmp_path, monkeypatch):
@@ -1429,6 +1464,22 @@ def test_running_heads_are_listed_in_report(route, journal, meta, tmp_path, monk
     assert not any("試験四郎" in t for t in out if "架空理論" in t or "学習指導案" in t)
     assert IGNORED_NOTE in section
     assert f"| d12 | {loc['d12']} | 1 | 試験四郎 |" in section and f"| d13 | {loc['d13']} | 1 | 試験四郎 |" in section
+    # 照合に使わなかった文字は要確認（実際の出版版 PDF ではほぼ毎回出るので、終了コード 1 にも、Colab の手順 8 で止めることにも
+    # しない）。ルート1 の PDF との違いと、ルート2 で直せなかった箇所（d13 の「2回」）も要確認
+    from jasme_jats.report import TO_CHECK, actions, render
+    levels = {a.key: a.level for a in actions(res)}
+    assert levels == {"pdf_diff" if route == "docx" else "pdf_unfixed": TO_CHECK, "pdf_ignored": TO_CHECK}
+    assert not res.needs_action
+    # レポートの冒頭の並び: 要対応（不変性チェック・DTD 検証の不合格）→ ルート2 の固定の案内 → PDF の知らせ（ここまでは 0.23.0 と
+    # 同じ）。照合に使わなかった文字の行（修正計画 D で足した）は、PDF の知らせの最後
+    res.fidelity.ok, res.dtd_valid = False, False
+    top = render(res).split("## 2.")[0]
+    order = ["> **注意: 文字の不変性チェックが不合格です。**", "> **要対応: J-STAGE 指定の DTD による検証が不合格です",
+             "> **出版版 PDF に合わせて docx を直してから変換しました" if route == "pdf" else "> **要確認: 出版版 PDF と文字が違う箇所",
+             "> **要確認: 照合に使わなかった PDF の文字が 2 件あります"]
+    pos = [top.index(x) for x in order]
+    assert pos == sorted(pos)
+    res.fidelity.ok, res.dtd_valid = True, True
 
 
 def test_no_running_heads_in_report(journal, meta, tmp_path):
@@ -3292,3 +3343,51 @@ def test_corrections_next_to_ordinary_spaces_are_fixed(docx, pdf_lines, pub, jou
     plan, src = n10_article(tmp_path, journal, [("body", docx), ("body", TALK)])
     pc = compare(plan, n10_pages([*SMALL_FRONT, *pdf_lines, *body_lines(TALK), *N10_TAIL]))
     assert changed_paragraphs(plan, pc, {src[docx]: pub}) == {}
+
+
+# ---------------------------------------------------------------------------- PDF を読めないときの知らせ（修正計画 D の M4・U2）
+def test_route2_with_broken_pdf_is_needs_action(journal, meta, tmp_path):
+    """壊れた PDF（0 バイト）でも、ルート2 は docx を直さずに変換を続け、要対応として知らせる。"""
+    from jasme_jats.colab import pdf_diff_box
+    (tmp_path / "broken.pdf").write_bytes(b"")
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, pdf_path=tmp_path / "broken.pdf", route="pdf",
+                                                   convert_metafiles=False))
+    assert res.pdf_fallback and res.docx_fix is None and res.fidelity.ok and res.needs_action
+    html = pdf_diff_box(res)
+    assert "出版版 PDF に合わせられませんでした" in html and "PDF を読めなかった" in html
+
+
+def test_route2_without_pypdfium2_is_needs_action(journal, meta, tmp_path, monkeypatch, capsys):
+    """pypdfium2 が入っていない（コマンドラインで [images] を入れていない）ときも、枠と標準エラーで理由を示し、1 を返す。"""
+    from conftest import META_EXAMPLE
+
+    from jasme_jats import pdfmatch
+    from jasme_jats.cli import main
+    from jasme_jats.colab import pdf_diff_box
+
+    def no_module(path):
+        raise ImportError("No module named 'pypdfium2'")
+    monkeypatch.setattr(pdfmatch, "extract_pages", no_module)
+    (tmp_path / "dummy.pdf").write_bytes(b"%PDF-1.4\n")
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "a", pdf_path=tmp_path / "dummy.pdf", route="pdf",
+                                                   convert_metafiles=False))
+    assert res.pdf_fallback and "pypdfium2 が入っていない" in pdf_diff_box(res)
+    assert main([str(PDFCHECK), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli"), "--pdf",
+                 str(tmp_path / "dummy.pdf"), "--no-metafile-conversion"]) == 1
+    assert "pypdfium2 が入っていない" in capsys.readouterr().err
+
+
+def test_route2_fully_fixed_has_no_action(journal, meta, tmp_path):
+    """ルート2 ですべて直せたときは、要対応・要確認はなく（赤い枠も出さない）、直した docx の案内と、14 章の「変更履歴を
+    確認する」は今までどおり固定で出す（actions には入れない）。"""
+    pytest.importorskip("pypdfium2")
+    from jasme_jats.colab import pdf_diff_box, result_boxes
+    from jasme_jats.report import actions, pdf_suspect
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, pdf_path=PDFCHECK_PDF, route="pdf",
+                                                   convert_metafiles=False))
+    assert res.docx_fix is not None and not res.pdf_fallback
+    assert actions(res) == [] and result_boxes(res) == "" and pdf_diff_box(res) == "" and not pdf_suspect(res)
+    assert not res.needs_action
+    report = res.report_path.read_text(encoding="utf-8")
+    assert "出版版 PDF に合わせて docx を直してから変換しました" in report.split("## 2.")[0]
+    assert "Word で開き、変更履歴を確認する" in report.split("## 14.")[1]

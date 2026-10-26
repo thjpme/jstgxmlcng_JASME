@@ -120,3 +120,51 @@ def test_figure_body_box(journal, meta, tmp_path):
     assert "・「図3\u3000表の直後の図キャプション」（直前の表に表キャプション「表1\u3000表キャプションの付いた表」が付いている）" in html
     assert "表を図キャプションのすぐ上" in html and "変換し直してください" in html
     assert figure_body_box(convert(FULL, meta, journal, Options(out_dir=tmp_path / "f", convert_metafiles=False))) == ""
+
+
+def test_result_boxes_follow_actions(journal, tmp_path, monkeypatch):
+    """手順 5・6・8 の赤い枠は report.actions からまとめて作る（colab.result_boxes）: J-STAGE のアップロード時チェック、
+    DTD 検証の不合格、AI のエラー（手動モードと API モードで見出しを書き分ける）。"""
+    from conftest import FULL
+
+    from jasme_jats import pipeline
+    from jasme_jats.ai_assist import AIOutcome
+    from jasme_jats.colab import result_boxes
+    from jasme_jats.config import ArticleMeta
+    from jasme_jats.pipeline import Options, convert
+    meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "lpage": "12", "pub_date": "2026-03-31",
+                                  "received": "2026-01-10", "accepted": "2025-11-20", "peer_review": "あり"})
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "j", convert_metafiles=False))
+    html = result_boxes(res)
+    assert "#dc2626" in html and "J-STAGE のアップロード時チェックで問題が 1 件あります（要対応）" in html
+    assert "EMSGM106E" in html and "手順 3" in html
+    assert result_boxes(res, level="要確認") == ""
+    res.dtd_valid, res.dtd_errors = False, ["31_1.xml:3: Element body content does not follow the DTD"]
+    html = result_boxes(res)
+    assert "J-STAGE 指定の DTD による検証が不合格です（1 件。要対応）" in html and "Element body content" in html
+    good = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり"})
+    res = convert(FULL, good, journal, Options(out_dir=tmp_path / "m", ai_mode="manual", ai_response="読めない回答",
+                                               convert_metafiles=False))
+    html = result_boxes(res)
+    assert "貼り付けた回答を読み込めませんでした（AI による補完は反映されていません）" in html
+    assert "AI の回答をまだ反映していません" not in html            # 回答を貼り付けた後は「回答待ち」ではない
+    # API モード: 偽の呼び出しがエラーを返す
+    monkeypatch.setattr(pipeline, "call_provider",
+                        lambda *a, **k: AIOutcome(mode="api", model="claude-test", error="API の利用制限に達しました"))
+    res = convert(FULL, good, journal, Options(out_dir=tmp_path / "a", ai_mode="api", ai_api_key="k",
+                                               convert_metafiles=False))
+    html = result_boxes(res)
+    assert "AI による補完ができませんでした" in html and "API の利用制限に達しました" in html
+    assert res.needs_action and "AI による補完ができませんでした（2 章）" in res.report_path.read_text(encoding="utf-8")
+
+
+def test_result_boxes_before_answer_in_manual_mode(journal, meta, tmp_path):
+    """手動モードで回答を貼り戻す前: 手順 5 では依頼文の枠があるので回答待ちの枠を出さず（skip）、手順 8 では出す。"""
+    from conftest import FULL
+
+    from jasme_jats.colab import result_boxes
+    from jasme_jats.pipeline import Options, convert
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", convert_metafiles=False))
+    assert result_boxes(res, skip=("ai_pending",)) == ""
+    html = result_boxes(res, level="要対応")
+    assert "AI の回答をまだ反映していません（手動モード）" in html and "手順 6" in html
