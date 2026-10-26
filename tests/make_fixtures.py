@@ -966,8 +966,9 @@ def b3_place_parts(b: Builder, variant=""):
     結び付け、その後ろを次の形にするもの: "two_lists"（2 つ目の項目、本文の段落、同じ番号の定義の 2 項目の箇条書き）、
     "list_heading"（2 つ目の項目、同じ番号の定義で、見出しと推定する太字の「２．…」の段落）、"list_image"（画像と文字が同じ
     段落の項目、3 つ目の項目、画像だけの項目）、"list_math"（2 つ目の項目、別行数式だけの項目、4 つ目の項目）、"list_textbox"
-    （2 つ目の項目、同じ番号の定義の段落を入れた、浮動配置でないテキストボックス）。"quote_blank" は、引用の 2 つ目の段落に
-    s1 を結び付け、3 つ目の段落との間に空の段落を置く。
+    （2 つ目の項目、同じ番号の定義の段落を入れた、浮動配置でないテキストボックス）。"other_list" は、2 項目の箇条書きの最後の
+    項目に s1 を結び付け、すぐ後ろに別の番号の定義の 2 項目の箇条書きを置く。"quote_blank" は、引用の 2 つ目の段落に s1 を
+    結び付け、3 つ目の段落との間に空の段落を置く。
     """
     img = [b.add_image(f"b3_place_{k}.png", png_bytes(f"Place {k}", size=(300, 200))) for k in range(1, 5)]
 
@@ -987,6 +988,11 @@ def b3_place_parts(b: Builder, variant=""):
     elif variant == "blank_list":
         first = [list_item(S["body"], "箇条書きの一つ目の項目である。"), para(S["body"], s1),
                  list_item(S["body"], "箇条書きの二つ目の項目である。")]
+    elif variant == "other_list":
+        first = [list_item(S["body"], "箇条書きの一つ目の項目である。"),
+                 list_item(S["body"], "この項目に図1のテキストボックスが結び付いている。", s1),
+                 list_item(S["body"], "別の番号の箇条書きの一つ目である。", num_id=7),
+                 list_item(S["body"], "別の番号の箇条書きの二つ目である。", num_id=7)]
     elif variant == "quote_blank":
         first = [para(S["quote"], "引用の一つ目の段落である。"),
                  para(S["quote"], "この引用の段落に図1のテキストボックスが結び付いている。", s1),

@@ -361,14 +361,15 @@ FIRST = "この項目に図1のテキストボックスが結び付いている�
     ("list_heading", [FIRST, "箇条書きの二つ目の項目である。"], "箇条書きの二つ目の項目である。", 1),
     ("list_image", [FIRST, "二つ目の項目には画像と文字がある。", "箇条書きの三つ目の項目である。"], "箇条書きの三つ目の項目である。", 1),
     ("list_math", [FIRST, "箇条書きの二つ目の項目である。"], "箇条書きの二つ目の項目である。", 2),
-    ("list_textbox", [FIRST, "箇条書きの二つ目の項目である。"], "箇条書きの二つ目の項目である。", 1)])
+    ("list_textbox", [FIRST, "箇条書きの二つ目の項目である。"], "箇条書きの二つ目の項目である。", 1),
+    ("other_list", ["箇条書きの一つ目の項目である。", FIRST], FIRST, 2)])
 def test_unplaced_float_does_not_split_list_or_quote(journal, meta, tmp_path, variant, items, last, groups):
     """アンカー段落が、続いた箇条書きの項目・引用の段落の途中にあるときは、その箇条書き・引用の最後の段落の後ろに仮に置く
     （箇条書き・引用を 2 つに分けない。分けると、図表を手作業で移しても分かれたまま残る）。空のアンカー段落が箇条書きの
-    項目の間にあるときも同じ。間の空の段落は飛ばし（quote_blank）、箇条書き・引用でない段落（two_lists の本文の段落）、
-    見出しと推定する段落（list_heading）、画像だけの項目（list_image。図になる）、別行数式だけの項目（list_math。数式になる）、
-    浮動配置でないテキストボックスの中の段落（list_textbox。XML に出さない）の前で止める。画像と文字が同じ段落の項目は、
-    箇条書きの項目として数える。AI が指定した位置はずらさない。"""
+    項目の間にあるときも同じ。間の空の段落は飛ばし（quote_blank）、別の番号の定義の箇条書き（other_list）、箇条書き・引用で
+    ない段落（two_lists の本文の段落）、見出しと推定する段落（list_heading）、画像だけの項目（list_image。図になる）、
+    別行数式だけの項目（list_math。数式になる）、浮動配置でないテキストボックスの中の段落（list_textbox。XML に出さない）の
+    前で止める。画像と文字が同じ段落の項目は、箇条書きの項目として数える。AI が指定した位置はずらさない。"""
     path = tmp_path / f"place_{variant}.docx"
     mf.make_b3_place(path, variant=variant)
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False))
@@ -396,8 +397,9 @@ def test_unplaced_float_does_not_split_list_or_quote(journal, meta, tmp_path, va
                                                convert_metafiles=False))
     assert res.plan.floats["s1"].mode == "ai" and res.fidelity.ok and res.dtd_valid
     if variant != "blank_list":
-        # 指定された段落の直後に置くので、2 つに分かれる（今までどおり）
-        assert len(list(load(res).find("body").iter(tag))) == groups + 1
+        # 指定された段落の直後に置くので、アンカー段落が箇条書き・引用の途中なら 2 つに分かれる（今までどおり。other_list の
+        # アンカー段落は、箇条書きの最後の項目）
+        assert len(list(load(res).find("body").iter(tag))) == groups + (variant != "other_list")
 
 
 def test_float_row_location_for_empty_anchor(journal, meta, tmp_path):
@@ -501,12 +503,14 @@ def cut_float_response(at):
 
 def test_cut_response_applies_only_finished_placements(journal, meta, tmp_path):
     """途中で切れた回答（2 つ目の placements の要素の途中）: 最後まで書かれた s1 の指定だけを読んで反映し、ほかの図表は
-    アンカー段落の後ろに仮に置いて、要対応として知らせる。operations と notes は使わない。"""
+    アンカー段落の後ろに仮に置いて、要対応として知らせる。operations と notes は使わない。出し直しの案内は、最初から
+    出し直してもらい、続きだけを貼り付けない（貼り付けても読めない）こと。"""
     resp = cut_float_response(lambda t: t.index('"float": "s2"') + 30)
     res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=resp,
                                                 convert_metafiles=False))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.lost_images == []
     assert res.ai.error == "" and "最後まで書かれていた 1 件だけを読み取って反映しました" in res.ai.partial
+    assert "同じ形式で最初から出し直してください" in res.ai.partial and "続きだけを貼り付けても読めません" in res.ai.partial
     assert res.plan.floats["s1"].mode == "ai" and res.plan.unplaced_floats == ["s2", "s3"]
     assert res.ai.notes == [] and not any(op["op"] == "set_role" for op, _ in res.ai.rejected)   # operations は使わない
     seq = body_sequence(load(res))

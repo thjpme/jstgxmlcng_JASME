@@ -70,8 +70,12 @@ def test_parse_response_reports_missing_json():
 
 
 def test_parse_response_accepts_code_fence():
+    """```json（```JSON も）のコードブロックの中身を読む（閉じの ``` の後ろの説明の { } は使わない）。"""
     data = parse_response("以下が回答です。\n```json\n" + RESPONSE + "\n```")
     assert len(data["operations"]) == 9
+    for fence in ("```json", "```JSON"):
+        data = parse_response(fence + "\n" + RESPONSE + "\n```\n補足: {placements} は空です。")
+        assert len(data["operations"]) == 9
 
 
 def test_parse_response_reads_json_before_trailing_text(journal, meta, tmp_path):
@@ -466,7 +470,7 @@ def test_complete_answers_are_not_read_as_cut():
     """最後まで書かれた回答の書き損じは、途中で切れた回答として読まない（読めない回答として、書き損じの案内を出す）:
     最後の文字列の閉じだけが飾りの引用符の回答（飾りの引用符のすぐ後ろが同じ行の ] } なら、途中で切れた回答と同じ
     「Unterminated string」になるので、飾りの引用符で見分ける。後ろが改行なら「Invalid control character」）、閉じの ``` まで
-    書かれたコードブロックの中で JSON が途中で終わっている回答。"""
+    書かれたコードブロック（```json・```JSON）の中で JSON が途中で終わっている回答。"""
     from jasme_jats.ai_assist import parse_cut_response
     full, one_line = head_first(), head_first(indent=None)
     smart = full[:full.rindex('"気づき"')] + '"気づき”\n ]\n}'
@@ -475,7 +479,7 @@ def test_complete_answers_are_not_read_as_cut():
         json.loads(smart_one)
     assert e.value.msg.startswith("Unterminated string")
     in_ops = cut_cases()["a"]
-    for text in (smart, smart_one, "```json\n" + in_ops + "\n```"):
+    for text in (smart, smart_one, "```json\n" + in_ops + "\n```", "```JSON\n" + in_ops + "\n```"):
         assert parse_cut_response(text) is None
         with pytest.raises(ValueError):
             parse_response(text)
