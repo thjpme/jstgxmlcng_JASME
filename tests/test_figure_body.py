@@ -69,6 +69,15 @@ def test_cell_figures_without_ai(journal, meta, tmp_path):
     assert all(reason == "空白のみの段落" for src, reason, _ in res.fidelity.excluded if src in cells)   # 文字は落とさない
 
 
+def test_cell_figures_are_listed_with_captions_in_request(journal, meta, tmp_path):
+    """AI 依頼文の「位置を機械的に決めた図表」では、表のセルの画像とキャプションで組んだ図も、キャプションで示す
+    （「キャプションなし」と示さない）。"""
+    res = convert(CELLS, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", convert_metafiles=False))
+    fixed = res.prompt_path.read_text(encoding="utf-8").split("\n# 位置を機械的に決めた図表（変更不可。")[1].split("\n#")[0]
+    assert "[s1] 「図1\u3000左のセルの図」「図2\u3000右のセルの図」: 段落" in fixed
+    assert "[s2] 「図3\u3000二つの画像からなる図」: 段落" in fixed and "キャプションなし" not in fixed
+
+
 @pytest.mark.parametrize("variant, fid", [("text", "s1"), ("tabcap", "s1"), ("cross", "s3"), ("extra", "s3")])
 def test_cell_figures_not_unique_stay_a_table(journal, meta, tmp_path, variant, fid):
     """組み方が一つに決まらない表（キャプションでない文字・表キャプションがある、画像とキャプションの組を決められない）は、
@@ -135,6 +144,46 @@ def test_cell_figures_guards(journal, meta, tmp_path, shape):
     assert after(sequence(root), "試験（2024）にな")[0].startswith("表:")     # アンカー段落の前に、表のまま
     cells = "".join("".join(td.itertext()) for td in root.iter("td"))
     assert "図2" in cells and ("図1" in cells)
+
+
+def test_cell_figures_are_not_fixed_by_route2(journal, meta, tmp_path, monkeypatch):
+    """表のセルの画像とキャプションで組んだ図のキャプション・画像と同じ段落の文字は、docx では表のセルなので、ルート2
+    （出版版 PDF に合わせてから作る）でも今までどおり照合せず、直さない（本文の図キャプションは直す）。"""
+    from jasme_jats import pdfmatch
+    from jasme_jats.docx_reader import read_docx
+    from jasme_jats.model import OBJ
+
+    def parts(b):
+        im = [b.add_image(f"route2_{k}.png", mf.png_bytes(f"Route2 {k}", size=(300, 200))) for k in range(3)]
+        left = [mf.para(mf.S["body"], mf.drawing(im[0], 1440000, 960000, 891), "説明文：左の画像に添えた架空の問題を解く。"),
+                cap("図１\u3000左のセルの図")]
+        right = [mf.para(mf.S["body"], mf.drawing(im[1], 1440000, 960000, 892)), cap("図２\u3000右のセルの図")]
+        return [mf.para(mf.S["sec1"], "１．表のセルの図"),
+                mf.para(mf.S["body"], "試験（2024）にならい，表のセルに図を並べた原稿を確かめる。十分な長さの本文である。"),
+                mf.para(mf.S["body"], "この段落に図1と図2の図形が結び付いている。本文の段落としての長さを持たせる。", mf.textbox(
+                    mf.table([[mf.cell(left), mf.cell(right)]]), 890, cx=16 * mf.B3_CM, cy=5 * mf.B3_CM,
+                    wrap="wrapTopAndBottom")),
+                mf.para(mf.S["body"], mf.drawing(im[2], 1440000, 960000, 893)), cap("図３\u3000本文の図"),
+                mf.para(mf.S["body"], "以上のように，表のセルに並べた図も図として出力する。最後の段落である。")]
+    path = tmp_path / "route2_cells.docx"
+    mf.make_article(path, "表のセルの図のルート2の検証用文書", parts)
+    # 出版版 PDF の文字: docx の段落の文字を順に並べ、図の番号だけを半角にし、説明文の語を直したもの
+    texts = [p.plain().replace(OBJ, "").strip() for p in read_docx(path).all_paragraphs()]
+    pub = [t.replace("図１", "図1").replace("図２", "図2").replace("図３", "図3").replace("解く。", "解いた。")
+           for t in texts if t]
+    monkeypatch.setattr(pdfmatch, "extract_pages", lambda p: ["\n".join(pub)])
+    (tmp_path / "dummy.pdf").write_bytes(b"%PDF-1.4\n")
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", pdf_path=tmp_path / "dummy.pdf", route="pdf",
+                                               convert_metafiles=False))
+    checks_pass(res)
+    plan = res.plan
+    cell_srcs = {q.src for info in plan.floats.values() for t in info.tables for q in t.paragraphs()}
+    assert {plan.paras[s].plain()[:3] for s in cell_srcs if plan.paras[s].role == "fig_caption"} == {"図１\u3000", "図２\u3000"}
+    fixed = {f.src for f in res.docx_fix.fixes}
+    assert fixed and not fixed & cell_srcs                            # 表のセルの段落は直さない（0.21.0 と同じ）
+    caps = {"".join(f.find("caption").itertext())[:2] for f in load(res).iter("fig")}
+    assert caps == {"図１", "図２", "図3"}                              # 本文の図キャプションだけ PDF に合わせる
+    assert "説明文：左の画像に添えた架空の問題を解く。" in "".join(load(res).itertext())
 
 
 def test_cell_figures_one_caption_in_a_row(journal, meta, tmp_path):

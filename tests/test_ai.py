@@ -462,6 +462,36 @@ def test_cut_response_does_not_guess(name):
     assert "飾りの引用符" in str(e.value)
 
 
+def test_complete_answers_are_not_read_as_cut():
+    """最後まで書かれた回答の書き損じは、途中で切れた回答として読まない（読めない回答として、書き損じの案内を出す）:
+    最後の文字列の閉じだけが飾りの引用符の回答（Unterminated string になる）、閉じの ``` まで書かれたコードブロックの中で
+    JSON が途中で終わっている回答。"""
+    from jasme_jats.ai_assist import parse_cut_response
+    full = head_first()
+    smart = full[:full.rindex('"気づき"')] + '"気づき”\n ]\n}'
+    in_ops = cut_cases()["a"]
+    for text in (smart, "```json\n" + in_ops + "\n```"):
+        assert parse_cut_response(text) is None
+        with pytest.raises(ValueError):
+            parse_response(text)
+    with pytest.raises(ValueError) as e:
+        parse_response(smart)
+    assert "飾りの引用符" in str(e.value) and "途中で切れている" not in str(e.value)
+    # 閉じのないコードブロックで切れた回答は、今までどおり読む（対照）
+    assert parse_cut_response("```json\n" + in_ops) is not None
+
+
+def test_code_fence_marks_inside_strings_are_not_blocks():
+    """JSON の文字列の中の ``` は、コードブロックの始まり・閉じとみなさない（コードブロックなしの回答・コードブロックの中の
+    回答・前置きの説明のある回答）。前置きの説明と同じ行から始まるコードブロックも読む。"""
+    body = json.dumps({"placements": FLOAT_RESPONSE["placements"], "operations": [], "notes": ["```の記号の説明"]},
+                      ensure_ascii=False, indent=1)
+    for text in (body, "```json\n" + body + "\n```", "以下が回答です。\n" + body, "以下が回答です：```json\n" + body + "\n```",
+                 "```text\n補足\n```\n```json\n" + body + "\n```"):
+        data = parse_response(text)
+        assert data["placements"] == FLOAT_RESPONSE["placements"] and data["notes"] == ["```の記号の説明"]
+
+
 def _cut_text():
     return cut_cases()["c"]
 
