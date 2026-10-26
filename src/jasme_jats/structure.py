@@ -331,32 +331,28 @@ def float_targets(plan, info) -> str:
     残らないように）。例: 「F1・F2 と段落「説明文：左のセルの画像と同じ段」」「F1 とキャプションのない図」「段落「…」」。
     どれもなければ（キャプションのない図だけのときなど）空文字で、呼び出し側は「図表の中身」と示す。
     """
-    ids = float_ids(plan, info)
     mine = {id(q) for q in info.paras} | {id(q) for t in info.tables for q in t.paragraphs()}
-    paras, nocap = [], [0]
 
     def walk(nodes):
         for node in nodes:
             if isinstance(node, Sec):
-                walk(node.children)
-            elif isinstance(node, FigNode):
-                if not node.fid and any(id(q) in mine for q in node.image_paras):
-                    nocap[0] += 1
-            elif isinstance(node, (PNode, FormulaNode)):
-                paras.extend([node.para] if id(node.para) in mine else [])
-            elif isinstance(node, (ListNode, QuoteNode)):
-                paras.extend(q for q in (node.items if isinstance(node, ListNode) else node.paras) if id(q) in mine)
+                yield from walk(node.children)
+            else:
+                yield node
 
-    walk(plan.body)
+    nodes = list(walk(plan.body))
+    nocap = sum(1 for n in nodes if isinstance(n, FigNode) and not n.fid and any(id(q) in mine for q in n.image_paras))
+    paras = [q for n in nodes if not isinstance(n, (FigNode, TableNode)) for q in Classifier.node_paras(n) if id(q) in mine]
+    ids = float_ids(plan, info)
     items = [ids] if ids else []
     if ids or paras:
-        if nocap[0]:
-            items.append("キャプションのない図" + (f" {nocap[0]} つ" if nocap[0] > 1 else ""))
+        if nocap:
+            items.append("キャプションのない図" + (f" {nocap} つ" if nocap > 1 else ""))
         if paras:
             items.append("段落" + "".join(f"「{_para_text(q).strip()[:20]}」" for q in paras))
     out = ""
     for item in items:
-        out += (" と" if out[-1:].isascii() else "と") + item if out else item
+        out += ((" と" if out[-1].isascii() else "と") + item) if out else item
     return out
 
 
