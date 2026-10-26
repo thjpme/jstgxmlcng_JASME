@@ -6,7 +6,6 @@ Colab の出力欄は暗い配色のこともあるので、枠の中の文字�
 from __future__ import annotations
 
 import html
-import re
 import uuid
 
 _COPY_JS = """
@@ -165,9 +164,6 @@ def _marks_note(docx_texts, pdf_texts, insert=False) -> str:
         notes.append("、".join(parts) + "です。")
     if insert and any(INSERT_AT in (t or "") for t in docx_texts):
         notes.append(f"docx の側の「{INSERT_AT}」は、docx に文字がなく PDF にだけ文字がある位置です（前後は docx の文字）。")
-    if insert and any(re.search(r"［[^］]+］", t or "") for t in docx_texts):
-        notes.append("docx の側の「［…］」で囲んだ文字は docx の違う部分です（前後は docx の文字。分断された段落の部分の違いは、"
-                     "隣の文字との偶然の一致で短く区切られることがあるので、そのとおりに置き換えず PDF の本文と見比べてください）。")
     return "".join(n + "\n" for n in notes)
 
 
