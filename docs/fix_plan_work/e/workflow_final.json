@@ -1,0 +1,1002 @@
+{
+  "summary": "単位 E（0.24.0）: 注（Word の文末脚注）と資料の見出し（N6・D4・D3）。設計と独立の反例 → 実装 → 確かめ → 仕上げ → 3 観点の点検 → 修正と再点検（最大 3 回）",
+  "agentCount": 15,
+  "logs": [
+    "design: ok / oracle: ok",
+    "指摘: blocking 0 / should 4 / nit 9",
+    "1 回目の点検: blocking 0 / should 2",
+    "2 回目の点検: blocking 0 / should 0"
+  ],
+  "result": {
+    "design": {
+      "design_doc": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/DESIGN_E.md",
+      "decisions": "設計書に書き、試作で確かめた。試作は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/design/src（0.23.1 の写しに patch.py・patch2.py を当てたもの。主な部分だけ）。正規表現の最終案と一覧は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/design/re_app.py。\n\n【D4 注の鍵と番号】\n- model.note_key(fn_kind, fn_id) は \"footnote:5\" か \"endnote:5\" を返す。'-custom' は除いて判定し、記号を自分で付けた参照も同じ鍵にする。note_label(key) は「Word の脚注 5」「Word の文末脚注 5」を返す（こちらも '-custom' を除く）。\n- FnNode に word_kind（footnote/endnote）・word_refs・linked・custom_mark を足す。word_id は note_key にする。\n- ArticlePlan に note_of（注の段落 ID → 鍵。すべての注の段落）・warnings・abstract_ja・app_after_refs を足す。\n- 「参照の順」は doc.all_paragraphs() の順とした（document.xml の段落の順。除外した段落の参照も、その位置で数える）。そのあと、集めた注の中の参照を幅優先で足す。決定事項 7 のとおり、脚注と文末脚注を合わせた通し番号にし、形式は fn_mark（「1)」）。番号は今までどおり builder.word_note_marks が付ける。\n- 却下した案: 領域の順（本文 → 注の中 → 除外した段落）。Word 自身の番号の数え方と違い、0.23.1 の脚注の番号も変わりうるため。\n- 除外した段落の中にしか参照がない注も出力する。リンクのない注になるので、Decision と 8 章の表で知らせる。\n- 削除の変更履歴の中の参照は、参照として数えない。computed task の文面とは違う扱いにした（理由: 文字ポリシーと、Word で変更を承諾した状態に合わせる）。docx_reader が新しく Document.deleted_note_refs に記録し、除外の理由で区別する。\n- 参照されていない注の理由: 「Word の脚注 9（本文から参照されていない注）」。参照が削除されたものは「Word の脚注 6（本文の参照が変更履歴で削除された注。Word で変更をすべて承諾すると消える）」。is_blank の段落は exclude_blank、plain() が空でなければ exclude。\n- plan.locations: 参照された注は「Word の文末脚注 5（注 2）」（2 段落以上なら「 第j段落」を付ける）、参照されていない注は「Word の文末脚注 5」。\n- まとめの Decision は、脚注だけなら今の文言のまま。文末脚注があれば「脚注・文末脚注機能で書かれた注 n 件（脚注 a 件・文末脚注 b 件）を、本文で最初に参照される順の通し番号で…」。\n- customMarkFollows の文末脚注は暫定で脚注と同じ扱い（番号を 1 つ使い、本文の印は docx の文字のまま）。範囲外として文書に明記する。新しく Decision でも知らせる。\n- A の暫定の知らせの外し方: ENDNOTE_EXCLUDED と PROVISIONAL[\"endnote\"] を消し、provisional_exclusions はテキストボックスだけを見るようにする（テキストボックスの分は F まで残す）。\n- 鍵をそろえる箇所:\n  - emit.write_object（fn_numbers を note_key で引く）\n  - pdfmatch._para_seq（footnote と endnote の両方、鍵は note_key）\n  - pdfdocx の PARTS（endnotes.xml を 'e' で）と _all_paragraphs（文末脚注を足す）。raw_paragraph_ids と paragraph_units は変えなくてよい。文末脚注をすでに同じ規則で読んでおり、試作で書き込みと読み直しを確かめた\n  - report の number_rows・word_note_refs（除外した段落の参照は数えない）、1 章の表記（文末脚注があるときだけ「Word の脚注・文末脚注」）、8 章（説明文の差し替えと対応の表。文末脚注・リンクのない注・記号を自分で付けた注のどれかがあるときだけ）\n  - ai_assist の注の一覧（note_label）と para_view（文末脚注は「⟦Word の文末脚注参照⟧」）\n  - pipeline.warnings に plan.warnings を足す\n  - linker・builder の処理・_placement_problem は変えない\n\n【D3 資料の見出し】\n- RE_APPENDIX の新しい形（設計書 2.1 に表）:\n  - 先頭の開き括弧を 1 つ許す\n  - 語の後の番号の前に、空白と「－」「‐」を許す。ASCII の「-」は語の直後に許さない\n  - 枝番は -－‐ とダッシュで区切る\n  - 番号は数字・英字・Ⅰ-Ⅻ・ⅰ-ⅻ・①-⑳\n  - 番号の直後に許すのは、空白・コロン・ピリオド・読点・括弧・ダッシュ（ASCII の「-」は除く）・行末\n  - 番号がないときに語の直後に許すのは、空白・コロン・括弧・ダッシュ・行末だけ\n  - 暫定で足した規則（FIX_PLAN にない）: 番号のない「Appendix」の後ろが「空白＋英小文字」なら認識しない。試作で、英文要旨の段落「Appendix abstract.」が資料にされるのを見つけたため\n  - 指定の 6 つ（資料（授業プリント）・資料Ⅰ　授業プリント・資料Ⅱ（ワークシート）・付録①　調査票・資料1-2・Appendix A）は認識し、「資料を配布した。」「資料-1」は認識しない\n- build_front_en で資料を始めるかは、次の順で決める:\n  1. AI の abstract・p なら始めない\n  2. app_heading なら始める\n  3. 今までどおり RE_APPENDIX に合えば始める\n  4. 英文要旨の後ろで資料がまだないときに、スタイル由来の sec1〜3 の段落が来たら始め、Decision「英文要旨の後ろの、見出しのスタイル「…」の段落「…」から資料とした（英文要旨の中に見出しは来ないため）」を記録する（決定事項 8(a)）\n  - 資料の見出しに AI が abstract を指定したら資料を閉じ、次の資料の見出しまで英文要旨に戻す。\n- 英文要旨の和文: plan.lang が ja で、かな・漢字（全角英数字は数えない）が 3 割以上の段落があれば、Decision（applied=False）・10 章の警告・要確認の Action \"abstract_ja\" を出す。自動では移さない。\n- 引用文献の後ろの資料は暫定の判断 (1) のとおり、資料にせず、10 章の警告と要確認の Action \"app_after_refs\" だけにする。検出の条件は FIX_PLAN の「扱うなら」の規則と同じで、build_back の refs・fn・notes・ack の中の、見出しのスタイルの段落か、参考文献のスタイル以外で RE_APPENDIX に合う段落。知らせの文言は設計書 2.7。\n- AI の役割: ROLES に app_heading を足す。REGION_ROLES は front_en に app_heading、app に abstract と app_heading を足す。SYSTEM_PROMPT に 1 段落を足す。\n- pdfdocx._structure は、段落ごとの値を ((role, region), links) にする。_lost は got[0] で比べているので変えなくてよい。変異テストで、領域を比べないと英文要旨の段落が資料に移ることを確かめた。\n\n【N6】\n- set_role_problem(p, plan, role) は、理由の文字列か '' を返す。上から順に見る:\n  1. 役割がない\n  2. float_id がある（placements の文言のまま）\n  3. Word の脚注・文末脚注の段落（参照のないものも含めてすべて）: 「Word の脚注・文末脚注の段落の役割は変えられない（注の区切りは Word のとおりにする）」\n  4. 領域がない: 「表のセルなど、論文の中の位置が決まっていない段落の役割は変えられない」\n  5. 暫定で足した規則: 英文の題目・副題の段落: 「英文の題目・副題の段落の役割は変えられない…」。0.23.1 でも、英文題目を exclude・abstract にすると英文副題が XML から落ち、不変性チェックが不合格になる。試作で見つけた\n  6. app_heading を、英文要旨・資料以外の段落に指定した\n  7. その領域の REGION_ROLES にない役割\n- role_overrides は今の 4 つの if をこの関数に置き換える。\n- 依頼文の除外の一覧の案内（set_role_hint）:\n  - p が使えるなら今のまま「（本文の一部なら set_role を提案）」\n  - ほかの役割だけ使えるなら「（set_role で指定できる役割: title, subtitle）」\n  - どれも使えなければ「（この段落の役割は set_role では変えられない）」\n- テキストボックスの段落の規則は F で足す。\n\n【決めなかったこと】\n- 決定事項 8(b)（暫定。利用者に未確認）。\n- 手で書いた注と Word の注が両方ある原稿で、番号が重なる問題（0.23.1 と同じ）。\n- 題目・著者などの段落（xref=False の文脈）の参照に知らせを出すか（0.23.1 と同じく出さない）。\n- pdfmatch.target_paragraphs の docstring の直し（B2.1 の控えとの衝突を避けて保留）。",
+      "changes": "関数ごとの詳細は設計書の 1〜3 章。\n- model.py: NOTE_KINDS_JA・note_key・note_label を足す。Document.deleted_note_refs を足す。Atom の fnref の docstring を直す。\n- docx_reader.py: _run で、w:del 中の footnoteReference・endnoteReference の鍵を deleted_note_refs に記録する（フィールドコードの中は除く）。read() でこの集合を初期化し、Document に渡す。文字の読み方は変えない。\n- structure.py:\n  - ENDNOTE_EXCLUDED を消し、上のコメントを直す。\n  - unreferenced_note_reason を足す。\n  - FnNode（word_kind・word_id の意味・word_refs・linked・custom_mark）と ArticlePlan（note_of・warnings・abstract_ja・app_after_refs）に欄を足す。\n  - run(): 注の段落を登録するところで note_of も入れる。\n  - attach_word_notes を書き直す（参照を集める → 注の中の参照 → 通し番号の FnNode・region・locations → 参照のない注を除外 → Decision 3 種）。\n  - RE_APPENDIX を置き換え、RE_KANA_KANJI・ABSTRACT_JA_RATIO・APP_PLACE を足す。\n  - build_front_en: starts を決める 5 段の規則、AI の abstract で資料を閉じる、和文の判定。\n  - build_back: 引用文献の後ろの資料らしい段落の検出と警告。\n- emit.py: write_object で fn_numbers を note_key で引く。__init__ のコメントを直す。\n- builder.py: word_note_marks の docstring だけ直す（処理は変えない）。\n- linker.py: 変えない。\n- pdfmatch.py: _para_seq の fnref の判定（footnote と endnote、note_key）、import、docstring とコメント（PdfCheck.numbers・compare・_para_seq の「Word の脚注 ID」）。_isolate・_classify・_joint などの照合の規則には触らない。\n- pdfdocx.py: PARTS に endnotes、_all_paragraphs に endnotes、_structure の値を ((role, region), links) に、_structure・make_fixed_docx の docstring を直す。\n- report.py:\n  - import を model.note_key・note_label に（ENDNOTE_EXCLUDED は使わない）。\n  - provisional_exclusions と PROVISIONAL から endnote を消す。\n  - number_rows は note_label にする。\n  - word_note_refs を note_key で数え、除外した段落の参照は数えない。\n  - 1 章の表記を変え、8 章に説明文の差し替えと対応の表を足す（条件付き）。\n  - _abstract_ja_action と _app_after_refs_action を作り、actions() の head の lost_action の後ろに入れる。\n- pipeline.py: warnings に plan.warnings を足す。\n- ai_assist.py:\n  - ROLES に app_heading、REGION_ROLES を直す。SYSTEM_PROMPT の set_role に 1 段落を足す。\n  - set_role_problem と set_role_hint を足す。role_overrides でこれを使う。\n  - build_request: 除外の案内、注の一覧の note_label。para_view の文末脚注の印。\n  - _placement_problem は変えない。\n- 文書: DESIGN.md（3・4.3・4.4・5・6 章の注と資料の行・7）、DEVELOPMENT.md（構成・テスト・残っている課題）、FIX_PLAN.md（E の実施の記録・決定事項 8 の暫定・触ったファイル）、README.md（148・236 行あたり）、docs/fix_plan_repro_tests.py（PROBLEM の 2 件と比較の 1 件を取り除き、冒頭の docstring に記録）、各 docstring。\n- 版: __init__.py・pyproject.toml を 0.24.0 にし、python tools/make_notebook.py でノートブックを作り直す。",
+      "tests": "【fixture】tests/make_fixtures.py\n- Builder.endnotes_extra は A で足し済み。\n- 部品を足す: footnote()、footnote_ref(custom=)、endnote_ref の custom、deleted()。\n- make_article に footnotes・abstract・appendix の引数を足す（既定は今と同じ出力）。\n- sample_structure.docx（ALL_DOCS）に次を足す:\n  - STRUCTURE_SECTIONS に節「Word の脚注と文末脚注」: 脚注 5 と文末脚注 5 の衝突、w:del の中の脚注 6 の参照、customMarkFollows の文末脚注 7 と上付きの「*」、脚注 8 の中から文末脚注 8 を参照、参照のない脚注 9（2 段落目は全角空白）\n  - make_structure の tail(appendix=…) に、英文要旨のスタイルの「資料（授業プリント）」と続く 2 段落\n  - 作り直しは make_structure だけを呼ぶ。git diff --stat tests/fixtures で、この docx だけが変わったことを確かめる。\n- 小さな原稿はテストの中で作る（ALL_DOCS に入れず、golden は 23 件のまま）。\n\n【test_notes.py】\n- 文末脚注が fn2 になり、rid=fn2・「2)」、脚注は fn1 のまま。\n- 最初に参照される順の番号。脚注の中から参照した文末脚注は除外されない。\n- customMarkFollows（xref は中身が空、本文の「*」は docx のまま、注の一覧は「3)」、Decision）。\n- 参照のない注・削除された参照の注の除外の理由と blank。不変性に合格。\n- 参照された注と参照のない注の両方で、全角・半角の空白だけの段落があっても不変性に合格。\n- 除外した段落の中にしか参照がない注（リンクのない注の Decision と 8 章の表）。\n- Word の注の段落への set_role（p・exclude・fn_start）が不採用。\n- 既存の test_ai_cannot_split_word_footnotes の期待を新しい文言に。\n- レポートの文言: 脚注だけなら今のまま（8 章に表が出ない）。STRUCTURE では「（うち Word の脚注・文末脚注 …）」と表の行が出る。\n- note_key・note_label の単体テスト。\n\n【test_structure.py】\n- RE_APPENDIX を、re_app.py の YES・NO で parametrize。\n- 資料（授業プリント）が app/title になり、2 段落が app の中に入る（docs/fix_plan_repro_tests.py の PROBLEM の逆）。\n- 資料Ⅰ・資料Ⅱ（…）・付録①が app/title になる。\n- 見出しのスタイルから資料を始め、Decision を記録する。\n- 英文要旨の和文の段落: Decision（applied=False）・10 章・要確認。自動では移さない。\n- 引用文献の後ろの資料: 警告と要確認。app-group は作らない。\n\n【test_ai.py】\n- 英文要旨の段落への app_heading で資料が始まる。\n- 英文題目への app_heading・exclude は不採用（不変性に合格）。\n- 見出しのスタイルで始めた資料への abstract で、英文要旨に戻る。\n- set_role_problem の規則 1〜7 の単体テスト。\n- 依頼文の除外の案内 3 種と、役割の一覧に app_heading がある。\n\n【test_pdfmatch.py】\n- 既存の test_word_footnote_numbers_follow_pdf の鍵を ('fnref','footnote:5')・('fnlist','footnote:5') に。\n- ルート2 の文末脚注: ('fnref','endnote:5')、e 段落の直しの書き込みと読み直し、13 章に「Word の文末脚注 5」。\n- 英文要旨と資料の境を変える直し（資料-1 → 資料－1）を直さない。\n- どちらも extract_pages を差し替える（sample_pdfcheck.pdf は作り直さない）。\n\n【A の暫定の知らせのテストを直す】FIX_PLAN の「2 つ」は古い。\n- test_lost_images.py の 3 件:\n  - test_image_in_endnote: 参照された文末脚注の画像は XML に出る。参照のない文末脚注の画像は要対応で、場所は「Word の文末脚注 4」。\n  - test_provisional_notices_for_textbox_and_endnote: テキストボックスだけにする。\n  - test_cli_shows_provisional_notices: 文末脚注の行は「出ない」ことを確かめる。\n- test_pipeline.py の test_blank_paragraphs_in_textbox_and_endnote_are_excluded: N3 の確かめは、参照のない文末脚注の空白段落に移す。\n\n【その他】\n- docs/fix_plan_repro_tests.py から 3 件を取り除く。\n- tests/__pycache__ を残さない。",
+      "acceptance": "【pytest】\n- 3.13 と 3.10 ですべて合格し、ruff check src tests tools が通ること。\n- 試作では、意図して変わる 6 件以外の 680 件が通った。6 件は test_lost_images の 3 件、test_pipeline の空白の 1 件、test_notes の文言、test_pdfmatch の鍵。\n\n【golden（23 件）】\n- XML が変わってよいのは sample_structure_manual・_split だけ（D3・D4 の要素を足すため）。\n- AI 依頼文は、全件が次の理由で変わってよい: 役割の一覧に app_heading、SYSTEM_PROMPT の 1 段落、冒頭の除外の案内「（set_role で指定できる役割: title, subtitle）」、著者表の重複する所属の案内「（この段落の役割は set_role では変えられない）」。\n- sample_edge の report と prompt は、脚注の場所「Word の脚注 1件中」が「Word の脚注 5（注 1）」になり、注の一覧の「（Word の脚注）」が「（Word の脚注 5）」になってよい。\n- 試作（fixture を足す前）では、XML の変化 0 件、レポートの変化は sample_edge の 2 件、依頼文の変化 13 件で、すべて上の理由だった。違いは本体を diff して、1 つずつ理由を書く。\n\n【td1〜3（ルート1・AI 手動）】\n- 実際に読んで確かめた（文字は書き写していない）。\n  - td1〜3 とも、Word の脚注 0・文末脚注 0・参照 0。\n  - 英文要旨の後ろの見出しスタイルの段落、引用文献の後ろの資料らしい段落、英文要旨の和文の段落も 0。\n  - td3 の資料 1 件は、新旧どちらの正規表現でも認識される（英文要旨のスタイルの見出し）。\n- 合格の条件:\n  - XML とレポート（版・日時の行を除く）が 0.23.1 と同じ。\n  - AI 依頼文の違いは、役割の一覧・SYSTEM_PROMPT・冒頭の除外 3 段落の案内だけ（試作で確かめた。テキストボックスの除外の案内は変わらない）。\n  - 不変性・最終・DTD・J-STAGE のチェックに合格。\n  - XML に入らなかった画像が増えない。\n  - 終了コードが 0.23.1 と同じ（1）。\n\n【版】\n- 0.24.0。ノートブックを作り直し、test_notebook が通ること。",
+      "risks": "【暫定の判断（利用者に未確認。FIX_PLAN と DESIGN.md に「暫定」と書く）】\n1. 引用文献の後ろの資料は、警告だけにする（決定事項 8(b)）。\n2. customMarkFollows の文末脚注は、脚注と同じ扱い。本文の印「*」と注の一覧の「n)」が合わないので、Decision で知らせる。\n3. N6 で、英文の題目・副題への set_role をすべて拒否する（FIX_PLAN は app_heading だけ）。\n4. RE_APPENDIX で、番号のない「Appendix」の後ろが空白と英小文字なら認識しない（0.23.1 より狭い）。\n5. 削除の変更履歴の中の参照は、番号を付けて出力せず、理由付きで除外する（computed task の文面と違う）。\n\n【回帰の恐れ】\n- 見出しのスタイルから資料を始める規則: 英文要旨の後ろの「Key words」などを見出しのスタイルで書いた原稿では、そこから資料になる。Decision が残り、AI の abstract で戻せる。td1〜3 と fixture には当たる段落がない。\n- 英文要旨の和文の判定: 短い和文の行でも要確認になる（出すぎないかは試験運用で確かめる）。\n- 1 章の Word の注のリンクの件数: 除外した段落の参照を数えなくなる（該当する原稿は、まだ見つかっていない）。\n- AI 依頼文の変化: すべての原稿で変わる。実際の AI の振る舞い（app_heading、拒否される set_role を勧めなくなったこと）は、模擬回答でしか確かめていない。\n\n【残る限界（0.23.1 と同じ）】\n- 題目・著者・所属・引用文献の段落の中の Word の注の参照は、リンクにならない。\n- 手で書いた注と Word の注が両方あると、番号が重なる。\n- 文字だけのテキストボックスの段落への set_role は、F まで今のまま受け付ける。\n\n【見つけた食い違い（設計書 8 章）】直したもの・直さなかったもの、どちらも挙げる。\n1. 照合する段落の説明が、コードと違う。pdfmatch.target_paragraphs の docstring と DESIGN.md 4.4 は「資料は照合しない」と書くが、実際は資料の中の段落を照合し、資料の見出しだけを照合しない。\n   - DESIGN.md は E で直す。\n   - pdfmatch.py の docstring は、B2.1 の控えとの衝突を避けて保留する（まとめ役の判断）。\n2. FIX_PLAN の「Builder に endnotes_extra を足す」は、A で済んでいる。\n3. FIX_PLAN の「既存テストの修正は 2 つ」は古い。実際は 6 件。\n4. attach_word_notes の場所の文言「Word の脚注 N件中」は、全件数を書いていた。\n5. word_note_refs は、docstring と違い、除外した段落の参照も数えていた。\n6. N6 の案内: 冒頭の段落の除外にも「本文の一部なら set_role を提案」と書いていた（p は必ず捨てられる）。\n7. 0.23.1 の不具合: AI の set_role で英文題目を exclude・abstract にすると、英文副題が落ちて不変性チェックが不合格になる。\n8. FIX_PLAN の行番号と、そこに出てくる実験スクリプトは古い。\n\n【片付け】\n- 試作の大きな出力は消した（td の出力・docx・golden の xml）。残したのはスクリプト・試作の src・設計書。\n- tests/__pycache__ は消した（gen_e.py が tests の make_fixtures を読み込んだときにできたもの）。リポジトリの作業ツリーは HEAD と同じ。"
+    },
+    "oracle": {
+      "dir": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/oracle/ (gen_e.py: docx generator. run_e.py: compares expected with actual. cases_e.json: the case list. overlap_check.py: checks overlap with real papers. results_base0231.json / log_base0231.txt: results on 0.23.1. results_base_copy.json / log_base_copy.txt: same run against the base0231_src copy. The docx and the conversion output have been deleted. run_e.py rebuilds any missing docx with gen_e.py.)",
+      "cases": "39 cases in total; each one also has common checks. Every case is exact on: invariance, final and DTD checks pass; jstage_issues == []; lost_images == []. Fictional docx are built with make_fixtures' Builder, front_ja, front_en, tail, para, textbox, drawing and endnote_ref. Word footnotes and endnotes are added through footnotes_extra / endnotes_extra.\n\n[Notes, D4]\n- N01 Endnotes only (one endnote, 2 paragraphs). exact: fn-group has 1 note. fn1 starts with \"1)\" and has 2 p. fn-group/title is \"注\", supplied as for Word footnotes. Body xref is [(fn1, \"1)\", sup)]. The provisional \"Word の文末脚注を XML に出力していません\" notice does not appear in the report. No exclusion has a reason containing \"未対応\".\n- N02 Footnotes only (regression). exact: fn1 \"1)\". The report keeps the current wording \"注 1（うち Word の脚注 1）\".\n- N03 Body references interleave endnote 3, footnote 5, endnote 4. exact: fn1 = endnote B, fn2 = footnote A, fn3 = endnote C. Body xrefs are fn1 \"1)\", fn2 \"2)\", fn3 \"3)\" (decision 7). info: the note-count line in the report.\n- N04 Footnote id=5 and endnote id=5 collide, footnote referenced first. exact: fn1 = footnote, fn2 = endnote. xrefs fn1 and fn2 are separate.\n- N05 Same collision, endnote referenced first. exact: fn1 = endnote, fn2 = footnote.\n- N06 A footnote references an endnote. exact: 2 notes (fn2 = the endnote), and the endnote is not excluded. either: the reference inside fn1 links to fn2 \"2)\", or has no link.\n- N07 The reference sits inside w:del. exact: the footnote is not in the XML, it is excluded once with a reason other than blank, and the invariance check passes.\n- N08 The reference sits inside w:ins. exact: it becomes fn2 as a normal reference.\n- N09 An unreferenced footnote and an unreferenced endnote, both with text. exact: each is excluded once with a reason that is neither \"空白のみの段落\" nor contains \"未対応\", and neither is in the XML. Their lines in the AI依頼文 exclusion list carry no set_role suggestion (N6).\n- N10 An unreferenced footnote and endnote containing only full-width and half-width spaces. exact: 2 exclusions with reason \"空白のみの段落\" (src starts with f or e), and the check passes.\n- N11 An endnote with a blank paragraph in the middle. exact: the text after the blank paragraph is also in fn1, and the check passes. either: the blank paragraph is excluded as blank, or output inside fn1.\n- N12 customMarkFollows endnote in 2nd of 3 places (provisional judgement 2). exact: 3 notes. fn1 starts with \"1)\", fn3 with \"3)\". Body xrefs are [(fn1, \"1)\", sup), (fn2, \"\", no sup), (fn3, \"3)\", sup)]. The docx \"*\" stays in the body. either: fn2 starts with \"*\" or with the generated \"2)\".\n- N13 A reference in a paragraph that has only the reference and no text. exact: the note is output. either: there is a link, or there is none because the paragraph is excluded.\n\n[Appendix headings, D3] Heading and next paragraph are placed after the English abstract.\n- Recognised (exact: app-group/app/title is the heading, the next paragraph is inside app, trans-abstract holds only the abstract paragraph):\n  - A01 資料（授業プリント）\n  - A02 資料Ⅰ　授業プリント\n  - A03 資料Ⅱ（ワークシート）\n  - A04 付録①　調査票 (body style)\n  - A05 資料1-2　授業の記録\n  - A06 【資料1】\n  - A07 Appendix A\n  - A08 資料 on its own line\n  - A15 資料　授業プリント (regression)\n  - A17 資料1　調査票 in body style (comparison for A04)\n  - A16 資料1 and 資料2 give 2 app elements.\n- Not recognised (exact: no app-group, the line stays in trans-abstract): A09 資料を配布した。, A10 資料-1　授業プリント.\n- A11 / A11b A chapter / section heading style after the abstract, with text that does not match RE_APPENDIX. exact: it becomes app, and a Decision with that src is recorded (decision 8(a)).\n- A12 A Japanese paragraph inside the English abstract. exact: all 3 paragraphs stay in trans-abstract. A Decision with applied=False is recorded for that src. res.warnings (chapter 10) gains an entry compared with the control A12c, which has no Japanese paragraph.\n- A13 One kanji word inside the abstract (under 30%). exact: no extra warning compared with control A13c, and no applied=False Decision.\n- A14 \"資料　…\" in chapter heading style placed after the references. either: no app plus an extra chapter 10 warning compared with A14c (provisional judgement 1), or app/title \"資料　架空の授業プリント\". exact: the text stays in the XML and trans-abstract holds only the abstract.\n\n[AI set_role, N6 and D3] Manual mode with a mock answer.\n- R01 app_heading on an abstract paragraph. exact: accepted, the appendix starts there, the following paragraph is in app, and trans-abstract holds only the first paragraph.\n- R02 app_heading on the English title. exact: rejected with a reason, the article trans-title is unchanged, and there is no app-group.\n- R03 p and exclude on a Word footnote paragraph. exact: both rejected with a reason, and fn1 remains.\n- R04 exclude and p on an endnote paragraph. exact: both rejected with a reason, and fn1 remains.\n- R05 p on a figure caption inside a shape (float_id). exact: rejected.\n- R06 p on the journal-name line (excluded, front_ja). either, both of which are consistent: rejected and the prompt does not suggest set_role, or accepted, appears in the body and the prompt suggests it.\n- R07 abstract on a heading-style appendix heading. exact: accepted, and it returns to trans-abstract and is no longer an app title.\n- R08 exclude on a body paragraph that carries a footnote reference. either: accepted, the paragraph is excluded and the note is output without a link; or rejected and linked as usual. exact: the note text stays in the XML.",
+      "runner": "cd /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/oracle && PYTHONDONTWRITEBYTECODE=1 python run_e.py --src <src> --label <name> [--only N01,A01,...]\n- <src> can be a folder that contains jasme_jats (the repository src) or the package folder itself (such as base0231_src).\n- For a package folder it creates a symlink named jasme_jats at oracle/.pkg_<hash>/jasme_jats and loads that.\n- If the jasme_jats it loaded is not the requested one, it stops. The last line shows the version and the path actually loaded.\n- Each case prints OK/FAIL. For failures it prints \"x [exact|either] expectation … actual\". For either and info it also prints which alternative matched.\n- Results go to results_<label>.json. Conversion output goes to out_<label>/ and should be deleted when done.\n- --list writes cases_e.json.\n- docx are generated in docx/ on first use (deterministic; python gen_e.py docx also works).\n- It uses only convert / Options, config's ArticleMeta / JournalConfig, Result attributes (plan.paras / plan.decisions / fidelity.excluded / warnings / ai.rejected) and the output XML, report and AI依頼文.\n- It imports tests/make_fixtures.py from the repository, so that file has to be there.\n- overlap_check.py: python overlap_check.py gen_e.py run_e.py checks whether the fictional text matches 12 or more characters of tests/private.",
+      "base_result": "0.23.1 (working-tree src, and the base0231_src copy gives the same pass/fail): OK 15 / 39.\n\nOK on 0.23.1 (behaviour that should not regress): N02, N08, N13, A07, A08, A09, A10, A13, A15, A16, A17, R02, R05, R07, R08.\n- R07 passes only because 0.23.1 never turns a heading style into an appendix in the first place.\n- R08 passes because 0.23.1 outputs every Word footnote regardless.\n\nFAIL on 0.23.1 (what E fixes):\n- N01/N03/N06/N11/N12: endnotes are excluded as \"Word の文末脚注（未対応…）\" and are missing from fn-group. The provisional \"要確認: Word の文末脚注 … XML に出力していません\" notice appears.\n- N04/N05: when ids collide, both body references become (fn1, \"1)\"), so the endnote links to the footnote, and there is only 1 note.\n- N07: the invariance check fails (a footnote whose reference is in w:del is neither output nor excluded).\n- N09/N10: the invariance check fails (unreferenced footnotes are not recorded). Unreferenced endnotes are excluded as \"未対応\", and the prompt adds \"（本文の一部なら set_role を提案）\" to them.\n- A01–A06: the heading and the paragraph after it go into trans-abstract.\n- A11/A11b: the heading-style paragraph goes into trans-abstract and there is no Decision.\n- A12: no Decision and no warning.\n- A14: no app and no warning.\n- R01: rejected with \"役割「app_heading」は指定できない\".\n- R03/R04: set_role p and exclude on footnote or endnote paragraphs are accepted (rejected == []) and change nothing.\n- R06: d1 (journal-name line, region front_ja) is rejected with \"この位置（front_ja）では役割「p」を指定できない\", yet the prompt says \"（本文の一部なら set_role を提案）\". This is the N6 contradiction.",
+      "notes": "- Not looked at, as instructed: DESIGN_E.md; the bodies of structure.attach_word_notes / build_front_en / build_back; ai_assist.role_overrides. I did not read structure.RE_APPENDIX either. Expectations come only from FIX_PLAN E, N6, D4, D3, decisions 7 and 8, appendix D3/D4, DESIGN.md and STYLE_MAPPING.md.\n- Grounds for treating A07 \"Appendix A\" and A08 \"資料\" alone as recognised (exact): STYLE_MAPPING.md says a paragraph that starts with 資料, 付録 or Appendix after the English abstract becomes app. The FIX_PLAN rule \"line end allowed after the number\" points the same way. Both are already OK on 0.23.1, so they serve as regression checks.\n- A10 \"資料-1\": exact \"not recognised\", from FIX_PLAN's \"ASCII hyphen not allowed right after the word\". Full-width \"資料－1\" is ambiguous in FIX_PLAN, so I did not test it.\n- R06 is exact on one reading: the \"（本文の一部なら set_role を提案）\" hint is the case where role p would be accepted. If the implementation judges the hint by some role other than p, R06 may FAIL on that interpretation alone.\n- N10 identifies footnote and endnote paragraphs by the first letter of src (f or e). These are the ID forms 0.23.1 uses.\n- N12 assumes the endnote body with customMarkFollows has no endnoteRef and starts with the \"*\" as text (Word's form).\n- N13 (a reference in a paragraph with no text) is output as a p containing only an xref on 0.23.1, so it does not reproduce \"a reference inside an excluded paragraph\". R08 (AI exclude) covers that instead. A reference inside a text box is something Word does not allow, so I did not make that case.\n- Not covered: route 2 (pdfdocx PARTS / numbers table \"Word の文末脚注 5\" / pdfmatch._para_seq). These need a PDF, and sample_pdfcheck.pdf must not be regenerated, so I did not write route-2 cases. The wording of report chapter 8 for mixed notes, and the Decision for a note without a link, are info only.\n- Real papers: tests/private/colab/td1–3 contain no footnotes, endnotes, footnoteReference or endnoteReference (counts only). The new fictional text in gen_e.py and run_e.py matches the real papers on 12 or more characters 0 times (checked with overlap_check.py, excluding the template's own text). No real text was copied.\n- Mismatch between the task text and the environment (not fixed; it concerns the leader's procedure): base0231_src is the jasme_jats package folder itself. Running PYTHONPATH=base0231_src python -m jasme_jats loads the editable-installed repository src (/home/user/jstgxmlcng_JASME/src/jasme_jats), not the copy (checked: with PYTHONPATH=base0231_src, jasme_jats.__file__ is the repository src). For a real comparison, put a jasme_jats symlink to it in a separate folder and point PYTHONPATH at that folder, or use run_e.py --src, which does this. The 0.23.1 results here were checked both with the repository src (identical to HEAD) and with the copy loaded through the symlink, and they agree.\n- Mismatch between documents and code: FIX_PLAN appendix D4 says \"Builder に endnotes_extra を足し\"; tests/make_fixtures.py already has Builder.endnotes_extra and endnote() / endnote_ref(). The plan text is out of date; not fixed.\n- Repository: nothing changed (git status is clean; no tests/__pycache__). Large outputs (docx and conversion output) deleted; about 23GB free on /."
+    },
+    "impl": {
+      "changed_files": [
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/model.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/docx_reader.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/structure.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/emit.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/builder.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/pdfmatch.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/pdfdocx.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/report.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/pipeline.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/ai_assist.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/data/jasme.toml",
+        "/home/user/jstgxmlcng_JASME/tests/make_fixtures.py",
+        "/home/user/jstgxmlcng_JASME/tests/fixtures/sample_structure.docx",
+        "/home/user/jstgxmlcng_JASME/tests/test_notes.py",
+        "/home/user/jstgxmlcng_JASME/tests/test_structure.py",
+        "/home/user/jstgxmlcng_JASME/tests/test_ai.py",
+        "/home/user/jstgxmlcng_JASME/tests/test_pdfmatch.py",
+        "/home/user/jstgxmlcng_JASME/tests/test_lost_images.py",
+        "/home/user/jstgxmlcng_JASME/tests/test_pipeline.py",
+        "/home/user/jstgxmlcng_JASME/docs/DESIGN.md",
+        "/home/user/jstgxmlcng_JASME/docs/DEVELOPMENT.md",
+        "/home/user/jstgxmlcng_JASME/docs/STYLE_MAPPING.md",
+        "/home/user/jstgxmlcng_JASME/docs/fix_plan_repro_tests.py"
+      ],
+      "summary": "単位 E（N6・D4・D3）を、設計 /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/DESIGN_E.md に沿って /home/user/jstgxmlcng_JASME（detached HEAD e2dbf73 = 0.23.1）に実装しました。どれも未コミットです。版は 0.23.1 のままで、0.24.0 への版上げ、ノートブックの作り直し、FIX_PLAN と README の更新はまとめ役に任せています。\n\nD4（Word の文末脚注を注として出す）\n- 脚注と文末脚注は ID が重なりうるので、種類と ID の組を「注の鍵」にしました（model.note_key と、表記用の note_label。例は「footnote:5」「Word の文末脚注 5」）。\n- docx_reader は、削除の変更履歴の中にある参照を Document.deleted_note_refs に記録します。\n- structure.Classifier.attach_word_notes を書き直しました。\n  - 脚注と文末脚注をまとめ、本文で最初に参照される順の通し番号にします。順は doc.all_paragraphs() の順で、出力しなかった段落の参照もその位置で数えます。続けて、注の中から参照される注も幅優先で足します。\n  - 参照のない注と、参照が削除の変更履歴の中にだけある注は、理由を付けて除外します。空白だけの段落は exclude_blank にしました。\n  - FnNode に word_kind・word_refs・linked・custom_mark を足しました。場所の表記は「Word の文末脚注 5（注 2）」の形です。リンクのない注と、記号を自分で付けた注は、判断の一覧に記録します。\n  - ENDNOTE_EXCLUDED と、文末脚注の暫定の知らせ（PROVISIONAL の endnote）は外しました。\n- 注の鍵を使うように合わせた箇所: emit の本文のリンク、pdfmatch の番号の照合、pdfdocx（PARTS と _all_paragraphs に word/endnotes.xml を追加）、report（1 章の件数、8 章の説明と対応の表、13 章の場所、word_note_refs は除外した段落の参照を数えない）、ai_assist（依頼文の注の一覧と、文末脚注の参照の表記）。\n\nD3（資料の見出し）\n- RE_APPENDIX を広げました。先頭の括弧、ローマ数字・丸数字、全角のハイフン、枝番を認識します。「資料-1」のような ASCII のハイフンと、「Appendix shows …」のような番号なし＋空白＋英小文字は認識しません。\n- build_front_en で資料を始める規則は、次の順で決めます。\n  1. AI が abstract・p を指定した段落は始めない\n  2. AI の app_heading で始める\n  3. RE_APPENDIX に合えば始める\n  4. 英文要旨の後ろの見出しのスタイルの段落から始め、判断の一覧に記録する\n  - 資料の見出しに AI が abstract を指定すると、次の資料の見出しまでが英文要旨に戻ります。\n- 英文要旨の段落で、かな・漢字が 3 割以上のものは、自動では移さずに知らせます（判断の一覧〈applied=False〉、10 章の警告、要確認の Action abstract_ja）。\n- 引用文献・注・付記・謝辞の中の、資料の見出しと思われる段落は、暫定で知らせるだけです（10 章の警告と Action app_after_refs）。\n- pipeline は plan.warnings を 10 章の警告に加えます。ルート2 の pdfdocx._structure は、役割に加えて領域も比べます。\n\nN6（set_role の可否を 1 か所に）\n- ai_assist.set_role_problem（7 つの規則）を足し、回答の検証（role_overrides）と依頼文の案内（set_role_hint）の両方で使います。\n- ROLES に app_heading を足し、REGION_ROLES の英文の部分（front_en）と資料（app）で指定できる役割を広げ、SYSTEM_PROMPT に 3 行足しました。\n\nテスト・fixture・文書\n- tests/make_fixtures.py に部品を足し（footnote・footnote_ref・endnote_ref の mark、deleted、make_article の footnotes・abstract・appendix）、sample_structure の節「Word の脚注と文末脚注」と資料を足しました。fixture は make_structure だけで作り直し、git diff --stat tests/fixtures で sample_structure.docx だけが変わったことを確かめています。\n- docs/fix_plan_repro_tests.py の PROBLEM 2 件を逆にして tests/ に取り込み、docstring を直しました。\n- docs/DESIGN.md（3 章・4.1・4.3・4.4・5 章・6 章の表・7 章）、docs/DEVELOPMENT.md（構成・テスト・残っている課題）、docs/STYLE_MAPPING.md を直しました。\n- 後片付け: git worktree（head_wt）は消し、大きな出力（docx・pdf・xml・zip・画像）も消しました。tests/ に一時ファイルと __pycache__ はありません。ディスクの空きは 23GB です。",
+      "tests_added": [
+        "tests/test_notes.py::test_note_key_and_label",
+        "tests/test_notes.py::test_endnotes_are_output_as_notes（fix_plan_repro_tests の test_PROBLEM_endnotes_are_excluded の逆）",
+        "tests/test_notes.py::test_endnote_becomes_fn_and_ids_do_not_collide",
+        "tests/test_notes.py::test_note_numbers_follow_first_reference",
+        "tests/test_notes.py::test_custom_mark_endnote_keeps_docx_mark",
+        "tests/test_notes.py::test_unreferenced_and_deleted_notes_are_excluded",
+        "tests/test_notes.py::test_blank_paragraphs_in_notes_pass_fidelity",
+        "tests/test_notes.py::test_note_referenced_only_from_excluded_paragraph",
+        "tests/test_notes.py::test_ai_cannot_set_role_on_word_notes",
+        "tests/test_notes.py::test_report_lists_word_notes_with_endnotes",
+        "tests/test_structure.py::test_appendix_heading_forms_are_recognized（parametrize 35 件）",
+        "tests/test_structure.py::test_appendix_heading_forms_are_not_recognized（parametrize 22 件）",
+        "tests/test_structure.py::test_appendix_with_paren_is_not_in_abstract（test_PROBLEM_appendix_with_paren_goes_into_abstract の逆）",
+        "tests/test_structure.py::test_appendix_heading_variants_become_app_titles",
+        "tests/test_structure.py::test_heading_style_after_abstract_starts_appendix",
+        "tests/test_structure.py::test_japanese_paragraph_in_abstract_is_reported（3 割ちょうどと 2 割の境目を含む）",
+        "tests/test_structure.py::test_appendix_after_references_is_warned（参考文献のスタイルの「資料…」と空白だけの見出しは知らせないことを含む）",
+        "tests/test_ai.py::test_set_role_app_heading_starts_appendix",
+        "tests/test_ai.py::test_set_role_on_english_title_is_rejected",
+        "tests/test_ai.py::test_set_role_abstract_returns_heading_style_appendix（資料の途中の段落を英文要旨に戻す形を含む）",
+        "tests/test_ai.py::test_set_role_overrides_appendix_heading_text（変異テストで見つけた抜けを埋めた）",
+        "tests/test_ai.py::test_set_role_problem_rules",
+        "tests/test_ai.py::test_request_hints_follow_set_role_problem",
+        "tests/test_pdfmatch.py::test_endnote_numbers_and_text_follow_pdf_in_route2",
+        "tests/test_pdfmatch.py::test_route2_keeps_abstract_appendix_border",
+        "tests/test_lost_images.py::test_image_in_referenced_endnote_is_output（旧 test_image_in_endnote_is_reported_with_location を分けた 1 つ目）",
+        "tests/test_lost_images.py::test_image_in_unreferenced_endnote_is_reported_with_location（分けた 2 つ目）",
+        "書き直した既存テスト: tests/test_lost_images.py::test_provisional_notices_for_textbox（旧 ..._for_textbox_and_endnote）, tests/test_lost_images.py::test_cli_shows_provisional_notices, tests/test_pipeline.py::test_blank_paragraphs_in_textbox_and_endnote_are_excluded, tests/test_notes.py::test_ai_cannot_split_word_footnotes, tests/test_notes.py::test_word_footnotes_use_journal_mark_and_get_a_title（拡張）, tests/test_pdfmatch.py::test_word_footnote_numbers_follow_pdf（鍵）, tests/test_structure.py::test_textbox_paragraphs_do_not_switch_regions（fixture に節を足したので最後の章が「３．おわりに」）"
+      ],
+      "pytest_result": "- Python 3.13: 767 passed（23.7 秒）。Python 3.10（venv310、PYTHONPATH=src）: 767 passed（26.1 秒）。\n- docs/fix_plan_repro_tests.py: docstring のとおり tests/ に一時的に写して実行し、5 passed。写しはすぐ消した。\n- ruff: 環境の ruff 0.16.9 の既定の規則で、HEAD でも 203 件ある（CI に ruff はない）。そこで HEAD の写しと作業ツリーを比べた。作業ツリーは 202 件で、増えた指摘は 0、減ったのは 1 件（report.py の PROVISIONAL の ISC004）。\n- 0.23.1 での確認: 0.23.1（scratchpad/e/base0231_src）で、変更した 6 つのテストファイル（test_notes・test_structure・test_ai・test_lost_images・test_pipeline・test_pdfmatch）を流した。\n  - 新しく足したテストと書き直したテストの 56 件（parametrize を含む）はすべて失敗した。\n  - ほかに失敗したのは test_pipeline.py::test_fidelity_and_dtd[sample_structure.docx-strict/-split] の 2 件だけ。作り直した fixture に参照のない脚注と、参照が削除された脚注があり、0.23.1 はこれらを出力も除外もしないので不変性チェックが不合格になる（直した不具合そのもの）。\n  - それ以外のテストは 0.23.1 でも通る。写しに examples/meta_example.toml を置き忘れた最初の実行で CLI のテストが 6 件失敗したが、置いて流し直すと通った。",
+      "measures": "golden（23 件。比べる相手は scratchpad/e/golden_base/manifest.json の 0.23.1。全件 ok=[True, True, True, 0]）\n- XML が変わったのは sample_structure_manual・_split の 2 件だけ（fixture に D3・D4 の節と資料を足したため）。\n- レポートが変わったのは次の 4 件。\n  - sample_edge_manual・_split: 4 章の M-009 の場所が「Word の脚注 1件中」から「Word の脚注 5（注 1）」になった 1 行だけ。\n  - sample_structure_manual・_split: fixture に足した分。\n- AI 依頼文は manual・ai の 13 件すべてが変わった。違いは cmp_prompts.py でならして確かめ、意図したものだけだった。\n  - 役割の一覧の app_heading と、SYSTEM_PROMPT の 3 行。\n  - 除外の一覧の案内: 冒頭の段落は「（set_role で指定できる役割: title, subtitle）」、重複する所属は「（この段落の役割は set_role では変えられない）」。\n  - sample_edge の注の一覧の「（Word の脚注 5）」と場所の表記。\n  - sample_structure の fixture に足した分。\n- 最後のソースの変更の後に流し直し、前回の作業ツリーの結果と 23 件すべて同じだった。\n\ntd1〜3（ルート1・AI 手動。0.23.1 と比べる）\n- XML・レポート（作成日時・ツールの行を除く）・標準エラーが同じ。終了コードはどちらも 1（手動モードで回答前）。\n- AI 依頼文は、役割の一覧・SYSTEM_PROMPT の 3 行・冒頭の除外 3 段落の案内だけが違う。td3 のテキストボックスの除外 27 段落は「本文の一部なら set_role を提案」のまま。\n- 不変性・最終・DTD・J-STAGE のチェックは合格のまま。XML に入らなかった画像は増えない。td1〜3 には Word の注・英文要旨の和文・引用文献の後ろの資料はない。\n\n追加: td1〜3（ルート2・出版版 PDF あり。0.23.1 と比べる）\n- XML・レポート・標準エラーは同じ。終了コードもどちらも 1。AI 依頼文は意図した違いだけ。\n- 直した docx で違う部品は word/endnotes.xml だけで、それも XML 宣言の引用符（\" → '）と改行（CRLF → LF）だけ。中身は同じ。PARTS に文末脚注の部品を足したため、直す箇所がなくても書き直すようになった。0.23.1 の footnotes.xml と同じ扱い。\n\n独立の反例（oracle。scratchpad/e/oracle/run_e.py。oracle のファイルは変えていない）\n- 作業ツリー 37/39 OK（0.23.1 は 15/39）。最終の作業ツリーで流し直しても、検査ごとの結果は最初の実行と同じ。\n- 残る FAIL 2 件は、どちらも設計 3 章が決めた案内の文言に「set_role」という語が入るためで、設計のとおりにして直していない。\n  - N09: 参照のない注の除外の行に「（この段落の役割は set_role では変えられない）」と書く。oracle は \"set_role\" という部分文字列があるだけで「勧めた」と判定する。\n  - R06: 誌名の行への p は不採用で、案内は「（set_role で指定できる役割: title, subtitle）」。p は勧めていないが、同じく部分文字列で判定される。\n\n変異テスト（scratchpad/e/impl/mut/run_mut.py。src の写しに 1 か所ずつ変異を入れて全テストを流す。47 件）\n- 43 件はテストが見つけた。最初の実行で残った 7 件のうち 3 件は、テストを足して見つけるようにした（AI の abstract・p を RE_APPENDIX より優先する、参考文献のスタイルの段落を知らせない、空白だけの見出しを知らせない）。\n- 残る 4 件は同値か、表示だけのもの。\n  - by_style と build_back の role_origin == \"style\" の条件: 英文の部分と後付けでは、見出しの役割はスタイルからしか来ないので同値。\n  - plan.lang == \"ja\": plan.lang は雑誌の設定で常に ja（設計 2.3 のとおり）。\n  - word_refs の重複を除く処理: 同じ段落が同じ注を 2 度参照することは Word では通常なく、影響は表示だけ。",
+      "deviations": "設計と違えたこと\n1. まとめの判断（注の一覧にした件数）を先に記録し、注ごとの判断（リンクのない注、記号を自分で付けた注）を後に記録した。設計の擬似コードは注ごとの判断を先にしていた。脚注だけの原稿で、判断の番号と並びを 0.23.1 と変えないため。\n2. リンクのない注の判断の文の最後を「本文からリンクする注なら、Word で参照を本文の段落に移して変換し直す」にした。設計は「注が本文に必要なら、…」。\n3. 要確認の abstract_ja の文から、XML の要素名「（trans-abstract）」「（XML の trans-abstract）」を外した。利用者向けの文に要素名を出さないため。SYSTEM_PROMPT の 1 文は、前の文に続くので「役割も変えられません」にした。\n4. Reader.deleted_note_refs は read() の最初ではなく __init__ で初期化した（warnings・hidden など、ほかの集まりと同じ書き方）。\n5. fixture の部品は、設計の custom=False の代わりに mark=\"\"（自分で付けた記号の文字）を取るようにした（footnote_ref・endnote_ref・footnote・endnote）。mark を指定しなければ、文末脚注の XML は今までと同じ。deleted() の w:id は、何度作っても同じ docx になるよう中身の crc32 から決めた。\n6. テストの名前と分け方を設計から変えた。\n   - test_set_role_app_heading_on_english_title_is_rejected → test_set_role_on_english_title_is_rejected（app_heading・exclude・abstract の 3 つを確かめる）。\n   - test_report_wording_for_footnotes_only_is_unchanged は、既存の test_word_footnotes_use_journal_mark_and_get_a_title を広げる形と、新しい test_report_lists_word_notes_with_endnotes に分けた。\n   - test_appendix_heading_forms は、認識する書き方と認識しない書き方の 2 つに分けた。\n   - 設計にないテストも足した: test_endnotes_are_output_as_notes（PROBLEM の逆）、test_set_role_overrides_appendix_heading_text（変異テストで見つけた抜け）、境目の確かめ（3 割、参考文献のスタイル、空白だけの見出し）。\n7. 書き直した既存テストは 7 件で、設計の見込みの 6 件より 1 件多い。test_structure.py::test_textbox_paragraphs_do_not_switch_regions は、fixture に節を足して最後の章の番号が変わったので、期待を「３．おわりに」に直した。\n8. golden で増えた ruff の指摘（新しいテストの pages の暗黙の文字列連結 2 件）は、括弧でくくって 0 件にした。ファイルの既存のテストは括弧なしの書き方のまま。\n\n直さなかった指摘と理由\n- oracle の N09・R06 の FAIL。理由は measures のとおり（設計が決めた文言に「set_role」の語が入る）。\n- 変異テストで残った 4 件。同値か、表示だけのもの。\n\n文書とコードの食い違い（見つけたものすべて）\n1. pdfmatch.target_paragraphs の docstring（pdfmatch.py 510 行）と 539 行のコメント、それに DESIGN.md 4.4 は「資料は照合しない」と書いていた。コードは、資料の中の段落を照合して直し、資料の見出しだけを照合しない。DESIGN.md は直した。pdfmatch.py は B2.1 の控えとぶつからないよう E では直さず、B2.1 を再開するときに直す（設計 8 章のとおり）。\n2. README.md が古い（まとめ役の担当なので直していない）。\n   - 148 行: 要確認「Word の文末脚注」。\n   - 186 行: 「直さないもの: …資料（付録）…」。今は資料の中の段落を直す。\n   - 236〜238 行: できないことの「Word の文末脚注」。\n3. FIX_PLAN の D4 の付録の「Builder に endnotes_extra を足し」は、A ですでに足してある。同じ節の「既存テストの修正は 2 つ」は、実際には 7 件だった。文中の行番号（L789・L1179 など）と、rvz_d3.py・rvz_d4.py・exp_struct_re.py は古いか、もうない。FIX_PLAN はまとめ役の担当なので直していない。\n4. structure.attach_word_notes の場所の表記「Word の脚注 {n}件中」は、注ごとの場所ではなく全件数を書いていた。直した。\n5. report.word_note_refs の docstring は「注へのリンクとして出力されるもの」だが、0.23.1 のコードは除外した段落の参照も数えていた。コードを docstring に合わせた。\n6. ai_assist.build_request の案内「（本文の一部なら set_role を提案）」は、冒頭・著者表・Word の注の段落にも書かれ、必ず捨てられる操作を勧めていた。N6 で直した。\n7. 0.23.1 の不具合: AI の set_role で英文題目を exclude・abstract にすると英文副題が XML から落ち、不変性チェックが不合格になる。set_role_problem の規則 5 で止めた。\n8. 設計 1.6 の「fn.number は builder が設定する」は誤り。Word の注の FnNode.number は None のままで、番号は word_note_marks が「fn.number or k」で付ける。コードに合わせて、8 章の表も同じ式にした。\n9. docs/DEVELOPMENT.md の test_lost_images の説明、jasme.toml の fn_mark のコメント、STYLE_MAPPING.md の資料と注、DESIGN.md 7 章の「E・F で直す」、docs/fix_plan_repro_tests.py の docstring は、どれも直した。\n10. computed task の「削除の変更履歴の中の参照は、番号を付けてリンクのない注にする」と、設計の「参照として数えず、理由付きで除外する」が食い違う。設計 1.2 のとおり後者にした（設計の 7 章に却下した案として記録されている）。",
+      "open_issues": "- 暫定の判断で、利用者にまだ確かめていないもの（FIX_PLAN の実施の記録と DESIGN.md に「暫定」と書く必要がある。まとめ役の担当）:\n  - 引用文献などの後ろの資料は、資料にせず知らせるだけ（決定事項 8(b)）。このとき見出しの段落と続く段落は、0.23.1 と同じく引用文献の 1 件として ref-list に出る。\n  - 記号を自分で付けた文末脚注（customMarkFollows）の扱い。\n  - 英文の題目・副題への set_role は、どの役割も採用しない。\n  - 番号のない「Appendix」の後ろが空白と英小文字なら認識しない。\n  - 削除された参照の注は、理由付きで除外する。\n- まとめ役の作業: 版 0.24.0（src/jasme_jats/__init__.py と pyproject.toml）、python tools/make_notebook.py、FIX_PLAN の E の実施の記録と決定事項 8 の追記、README の 148・186・236〜238 行。\n- pdfmatch.py の target_paragraphs の docstring（510 行）と 539 行のコメントは、B2.1 を再開するときに直す。\n- 実際の AI（少なくとも Claude）で、app_heading・abstract の set_role と、捨てられる set_role を勧めなくなった依頼文を確かめていない（模擬回答だけ）。\n- J-STAGE の試験登載で、文末脚注から作った注と、記号を自分で付けた注の表示を確かめていない。\n- 英文要旨の和文の要確認が、実際の原稿で出すぎないか（短い和文の行でも出る）。td1〜3 では 0 件だった。\n- 英文要旨の後ろの「Key words」などを見出しのスタイルで書いた原稿は、そこから資料になる（判断の一覧に残り、AI の abstract で戻せる）。\n- 本文の表のセルの段落は、今も set_role を受け付ける（多くは効果がない）。FIX_PLAN の範囲外。\n- 文字だけのテキストボックスの段落の set_role の規則は F で足す。\n- plan.lang は雑誌の設定で、記事の言語 meta.lang は見ない（設計 2.3 のとおり）。\n- ルート2 の直した docx は、直す箇所がなくても word/endnotes.xml を書き直し、XML 宣言の引用符と改行だけが変わる。0.23.1 の footnotes.xml と同じ扱い。\n- oracle の N09・R06 は、案内の文言に「set_role」の語があるだけで FAIL と判定する。oracle の期待を直すかどうかは、まとめ役の判断。\n- 実験の結果・ログ・スクリプトは /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/impl/ に残した（mut/results_run1.json・mut/results.json、golden_wt2/manifest.json、td_out/・td_r2/ の exit.txt と stderr.txt、run_td.sh・run_td_r2.sh・cmp_prompts.py・tools/）。oracle の結果は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/oracle/results_wt_final.json。"
+    },
+    "verify": {
+      "passed_all": true,
+      "measures": "作業ツリーの単位 E は、出力を止めるほどの問題がなく、物差しはすべて合格でした。直した方がよい点が 1 件（レポートのリンクの表示）、細かい点が 5 件あります。検証用の作業ファイルは /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/verify/ にあり、作業ツリーのファイルは変えていません。\n\n1. pytest\n- Python 3.13・3.10 とも 767 passed。\n- 自分の実行で tests/__pycache__ ができたので消しました。\n\n2. ruff（ruff check src tests tools）\n- 作業ツリー 202 件、HEAD（git worktree で作った写し）203 件。\n- 違いは report.py の ISC004 が 1 件減っただけで、増えた指摘はありません。\n\n3. golden（23 件。0.23.1 の golden_base/manifest.json と比べた）\n- 全件で不変性・最終・DTD・J-STAGE が合格（ok=[True,True,True,0]）。\n- XML が変わったのは sample_structure_manual・_split だけで、fixture に足した部分です。本体の diff で次を確かめました。\n  - 注: fn1＝脚注 5「1)」、fn2＝文末脚注 5「2)」（2 段落）、fn3＝記号の文末脚注 7（xref は空で、本文の「*」は docx のまま）、fn4＝脚注 8、fn5＝文末脚注 8（脚注 8 の中からリンク）。\n  - 資料: app-group の「資料（授業プリント）」と問1・問2。\n- レポートが変わったのは次の 4 件。\n  - sample_edge_manual・_split は、4 章の場所「Word の脚注 1件中」が「Word の脚注 5（注 1）」になった 1 行だけ。\n  - sample_structure の 2 件は、1 章の段落数とリンク数、4 章の判断 2 件、6 章の除外 3 件（脚注 6 は削除の理由、脚注 9 は参照なし、全角空白は空白のみ）、8 章の対応の表、10 章の変更履歴の行。\n- AI 依頼文は 13 件が変わり、行を分類した結果、意図した違いだけでした。\n  - 役割の一覧の app_heading と、SYSTEM_PROMPT の 3 行。\n  - 冒頭の除外 d1・d2・d8（と d10・d12）の案内が「（set_role で指定できる役割: title, subtitle）」になった。\n  - 重複する所属の案内が「（この段落の役割は set_role では変えられない）」になった。\n  - sample_edge の注の一覧「（Word の脚注 5）」と場所の表記。\n\n4. td1〜3（0.23.1 と比べた）\n- 調べた範囲:\n  - ルート1（--route docx --ai manual）と、ルート2（実際の PDF）の両方。\n  - 0.23.1 は base0231_src を jasme_jats という名前のリンクで読ませて動かした。\n- 結果:\n  - XML・レポート（作成日時とツールの行を除く）・標準エラーは 6 組すべて同じ。終了コードはすべて 1（手動モードで回答前）。\n  - AI 依頼文の違いは 11 行で、役割の一覧・SYSTEM_PROMPT・冒頭の除外 3 段落の案内だけ。\n  - 不変性・最終・DTD・J-STAGE のチェックは合格。XML に入らなかった画像は 0 件で増えていない。\n  - docx の中身も確かめ、td1〜3 には脚注・文末脚注も、その参照も 0 件だった。注の数・番号・資料の領域・本文の文字は 0.23.1 と同じ。\n  - ルート2 で直した docx の部品の一覧（word/endnotes.xml・footnotes.xml）は 0.23.1 と同じ。\n\n5. 独立の反例（oracle）\n- 写しを verify/oracle/ に作って実行し、37/39 OK。\n- 残る FAIL は N09 と R06 で、どちらも案内の文言に「set_role」という語があるだけで判定されるものです（下の problems）。\n\n6. 自作の架空の docx（7 件。verify/cx/cases.py、要点は wt/*/summary.json。7 件とも不変性・最終・DTD・J-STAGE が合格し、XML に入らなかった画像は 0）\n- c1（文末脚注・脚注の入れ違い。ID はどちらも 1・2。同じ脚注を 2 度参照、表のセルの中の参照）\n  - 番号は文末1→1)、脚注1→2)、文末2→3)、脚注2→4)、セルの文末3→5)。再参照も fn2「2)」にリンク。\n- c2（注の中の参照の連鎖。参照されていない注の中からの参照、互いに参照し合う注）\n  - 連鎖は番号が続き（fn3・fn4）、参照されていない注 4 段落は理由付きで除外。\n- c3（資料の見出しの揺れ）\n  - 【資料1】、資料２－１、付録Ⅲ：、〔資料⑤〕、Appendix B. が app になった。\n  - 「資料1を配布した。」は資料の段落のまま。英文要旨の「Appendix shows …」「資料-1 shows …」は英文要旨のまま。\n- c4（英文要旨の後ろの章見出しのスタイル、英文要旨の中の和文）\n  - 章見出しのスタイルから資料を始め、判断の一覧に記録。資料の中の節見出しは資料の段落。\n  - 和文の段落は判断（applied=False）・10 章の警告・Action abstract_ja が出た。\n- c5（引用文献の後ろの章見出しスタイルの「資料　…」）\n  - 引用文献のまま、10 章の警告と Action app_after_refs が出た。\n- c6（記号を自分で付けた脚注・文末脚注、削除と生きている参照の両方、参照先のない参照）\n  - 記号の注は判断 2 件と 8 章の表「あり（本文の記号は docx の文字のまま）」。両方の参照がある注はふつうに出力。参照先のない参照は何も出さない。\n- c7（題目・引用文献の中の文末脚注）\n  - 下の problems の 1 件目の不具合が出た。\n\n7. ルート2（extract_pages を差し替えて c1 を変換）\n- number_edits は note_key で 9 件、文末脚注の段落の直し（e3〜e5）は書き込んで読み直しが合った。fn の番号は PDF の「１）」。\n- 13.3 の表の場所は「Word の文末脚注 1」、8 章の表の番号は PDF に合わせた「１）」。\n- 表のセルの参照「5)」は、セルを照合しない今までの扱いのため半角のまま（以前からの限界）。\n- 表記の分かりやすさは problems の 3 件目に書きました。\n\n8. 変異テスト（verify/mut/run.py。12 件）\n- 11 件はテストが見つけた（word_note_refs・_para_seq・_all_paragraphs・linked・削除の理由・custom・3 割の境目・依頼文の案内・領域のない段落の規則・引用文献の後ろの警告・note_of）。\n- 残ったのは build_front_en の role_origin==\"style\" の条件だけで、実装の担当の判断どおり同値です（見出しの heuristic な役割は本文の領域でしか付かない）。\n\n9. 原則\n- 新しいコードに、文字列を書き換える処理や XML に文字を書く処理はありません。\n- 参照されていない注は exclude・exclude_blank で記録され、出力した段落を除外に入れることもありません。\n- 新しい知らせは report.actions() の Action だけで出ています。\n\n10. 後片付け\n- git worktree は消しました。大きな出力（docx・pdf・xml・zip・画像）も消しました。verify/ の中は 4.2MB。\n- tests/ に一時ファイルはありません。git status は 23 ファイルの変更のままです。ディスクの空きは 23GB。",
+      "problems": [
+        {
+          "severity": "should",
+          "where": "src/jasme_jats/report.py word_note_rows・word_note_refs（8 章の「本文からのリンク」の列、1 章のリンクの件数）／structure.attach_word_notes の FnNode.linked",
+          "problem": "題目・著者名・所属・引用文献の段落にある参照は、emit がリンクにしません（xref=False の文脈）。なのに linked=True のままなので、8 章の対応の表に「あり」と出ます。1 章のリンクの件数にも数えられます。題目に付けた注（科研費などの謝辞の脚注）はよくある形で、文末脚注と一緒になると、利用者はリンクがあると思い込みます。word_note_refs の docstring「注へのリンクとして出力されるもの」とも食い違います。DESIGN.md 7 章は「リンクにならない（知らせない）」と書いていますが、新しい列は「あり」と言い切っています。",
+          "evidence": "verify/cx/wt/c7_title_endnote/summary.json: XML の fn の xref は fn2 の 1 つだけで、題目は『検証の論文1)』、引用文献は『…『架空誌』3)．』になる。なのに 8 章の表は『| fn1 | Word の文末脚注 1 | 1) | あり |』『| fn3 | Word の文末脚注 3 | 3) | あり |』、1 章は『注 3（うち Word の脚注・文末脚注 3）』。脚注だけの c5（題目と引用文献に脚注の参照）でも、1 章は『注 3（うち Word の脚注 3）』で、実際の xref は 1。",
+          "fix": "linked の判定で、XML に出力しなかった段落に加えて、xref=False で出力する段落（plan.title・subtitle・著者表・所属・引用文献〈region refs の ref〉など。emit がリンクにしない文脈）の参照も『リンクなし』として数える。word_note_refs も同じ条件で数える（できれば builder が実際に作った fn の xref を数える）。8 章の表は『なし（参照は題目など、リンクにしない段落の中だけ）』とし、DESIGN.md 7 章の『知らせない』を直す。直さないなら、少なくとも word_note_refs の docstring と DESIGN 7 章に、題目・引用文献の参照も数えて『あり』と出すことを書く。"
+        },
+        {
+          "severity": "nit",
+          "where": "oracle（scratchpad/e/oracle/run_e.py の N09・R06 の判定）",
+          "problem": "N09・R06 の FAIL は、依頼文の案内に『set_role』という部分文字列があるかで『勧めた』と判定しているためで、実装の不具合ではありません。実際の案内は『（この段落の役割は set_role では変えられない）』と『（set_role で指定できる役割: title, subtitle）』で、p は勧めていません。",
+          "evidence": "verify/oracle/log_verify.txt: R06 は rejected『この位置（front_ja）では役割「p」を指定できない』、hint=True。依頼文の d1 の行は『（set_role で指定できる役割: title, subtitle）』。",
+          "fix": "oracle の期待を『（本文の一部なら set_role を提案）』があるか、または p を勧める文言があるかで判定するように直すか、まとめ役が FAIL 2 件を偽陽性として記録する。"
+        },
+        {
+          "severity": "nit",
+          "where": "src/jasme_jats/report.py 8 章の対応の表・13.3（number_rows）、model.note_label",
+          "problem": "『Word の文末脚注 5』の数字は docx の中の ID で、Word の画面の表示（文末脚注は i, ii, …）とは違います。Word で保存した原稿なら、ID は文書の中の順とほぼ同じになるので推測はできます。しかし、ほかのアプリで作った docx や、注を足したり消したりした後では、利用者が Word でどの注かを見つけにくくなります。13.3 の表の『本文の脚注番号 | Word の文末脚注 1』も同じです。",
+          "evidence": "verify/cx/r2.py の出力（c1。ルート2）: 8 章『| fn1 | Word の文末脚注 1 | １） | あり |』、13.3『| 本文の脚注番号 | Word の文末脚注 1 | 「1)」→「1）」 |』。8 章の前置きは『Word の表示〈脚注は「1」、文末脚注は「i」など〉ではなく…』と書く。",
+          "fix": "8 章の表に、注の書き出しの 10〜20 字の列を足す（plan.paras の text_only。docx の文字を表示するだけ）。または note_label を『Word の文末脚注（docx の中の番号 5）』の形にする。急がないので F・H でもよい。"
+        },
+        {
+          "severity": "nit",
+          "where": "src/jasme_jats/structure.py attach_word_notes のまとめの Decision",
+          "problem": "文末脚注だけの原稿で『（脚注 0 件・文末脚注 3 件）』と、0 件の種類まで出ます。",
+          "evidence": "verify/cx/wt/c7_title_endnote/summary.json の dec:『Word の脚注・文末脚注機能で書かれた注 3 件（脚注 0 件・文末脚注 3 件）を、…』",
+          "fix": "脚注が 0 件なら『Word の文末脚注機能で書かれた注 3 件を、…』にする（任意）。"
+        },
+        {
+          "severity": "nit",
+          "where": "docs/FIX_PLAN.md（E の節・決定事項 8）、README.md 148・236〜238 行、src/jasme_jats/__init__.py・pyproject.toml（0.23.1 のまま）、notebooks",
+          "problem": "まとめ役の担当として残っている、文書とコードの食い違いと反映前の作業です。README は今も『要確認「Word の文末脚注」』『Word の文末脚注は…XML に出力できません』と書いています。FIX_PLAN には暫定の判断（引用文献の後ろの資料は警告だけ、customMarkFollows の文末脚注、英文の題目・副題への set_role の拒否、番号のない Appendix＋英小文字、削除された参照の除外）がまだ書かれていません。FIX_PLAN の『既存テストの修正は 2 つ』（実際は 7 件）、『Builder に endnotes_extra を足し』（A で足し済み）、行番号と rvz_*.py・exp_struct_re.py も古いままです。版は 0.23.1 のままで、ノートブックも作り直していません。",
+          "evidence": "grep の結果: README.md:148『要確認「テキストボックスの中の文字」「Word の文末脚注」』、:236・:238。__init__.py と pyproject.toml の version は 0.23.1。docs/FIX_PLAN.md の 465〜473 行（E の節）に実施の記録がない。",
+          "fix": "反映の前に、まとめ役が次を行う。版を 0.24.0 に上げる。python tools/make_notebook.py を実行する。FIX_PLAN の E の節に実施の記録と暫定の判断を書き、決定事項 8 に『(b) は暫定で警告だけ』を追記する。README の 3 か所を直す。"
+        },
+        {
+          "severity": "nit",
+          "where": "src/jasme_jats/pdfmatch.py target_paragraphs の docstring と、その下の資料に関するコメント",
+          "problem": "docstring とコメントは『資料は照合しない』と書いていますが、コードは資料の中の段落を照合して直し、資料の見出しだけを照合しません。DESIGN.md 4.4 は直してありますが、pdfmatch.py は B2.1 の控えとぶつからないよう、E では直していません（実装の担当の報告どおり）。レポート 13 章の冒頭の定型文『表のセル・別行の数式・図の中の文字・資料と、4 文字未満の段落は照合せず』も同じく古いです。",
+          "evidence": "verify/cx/r2.py の出力の 13 章の冒頭『…表のセル・別行の数式・図の中の文字・資料と、4 文字未満の段落は照合せず、docx のままです。』。docs/DESIGN.md 4.4 の新しい文『資料の中の段落（… linker.body_paragraphs が後付けの段落として返すので照合し、ルート2 で直す。資料の見出しは返さないので照合しない）』。",
+          "fix": "B2.1 を再開するときに、pdfmatch.py の docstring・コメントと、report.py の 13 章の定型文の『資料』を『資料の見出し』に直す（定型文は report.py なので、E で直してもよい）。"
+        }
+      ]
+    },
+    "pre": {
+      "changed_files": [
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/structure.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/report.py",
+        "/home/user/jstgxmlcng_JASME/tests/test_notes.py",
+        "/home/user/jstgxmlcng_JASME/tests/test_pdfmatch.py",
+        "/home/user/jstgxmlcng_JASME/docs/DESIGN.md",
+        "/home/user/jstgxmlcng_JASME/docs/DEVELOPMENT.md"
+      ],
+      "summary": "確かめで見つかった問題は should 1 件と nit 5 件でした。should はすべて直し、nit のうち 3 件も直しました。どれも作業ツリーへの未コミットの差分です。版は 0.23.1 のままです。\n\nshould（題目・著者名・所属・引用文献の中の参照を「リンクあり」と数えていた）\n- structure.py に ArticlePlan.no_link_paras を足した。\n  - 対象は題目・副題（和文・英文）・著者名・所属・引用文献の段落で、段落 ID から段落の種類を引く。\n  - builder が emit の xref=False の文脈（TITLE・NAME・AFF・REF）で書き出す段落と同じものを返す。\n- FnNode.linked の条件を改めた（attach_word_notes）。XML に出力しなかった段落と no_link_paras の段落を除いて、参照が 1 つでも残る注だけを「リンクあり」とする。\n- report.word_note_refs（1 章のリンクの数）も同じ条件で数えるようにした。これで docstring どおりになった。\n- 判断の一覧と 8 章の表の説明を、参照の場所で 3 通りに分けた。分け方は ArticlePlan.unlinked_places で共通にした。\n  - 出力しなかった段落だけ: 今までの文言のまま。\n  - 題目などだけ: 判断の一覧は「Word の文末脚注 1（注 1）は、参照が題目の段落 d3 の中にだけあるので、本文からのリンクのない注として出力した（題目・副題・著者名・所属・引用文献の中の注の番号は、リンクにせず上付きの番号だけにする。8 章）」。8 章の表は「なし（参照は題目の段落 d3 の中だけ。…）」。\n  - 両方にある: 上の文に加えて、Word で参照を本文の段落に移すよう案内する。\n- 脚注だけの原稿でも、題目などにだけ参照がある脚注があれば 8 章の表が出る。そのときの前置きは「Word の脚注と、XML の注の対応」にした。\n- builder が実際に書いたリンクと一致するかは、新しいテスト test_word_note_links_match_xml で確かめる。\n\n直した nit\n- 文末脚注だけの原稿のまとめの文から「脚注 0 件」を外した（「Word の文末脚注機能で書かれた注 N 件を、…」）。\n- 8 章の表に「注の書き出し」の列を足した。中身は、文字のある最初の段落の docx の文字（15 文字まで）。\n  - 表の前置きに、「Word の注」の番号は docx の中の番号で、Word の画面の番号（文末脚注の「i」など）と違うことがある、と書いた。\n- 13 章の定型文（ルート1・ルート2）の「資料」を「資料の見出し」に直した。\n\n文書\n- DESIGN.md の 6 章の表（Word の脚注・文末脚注の行）と 7 章の「知らせない」を直した。\n- DEVELOPMENT.md の構成・テスト・残っている課題を直した。\n- 7 章と残っている課題には、著者名の中の参照で DTD 検証が不合格になることを書いた（0.23.1 の脚注から同じ）。\n\n後片付け\n- 大きな出力（docx・xml・zip・画像など）は消した。ディスクの空きは 23GB。\n- tests/ に一時ファイルと __pycache__ はない。",
+      "tests_added": [
+        "tests/test_notes.py::test_notes_referenced_only_from_title_and_references_have_no_link（題目・副題・所属・英文題目・英文の所属・引用文献の参照と、誌名の行＋所属の参照を混ぜた形。リンク・番号・8 章の 7 行・判断の一覧・1 章の数を確かめる）",
+        "tests/test_notes.py::test_title_footnote_is_listed_in_chapter8（脚注だけで題目に脚注がある形。8 章の表の前置き「Word の脚注と、…」と、1 章の「注 1（うち Word の脚注 1）」）",
+        "tests/test_notes.py::test_chapter8_excerpt_uses_first_paragraph_with_text（1 段落目が空白だけの注の、注の書き出し）",
+        "tests/test_notes.py::test_word_note_links_match_xml[edge]・[structure]・[everywhere]（FnNode.linked と word_note_refs が、builder の書いた注へのリンクと一致する。everywhere は参照を冒頭・英文の部分・見出し・本文・表のセル・引用文献・英文要旨・注の中に置いた 15 注）",
+        "書き直した既存テスト: tests/test_notes.py::test_endnotes_are_output_as_notes（まとめの文言。「脚注 0 件」を出さない）、test_note_referenced_only_from_excluded_paragraph と test_report_lists_word_notes_with_endnotes（8 章の表の列と前置き）、tests/test_pdfmatch.py::test_endnote_numbers_and_text_follow_pdf_in_route2（8 章の表の列）、test_route1_reports_without_changing_text・test_route2_fixes_docx_with_tracked_changes（13 章の定型文の assert を足した）"
+      ],
+      "pytest_result": "- Python 3.13: 773 passed（24.1 秒）。Python 3.10（venv310、PYTHONPATH=src）: 773 passed（25.9 秒）。\n  - 修正前は 767 件。増えた 6 件は、新しいテスト 3 件と、parametrize の 3 件。\n- 修正前の src（scratchpad/e/fixv/pre_src）で流すと 4 件失敗する。\n  - 失敗するもの: test_endnotes_are_output_as_notes、test_notes_referenced_only_from_title_and_references_have_no_link、test_title_footnote_is_listed_in_chapter8、test_word_note_links_match_xml[everywhere]。\n  - [edge] と [structure] は修正前でも通る（これからの変更の守り）。\n  - test_chapter8_excerpt_uses_first_paragraph_with_text は後で足したので、修正前では流していない。修正前の 8 章の表には「注の書き出し」の列がないので、通らない。\n- docs/fix_plan_repro_tests.py は、tests/ に一時的に写して流し 5 passed。写しはすぐ消した。\n- ruff（環境の 0.16.9。既定の規則）: 作業ツリーは 202 件で、修正前と同じ（HEAD は 203 件）。増えた指摘は 0 件。\n- 変異テスト（scratchpad/e/fixv/mut/run_mut.py）: 今回の修正に 1 か所ずつ変異を入れた 15 件は、すべてテストが見つけた。\n  - 変異の例: no_link_paras から引用文献・所属・著者名・英文題目・副題を外す、linked と word_note_refs の条件を戻す、文言の分岐を消す、書き出しを 1 段落目だけから取る。",
+      "measures": "golden（23 件。全件 ok=[True, True, True, 0]）\n- 修正前の作業ツリー（verify/golden_wt）との違い。XML と AI 依頼文は 23 件すべて同じで、違うのはレポートだけ。\n  - sample_structure_manual・_split: 8 章の表の前置きの注意書きと、「注の書き出し」の列。\n  - pdfcheck_route1・route2: 13 章の定型文 1 行（資料 → 資料の見出し）。\n- 0.23.1（golden_base）との違い。\n  - XML が違うのは、今までどおり sample_structure の 2 件だけ。\n  - AI 依頼文は、manual・ai の 13 件が今までどおり E の意図した違い。\n  - レポートが違うのは sample_edge×2（M-009 の場所。前から）、sample_structure×2、pdfcheck_route1・route2（定型文）。\n\ntd1〜3（0.23.1 は impl/base_pkg。HEAD と同じことを確かめた）\n- ルート1\n  - XML・ZIP の中の XML・標準エラーが同じ。終了コードはどちらも 1。レポートは作成日時・ツールの行を除いて同じ。\n  - AI 依頼文の違い 11 行は、E の役割の一覧などだけ。修正前の作業ツリーとは 3 本とも 1 文字も違わない。\n- ルート2\n  - XML・ZIP・標準エラー・終了コードが同じ。\n  - レポートの違いは 13 章の定型文 1 行だけ。\n  - 直した docx で違う部品は word/endnotes.xml だけ。XML 宣言の引用符と改行を揃えると同じ。\n- 不変性・最終・DTD・J-STAGE のチェックは 6 本とも合格。\n- XML に入らなかった画像は増えない（td3 の要対応 2 件は 0.23.1 と同じ）。\n\n独立の反例\n- oracle（scratchpad/e/fixv/oracle に写して実行。oracle は変えていない）: 37/39 OK。ケースごとの結果は修正前と同じ。\n  - 0.23.1 は 15/39。\n  - 残る N09・R06 の FAIL は偽陽性（deviations を参照）。\n- 確かめの担当の反例 c1〜c7（scratchpad/e/fixv/cx）。数字は修正前 → 修正後（0.23.1 は c5 で 3）。\n  - c5（脚注だけ）: 1 章の注のリンクの数が 3 → 1。8 章の表が出て、題目と引用文献の脚注が「なし」。\n  - c7（文末脚注だけ）: 1 章が 3 → 1。題目と引用文献の文末脚注は「なし」。まとめの文に「脚注 0 件」が出ない。\n  - c1・c2・c6: 列が 1 つ増えただけ。c3・c4: 変わらない。\n  - c1〜c7 のすべてで、1 章の数が XML の注へのリンクの数と、8 章の「あり」の注がリンクのある注と一致した。\n  - r2.py（ルート2）: 合格。8 章の番号は PDF に合わせたもので、書き出しは直した docx の文字。\n- 自分の反例 k1〜k4（scratchpad/e/fixv/exp/ctx_cases.py）: 参照を題目・副題・所属・著者名・英文の各部・引用文献・誌名の行に置いた形。数字は修正前 → 修正後。\n  - リンクのある注の集合は、XML の xref の集合と一致するようになった（修正前は不一致）。\n  - リンクの数: k1 は 11 → 2（XML も 2）、k2 は 3 → 1、k3 は 2 → 1、k4 は 3 → 1。\n  - k1 は DTD が不合格。著者名の中の参照によるもので、0.23.1（base_pkg）も同じ。",
+      "deviations": "直し方を確かめの担当の案から変えたこと\n1. リンクの有無は、builder が書いた xref を数えずに、構造の組み立ての段階で決めた（ArticlePlan.no_link_paras。builder の xref=False の文脈をなぞる）。\n   - 理由: リンクのない注の判断（判断の一覧と AI 依頼文の「推定:」）は、構造の組み立てで記録している。1 か所の条件で、判断・8 章の表・1 章の数をそろえるため。\n   - 守り: builder と食い違わないことは test_word_note_links_match_xml で確かめる。c1〜c7・k1〜k4 でも、XML の xref と数・集合が一致した。\n2. 題目などにだけ参照がある注も、判断の一覧（M-xxx）に記録し、8 章の表を出すようにした。\n   - 脚注だけで題目に脚注がある原稿は、0.23.1 と比べて判断が 1 行増え、8 章の表が出て、1 章のリンクの数が減る（意図した変化）。\n   - 判断の文には、Word で直す案内を付けない（直す必要がないため）。\n3. 8 章の文言は、案の「なし（参照は題目など、リンクにしない段落の中だけ）」より具体的にした。例:「なし（参照は題目の段落 d3 の中だけ。題目・副題・著者名・所属・引用文献の中の注の番号はリンクにしない）」。\n4. nit 3（Word の画面の番号との違い）は、8 章の表に書き出しの列を足して直した。note_label は変えていない。13.3 の表は 0.23.1 と同じ形のまま。\n5. nit 6 はレポートの定型文だけを直した。pdfmatch.target_paragraphs の docstring とコメントは、B2.1 の控えとぶつからないよう直していない。\n6. nit 1（oracle の N09・R06）は直していない。独立の物差しなので変えない。\n   - 実際の案内は「（この段落の役割は set_role では変えられない）」と「（set_role で指定できる役割: title, subtitle）」で、捨てられる操作は勧めていない。偽陽性として記録してほしい。\n7. nit 5（版 0.24.0、ノートブックの作り直し、FIX_PLAN の記録、README）は、まとめ役の担当として残した。\n\n文書とコードの食い違い（見つけたものすべて）\n- 直したもの\n  - DESIGN.md 7 章の「（知らせない）」。今は判断の一覧と 8 章で知らせる。\n  - DESIGN.md 6 章の表（Word の脚注・文末脚注の行）の、リンクのない注の条件。\n  - report.word_note_refs の docstring「注へのリンクとして出力されるもの」と、コード（題目・引用文献の参照も数えていた）。コードを docstring に合わせた。\n  - レポート 13 章の定型文（ルート1・2）の「資料は照合しない」。実際は資料の中の段落を照合し、資料の見出しだけを照合しない。\n  - DEVELOPMENT.md のテストの説明「脚注だけなら 0.23.1 と同じ」。今は「リンクのない注・記号を自分で付けた注もなければ」が条件。\n- 直していないもの\n  - pdfmatch.target_paragraphs の docstring と、その下のコメントの「資料は照合しない」（B2.1 を再開するときに直す）。\n  - README.md の 148・186・236〜238 行（実装の担当が挙げたもの）。今回、次の 2 か所も見つけた。\n    - 210 行: Word が付ける番号に、文末脚注の番号が入っていない。\n    - 245 行: 「Word の脚注機能で書かれた注は…」に、文末脚注がない。\n  - FIX_PLAN の E の節（既存テストの修正の数、endnotes_extra、行番号、rvz_*.py・exp_struct_re.py、暫定の判断の記録）。まとめ役の担当。\n\n手順の注意\n- 依頼文が比べる相手とする scratchpad/e/base0231_src は、jasme_jats のパッケージのフォルダそのもの。\n- PYTHONPATH=base0231_src で python -m jasme_jats を実行すると、編集可能インストールの作業ツリーが読まれ、0.23.1 と比べたつもりで作業ツリー同士を比べてしまう。\n- 私も 1 回目の td の比較で引っかかり、全部「同じ」と出た。impl/base_pkg（jasme_jats を中に持ち、HEAD と同じことを確かめた）で流し直した。",
+      "open_issues": "- 著者名の段落の中の Word の脚注・文末脚注の参照について\n  - 上付きの番号が <surname>・<given-names> の中に入り、DTD 検証が不合格になる。0.23.1 の脚注から同じで、E で文末脚注にも広がった。\n  - 要対応として知らせる（黙っては落ちない）。DESIGN 7 章と DEVELOPMENT の残っている課題に書いた。\n  - 直し方（番号を name の外に置く、など）は今後の課題で、利用者・まとめ役の判断が要る。\n- 13.3 の表（ルート2 の番号の直し）の「Word の文末脚注 1」は、docx の中の番号のまま。8 章の表には書き出しを足した。F・H で揃えるか決める。\n- まとめ役の作業\n  - 版を 0.24.0 に上げる。\n  - python tools/make_notebook.py を実行する。\n  - FIX_PLAN の E の節に、実施の記録と暫定の判断を書く。今回の「題目などの参照もリンクのない注として知らせる」も入れる。\n  - README の 148・186・210・236〜238・245 行を直す。\n- pdfmatch.py の target_paragraphs の docstring とコメントは、B2.1 を再開するときに直す。\n- oracle の N09・R06 は偽陽性（記録する）。\n- 題目などに付いた注の判断も、AI 依頼文の「推定:」に載るようになった。実際の AI では確かめていない。\n- 題目の注の J-STAGE での表示（題目の上付きの「1)」と注の一覧）は、試験登載で確かめていない。\n- 実験のスクリプト・結果は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/fixv/ にある。大きな出力は消した。\n  - 主なもの: cmp_td.json、golden_fix2/manifest.json、oracle/results_fixv2.json、cx/out/*/summary.json、exp/out_new/*/summary.json、mut/results.json。\n  - 修正前の src の写しは pre_src。差分は pre_fix.diff・post_fix.diff・fix_only_src.diff。"
+    },
+    "fin": {
+      "changed_files": [
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/__init__.py",
+        "/home/user/jstgxmlcng_JASME/pyproject.toml",
+        "/home/user/jstgxmlcng_JASME/notebooks/JASME_docx_to_JSTAGE_XML.ipynb",
+        "/home/user/jstgxmlcng_JASME/README.md",
+        "/home/user/jstgxmlcng_JASME/docs/FIX_PLAN.md"
+      ],
+      "summary": "仕上げ(finalize)を行った。\n1. 版を 0.24.0 にした(__init__.py と pyproject.toml)。python tools/make_notebook.py でノートブックを作り直した(差分は版の表記 3 行だけ)。\n2. docs/FIX_PLAN.md を直した。\n - 反映の順序の表の E に「(実装済み)」を付けた。\n - 決定事項 8 に、暫定の判断 2 つを「(暫定。2026-10-26)」で追記した。1 つは (b) を警告だけにしたこと。もう 1 つは customMarkFollows の文末脚注を脚注と同じ扱いにしたこと。\n - E の節に次を足した。実装で決めたこと(暫定の判断 4 つと、題目などの参照をリンクなしと数える確かめの修正を含む)、設計と違えたこと、テスト、確かめた数、残る限界、文書とコードの食い違い。\n - 「同じファイルを触る順」の節に E で触ったファイルを足した。\n - 計画の「既存テストの修正は 2 つ」が実際は 7 件だったことは、E の節に書いた。\n3. README.md を直した。\n - 要確認から「Word の文末脚注」を外した。\n - 直さないものの「資料(付録)」を「資料(付録)の見出し」にした。\n - Word が付ける番号の記述に文末脚注を足した。\n - できないことから文末脚注を外した。\n - 注の記述に、文末脚注が注として出ること、題目などの中の参照はリンクにならないこと、記号を自分で付けた文末脚注の暫定の扱い、資料の見出しの認識が広がったこと、引用文献の後ろの資料は警告だけ(暫定)を書いた。\n4. DESIGN.md・DEVELOPMENT.md・STYLE_MAPPING.md・fix_plan_repro_tests.py は、実装と確かめの修正の担当がすでに実装に合わせて直してあった。暫定の判断の記述が DESIGN.md にあることを確かめ、追加の修正は要らなかった。\n5. 点検の結果。\n - 実際の論文の文字は入っていない。tests/private の docx(document・footnotes・endnotes)の 12 文字の並び(かな・漢字 6 文字以上を含むもの)と、追加行 1536 行を突き合わせ、一致 0 件だった。\n - 一時ファイルと tests/__pycache__ は残っていない。git status は変更 23 件に、README・ノートブック・版のファイルが加わっただけ。",
+      "tests_added": [],
+      "pytest_result": "Python 3.13 は 773 passed。Python 3.10(venv310、PYTHONPATH=src)も 773 passed。ruff check src tests tools は環境の ruff 0.16.9 の既定の規則で 202 件。HEAD は 203 件なので増えていない。",
+      "measures": "この担当では新たに測っていない。golden 23 件・td1〜3(ルート1・2)・独立の反例 37/39・変異テストの数は、実装と確かめの修正の担当の値を FIX_PLAN の E の節に転記した。0.23.1 との比較もその担当の値で、golden は XML が変わったのが sample_structure 2 件だけ。td1〜3 は XML・レポート・標準エラー・終了コードが同じ。これらの数は転記だけで、この担当では再計測していない。最後に pytest(3.13・3.10)と ruff を流し直し、結果は上のとおり。",
+      "deviations": "設計と違えたこと\n- なし。\n- FIX_PLAN の E の節の確かめた数は、実装と確かめの修正の担当の報告を転記した。再計測はしていない。\n- 変異テストの件数(実装 47 件中 43 件、確かめの修正 15 件中 15 件)は、2 つの担当の報告の値を並べた。\n\n直さなかった指摘と理由\n- oracle の N09・R06 の FAIL。案内の文言に「set_role」の語が入るだけで判定される偽陽性。FIX_PLAN に書いた。\n- pdfmatch.target_paragraphs の docstring とコメントの「資料は照合しない」。B2.1 の控え(67a854b)とぶつからないよう E では直さない。FIX_PLAN の食い違いの項に書いた。\n\n文書とコードの食い違い\n- 直したもの\n - README.md: 148 行(要確認の文末脚注)、186 行(資料の見出し)、210 行(Word が付ける番号に文末脚注)、236〜238 行(できないことの文末脚注)、245 行(注の記述に文末脚注と資料の見出し)。\n - FIX_PLAN の「既存テストの修正は 2 つ」が実際は 7 件だった。E の節に実績として書き直した。\n - FIX_PLAN の「Builder に endnotes_extra を足し」は A で足し済み。E の節に書いた。\n - 実装と確かめの修正の担当が直した分(DESIGN.md、DEVELOPMENT.md、STYLE_MAPPING.md、jasme.toml、fix_plan_repro_tests.py、report.py の docstring と 13 章の定型文)を E の節に列挙した。\n- 直していないもの\n - FIX_PLAN の項目の表と付録 D3・D4 の元の文面にある古い行番号(L789 など)と、rvz_d3.py・rvz_d4.py・exp_struct_re.py への言及。履歴として残した。E の節に古いと明記した。\n - pdfmatch.py の docstring(上記)。",
+      "open_issues": "- 暫定の判断は、利用者にまだ確かめていない。DESIGN.md、FIX_PLAN、README に「暫定」と書いた。\n (1) 決定事項 8(b): 引用文献の後ろの資料は警告だけ。\n (2) customMarkFollows の文末脚注は脚注と同じ扱い。\n (3) 英文の題目・副題への set_role は拒否。\n (4) 削除された参照だけの注は理由付きで除外。\n (5) 番号なしの「Appendix」の後ろが空白と英小文字なら認識しない。\n- 著者名の段落の中の Word の注の参照で DTD 検証が不合格になる。0.23.1 の脚注から同じで、要対応として知らせる。直し方は今後の課題。\n- 13.3 の表の「Word の文末脚注 N」は docx の中の番号。Word の画面の番号(i など)と違うことがある。\n- 実際の AI での app_heading・abstract の set_role と、J-STAGE の試験登載での文末脚注・記号の注・題目の注の表示は未確認。\n- 英文要旨の和文の要確認が、実際の原稿で出すぎないかは未確認。td1〜3 では 0 件だった。\n- 反映(コミット・main への push)はまとめ役が行う。この担当は git commit などをしていない。\n- 週明けの別セッションでの再開の準備は、このあとの作業。B2.1 は保留のまま(控え 67a854b)。次の単位は F(0.25.0)。"
+    },
+    "reviews": [
+      {
+        "checked": "作業ツリー（e2dbf73 に単位 E を積んだもの。git status は変更 28 件のまま）を、原則と文字の不変性の観点で点検した。ファイルは変えていない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/review/principle/ に置いた（results_cx.json、results_td.json、cx/gen*.py、cx/run_case.py、cx/drive.sh、logs/）。\n\n1. 読んだもの\n- FIX_PLAN の E の節、決定事項 7・8、付録 D3・D4、DESIGN.md の注と資料の章、DEVELOPMENT.md の「守るべき原則」。\n- src の diff を全部読んだ（structure、model、docx_reader、emit、builder、pdfmatch、pdfdocx、report、ai_assist、pipeline、jasme.toml）。tests と docs の diff も読んだ。\n\n2. 物差し\n- pytest: 3.13・3.10 とも 773 passed。\n- ruff: 作業ツリー 202 件、HEAD 203 件（git worktree で比べ、使い終わったら消した）。増えた指摘はない。\n- golden: 23 件すべて ok=[True,True,True,0]。XML が変わったのは sample_structure の 2 件だけで、本体の diff は、足した節・app-group・fn-group の注 5 件だけ。レポートが変わったのは次だけ。\n  - sample_edge の M-009 の場所の表記\n  - sample_structure\n  - pdfcheck の 13 章の定型文 1 行\n- fixture: make_structure だけで作り直すと、tests/fixtures/sample_structure.docx と中身が一致した。変わった fixture はこれだけ。\n- td1〜3\n  - 脚注・文末脚注は区切りだけで、参照は 0 件（数だけ数えた）。\n  - ルート1: XML・レポート・標準エラー・終了コードが 0.23.1 と同じ。\n  - ルート2: XML・標準エラー・終了コードは同じ。レポートは 13 章の定型文 1 行だけ違う。直した docx は word/endnotes.xml だけが違い、C14N では一致した（XML 宣言の書き方だけの違い）。\n  - 不変性・最終・DTD・J-STAGE のチェックは合格。XML に入らなかった画像は 0 件で、0.23.1 と同じ。\n- 独立の反例: 写しで 37/39。N09・R06 は既知の偽陽性。\n\n3. 自作の架空の docx（38 件。0.23.1 と比べた）\n- 不変性・最終チェックは全件合格した。0.23.1 では c07（注の循環）と c08（参照のない数式だけの脚注）が出力漏れで不合格だった。\n- DTD は、著者名の中の参照（c24・c25_name・c25_name_en）だけ不合格（指摘 2）。\n- 番号とリンク\n  - 脚注と文末脚注の ID の重なり、記号付きの注（c06）: rid は正しい。0.23.1 では、文末脚注の参照が脚注の fn1・fn2 にリンクしていた。\n  - 注の中の参照の連鎖・循環（c07）: 正しい。\n  - 図・表キャプション、見出し、箇条書き、英文要旨、資料の見出しと段落、表のセルの中の参照: 正しい。\n  - 1 章の注のリンクの数は、点検した 34 件すべてで XML の xref の数と一致した。\n- 除外の記録\n  - 参照のない注は理由付きで除外された。空白だけの段落は exclude_blank、画像だけの段落は要対応 lost になった。\n  - 変更履歴: w:del と生きた参照の両方がある注、moveTo だけの注、ins の注は、ふつうに出力された。moveFrom だけの注は、削除の理由で除外された。\n  - 丸ごと削除された注（c15）は、6 章に文字のない行として出る（害はない）。\n- 注の中の画像・図形・表\n  - 参照のある文末脚注の中のテキストボックス・行内の画像・浮動配置の画像・表は、fn の中に出力された（c01・c02・c26）。0.23.1 では除外され、画像は lost だった。\n  - 図形は plan.floats に入らず、placements の対象にもならない。\n- ルート2（c12。extract_pages を差し替え）\n  - mc:AlternateContent の囲みを含む文末脚注の後ろの文末脚注で、e 番号はずれなかった。直しは正しい段落（e3・e6）に入った。\n  - number_edits の鍵は note_key になっている。読み直しの確かめも合った。\n\n4. 原則（コードを読んで確かめた）\n- 文字列を書き換えるコードは増えていない。XML の文字は span と gen だけで書いている。\n- 出力する注と除外する注は同じ鍵の集合で分けていて、両方に入る段落はない。\n- canonical_text・docx_reader・pdfdocx.paragraph_units の endnoteRef・endnoteReference の扱い（削除・隠し文字・フィールド）はそろっている。\n- pdfmatch と pdfdocx で変えたのは、許された箇所と docstring だけ。_isolate・_classify・_joint は変えていない。\n- 知らせの追加は report.actions の abstract_ja と app_after_refs だけ。colab・cli・make_notebook は変えていない。\n\n5. AI の set_role\n- 資料と英文要旨への abstract・app_heading・p・exclude（c04a・c04b・c09a〜c09c・c20a・c28）は、どれも文字を落とさない。\n- 最初の資料の見出しへの p だけは、資料が英文要旨に移る（指摘 5）。\n- 0.23.1 からある問題で、E で悪くなっていないもの:\n  - 隠し文字の参照も番号を出す（c13）。\n  - 本文の表のセルは領域が body なので、効果のない set_role も採用される。\n\n6. 実際の論文の文字\n- tests/private の docx から取った、かな・漢字 4 字以上を含む 10 文字の並びを、diff の追加行 1509 行と照らした。一致は 1 件だけで、新しい docstring の一般的な言い回しだった。\n\n7. 文書とコードの食い違い（どれも直していない。点検の担当なので）\n- FIX_PLAN 489 行: ルート2 の td のレポートが「同じ」となっているのと、ruff が「同じ指摘数」となっている点（指摘 6）。\n- DESIGN.md 6 章の「資料」の行は、番号の前を「全角のハイフン」とだけ書いている。コードは「－」と「‐」（U+2010）の両方を許す。\n- DESIGN.md 6 章と STYLE_MAPPING.md は「「資料を配布した。」のような文は除く」と書いている。しかし、読点・括弧・ダッシュが続く文や、括弧で始まる文は資料の見出しとして認識される（指摘 1）。\n- DESIGN.md 5 章の「資料の見出しへの abstract で、次の資料の見出しまで英文要旨に戻る」: 見出しのスタイルの規則のため、戻した資料の中の節見出しのスタイルの段落から、新しい資料が始まる（c09a）。\n- 8 章の表の列「本文からのリンク」は、注の中からだけリンクされる注（c07 の fn2）にも「あり」と出る。\n- 手で書いた注と Word の注の番号の重なりは DESIGN.md 8 章に書かれたが、README と FIX_PLAN の残る限界には書かれていない（指摘 3）。\n- pdfmatch.target_paragraphs の docstring の「資料は除く」は、既知のまま直していない（B2.1 と重なるため。FIX_PLAN に記載済み）。\n\n8. 後片付け\n- docx・xml・zip・画像・レポートと src の写しは消した（残りは 1.6MB）。\n- tests/__pycache__ はなく、git worktree も残っていない。ディスクの空きは 23GB。",
+        "findings": [
+          {
+            "severity": "should",
+            "file": "src/jasme_jats/structure.py",
+            "line": 67,
+            "problem": "RE_APPENDIX で新しく許した形（先頭の括弧、番号の直後の読点・括弧・ピリオド・ダッシュ、番号の前の「－」）が、文で始まる段落も資料の見出しとして認識します。その結果、英文要旨の文と後ろの段落が資料に移ったり、資料の中の文が新しい資料の見出しになって後ろの段落が付け替わったりします。どちらも判断の一覧・10 章・要確認に何も出ません（build_front_en は、見出しのスタイルから始めたときだけ判断を記録します。1719 行）。D3 の「資料の文字が英文要旨に入る」の逆向きの、場所の誤りが新しくできています。",
+            "evidence": "確かめ方は 3 つ。\n(1) 0.23.1（base0231_src）と作業ツリーの RE_APPENDIX に、同じ文字列を当てて比べた。次の文は 0.23.1 では認識せず、作業ツリーでは資料の見出しとして認識する。\n- 「(Appendix 1) lists the tasks.」\n- 「(Appendix A) contains the questionnaire.」\n- 「（資料1）に示すように、」\n- 「【資料1】に示すように」\n- 「資料1－2に示したように、」\n- 「資料2（後掲）に示すように、」\n- 「資料1、2は授業の記録である。」\n- 「付録1，2に示す問い。」\n- 「資料1）に示す」\n- 「資料（後掲）のとおり、問いを並べた。」\n(2) 架空の docx を変換した（cx/gen2.py。結果は results_cx.json）。\n- c21: 英文要旨の 2 段落目を「(Appendix 1) lists the fictional tasks used in the lesson.」にした。0.23.1 では trans-abstract が 3 段落のまま。作業ツリーでは trans-abstract が 1 段落だけになり、2・3 段落目は app-group/app に移る（title がその文）。\n- c20: 資料1 の中に「資料2（後掲）に示すように、架空の問いを並べた。」を置いた。0.23.1 では資料1 の段落のまま。作業ツリーでは新しい app の title になり、続く段落もその app に移る。\n- どちらも不変性と DTD は合格。レポートに資料についての記述はなく、actions・warnings・decisions も空。AI の依頼文には「資料2（見出し）」と出るので、AI があれば p で戻せる（c20a で確かめた）。AI なしでは、利用者は気づけない。\n(3) 見出しらしさの条件（「。」を含まず 40 文字以下）を足した写しで、本体のテストを流した（fixB2r4/tools/pytest_src.sh）。771/773 が合格した。落ちた 2 件は、わざと文の形の段落を使っているテストだった。\n- test_ai.py::test_set_role_overrides_appendix_heading_text（「Appendix A shows the questionnaire in detail.」）\n- test_pdfmatch.py::test_route2_keeps_abstract_appendix_border（「資料-1 shows the worksheet used in the lesson.」）",
+            "fix": "2 つ直す。\n- RE_APPENDIX で資料を始めたときも、見出しのスタイルのときと同じく判断（Decision）を記録する。4 章と AI 依頼文の推定に出るようにするため。\n- 英文要旨の領域と資料の中の両方で、文の形の段落は資料の見出しとみなさない条件を足す。例: 「。」を含む段落、または 40 文字を超える段落。\nあわせて、上の 2 件のテストの文字を見出しの形に変える。DESIGN.md 6 章と STYLE_MAPPING.md の「「資料を配布した。」のような文は除く」も、実装に合わせて書き直す。"
+          },
+          {
+            "severity": "should",
+            "file": "src/jasme_jats/emit.py",
+            "line": 244,
+            "problem": "著者名（和文・英文）の段落の中にある Word の文末脚注の参照で、DTD 検証が不合格になります。原因は、xref=False の文脈では ctx.fmt を見ずに <sup> を作るため、生成した番号が <given-names> や <surname> の中に入ることです。0.23.1 では文末脚注は除外されていたので、DTD は合格していました。E で文末脚注を出力するようになり、この不合格が新しく起きます。要対応の文は「変換ツールの不具合の可能性があります」だけで、編集委員は何をすればよいか分かりません。脚注では 0.23.1 から同じで、FIX_PLAN の残る限界と DESIGN.md 8 章には書かれています。",
+            "evidence": "架空の docx を変換した（cx/gen5.py・gen4.py。結果は results_cx.json）。\n- c25_name（和文の著者表の著者名のセルに文末脚注 5 の参照を置いた）: 作業ツリーは DTD 不合格（「Element given-names was declared #PCDATA but contains non text nodes」）。要対応は dtd だけで、レポートの冒頭は「この XML は J-STAGE にアップロードできません。12 章のエラーを確認してください（変換ツールの不具合の可能性があります）」。0.23.1 は DTD 合格で、文末脚注は除外して要確認 endnote を出していた。\n- c25_name_en（英文の著者名）: 作業ツリーは surname で同じ不合格。0.23.1 は合格。\n- c25_aff・c25_aff_en・c25_subtitle（所属・英文所属・副題）: 両方の版で合格。\n- c24b（同じ位置に脚注）: 0.23.1 でも同じ不合格（既存）。",
+            "fix": "write_object で、文脈が上付きを許さないとき（\"sup\" not in ctx.fmt。E.NAME）は、生成した番号を出さない。番号は docx の文字ではないので、不変性には影響しない。注は今までどおり、本文からのリンクのない注として fn-group に出て、判断の一覧と 8 章で知らせる。判断の文言（「上付きの番号だけにする」）も、著者名のときの扱いに合わせる。test_notes.py の everywhere のケースでも DTD を確かめるようにする。直さないなら、少なくとも DTD 不合格の要対応の文に、原因と直し方（Word で参照を著者名の外に移す）を書く。"
+          },
+          {
+            "severity": "should",
+            "file": "src/jasme_jats/builder.py",
+            "line": 729,
+            "problem": "「注」の節に手で書いた注（「1)」）と Word の注が両方ある原稿では、Word の注にも 1 から番号が付きます。本文と注の一覧に、別の注を指す「1)」が 2 つ並びます。レポートの冒頭・10 章・要確認には何も出ません。0.23.1 では、文末脚注は除外して要確認（本文の注に移してから変換し直す）で知らせていました。E でその知らせがなくなり、番号の重なりが黙って出るようになりました。よくある形は、題目に付けた助成の謝辞を Word の文末脚注にし、本文の注は手で書く原稿です。脚注では 0.23.1 から同じです。DESIGN.md 8 章には限界として足されましたが、README・FIX_PLAN の残る限界・レポートには出ません。",
+            "evidence": "架空の docx を変換した（cx/gen.py の c17、gen2.py の c19・c17b。結果は results_cx.json）。\n- c17（本文に手で打った上付きの「1)」と、本文の文末脚注の参照。「注」の節に「1) 手で書いた…」）: 作業ツリーは fn1「1) 手で書いた架空の注。」と fn2「1) Word の文末脚注の架空の注。」になる。本文の参照も 2 つとも「1)」（リンク先は fn1・fn2 で正しい）。actions と warnings は空で、8 章の表に「fn2 | Word の文末脚注 3 | 1)」と出るだけ。0.23.1 は文末脚注を除外し、要確認 endnote を出していた。\n- c19（題目に文末脚注、本文と注の節は手で書いた「1)」）: 作業ツリーでは題目の「1)」と本文の「1)」が別の注を指す。0.23.1 は要確認 endnote を出していた。\n- c17b（同じ形で脚注）: 0.23.1 でも「1)」が 2 つ（既存）。\n- 原因: word_note_marks（builder.py 726〜729 行）は、Word の注だけを数えて番号を付ける。",
+            "fix": "plan.fns に、手で書いた注（word_note が偽）と Word の注の両方があるとき、report.actions() に要確認の Action を 1 つ足し、10 章にも警告を出す。文言の例: 「手で書いた注と Word の脚注・文末脚注が両方あり、注の番号が重なっています。どちらかの書き方にそろえて変換し直してください」。番号を手で書いた注の後ろから続けるかどうかは、利用者に確かめる（決定事項 7 の範囲外）。FIX_PLAN の E の残る限界と README にも書く。"
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/structure.py",
+            "line": 1621,
+            "problem": "build_back の、引用文献の後ろの資料の知らせ（暫定）は、章・節・項見出しのスタイルであれば文字を見ずに出します。そのため、引用文献を和文献と英文献に分ける小見出しなどでも、要確認「引用文献などの後ろに、資料の見出しと思われる段落があります」が出ます。出力は変わらず、知らせが誤っているだけです。",
+            "evidence": "cx/gen7.py の c27 で確かめた。引用文献の中に、項見出しのスタイルの「＜英文献＞」を置いた。\n- 作業ツリー: actions に app_after_refs が出る。冒頭の要確認は「…資料なら、Word で英文要旨の後ろ（論文の最後）に移して、変換し直してください」で、10 章にも警告が出る。\n- 0.23.1: 何も出ない。\n- XML はどちらも同じ。",
+            "fix": "見出しのスタイルの段落でも、RE_APPENDIX に合うときだけ知らせる。または、引用文献の中では文字の規則だけで判定する。"
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/structure.py",
+            "line": 1715,
+            "problem": "AI が最初の資料の見出しに set_role p（本文段落）を指定すると、採用されます。その結果、見出しと、続く見出しのない資料の段落がすべて英文要旨（trans-abstract）に移ります。依頼文で説明しているのは、資料の app_heading と abstract だけです。資料の中の p の意味（最初の見出しに付けると英文要旨に戻る）は書いていません。AI が「資料の中のふつうの段落」のつもりで p を付けると、資料の文字が英文要旨に入ります。",
+            "evidence": "cx/gen8.py の c28 で確かめた。資料は「資料1　架空の授業プリント」と、英文要旨のスタイルの段落 2 つ。AI の回答は d23 に p。\n- 作業ツリー: 採用され、app-group がなくなる。trans-abstract が「The fictional…」「資料1　架空の授業プリント」「問1…」「問2…」になる。\n- 0.23.1: 採用と記録するが何も変えず、資料のまま。\n- 2 つ目以降の見出しへの p は前の資料の段落になり、意図どおり（c20a）。",
+            "fix": "最初の資料の見出しへの p は、見出しのない資料（AppNode(title=None)）の最初の段落にする。あるいは、依頼文と DESIGN.md 5 章に「最初の資料の見出しへの p は、abstract と同じく英文要旨に戻す」と書く。"
+          },
+          {
+            "severity": "nit",
+            "file": "docs/FIX_PLAN.md",
+            "line": 489,
+            "problem": "E の節の「確かめた数」に、実測と合わない記述が 2 つあります。1 つは「td1〜3（ルート1・ルート2）は XML・レポート・標準エラー・終了コードが 0.23.1 と同じ」です。確かめの修正で 13 章の定型文を直したため、ルート2 のレポートは 1 行違います。もう 1 つは「ruff は HEAD と同じ指摘数」で、実際は 1 件少ないです。",
+            "evidence": "- td（results_td.json）: ルート2 の td1〜3 のレポートは、0.23.1 と次の 1 行だけ違う（td1 148 行、td2 142 行、td3 169 行）。13 章の「…図の中の文字・資料と、4 文字未満の段落は照合せず」が「資料の見出しと」になった。XML・標準エラー・終了コードは同じ。\n- ruff: 作業ツリーは 202 件、HEAD は 203 件（git worktree で比べた）。report.py の ISC004 が 1 件減った。",
+            "fix": "次のように直す。\n- 「ルート2 のレポートは、13 章の定型文 1 行（資料 → 資料の見出し）だけ違う」\n- 「ruff は HEAD より 1 件少ない（増えない）」"
+          }
+        ]
+      },
+      {
+        "checked": "点検したのは作業ツリーのコミットしていない差分（git status は 28 件。src 11、tests 8、docs 5、README・ノートブック・pyproject・fixture）。HEAD は e2dbf73（0.23.1）。作業ツリーのファイルは変えていない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/review/regression/ の下に置いた。\n\n1. pytest\n- Python 3.13・3.10（venv310、PYTHONPATH=src）とも 773 passed。\n- 自分の実行でできた tests/__pycache__ は消した。\n\n2. ruff（ruff check src tests tools）\n- 作業ツリー 202 件、HEAD 203 件（git worktree で確かめ、後で消した）。\n- 違いは report.py の ISC004 が 1 件減っただけで、増えた指摘はない。\n\n3. golden（23 件。golden_base/manifest.json〈0.23.1〉と比べた）\n- 全件 ok=[True,True,True,0]。\n- XML が変わったのは sample_structure_manual・_split だけ。本体の diff は 43 行で、fixture に足した次の部分だけだった。\n  - 節「２．Word の脚注と文末脚注」。fn1〜fn5 で、fn3 は記号の文末脚注（xref は空、本文の「*」は docx のまま）、fn5 は fn4 の中からリンク。削除した参照の文にはリンクなし。\n  - app-group の「資料（授業プリント）」。\n- レポートの違い（すべて意図したもの）:\n  - sample_edge の 2 件: 4 章の場所「Word の脚注 1件中」が「Word の脚注 5（注 1）」になった 1 行だけ。\n  - pdfcheck_route1・route2: 13 章の定型文の「資料」が「資料の見出し」になった 1 行だけ（確かめの担当の報告の後に直した分）。\n  - sample_structure: 注・資料の部分。\n- AI 依頼文の違い（13 件）: 役割の一覧の app_heading と SYSTEM_PROMPT の 3 行、除外の案内（「（set_role で指定できる役割: title, subtitle）」「（この段落の役割は set_role では変えられない）」）、sample_edge の注の一覧「（Word の脚注 5）」と場所。\n\n4. td1〜3（ルート1 とルート2 の両方。0.23.1 は base0231_src をリンクで読ませた）\n- XML は 6 組すべてバイト一致。ルート2 で直した docx の document.xml も一致。標準エラーと終了コード（すべて 1）も同じ。\n- レポートの違い: ルート1 はなし。ルート2 は 13 章の定型文 1 行だけ。\n- AI 依頼文の違いは、役割の一覧・SYSTEM_PROMPT・冒頭の除外の案内だけ。\n- 不変性・DTD・J-STAGE のチェックは合格。XML に入らなかった画像は 0 件。td3 の「画像ファイルを用意できなかった図 2 件」は 0.23.1 と同じ。\n- 3 件とも、endnotes.xml は区切り線だけで、本文に脚注・文末脚注の参照は 0 件だった。\n\n5. 足したテストが 0.23.1 で落ちるか\n- 0.23.1 の src で流すと、test_ai・test_lost_images・test_pdfmatch・test_structure の新しいテストが 42 件落ちた。\n- test_notes は 0.23.1 にない名前（note_key・note_label・NO_LINK_KINDS）を import するので、その名前だけを足した写しで流した。17 件落ち、19 件通った。\n- 既存の期待は作業ツリーでも保たれている: sample_edge の「注 1（うち Word の脚注 1）」「Word の脚注機能で書かれた注 1 件を、注の一覧にした」と、sample_notes の期待。\n\n6. 変異テスト（40 件。mut/run.py、結果は mut/result.json）\n- 38 件はテストが見つけた。対象は次のとおり。\n  - RE_APPENDIX の 7 規則（ASCII のハイフン、英小文字の除外、先頭の括弧、ローマ数字・丸数字、枝番、番号の直後の文字、ピリオド）。\n  - 通し番号（種類の順、注の中の参照、custom）、参照のない注の exclude と exclude_blank、削除された参照の記録、linked の 2 条件、word_note_refs、no_link_paras の引用文献と所属。\n  - emit の注の鍵、pdfmatch の文末脚注、pdfdocx の PARTS と _all_paragraphs、_structure の領域。\n  - 見出しのスタイルから資料を始めること・資料の中では始めないこと、3 割の境目、引用文献の後ろの警告。\n  - AI の abstract・p の優先、set_role_problem の 7 規則、依頼文の案内 2 件。\n- 残ったのは 2 件（findings の 2 件目）。\n- 並列で流したとき test_pipeline.py::test_template_emf_conversion が 2 回落ちた。同じ変異を 1 つずつ流すと別のテストが見つけたので、負荷による不安定さとみられる。E とは関係しないので、指摘にはしていない。\n\n7. 独立の反例（oracle。写しを review/regression/oracle で実行）\n- 37/39 OK。\n- N09・R06 の FAIL は、確かめの担当が書いたとおり、案内の文言に「set_role」の語があるだけで判定される偽陽性。\n\n8. 自作の反例\n- 引用文献の後ろの、本文のスタイル・スタイルなしの「資料1　…」: app_after_refs として知らせ、XML は 0.23.1 とバイト一致（cx/back_text.py）。\n- 最初の資料の見出しに AI の set_role p: findings の 1 件目（cx/p_on_first_app.py）。\n\n9. 前の指摘の確かめ\n- 確かめの担当の should（題目・引用文献の中の参照を「あり」と数える件）は直っていた。no_link_paras・unlinked_places があり、test_word_note_links_match_xml が XML の xref と照らして確かめている。変異 linked_no_nolink・no_link_drop_refs・no_link_drop_aff はどれもテストが見つけた。\n- 細かい点も直っていた: 脚注 0 件の文言、8 章の注の書き出しの列、13 章の定型文。\n\n10. その他の確かめ\n- fixture: make_fixtures の 11 の make_* を別の場所で作り直し、tests/fixtures の docx と部品ごとにバイト一致した（sample_structure も）。\n- 版: __init__.py・pyproject は 0.24.0。ノートブックは写しで make_notebook.py を実行し直して一致した。\n- 段落の領域: 本文の表のセルの段落は region が body なので、「region のない段落」で拒否されるのは参照のない注の段落など（sample_full・sample_structure で確かめた）。\n- emit の xref=False の文脈: DISPF・LABEL に注の参照が入らないことを確かめた（formula_node は fnref のある段落を別行数式にしない）。no_link_paras の対象に漏れはない。\n\n11. 後片付け\n- git worktree は消した。大きな出力（docx・pdf・xml・zip・画像）と写しは消した。残りは 3.3MB。\n- tests/ に一時ファイルはない。ディスクの空きは 23GB。\n\n12. 文書とコードの食い違い\n- 前からあるもので、直していない:\n  - pdfmatch.target_paragraphs の docstring とコメントの「資料は照合しない」。B2.1 の控えとぶつからないよう、E では直さない（仕上げの担当の報告どおり）。\n  - FIX_PLAN の古い行番号と、rvz_*.py・exp_struct_re.py への言及（履歴として残してある）。\n- 新しく見つけたもの:\n  - DESIGN.md の set_role の節と DEVELOPMENT.md の「AI の abstract・p を文字の規則より優先する」は、最初の資料の見出しへの p で資料が英文要旨になること（findings の 1 件目）を書いていない。\n  - test_appendix_after_references_is_warned の説明は「参考文献のスタイル以外で『資料1』などで始まる段落」の規則を述べている。しかし、その場合（見出しのスタイルでない段落）のテストがない（findings の 2 件目）。",
+        "findings": [
+          {
+            "severity": "should",
+            "file": "src/jasme_jats/structure.py",
+            "line": 1715,
+            "problem": "AI が最初の資料の見出し（その前に資料がない見出し）に set_role p を指定すると、資料の見出しにならない。見出しとその後ろの段落（次の資料の見出しまで）は英文要旨（trans-abstract）に入る。ai_assist の REGION_ROLES[\"app\"] が p を許し、依頼文の SYSTEM_PROMPT も p の意味を書いていない。0.23.1 では、p を指定しても見出しは資料の見出しのままだった。文字は落ちないが、和文の資料が英文要旨に混ざる。和文なら abstract_ja の要確認は出る。この形のテストはない（test_set_role_overrides_appendix_heading_text は、前に資料がある「資料2：…」への p だけを見ている）。",
+            "evidence": "cx/p_on_first_app.py: make_article で、英文要旨の後ろに「資料1　架空の授業プリント」と「架空のプリントの本文。」を置いた（機械的には app の d23）。d23 に set_role p を指定して変換した。作業ツリー: rejected=[]、trans-abstract が ['Small article abstract.', '資料1　架空の授業プリント', '架空のプリントの本文。']、app は 0 件、Action は abstract_ja だけ。0.23.1: rejected=[]、trans-abstract は ['Small article abstract.']、app は [('資料1　架空の授業プリント', ['架空のプリントの本文。'])]。",
+            "fix": "build_front_en で、AI の p は前の資料があるとき（app is not None）だけ見出しの取り消しとして扱う。前の資料がないときは、資料の見出しのまま始める（0.23.1 と同じ）。英文要旨に戻すのは abstract だけにする。代わりに set_role_problem で、前に資料のない資料の見出しへの p を「資料の最初の見出しは p にできない（英文要旨に戻すなら abstract）」と拒否してもよい。どちらでも、test_ai に「最初の資料の見出しへの p」のテストを足す。DESIGN.md の set_role の節と DEVELOPMENT.md の説明も合わせる。"
+          },
+          {
+            "severity": "nit",
+            "file": "tests/test_structure.py",
+            "line": 316,
+            "problem": "新しい規則のうち 2 つは、外してもテストが落ちない。(1) build_back の警告の条件のうち「参考文献のスタイル以外で RE_APPENDIX に当たる段落」の側（見出しのスタイルでない「資料1　…」）。(2) check_abstract_ja を和文の論文（plan.lang == \"ja\"）に限る条件。",
+            "evidence": "mut/run.py の変異。back_warn_style_only（条件を見出しのスタイルだけにする）と ja_check_en_too（lang の条件を外す）は、どちらも 772 passed（test_template_emf_conversion を除く）で残った。(1) の段落は実際に起きうる: cx/back_text.py で、引用文献の後ろに本文のスタイル・スタイルなしの「資料1　架空の授業プリント」を置くと、作業ツリーは role=''・region=refs で app_after_refs と Action に出す。XML は 0.23.1 とバイト一致。",
+            "fix": "test_appendix_after_references_is_warned に、本文のスタイルの「資料1　…」の段落が app_after_refs に入ることを足す。test_structure に、英文の論文（lang en）の英文要旨にかな・漢字が多い段落があっても abstract_ja を出さないテストを足す。"
+          }
+        ]
+      },
+      {
+        "checked": "点検は利用者への見え方と文書の観点で行った。作業ツリーのファイルは変えていない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/review/user/ の下に置き、最後に大きな出力（docx・xml・zip・画像と、td1〜3 の出力すべて）を消した。\n\n1. 物差し\n- pytest（3.13）: 773 passed。\n- tests/__pycache__ は残っていない。\n- ruff check src tests tools: 202 件で、仕上げの担当の報告と同じ。\n- ノートブック: 写しで tools/make_notebook.py を実行し、notebooks/JASME_docx_to_JSTAGE_XML.ipynb とバイト単位で一致した。版の表記 3 行だけが変わっている。\n- 版: __init__.py・pyproject.toml・ノートブックの 3 か所とも 0.24.0。\n\n2. sample_structure を CLI で変換し、レポートを読んだ（ルート1、手動）\n- 1 章: 「注 5（うち Word の脚注・文末脚注 5）」。\n- 4 章: まとめの判断「脚注 2 件・文末脚注 3 件」と、記号の注の判断がある。\n- 6 章: 次の 3 件が、1 件ずつ分けて理由を付けて載る。参照が削除された脚注 6、参照のない脚注 9、空白だけの段落。\n- 8 章:\n  - 前置きが文末脚注に合わせて「i」と通し番号を説明している。\n  - 対応の表（XML の注・Word の注・番号・注の書き出し・本文からのリンク）が正しい。\n- 14 章: 文末脚注の暫定の知らせは消えている。\n- 標準エラー: Action の cli の文言だけが出る。\n\n3. 確かめの担当の架空の docx 7 件（verify/cx/cases.py）を、今の src で作り直して変換し、レポートを読んだ\n- c4（英文要旨の後ろの章見出しのスタイル・英文要旨の中の和文）\n  - 冒頭の要確認、10 章の警告、14 章のチェックリストが出る。\n  - 4 章に M-001（applied=False の判断）と M-002（見出しのスタイルから資料）がある。\n  - 文言は、何が起きて、どこを見て、何をするかの形になっている。\n- c5（引用文献の後ろの資料）\n  - 冒頭の要確認「引用文献などの後ろに…」と 10 章の警告が出る。\n  - 題目と引用文献の中の脚注は、8 章に「なし（参照は題目の段落 d3 の中だけ。…）」と出る。\n  - 1 章は「注 1」で、実際の xref の数と合う。確かめの担当の should は直っている。\n- c7: 題目と引用文献の文末脚注も同じ表示で、1 章は「注 1」。まとめの判断から「脚注 0 件」が消えている（nit は直っている）。\n- c6: 記号の注は 8 章で「あり（本文の記号は docx の文字のまま）」と出る（下の nit 1）。\n\n4. 0.23.1 で c5・c6 を変換して比べた\n- 記号を自分で付けた脚注の、中身のない xref（`<xref .../>` の後ろに `<sup>†</sup>`）は 0.23.1 から同じ。\n\n5. AI依頼文.txt\n- 役割の一覧に「app_heading（資料の見出し（英文要旨の後ろの、資料・付録の始まり））」がある。\n- SYSTEM_PROMPT の 3 行で、次のことがチャットの AI に伝わる形になっている。\n  - Word の注と英文の題目・副題の段落の役割は変えられないこと。\n  - app_heading で資料を始め、abstract で英文要旨に戻すこと。\n- 注の一覧の表記は「[fn2]（Word の文末脚注 5）注 …」。段落の一覧では「（fn / Word の文末脚注 5（注 2） 第1段落 / …）」になり、参照は「⟦Word の文末脚注参照⟧」になる。\n- 除外の一覧の案内は「（set_role で指定できる役割: title, subtitle）」と「（この段落の役割は set_role では変えられない）」の 2 つで、必ず捨てられる操作は勧めていない。\n\n6. td1〜3（ルート1・手動）\n- 今の src と 0.23.1（verify/base_pkg）の両方で変換した。\n- XML・レポート（作成日時とツールの行を除く）・標準エラーは 3 件とも同じで、終了コードはどれも 1。\n- AI 依頼文の違いは、役割の一覧・SYSTEM_PROMPT の 3 行・冒頭の除外 3 段落の案内だけ。\n- 1 章の不変性・最終・DTD・J-STAGE は合格。資料（app）は 0 件で、0.23.1 と同じ。\n- レポートは 1 章と冒頭の知らせを読んだ。td3 の要対応（画像）と要確認（テキストボックス）は 0.23.1 と同じ。\n\n7. 実際の論文の文字\n- tests/private/colab の docx 3 件から、document・footnotes・endnotes の 12 文字の並びのうち、かな・漢字を 6 文字以上含むもの 49366 個を取り出した。\n- git diff の追加行と突き合わせ、一致は 0 件だった。\n\n8. 文書と実装を突き合わせた\n- 突き合わせた文書: README（要確認の一覧、直さないもの、Word が付ける番号、できないこと、注の記述）、STYLE_MAPPING、jasme.toml のコメント、DESIGN（6 章の注・資料の行、7 章の残る限界）、DEVELOPMENT（テストの説明、確かめていないことの表）。\n- FIX_PLAN で突き合わせた箇所: 反映の順序の表の「（実装済み）」、決定事項 8 の暫定 2 行、E の節の「実装で決めたこと」「設計と違えたこと」「テスト」「確かめた数」「残る限界」「食い違い」、同じファイルを触る順の E の行。\n- どれも実装と合っている。Reader.deleted_note_refs は docx_reader の Reader の属性で、Document にも渡しており、記述は正しい。\n\n9. 文書とコードの食い違い（すべて挙げる）\n- 新しく見つけたもの:\n  - README.md の 133 行の例示に、新しい要確認 2 つ（英文要旨の和文、引用文献の後ろの資料）が載っていない。例示なので食い違いではないが、指摘として下の findings に入れた。\n  - FIX_PLAN の決定事項 8（D3）の下に、customMarkFollows（D4・決定事項 7 の範囲）の暫定の判断が書かれている。\n  - 仕上げの担当の open_issues は暫定の判断を 5 つ挙げている。FIX_PLAN の E の節の「暫定の判断」は (1)〜(4) の 4 つで、(5)「番号なしの Appendix＋英小文字」は D3 の規則として書かれ、暫定とは書かれていない。\n- 前の担当がすでに挙げていて、直していないもの:\n  - pdfmatch.target_paragraphs の docstring とコメントの「資料は照合しない」。B2.1 の控えとぶつからないよう、E では直していない。\n  - FIX_PLAN の項目の表と付録の古い行番号、rvz_*.py・exp_struct_re.py への言及。履歴として残し、E の節に古いと書いてある。\n- 確かめの担当の指摘の扱い:\n  - 直っている: report.py 13 章の定型文（「資料の見出し」になった）、題目・引用文献の参照のリンクの数え方、「脚注 0 件」の文言、8 章の書き出しの列。\n  - 確かめの担当の 5 件目の nit（版・README・FIX_PLAN）は、仕上げの担当が直した。",
+        "findings": [
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/report.py",
+            "line": 480,
+            "problem": "記号を自分で付けた注（customMarkFollows）について、8 章の対応の表の「本文からのリンク」が「あり（本文の記号は docx の文字のまま）」と出る。1 章のリンクの数にも数えられる。しかし XML の本文の参照は中身のない <xref ref-type=\"fn\" rid=\"fn1\"/> で、その後ろに docx の記号 <sup>†</sup> が xref の外に置かれる。J-STAGE の画面でクリックできる文字はなく、利用者は記号がリンクになっていると思い込む。題目・引用文献の参照で直した『リンクがあると思い込む』と同じ種類の問題（ただし件数は少ない）。",
+            "evidence": "確かめの担当の verify/cx/cases.py の c6_custom_and_deleted を、今の src で変換した（review/user/cx）。XML は『記号の脚注<xref ref-type=\"fn\" rid=\"fn1\"/><sup>†</sup>』、8 章は『| fn1 | Word の脚注 1 | 1) | † 記号の脚注の説明。 | あり（本文の記号は docx の文字のまま） |』、1 章は『注 3（うち Word の脚注・文末脚注 3）』。0.23.1（verify/base_pkg）でも XML は同じ中身のない xref で、8 章の表はなかった。DESIGN.md 6 章は『本文のリンクは中身のない <xref>』と書いているが、レポートは『あり』と言い切っている。J-STAGE での表示は未確認（仕上げの担当の open_issues）。",
+            "fix": "8 章の欄を『あり（中身のない参照。本文の記号はリンクの外で docx の文字のまま。J-STAGE のプレビューで確かめる）』のように直し、M-00x の判断の文言にも、記号がリンクにならないことを足す。急がないなら、DESIGN 7 章と FIX_PLAN の残る限界に『8 章は「あり」と出るが、画面ではクリックできる文字がない』と書く。"
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/structure.py",
+            "line": 1905,
+            "problem": "本文からのリンクのない注の判断（4 章）は、XML に出力しなかった段落 ID を『（d5, d6）』と半角カンマでつなぐ。同じ関数の 1909 行と、8 章の表（report.py 475・477 行）は『d5、d6』と読点でつなぐ。1 つのレポートの中で表記がそろわない。",
+            "evidence": "コードを読んで確かめた: structure.py:1905 は ', '.join(out)、1909 行と report.py:475・477 は '、'.join(out)。どちらも E で足したコードで、0.23.1 にはない。",
+            "fix": "1905 行を '、'.join(out) にそろえる（任意）。"
+          },
+          {
+            "severity": "nit",
+            "file": "README.md",
+            "line": 133,
+            "problem": "『たとえば次のものです。』の要確認・要対応の例に、E で足した要確認 2 つ（英文要旨に和文と思われる段落がある、引用文献などの後ろに資料の見出しと思われる段落がある）が載っていない。例示なので食い違いではない。ただ、利用者が初めて見る知らせで、Word でどう直すか（資料の見出しを付ける、英文要旨の後ろに移す）を README から引けない。",
+            "evidence": "README.md の 133〜151 行を読んだ。テキストボックスの要確認はあるが、abstract_ja と app_after_refs の要確認はない。レポートには c4・c5 で『要確認: 英文要旨に、和文と思われる段落が 1 件あります（10 章）。…』『要確認: 引用文献などの後ろに、資料の見出しと思われる段落があります（10 章）。…』が出る（review/user/cx）。",
+            "fix": "例に 2 行を足す（任意）。1 行目は「英文要旨の中の和文」で、資料なら Word で資料の見出しを付けて変換し直す。2 行目は「引用文献などの後ろの資料」で、今の版では資料にしない（暫定）ので、資料なら英文要旨の後ろに移して変換し直す。"
+          },
+          {
+            "severity": "nit",
+            "file": "docs/FIX_PLAN.md",
+            "line": 213,
+            "problem": "暫定の判断『記号を自分で付けた文末脚注（customMarkFollows）は脚注と同じ扱い』が、決定事項 8（D3、資料）の下に書かれている。これは D4（決定事項 7、注）の範囲。また、E の節の『暫定の判断』は (1)〜(4) の 4 つで、仕上げの担当の open_issues が挙げる (5)『番号なしの Appendix の後ろが空白と英小文字なら認識しない』は、D3 の規則として書かれていて、暫定とは書かれていない。週明けに別のセッションで再開するとき、利用者に確かめる項目を数え違えるおそれがある。",
+            "evidence": "docs/FIX_PLAN.md の 211〜213 行（決定事項 8 の下に 2 行の暫定）と、E の節の『暫定の判断（利用者にまだ確かめていない…）: (1)…(4)』を読み、仕上げの担当の open_issues の (1)〜(5) と突き合わせた。",
+            "fix": "customMarkFollows の行を決定事項 7 の下に移す。E の節の暫定の判断に (5) を足すか、open_issues の側から (5) を外し、どちらかにそろえる。"
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/structure.py",
+            "line": 1735,
+            "problem": "英文要旨の後ろの、見出しのスタイルの段落から資料を始めたときの判断（4 章）は『…から資料とした（英文要旨の中に見出しは来ないため）』とだけ書く。資料でなかったとき（FIX_PLAN の残る限界にある『Key words』を見出しのスタイルで書いた原稿など）に、どうすればよいかが書かれていない。要確認にもならず、4 章の表に 1 行あるだけなので、利用者はその行から対処を読み取れない。",
+            "evidence": "c4_heading_style（review/user/cx）の 4 章は『| M-002 | 段落の役割（スタイル） | 資料1（見出し） | 英文要旨の後ろの、見出しのスタイル「章見出し」の段落「授業の記録」から資料とした（英文要旨の中に見出しは来ないため） |』。FIX_PLAN の E の節の残る限界には『そこから資料になる（判断の一覧に残り、AI の abstract で戻せる）』とあるが、その対処はレポートに出ない。",
+            "fix": "判断の文言に『資料でなければ、Word でその段落のスタイルを英文要旨のスタイルに直して変換し直す（AI による補完では abstract で戻せる）』を足す（任意。F・H でもよい）。"
+          }
+        ]
+      }
+    ],
+    "failedFirst": [],
+    "firstFindings": [
+      {
+        "lens": "principle",
+        "severity": "should",
+        "file": "src/jasme_jats/structure.py",
+        "line": 67,
+        "problem": "RE_APPENDIX で新しく許した形（先頭の括弧、番号の直後の読点・括弧・ピリオド・ダッシュ、番号の前の「－」）が、文で始まる段落も資料の見出しとして認識します。その結果、英文要旨の文と後ろの段落が資料に移ったり、資料の中の文が新しい資料の見出しになって後ろの段落が付け替わったりします。どちらも判断の一覧・10 章・要確認に何も出ません（build_front_en は、見出しのスタイルから始めたときだけ判断を記録します。1719 行）。D3 の「資料の文字が英文要旨に入る」の逆向きの、場所の誤りが新しくできています。",
+        "evidence": "確かめ方は 3 つ。\n(1) 0.23.1（base0231_src）と作業ツリーの RE_APPENDIX に、同じ文字列を当てて比べた。次の文は 0.23.1 では認識せず、作業ツリーでは資料の見出しとして認識する。\n- 「(Appendix 1) lists the tasks.」\n- 「(Appendix A) contains the questionnaire.」\n- 「（資料1）に示すように、」\n- 「【資料1】に示すように」\n- 「資料1－2に示したように、」\n- 「資料2（後掲）に示すように、」\n- 「資料1、2は授業の記録である。」\n- 「付録1，2に示す問い。」\n- 「資料1）に示す」\n- 「資料（後掲）のとおり、問いを並べた。」\n(2) 架空の docx を変換した（cx/gen2.py。結果は results_cx.json）。\n- c21: 英文要旨の 2 段落目を「(Appendix 1) lists the fictional tasks used in the lesson.」にした。0.23.1 では trans-abstract が 3 段落のまま。作業ツリーでは trans-abstract が 1 段落だけになり、2・3 段落目は app-group/app に移る（title がその文）。\n- c20: 資料1 の中に「資料2（後掲）に示すように、架空の問いを並べた。」を置いた。0.23.1 では資料1 の段落のまま。作業ツリーでは新しい app の title になり、続く段落もその app に移る。\n- どちらも不変性と DTD は合格。レポートに資料についての記述はなく、actions・warnings・decisions も空。AI の依頼文には「資料2（見出し）」と出るので、AI があれば p で戻せる（c20a で確かめた）。AI なしでは、利用者は気づけない。\n(3) 見出しらしさの条件（「。」を含まず 40 文字以下）を足した写しで、本体のテストを流した（fixB2r4/tools/pytest_src.sh）。771/773 が合格した。落ちた 2 件は、わざと文の形の段落を使っているテストだった。\n- test_ai.py::test_set_role_overrides_appendix_heading_text（「Appendix A shows the questionnaire in detail.」）\n- test_pdfmatch.py::test_route2_keeps_abstract_appendix_border（「資料-1 shows the worksheet used in the lesson.」）",
+        "fix": "2 つ直す。\n- RE_APPENDIX で資料を始めたときも、見出しのスタイルのときと同じく判断（Decision）を記録する。4 章と AI 依頼文の推定に出るようにするため。\n- 英文要旨の領域と資料の中の両方で、文の形の段落は資料の見出しとみなさない条件を足す。例: 「。」を含む段落、または 40 文字を超える段落。\nあわせて、上の 2 件のテストの文字を見出しの形に変える。DESIGN.md 6 章と STYLE_MAPPING.md の「「資料を配布した。」のような文は除く」も、実装に合わせて書き直す。"
+      },
+      {
+        "lens": "principle",
+        "severity": "should",
+        "file": "src/jasme_jats/emit.py",
+        "line": 244,
+        "problem": "著者名（和文・英文）の段落の中にある Word の文末脚注の参照で、DTD 検証が不合格になります。原因は、xref=False の文脈では ctx.fmt を見ずに <sup> を作るため、生成した番号が <given-names> や <surname> の中に入ることです。0.23.1 では文末脚注は除外されていたので、DTD は合格していました。E で文末脚注を出力するようになり、この不合格が新しく起きます。要対応の文は「変換ツールの不具合の可能性があります」だけで、編集委員は何をすればよいか分かりません。脚注では 0.23.1 から同じで、FIX_PLAN の残る限界と DESIGN.md 8 章には書かれています。",
+        "evidence": "架空の docx を変換した（cx/gen5.py・gen4.py。結果は results_cx.json）。\n- c25_name（和文の著者表の著者名のセルに文末脚注 5 の参照を置いた）: 作業ツリーは DTD 不合格（「Element given-names was declared #PCDATA but contains non text nodes」）。要対応は dtd だけで、レポートの冒頭は「この XML は J-STAGE にアップロードできません。12 章のエラーを確認してください（変換ツールの不具合の可能性があります）」。0.23.1 は DTD 合格で、文末脚注は除外して要確認 endnote を出していた。\n- c25_name_en（英文の著者名）: 作業ツリーは surname で同じ不合格。0.23.1 は合格。\n- c25_aff・c25_aff_en・c25_subtitle（所属・英文所属・副題）: 両方の版で合格。\n- c24b（同じ位置に脚注）: 0.23.1 でも同じ不合格（既存）。",
+        "fix": "write_object で、文脈が上付きを許さないとき（\"sup\" not in ctx.fmt。E.NAME）は、生成した番号を出さない。番号は docx の文字ではないので、不変性には影響しない。注は今までどおり、本文からのリンクのない注として fn-group に出て、判断の一覧と 8 章で知らせる。判断の文言（「上付きの番号だけにする」）も、著者名のときの扱いに合わせる。test_notes.py の everywhere のケースでも DTD を確かめるようにする。直さないなら、少なくとも DTD 不合格の要対応の文に、原因と直し方（Word で参照を著者名の外に移す）を書く。"
+      },
+      {
+        "lens": "principle",
+        "severity": "should",
+        "file": "src/jasme_jats/builder.py",
+        "line": 729,
+        "problem": "「注」の節に手で書いた注（「1)」）と Word の注が両方ある原稿では、Word の注にも 1 から番号が付きます。本文と注の一覧に、別の注を指す「1)」が 2 つ並びます。レポートの冒頭・10 章・要確認には何も出ません。0.23.1 では、文末脚注は除外して要確認（本文の注に移してから変換し直す）で知らせていました。E でその知らせがなくなり、番号の重なりが黙って出るようになりました。よくある形は、題目に付けた助成の謝辞を Word の文末脚注にし、本文の注は手で書く原稿です。脚注では 0.23.1 から同じです。DESIGN.md 8 章には限界として足されましたが、README・FIX_PLAN の残る限界・レポートには出ません。",
+        "evidence": "架空の docx を変換した（cx/gen.py の c17、gen2.py の c19・c17b。結果は results_cx.json）。\n- c17（本文に手で打った上付きの「1)」と、本文の文末脚注の参照。「注」の節に「1) 手で書いた…」）: 作業ツリーは fn1「1) 手で書いた架空の注。」と fn2「1) Word の文末脚注の架空の注。」になる。本文の参照も 2 つとも「1)」（リンク先は fn1・fn2 で正しい）。actions と warnings は空で、8 章の表に「fn2 | Word の文末脚注 3 | 1)」と出るだけ。0.23.1 は文末脚注を除外し、要確認 endnote を出していた。\n- c19（題目に文末脚注、本文と注の節は手で書いた「1)」）: 作業ツリーでは題目の「1)」と本文の「1)」が別の注を指す。0.23.1 は要確認 endnote を出していた。\n- c17b（同じ形で脚注）: 0.23.1 でも「1)」が 2 つ（既存）。\n- 原因: word_note_marks（builder.py 726〜729 行）は、Word の注だけを数えて番号を付ける。",
+        "fix": "plan.fns に、手で書いた注（word_note が偽）と Word の注の両方があるとき、report.actions() に要確認の Action を 1 つ足し、10 章にも警告を出す。文言の例: 「手で書いた注と Word の脚注・文末脚注が両方あり、注の番号が重なっています。どちらかの書き方にそろえて変換し直してください」。番号を手で書いた注の後ろから続けるかどうかは、利用者に確かめる（決定事項 7 の範囲外）。FIX_PLAN の E の残る限界と README にも書く。"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "src/jasme_jats/structure.py",
+        "line": 1621,
+        "problem": "build_back の、引用文献の後ろの資料の知らせ（暫定）は、章・節・項見出しのスタイルであれば文字を見ずに出します。そのため、引用文献を和文献と英文献に分ける小見出しなどでも、要確認「引用文献などの後ろに、資料の見出しと思われる段落があります」が出ます。出力は変わらず、知らせが誤っているだけです。",
+        "evidence": "cx/gen7.py の c27 で確かめた。引用文献の中に、項見出しのスタイルの「＜英文献＞」を置いた。\n- 作業ツリー: actions に app_after_refs が出る。冒頭の要確認は「…資料なら、Word で英文要旨の後ろ（論文の最後）に移して、変換し直してください」で、10 章にも警告が出る。\n- 0.23.1: 何も出ない。\n- XML はどちらも同じ。",
+        "fix": "見出しのスタイルの段落でも、RE_APPENDIX に合うときだけ知らせる。または、引用文献の中では文字の規則だけで判定する。"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "src/jasme_jats/structure.py",
+        "line": 1715,
+        "problem": "AI が最初の資料の見出しに set_role p（本文段落）を指定すると、採用されます。その結果、見出しと、続く見出しのない資料の段落がすべて英文要旨（trans-abstract）に移ります。依頼文で説明しているのは、資料の app_heading と abstract だけです。資料の中の p の意味（最初の見出しに付けると英文要旨に戻る）は書いていません。AI が「資料の中のふつうの段落」のつもりで p を付けると、資料の文字が英文要旨に入ります。",
+        "evidence": "cx/gen8.py の c28 で確かめた。資料は「資料1　架空の授業プリント」と、英文要旨のスタイルの段落 2 つ。AI の回答は d23 に p。\n- 作業ツリー: 採用され、app-group がなくなる。trans-abstract が「The fictional…」「資料1　架空の授業プリント」「問1…」「問2…」になる。\n- 0.23.1: 採用と記録するが何も変えず、資料のまま。\n- 2 つ目以降の見出しへの p は前の資料の段落になり、意図どおり（c20a）。",
+        "fix": "最初の資料の見出しへの p は、見出しのない資料（AppNode(title=None)）の最初の段落にする。あるいは、依頼文と DESIGN.md 5 章に「最初の資料の見出しへの p は、abstract と同じく英文要旨に戻す」と書く。"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "docs/FIX_PLAN.md",
+        "line": 489,
+        "problem": "E の節の「確かめた数」に、実測と合わない記述が 2 つあります。1 つは「td1〜3（ルート1・ルート2）は XML・レポート・標準エラー・終了コードが 0.23.1 と同じ」です。確かめの修正で 13 章の定型文を直したため、ルート2 のレポートは 1 行違います。もう 1 つは「ruff は HEAD と同じ指摘数」で、実際は 1 件少ないです。",
+        "evidence": "- td（results_td.json）: ルート2 の td1〜3 のレポートは、0.23.1 と次の 1 行だけ違う（td1 148 行、td2 142 行、td3 169 行）。13 章の「…図の中の文字・資料と、4 文字未満の段落は照合せず」が「資料の見出しと」になった。XML・標準エラー・終了コードは同じ。\n- ruff: 作業ツリーは 202 件、HEAD は 203 件（git worktree で比べた）。report.py の ISC004 が 1 件減った。",
+        "fix": "次のように直す。\n- 「ルート2 のレポートは、13 章の定型文 1 行（資料 → 資料の見出し）だけ違う」\n- 「ruff は HEAD より 1 件少ない（増えない）」"
+      },
+      {
+        "lens": "regression",
+        "severity": "should",
+        "file": "src/jasme_jats/structure.py",
+        "line": 1715,
+        "problem": "AI が最初の資料の見出し（その前に資料がない見出し）に set_role p を指定すると、資料の見出しにならない。見出しとその後ろの段落（次の資料の見出しまで）は英文要旨（trans-abstract）に入る。ai_assist の REGION_ROLES[\"app\"] が p を許し、依頼文の SYSTEM_PROMPT も p の意味を書いていない。0.23.1 では、p を指定しても見出しは資料の見出しのままだった。文字は落ちないが、和文の資料が英文要旨に混ざる。和文なら abstract_ja の要確認は出る。この形のテストはない（test_set_role_overrides_appendix_heading_text は、前に資料がある「資料2：…」への p だけを見ている）。",
+        "evidence": "cx/p_on_first_app.py: make_article で、英文要旨の後ろに「資料1　架空の授業プリント」と「架空のプリントの本文。」を置いた（機械的には app の d23）。d23 に set_role p を指定して変換した。作業ツリー: rejected=[]、trans-abstract が ['Small article abstract.', '資料1　架空の授業プリント', '架空のプリントの本文。']、app は 0 件、Action は abstract_ja だけ。0.23.1: rejected=[]、trans-abstract は ['Small article abstract.']、app は [('資料1　架空の授業プリント', ['架空のプリントの本文。'])]。",
+        "fix": "build_front_en で、AI の p は前の資料があるとき（app is not None）だけ見出しの取り消しとして扱う。前の資料がないときは、資料の見出しのまま始める（0.23.1 と同じ）。英文要旨に戻すのは abstract だけにする。代わりに set_role_problem で、前に資料のない資料の見出しへの p を「資料の最初の見出しは p にできない（英文要旨に戻すなら abstract）」と拒否してもよい。どちらでも、test_ai に「最初の資料の見出しへの p」のテストを足す。DESIGN.md の set_role の節と DEVELOPMENT.md の説明も合わせる。"
+      },
+      {
+        "lens": "regression",
+        "severity": "nit",
+        "file": "tests/test_structure.py",
+        "line": 316,
+        "problem": "新しい規則のうち 2 つは、外してもテストが落ちない。(1) build_back の警告の条件のうち「参考文献のスタイル以外で RE_APPENDIX に当たる段落」の側（見出しのスタイルでない「資料1　…」）。(2) check_abstract_ja を和文の論文（plan.lang == \"ja\"）に限る条件。",
+        "evidence": "mut/run.py の変異。back_warn_style_only（条件を見出しのスタイルだけにする）と ja_check_en_too（lang の条件を外す）は、どちらも 772 passed（test_template_emf_conversion を除く）で残った。(1) の段落は実際に起きうる: cx/back_text.py で、引用文献の後ろに本文のスタイル・スタイルなしの「資料1　架空の授業プリント」を置くと、作業ツリーは role=''・region=refs で app_after_refs と Action に出す。XML は 0.23.1 とバイト一致。",
+        "fix": "test_appendix_after_references_is_warned に、本文のスタイルの「資料1　…」の段落が app_after_refs に入ることを足す。test_structure に、英文の論文（lang en）の英文要旨にかな・漢字が多い段落があっても abstract_ja を出さないテストを足す。"
+      },
+      {
+        "lens": "user",
+        "severity": "nit",
+        "file": "src/jasme_jats/report.py",
+        "line": 480,
+        "problem": "記号を自分で付けた注（customMarkFollows）について、8 章の対応の表の「本文からのリンク」が「あり（本文の記号は docx の文字のまま）」と出る。1 章のリンクの数にも数えられる。しかし XML の本文の参照は中身のない <xref ref-type=\"fn\" rid=\"fn1\"/> で、その後ろに docx の記号 <sup>†</sup> が xref の外に置かれる。J-STAGE の画面でクリックできる文字はなく、利用者は記号がリンクになっていると思い込む。題目・引用文献の参照で直した『リンクがあると思い込む』と同じ種類の問題（ただし件数は少ない）。",
+        "evidence": "確かめの担当の verify/cx/cases.py の c6_custom_and_deleted を、今の src で変換した（review/user/cx）。XML は『記号の脚注<xref ref-type=\"fn\" rid=\"fn1\"/><sup>†</sup>』、8 章は『| fn1 | Word の脚注 1 | 1) | † 記号の脚注の説明。 | あり（本文の記号は docx の文字のまま） |』、1 章は『注 3（うち Word の脚注・文末脚注 3）』。0.23.1（verify/base_pkg）でも XML は同じ中身のない xref で、8 章の表はなかった。DESIGN.md 6 章は『本文のリンクは中身のない <xref>』と書いているが、レポートは『あり』と言い切っている。J-STAGE での表示は未確認（仕上げの担当の open_issues）。",
+        "fix": "8 章の欄を『あり（中身のない参照。本文の記号はリンクの外で docx の文字のまま。J-STAGE のプレビューで確かめる）』のように直し、M-00x の判断の文言にも、記号がリンクにならないことを足す。急がないなら、DESIGN 7 章と FIX_PLAN の残る限界に『8 章は「あり」と出るが、画面ではクリックできる文字がない』と書く。"
+      },
+      {
+        "lens": "user",
+        "severity": "nit",
+        "file": "src/jasme_jats/structure.py",
+        "line": 1905,
+        "problem": "本文からのリンクのない注の判断（4 章）は、XML に出力しなかった段落 ID を『（d5, d6）』と半角カンマでつなぐ。同じ関数の 1909 行と、8 章の表（report.py 475・477 行）は『d5、d6』と読点でつなぐ。1 つのレポートの中で表記がそろわない。",
+        "evidence": "コードを読んで確かめた: structure.py:1905 は ', '.join(out)、1909 行と report.py:475・477 は '、'.join(out)。どちらも E で足したコードで、0.23.1 にはない。",
+        "fix": "1905 行を '、'.join(out) にそろえる（任意）。"
+      },
+      {
+        "lens": "user",
+        "severity": "nit",
+        "file": "README.md",
+        "line": 133,
+        "problem": "『たとえば次のものです。』の要確認・要対応の例に、E で足した要確認 2 つ（英文要旨に和文と思われる段落がある、引用文献などの後ろに資料の見出しと思われる段落がある）が載っていない。例示なので食い違いではない。ただ、利用者が初めて見る知らせで、Word でどう直すか（資料の見出しを付ける、英文要旨の後ろに移す）を README から引けない。",
+        "evidence": "README.md の 133〜151 行を読んだ。テキストボックスの要確認はあるが、abstract_ja と app_after_refs の要確認はない。レポートには c4・c5 で『要確認: 英文要旨に、和文と思われる段落が 1 件あります（10 章）。…』『要確認: 引用文献などの後ろに、資料の見出しと思われる段落があります（10 章）。…』が出る（review/user/cx）。",
+        "fix": "例に 2 行を足す（任意）。1 行目は「英文要旨の中の和文」で、資料なら Word で資料の見出しを付けて変換し直す。2 行目は「引用文献などの後ろの資料」で、今の版では資料にしない（暫定）ので、資料なら英文要旨の後ろに移して変換し直す。"
+      },
+      {
+        "lens": "user",
+        "severity": "nit",
+        "file": "docs/FIX_PLAN.md",
+        "line": 213,
+        "problem": "暫定の判断『記号を自分で付けた文末脚注（customMarkFollows）は脚注と同じ扱い』が、決定事項 8（D3、資料）の下に書かれている。これは D4（決定事項 7、注）の範囲。また、E の節の『暫定の判断』は (1)〜(4) の 4 つで、仕上げの担当の open_issues が挙げる (5)『番号なしの Appendix の後ろが空白と英小文字なら認識しない』は、D3 の規則として書かれていて、暫定とは書かれていない。週明けに別のセッションで再開するとき、利用者に確かめる項目を数え違えるおそれがある。",
+        "evidence": "docs/FIX_PLAN.md の 211〜213 行（決定事項 8 の下に 2 行の暫定）と、E の節の『暫定の判断（利用者にまだ確かめていない…）: (1)…(4)』を読み、仕上げの担当の open_issues の (1)〜(5) と突き合わせた。",
+        "fix": "customMarkFollows の行を決定事項 7 の下に移す。E の節の暫定の判断に (5) を足すか、open_issues の側から (5) を外し、どちらかにそろえる。"
+      },
+      {
+        "lens": "user",
+        "severity": "nit",
+        "file": "src/jasme_jats/structure.py",
+        "line": 1735,
+        "problem": "英文要旨の後ろの、見出しのスタイルの段落から資料を始めたときの判断（4 章）は『…から資料とした（英文要旨の中に見出しは来ないため）』とだけ書く。資料でなかったとき（FIX_PLAN の残る限界にある『Key words』を見出しのスタイルで書いた原稿など）に、どうすればよいかが書かれていない。要確認にもならず、4 章の表に 1 行あるだけなので、利用者はその行から対処を読み取れない。",
+        "evidence": "c4_heading_style（review/user/cx）の 4 章は『| M-002 | 段落の役割（スタイル） | 資料1（見出し） | 英文要旨の後ろの、見出しのスタイル「章見出し」の段落「授業の記録」から資料とした（英文要旨の中に見出しは来ないため） |』。FIX_PLAN の E の節の残る限界には『そこから資料になる（判断の一覧に残り、AI の abstract で戻せる）』とあるが、その対処はレポートに出ない。",
+        "fix": "判断の文言に『資料でなければ、Word でその段落のスタイルを英文要旨のスタイルに直して変換し直す（AI による補完では abstract で戻せる）』を足す（任意。F・H でもよい）。"
+      }
+    ],
+    "rounds": [
+      {
+        "round": 1,
+        "fix": {
+          "changed_files": [
+            "/home/user/jstgxmlcng_JASME/src/jasme_jats/structure.py",
+            "/home/user/jstgxmlcng_JASME/src/jasme_jats/emit.py",
+            "/home/user/jstgxmlcng_JASME/src/jasme_jats/report.py",
+            "/home/user/jstgxmlcng_JASME/src/jasme_jats/ai_assist.py",
+            "/home/user/jstgxmlcng_JASME/tests/test_structure.py",
+            "/home/user/jstgxmlcng_JASME/tests/test_notes.py",
+            "/home/user/jstgxmlcng_JASME/tests/test_ai.py",
+            "/home/user/jstgxmlcng_JASME/tests/test_pdfmatch.py",
+            "/home/user/jstgxmlcng_JASME/docs/DESIGN.md",
+            "/home/user/jstgxmlcng_JASME/docs/DEVELOPMENT.md",
+            "/home/user/jstgxmlcng_JASME/docs/STYLE_MAPPING.md",
+            "/home/user/jstgxmlcng_JASME/docs/FIX_PLAN.md",
+            "/home/user/jstgxmlcng_JASME/README.md"
+          ],
+          "summary": "1 回目の点検の指摘のうち、should の 4 件はすべて直した。nit も全件、直すか文書に反映した。変更はコミットしていない差分として積んである（版は 0.24.0 のまま。ノートブックは作り直したが中身は変わらない）。\n\n(1) 資料の見出しの規則（principle should）\n- structure.appendix_heading(text) を足した。RE_APPENDIX の形に合う段落でも、次の 2 つは文とみなして見出しにしない。\n  - 「。」を含む段落\n  - 語・番号（と閉じ括弧）の後ろが「空白 + 英小文字」の段落（RE_APPENDIX_SENTENCE）\n- build_front_en と build_back の両方で、この関数を使う。\n- 文字の規則で始めた資料も判断の一覧に記録する（category style）。4 章と AI 依頼文の「推定:」に出る。文言は「段落「…」を資料の見出しとした（…見出しの形のため）。資料の見出しでなければ、AI による補完の set_role で英文要旨の段落（abstract）／前の資料の段落（p）に戻せる」。\n- 見出しのスタイルで始めた資料の判断には、資料でなければ Word でスタイルを直す案内を足した（user nit）。\n\n(2) 著者名の中の注の参照（principle should）\n- emit.Emitter.write_object で、上付きを置けない文脈（\"sup\" not in ctx.fmt。NAME）では生成した番号を出さない。番号は docx の文字ではないので、不変性には関係しない。\n- 判断の文言は、参照のある段落の種類ごとにした（structure.no_link_rule）。著者名なら「著者名の中の注の番号は、著者名に上付きの文字を置けないので出力しない」。8 章の行にも「著者名の中では番号も出力しない」を足した。\n- 0.23.1 からあった脚注の DTD 不合格も、同時に直った。\n\n(3) 手で書いた注と Word の注の番号の重なり（principle should）\n- attach_word_notes で、重なる番号を ArticlePlan.note_overlap に記録する。\n- 10 章の警告と、要確認の Action note_overlap（report._note_overlap_action）で知らせる。番号は変えない（暫定の判断）。\n\n(4) 最初の資料の見出しへの AI の set_role p（regression should と principle nit）\n- p の意味を「資料の中の段落」にそろえた。前に資料がなければ、見出しのない資料（AppNode(title=None)）の最初の段落にする。英文要旨に戻すのは abstract だけ。\n- SYSTEM_PROMPT に 2 行足し、DESIGN.md 5 章にも書いた。\n\nnit\n- build_back の要確認は、見出しのスタイルかどうかに関係なく文字の規則（appendix_heading）だけで決める。「＜英文献＞」のような小見出しでは出ない。\n- 記号を自分で付けた注は、8 章の欄を「あり（中身のない参照。本文の記号はリンクの外で docx の文字のまま。J-STAGE のプレビューで確かめる）」にした。判断の文言にも、記号がリンクにならないことを足した。\n- 判断の一覧の段落 ID の区切りを読点にそろえた。\n- README.md の要確認の例に 3 行足した（英文要旨の和文、引用文献などの後ろの資料、注の番号の重なり）。\n- FIX_PLAN.md\n  - 確かめた数の誤り 2 か所を直した。\n  - customMarkFollows の暫定の行を決定事項 7 の下に移した。\n  - E の節の暫定の判断に (5) と (6) を足した。\n  - 「点検の指摘で直したこと」の段落を足した。\n- 変異で生き残った 2 つ（本文のスタイルの「資料1」、英文の論文の英文要旨の和文）を見つけるテストを足した。\n\n文書は DESIGN.md（5・6・7 章）、DEVELOPMENT.md、STYLE_MAPPING.md、README.md、FIX_PLAN.md を実装に合わせた。\n\n実験の結果と記録は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/fix1/ にある。まとめは results_fix1.json、反例は cx/results_cx.json、変異は mut/results.json、td は cmp_td.json（原稿の文字は伏せてある）。docx・xml・td の出力は消した。",
+          "tests_added": [
+            "tests/test_structure.py::test_sentences_are_not_appendix_headings（新規。12 件。形は合うが文の形の段落）",
+            "tests/test_structure.py::test_sentence_paragraphs_do_not_start_appendix（新規。英文要旨の文・資料の中の文、文字の規則の判断の記録、AI 依頼文の推定、2 つ目の資料の案内の p）",
+            "tests/test_structure.py::test_japanese_paragraph_in_abstract_of_english_article_is_not_reported（新規。変異 ja_check_en_too）",
+            "tests/test_structure.py::test_appendix_heading_forms_are_recognized（4 形を追加、appendix_heading も確認）",
+            "tests/test_structure.py::test_appendix_heading_forms_are_not_recognized（appendix_heading も確認）",
+            "tests/test_structure.py::test_appendix_after_references_is_warned（本文のスタイルの「資料2」は知らせる、「＜英文献＞」と文は知らせない）",
+            "tests/test_structure.py::test_heading_style_after_abstract_starts_appendix（判断の文言）",
+            "tests/test_ai.py::test_set_role_p_on_first_appendix_heading（新規）",
+            "tests/test_ai.py::test_set_role_overrides_appendix_heading_text（文字を見出しの形に変更）",
+            "tests/test_ai.py::test_request_hints_follow_set_role_problem（SYSTEM_PROMPT の p の行）",
+            "tests/test_notes.py::test_note_in_author_name_has_no_number（新規。DTD 合格・番号なし・判断・8 章）",
+            "tests/test_notes.py::test_manual_and_word_notes_with_same_numbers_are_reported[endnote/footnote]（新規）",
+            "tests/test_notes.py::test_note_overlap_is_not_reported_without_both_kinds（新規）",
+            "tests/test_notes.py::test_word_note_links_match_xml（3 件とも DTD を確認。everywhere で著者名の番号なし）",
+            "tests/test_notes.py::test_notes_referenced_only_from_title_and_references_have_no_link（段落の種類ごとの文言）",
+            "tests/test_notes.py::test_report_lists_word_notes_with_endnotes（記号の注の 8 章の欄）",
+            "tests/test_pdfmatch.py::test_route2_keeps_abstract_appendix_border（文字を見出しの形に変更）"
+          ],
+          "pytest_result": "- Python 3.13: 796 passed（python -m pytest -q -p no:cacheprovider）。修正前は 773 件。\n- Python 3.10: 796 passed（venv310）。\n- 修正前のコードの写しで流すと、この回で足した・書き直したテストのうち 24 件が失敗する。appendix_heading は、修正前の動作（RE_APPENDIX だけで判定）を写した関数を足して流した。\n- docs/fix_plan_repro_tests.py: 5 passed（tests/ に一時的に写して流し、消した）。\n- ruff check src tests tools: 202 件。HEAD は 203 件で、新しい指摘はない。差は、E の実装の時点で report.py の ISC004 が 1 件減った分。",
+          "measures": "いずれも 0.23.1 / 修正前 / 修正後 の順に並べる。\n\ngolden（23 件）\n- 不変性・最終・DTD・J-STAGE は全件合格。\n- XML が 0.23.1 と違うのは sample_structure の 2 件だけ（fixture に要素を足したため。修正前から同じ）。\n- レポートが修正前と違うもの:\n  - sample_full の 3 件と JASME_template の 2 件: 4 章に資料の見出しの判断が 1 行増えた（文字の規則で始めた資料も記録するため）。\n  - sample_structure の 2 件: 同じ 1 行が増え、注の判断の番号が 1 つ繰り下がった。記号の注の判断の文言と 8 章の欄も変わった。\n- AI 依頼文が修正前と違うもの:\n  - 13 件すべて: SYSTEM_PROMPT の 2 行（資料の見出しへの p）。\n  - 資料のある 3 種: 資料の見出しの「推定:」が 1 行増えた。\n- それ以外は修正前と同じ（0.23.1 との違いも E の実装の時点のまま）。\n\ntd1〜3（ルート1・ルート2 の 6 本）\n- XML・標準エラー・終了コード（1）は 3 版とも同じ。\n- レポートが 0.23.1 と違うのは次だけ。\n  - ルート2 の 13 章の定型文 1 行（資料 → 資料の見出し。E の実装から）。\n  - td3（資料が 1 つある）の 4 章: 「ありません」が判断 1 行（資料の見出しの記録）の表に変わった。修正前との違いはこの td3 の行だけ。\n- AI 依頼文: SYSTEM_PROMPT と除外の案内に加えて、td3 に「推定:」が 1 行増えた。\n- 画像の出力漏れは増えていない（XML が同じ）。\n\n点検の反例（38 件。点検の担当の gen*.py で作り直した）\n- 不変性・最終・DTD がすべて合格した件数: 0.23.1 は 34/38、修正前は 34/38、修正後は 38/38。\n  - 0.23.1 の失敗: c07・c08・c24 が不変性、c24b が DTD。\n  - 修正前の失敗: c24・c24b・c25_name・c25_name_en が DTD。\n- 指摘の形はすべて直った。\n  - c21: 英文要旨が 3 段落のまま。\n  - c20・c11: 資料の中の文が前の資料の段落のまま。\n  - c24・c25_name・c25_name_en・c24b: DTD 合格。\n  - c17・c17b・c19: 要確認 note_overlap が出る。\n  - c27: 要確認が出ない。\n  - c28・c09b: 見出しのない資料になり、英文要旨は 1 段落のまま。\n- XML に入らなかった画像: 0.23.1 は 4、修正前と修正後は 2（参照のない文末脚注の画像。要対応で知らせている）。\n\n独立の反例（oracle）\n- 修正後 37/39（0.23.1 は 15/39）。\n- 残る N09・R06 は、修正前と同じ偽陽性（判定が案内の文言の「set_role」の語だけを見る）。\n\n変異テスト\n- この回の修正の 15 件。最初は 13 件をテストが見つけ、2 件（back_regex_only、ch8_names_off）が残った。\n- テストを足して、15 件すべてを見つけるようになった。",
+          "deviations": "直し方を指摘どおりにしなかったもの（理由つき）\n1. 資料の見出しの「文の形」の条件（should 1）。指摘の例（「。」を含む、または 40 文字を超える）ではなく、「。」を含む段落と、語・番号（と閉じ括弧）の後ろが「空白 + 英小文字」の段落を除く形にした。\n   - 文字数の上限をやめた理由: 0.23.1 が認識していた長い英文の見出しを認識しなくなる（後退）うえ、40 文字以下の英文の文「(Appendix 1) lists the tasks.」は通ってしまう。\n   - 「閉じ括弧の直後がひらがな」も検討したが入れなかった理由: 「【資料1】ふりかえりシート」「（資料2）とけいの読み方」のような小学校の資料の見出しを落とす。\n   - 実際の原稿 3 本の本文は「，」と「。」を使っていたので（統計だけを数えた）、和文の文は「。」で見分けられる。\n   - 残る限界は DESIGN 7 章と FIX_PLAN に書いた。「Appendix 1, which …」のような文や、「。」のない和文の行（「資料1，2の比較」）は見出しとみなす。どちらも判断の一覧と AI 依頼文の推定に出るので、AI で戻せる。\n2. 文字の規則で始めた資料の判断は、0.23.1 から認識していた「資料1　…」にも記録する。\n   - このため、資料のある golden の 3 種と td3 のレポートに 4 章の 1 行が増える。\n   - td3 で違ってよいのは「E で意図したもの」だけだが、これは指摘の直し方そのもので、「資料の領域」の範囲として扱った。\n3. 手で書いた注と Word の注（should 3）。指摘は「両方あるとき」だが、要確認を出すのは番号が実際に重なるときだけにした。番号のない手書きの注だけなら、注の一覧に同じ番号が並ぶ害はないため。\n4. 最初の資料の見出しへの p（regression should）。指摘の案 (a)「見出しのまま」・(b)「拒否」ではなく、見出しのない資料の最初の段落にした（principle の nit の案）。\n   - (a) では、採用と記録されるのに何も変わらない（N6 で避けた形）。\n   - (b) では、AI の意図（資料の中の段落）が反映されない。\n   - 見出しのない資料は builder にもとからある形（空の <title>）で、DTD にも J-STAGE のチェックにも合格する。\n5. build_back の知らせ（nit）を文字の規則だけにしたので、「資料」などの語を含まない見出しのスタイルの段落（引用文献の後ろの「授業の記録」など）は、要確認を出さなくなった。誤った知らせを減らす方を選んだ。\n6. 著者名の中の注（should 2）は、文末脚注だけでなく 0.23.1 からの脚注の DTD 不合格もまとめて直した。0.23.1 と比べた出力の変化になる。\n7. 記号を自分で付けた注（user nit）は文言だけを直した。記号を xref の中に入れる変更は、構造（LinkSpec）を変えるので見送った。\n\n文書とコードの食い違い（直したもの）\n- DESIGN.md 6 章・STYLE_MAPPING.md の「「資料を配布した。」のような文は除く」。実際は「資料1、2は…である。」のような文も見出しにしていた。コードを直し、文書を合わせた。\n- DESIGN.md 7 章・DEVELOPMENT.md の既知の限界・FIX_PLAN の残る限界の「著者名の中の注は DTD 不合格（要対応）」。コードを直したので書き直した。\n- FIX_PLAN の E の節「確かめた数」の 2 か所（td のルート2 のレポートの 1 行の違い、ruff の 1 件の差）。\n- FIX_PLAN の決定事項 8 の下にあった customMarkFollows の暫定の行。決定事項 7 の範囲なので、7 の下に移した。\n- FIX_PLAN の E の節の暫定の判断が (1)〜(4) で、仕上げの担当の open_issues の (5) と数が合っていなかった。(5) と (6) を足した。\n- report の 8 章の「あり（本文の記号は docx の文字のまま）」と、DESIGN 6 章の「中身のない <xref>」。レポートの文言を合わせた。\n- DESIGN.md 5 章の set_role の説明に、資料の見出しへの p の意味がなかった。\n- ArticlePlan.no_link_paras の docstring「注の番号は上付きの文字だけになる」。著者名（NAME）では出さないことを足した。\n- test_notes.py のコメント「ここでは DTD を確かめない」。DTD を確かめるようにした。\n\n直していないもの\n- pdfmatch.target_paragraphs の docstring とコメントの「資料は照合しない」。B2.1 の控えとぶつかるので触らない（E の節に既に記載）。\n\n担当の範囲外\n- 利用者の依頼「週明けの再開の準備」は、まとめ役の作業なので行っていない。HANDOFF.md は触っていない。",
+          "open_issues": "利用者に確かめる暫定の判断（FIX_PLAN の E の節 (1)〜(6) と決定事項 7・8 の下に記載）\n- (1) 引用文献などの後ろの資料は警告だけ。\n- (2) customMarkFollows の文末脚注は、脚注と同じ扱い。\n- (3) 英文の題目・副題への set_role は、どの役割も採用しない。\n- (4) 参照が削除された注は除外する。\n- (5) 文の形の段落は資料の見出しにしない（この回で足した規則）。\n- (6) 手で書いた注と Word の注の番号が重なっても、番号は変えずに知らせるだけ。Word の注の番号を、手で書いた注の後ろから続けるかは未確認。\n\nまだ確かめていないこと\n- J-STAGE の試験登載での表示: 見出しのない資料（空の <title>）、記号を自分で付けた注（中身のない xref）、文末脚注・題目の注。\n- 実際の AI（Claude）が app_heading・abstract・p をどう使うか。依頼文に足した p の説明が、意図どおりに使われるか。\n\n残る限界\n- 文の形の判定は「。」と「空白 + 英小文字」だけを見る。英文の文「Appendix 1, which …」や、「。」のない和文の行は、資料の見出しとみなす（判断の一覧と AI で戻せる）。\n- 著者名の中の注は番号を出さない。番号を <contrib> の中の <xref> などに置くかは今後の課題。\n- 記号を自分で付けた注の参照は、1 章のリンクの数には数えるが、画面でクリックできる文字はない。\n\n次の点検へ\n- 修正前の写し: /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/fix1/pre_pkg\n- 修正だけの差分: /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/fix1/fix_only_src.diff と /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/fix1/fix_only_tests_docs.diff\n- 反例を 3 版で流すスクリプト: /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/fix1/cx/drive.sh（docx は gen*.py で作り直す）\n- td1〜3 を流すスクリプト: /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/fix1/run_td.sh\n- 変異テストの実行と結果: /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/fix1/mut/run_mut.py"
+        },
+        "findings": [
+          {
+            "lens": "principle",
+            "severity": "should",
+            "file": "src/jasme_jats/structure.py",
+            "line": 111,
+            "problem": "1 回目の修正で足した「文の形」の規則（appendix_heading）が、0.23.1 と修正前の版が資料の見出しにしていた形まで、見出しにしなくなりました。当たるのは次の 2 つです。\n- 段落のどこかに「。」がある見出し。括弧・かぎ括弧の中も含みます（「資料2　…（下線は筆者。）」「資料1　問い「なぜだろう。」の…」）。\n- 番号の後ろが「空白 + 英小文字」の見出し（「Appendix 1 questionnaire」「資料1 worksheet」）。\n\n最初の資料なら、見出しと後ろの資料の段落がすべて英文要旨（trans-abstract）に入ります。これは D3 が直そうとした誤りそのものです。2 つ目以降の資料なら、前の資料に黙ってつながります。\n\n知らせは次のとおりです。\n- 和文なら要確認 abstract_ja が出る。ただし案内は「Word でその前に資料の見出しを付けて」で、見出しがすでにある段落には当てはまらない。\n- 英文の見出しと、2 つ目以降の資料では、判断の一覧・10 章・要確認のどれにも出ない（判断を記録するのは、資料を始めたときだけ）。\n- 引用文献の後ろに置いたこの形の見出しは、修正前は要確認 app_after_refs を出していたが、出なくなった。\n\n文字は落ちません（不変性・DTD は合格）。資料の文字が別の場所に入ります。この形を守るテストはありません。",
+            "evidence": "確かめ方は 3 つ（scratchpad/e/review/principle/r2/。結果は results_r2.json）。\n\n(1) 判定の比較（re/probe.py）: 29 個の文字列を、0.23.1 の RE_APPENDIX・修正前の RE_APPENDIX・作業ツリーの appendix_heading で判定した。次の 9 個は、0.23.1 と修正前では見出し、作業ツリーでは見出しにならない。\n- 「資料1　架空の問い「なぜだろう。」の授業プリント」\n- 「資料2　架空の児童の記述（下線は筆者。）」\n- 「資料3　架空の調査問題（一部抜粋。）」\n- 「資料1　架空の授業プリント。」\n- 「Appendix 1 questionnaire」\n- 「Appendix A worksheet for the fictional lesson」\n- 「Appendix 2 lesson plan of the fictional class」\n- 「資料1 pre-test の架空の問題」\n- 「資料1 worksheet」\n\n(2) 架空の docx を 3 版で変換した（cx/gen_r2.py・gen_r2c.py）。\n- r01（最初の見出しが「資料1　架空の授業プリント（一部抜粋。）」）: 0.23.1 と修正前は、資料 1 つに中の段落 2 つ。作業ツリーは app-group がなくなり、trans-abstract が 4 段落になる。Action は abstract_ja で、10 章の d23 は「Word でその前に資料の見出し（「資料1」など）を付けて変換し直してください」。\n- r04（「なぜだろう。」の見出し）: r01 と同じ。\n- r02（2 つ目の見出しが「資料2　架空の児童の記述（下線は筆者。）」）: 0.23.1 と修正前は資料 2 つ。作業ツリーは資料 1 つにつながり、警告も Action も出ない。判断は d23 の 1 行だけ。\n- r03（「Appendix 1 questionnaire」と英文の 2 段落）: 0.23.1 と修正前は資料。作業ツリーは trans-abstract が 4 段落で、actions・warnings・decisions はすべて空。\n- r03b（2 つ目が「Appendix 2 questionnaire」）: 黙ってつながる。\n- r10・r11（引用文献の後ろの r01・r03 の見出し）: 修正前は app_after_refs を出していた。作業ツリーは何も出さない。\n- r06（r01 の見出しを章見出しのスタイルにした）: 作業ツリーでも資料になる（by_style。最初の資料だけ）。\n- どのケースも不変性・最終・DTD・J-STAGE は合格。\n\n(3) 直し方の試作（protoA_structure.diff。リポジトリは変えていない）: 「。」は括弧・かぎ括弧の外にあるときだけ文の終わりとみなした。英小文字が続く形は、段落が「.」「．」「?」「!」で終わるときだけ文とみなした。\n- この写しで本体のテスト 796 件がすべて合格した（pytest_src.sh。WHICH で写しを使っていることを確かめた）。\n- r01〜r04・r03b は 0.23.1 と同じ資料に戻った。\n- c20・c21・c11・c27・c04・c09 の出力は作業ツリーと同じだった（1 回目の指摘の形は直ったまま）。",
+            "fix": "次の 4 つを直す。\n1. appendix_heading の文の形の判定を絞り、0.23.1 が見出しにしていた形を落とさない。試作の例: 「。」は括弧・かぎ括弧の外にあるときだけ数える。英小文字が続く形は、英文の文の終わり（「.」など）で終わるときだけ文とみなす。\n2. build_front_en で、英文要旨・資料の中の段落が RE_APPENDIX に合うのに文の形として見出しにしなかったときは、判断（applied=False）を記録する。文言の例: 「段落「…」は資料の見出しの形だが、文とみなして資料の見出しにしなかった。見出しなら、AI の set_role app_heading で資料にできる。最初の資料なら、Word で章・節・項見出しのスタイルを付けても資料になる」。4 章と AI 依頼文の推定に出すため。\n3. check_abstract_ja の案内は、段落が「資料1」などで始まるときは「その前に見出しを付けて」と言わない。代わりに、見出しのスタイルを付ける（文字を変えずに直せる）案内にする。\n4. APPENDIX_YES に「資料2　…（下線は筆者。）」「Appendix 1 questionnaire」のような見出しを足し、r01・r02 に当たる docx のテストを足す。\n\nあわせて、DESIGN.md 6・7 章、FIX_PLAN の E の残る限界・暫定 (5)、README、STYLE_MAPPING、DEVELOPMENT を、実装に合わせて書き直す。規則を変えないなら、少なくとも 2 と 3 を行い、「0.23.1 では見出しだったこれらの形を、今は見出しにしない」ことを残る限界に書く。"
+          },
+          {
+            "lens": "principle",
+            "severity": "nit",
+            "file": "docs/DEVELOPMENT.md",
+            "line": 383,
+            "problem": "「残っている課題」の資料の見出しの行は、文の形の規則を「認識を広げた形に合う文（…）は、「。」と「空白 + 英小文字」で見分けて見出しにしない」と書いています。広げた形にだけ当てはめるように読めます。実際のコード（structure.appendix_heading）は、RE_APPENDIX に合う段落すべてに当てはめます。0.23.1 から認識していた「資料1　…」「Appendix 1 …」の形も含みます。",
+            "evidence": "structure.py 103〜111 行の appendix_heading は、RE_APPENDIX.match の後に、無条件で「。」と RE_APPENDIX_SENTENCE を見ている。re/probe.py で、0.23.1 の形の「資料2　架空の児童の記述（下線は筆者。）」「Appendix 1 questionnaire」も見出しにしないことを確かめた。DESIGN.md 6 章の表の説明（「形に合っても、「。」を含む段落…は、英文要旨・資料の中の文とみなして見出しにしない」）は、コードと合っている。",
+            "fix": "DEVELOPMENT.md の行を、コードに合わせて「RE_APPENDIX に合う段落のうち、文の形のもの（…）は見出しにしない」と書き直す。1 件目の指摘で規則を変えるなら、変えた規則に合わせる。"
+          },
+          {
+            "lens": "principle",
+            "severity": "nit",
+            "file": "src/jasme_jats/report.py",
+            "line": 847,
+            "problem": "要確認 note_overlap の文と 10 章の警告（structure.py 1957 行）は、「本文からのリンクは、それぞれ正しい注を指します」と書いています。前の指摘が「よくある形」として挙げた、題目に Word の文末脚注を付け、本文の注は手で書く原稿では、Word の注に本文からのリンクがありません。8 章は「なし」と出ています。「それぞれ」と言い切ると、題目の「1)」もリンクだと受け取られます。",
+            "evidence": "c19_title_endnote_manual を作業ツリーで変換した。冒頭の要確認と 10 章に、上の文が出る。8 章の表は「| fn2 | Word の文末脚注 1 | 1) | 本研究は架空の助成を受けた。 | なし（参照は題目の段落 d3 の中だけ。…リンクにしない） |」。fn_xrefs は fn1 の 1 件だけ。",
+            "fix": "「（本文からリンクしている注は、それぞれ正しい注を指します）」のように、リンクのある注に限った言い方にするか、括弧の中を消す。report.py と structure.py の 2 か所をそろえる。"
+          },
+          {
+            "lens": "regression",
+            "severity": "should",
+            "file": "src/jasme_jats/structure.py",
+            "line": 103,
+            "problem": "appendix_heading（修正で足した文の形の判定）は、和文の資料の見出しも認識しなくなります。対象は、番号の後ろの空白の次に英小文字で始まる語が来る見出し（「資料2 iPad の画面」「付録1 t検定の結果」「資料1 x と y の関係表」「資料3 pre-test の問題」「資料 1 n=30 の結果」）と、「。」を含む見出し（「資料1　授業の感想（抜粋。原文のまま）」）です。どれも 0.23.1 と修正前は資料の見出しとして認識していました。ずれ方は 2 つあります。(1) 最初の資料のとき: 見出しと続く和文が英文要旨（trans-abstract）に入ります。要確認 abstract_ja は出ますが、その文言は「その前に資料の見出し（「資料1」など）を付けて変換し直してください」で、見出しはもう付いているので、利用者は直し方が分かりません。(2) 2 つ目以降の資料のとき: 見出しは前の資料の段落になり、2 つの資料が 1 つにまとまります。判断の一覧・10 章・要確認のどこにも出ません。もう一つ、番号のない「付録 web 調査票」も、E の実装の RE_APPENDIX（番号なしの語の後ろが「空白 + 英小文字」なら認識しない）で認識しなくなっています（0.23.1 は認識）。DESIGN 7 章と FIX_PLAN の残る限界にはどちらも書かれていません。",
+            "evidence": "確かめ方は 3 つ。\n(1) r2/heads.py で、0.23.1（base_pkg）・修正前（fix1/pre_pkg）・作業ツリーの判定を比べた。\n- 0.23.1 は 17 例すべてを認識する。\n- 修正前は、上の和文の見出し 10 例を認識する（「付録 web 調査票」「Appendix questionnaire」は修正前でも認識しない）。\n- 作業ツリーは 0 例。\n(2) r2/cx/lower_head.py で、架空の docx（make_fixtures.make_article の appendix）を変換した。\n- first（「資料1 t検定の結果」と説明の段落）: 0.23.1 と修正前は app が 1 つ。作業ツリーは trans-abstract が [要旨, 「資料1 t検定の結果」, 説明] になり、app は 0 件。actions は ai_pending と abstract_ja。\n- second（資料1 の後ろに「資料2　iPad の画面」）: 0.23.1 と修正前は app が 2 つ。作業ツリーは app が 1 つで、「資料2　iPad の画面」とその説明が資料1 の p になる。actions は ai_pending だけで、warnings は空。\n- second_body（本文のスタイル、「資料2 x と y の対応表」）: second と同じ。\n- 不変性と DTD は、どれも合格。\n(3) 直し方の試作（r2/proto）: 英文の文の判定を、マッチの後ろにかな・漢字がないときだけ効かせる形にした（`not (RE_APPENDIX_SENTENCE.match(text, m.end()) and not RE_KANA_KANJI.search(text, m.end()))`）。和文の 10 例は再び認識した。本体のテストは 796 件すべて合格した（「(Appendix 1) lists the fictional tasks.」などの文の例は、引き続き認識しない）。",
+            "fix": "appendix_heading で、「空白 + 英小文字」の判定は、マッチの後ろにかな・漢字がない段落（英文の文）だけに効かせる（試作でテストは全件合格）。「。」の判定は、文末の「。」だけにするなどして、括弧の中の「。」を許すかを決める。test_appendix_heading_forms_are_recognized に、「資料2 iPad の画面」「付録1 t検定の結果」の形を足す。番号なしの「付録 web 調査票」を認識しないことは、残す（英文の文「Appendix shows …」のため）なら、DESIGN 7 章と FIX_PLAN の残る限界に書く。あわせて、英文要旨の段落が RE_APPENDIX に合うときは、abstract_ja の案内（「資料の見出しを付けて」）を「見出しの形を確かめて」に変えると、(1) の利用者が迷わない。"
+          },
+          {
+            "lens": "regression",
+            "severity": "nit",
+            "file": "src/jasme_jats/structure.py",
+            "line": 1759,
+            "problem": "AI が資料の見出しに abstract を指定し、すぐ後ろの段落に p を指定すると、後ろの段落から見出しのない資料が始まります。英文要旨の文が、空の <title> の資料に入ります。修正前は、その段落は英文要旨に入っていました。p の意味（資料の中の段落。前に資料がなければ見出しのない資料の最初の段落）どおりですが、AI にとっては矛盾した回答で、レポートには採用としか出ません。",
+            "evidence": "r2/cx/ai_p.py の abstract_then_p で確かめた。英文要旨の後ろに「Appendix 1: The fictional second abstract paragraph」「The fictional third abstract paragraph.」と、資料2 を置き、d23 に abstract、d24 に p を指定した。\n- 修正前（pre_pkg）: trans-abstract が 3 段落。\n- 作業ツリー: trans-abstract が 2 段落になり、app の 1 つ目は title が空で、p が「The fictional third…」。rejected・actions は空。\n- 0.23.1: abstract を拒否し、資料のまま。",
+            "fix": "build_front_en で、同じ回答の abstract によって英文要旨に戻した直後の段落への p は、前に資料がないときでも英文要旨のままにする。あるいは、SYSTEM_PROMPT に「abstract で戻した後ろの段落には p を付けない」と書く（任意）。"
+          },
+          {
+            "lens": "regression",
+            "severity": "nit",
+            "file": "tests/test_notes.py",
+            "line": 524,
+            "problem": "番号の重なりは「実際に重なるときだけ知らせる」（修正の担当の deviations 3）としていますが、この条件を確かめるテストがありません。手で書いた注と Word の注が両方あって番号が重ならない原稿で、知らせないことを見ていません。plan.note_overlap を手で書いた注の番号すべてにする変異が残ります。",
+            "evidence": "r2/mut/run_mut.py の overlap_manual_only で確かめた。`plan.note_overlap = sorted(manual & set(range(1, len(nodes) + 1)))` を `sorted(manual)` に変えても、関係するテスト 640 件がすべて合格した。test_note_overlap_is_not_reported_without_both_kinds は、片方だけの原稿しか見ていない。",
+            "fix": "test_notes に、手で書いた注が「3)」だけで Word の注が 2 つの原稿（または手で書いた注に番号がない原稿）を足し、note_overlap が空で note_overlap の Action が出ないことを確かめる。"
+          }
+        ],
+        "failedLens": []
+      },
+      {
+        "round": 2,
+        "fix": {
+          "changed_files": [
+            "/home/user/jstgxmlcng_JASME/src/jasme_jats/structure.py",
+            "/home/user/jstgxmlcng_JASME/src/jasme_jats/report.py",
+            "/home/user/jstgxmlcng_JASME/src/jasme_jats/ai_assist.py",
+            "/home/user/jstgxmlcng_JASME/tests/test_structure.py",
+            "/home/user/jstgxmlcng_JASME/tests/test_ai.py",
+            "/home/user/jstgxmlcng_JASME/tests/test_notes.py",
+            "/home/user/jstgxmlcng_JASME/tests/test_pdfmatch.py",
+            "/home/user/jstgxmlcng_JASME/docs/DESIGN.md",
+            "/home/user/jstgxmlcng_JASME/docs/DEVELOPMENT.md",
+            "/home/user/jstgxmlcng_JASME/docs/FIX_PLAN.md",
+            "/home/user/jstgxmlcng_JASME/docs/STYLE_MAPPING.md",
+            "/home/user/jstgxmlcng_JASME/README.md"
+          ],
+          "summary": "点検 2 回目の指摘（should 2 件・nit 4 件）をすべて直した。変更はコミットしていない差分として積んである（HEAD e2dbf73 のまま。版は 0.24.0 のまま。ノートブックは作り直したが、修正前とバイト単位で同じ）。\n\n1. 資料の見出しの「文の形」の判定を絞った（should：principle 1・regression 4）\n- 新しく structure.appendix_sentence(text) を作った。文の形のときは、その形の名前を返す。\n- 和文の文とみなすのは、語・番号の後ろにかな・漢字があり、段落が「。」か「．」で終わるときだけ。\n- 英文の文とみなすのは、語・番号（と閉じ括弧）の後ろが「空白 + 英小文字」で、かな・漢字がなく、段落が「.」「?」「!」で終わるときだけ。\n- appendix_heading は「RE_APPENDIX に合い、かつ appendix_sentence が空」とした。\n- RE_APPENDIX から「番号のない語の後ろが空白 + 英小文字なら認識しない」先読みを外し、同じ判定にまとめた。\n- 結果: 次の見出しは 0.23.1 と同じく見出しに戻った。\n  - 括弧・かぎ括弧の中に「。」がある見出し（「資料2　…（下線は筆者。）」「資料1　問い「なぜだろう。」の…」）\n  - 「Appendix 1 questionnaire」「資料2 iPad の画面」「付録1 t検定の結果」「付録 web 調査票」\n- 1 回目の規則では見出しにしていた「．」で終わる和文の文（「資料1，2は…である．」）は、文とみなすようになった。\n\n2. 文とみなした段落を判断の一覧に記録する\n- 見出しの形に合うのに文とみなした段落は、Classifier.note_appendix_sentence で判断の一覧に applied=False として記録する。4 章と AI 依頼文の「推定:」に載る。\n- 案内の文言は位置で分けた。\n  - 英文要旨の段落（最初の資料の位置）: 「Word で章・節・項見出しのスタイルを付ければ、文字はそのままで資料になる」\n  - 2 つ目からの資料: 「AI の set_role app_heading で資料にできる」\n\n3. 英文要旨の中の和文の案内（check_abstract_ja と report の abstract_ja）\n- 「資料1　…。」の形で文とみなした段落の 10 章の警告は、その段落に見出しのスタイルを付ける案内にした。\n- 要確認（冒頭・14 章・Colab・コマンドライン）とほかの段落の警告は「資料の見出しの段落に章・節・項見出しのスタイルを付けて（見出しがなければ見出しを付けて）」にした。\n\n4. nit 4 件\n- DEVELOPMENT.md の「残っている課題」の資料の行を、コードに合わせて書き直した。\n- note_overlap の文言は 2 か所とも「本文からリンクしている注は、それぞれ正しい注を指します」にした（report.py と structure.py）。\n- AI の abstract と p: abstract で英文要旨に戻した後ろの段落のうち、見出しの形でも見出しのスタイルでもない段落への p では、資料を始めない（英文要旨のまま）。このときの判断の記録も「英文要旨の段落のままにした」にした（ai_assist.apply_ops）。\n- 番号が重ならないときは知らせないことを確かめるテストを足した。\n\n5. 文書\nDESIGN 5・6・7 章、FIX_PLAN の E 節、README、STYLE_MAPPING、DEVELOPMENT を実装に合わせた。FIX_PLAN の E 節では、実装で決めたこと・暫定 (5)・「点検の指摘で直したこと（2 回目）」・確かめた数・残る限界・食い違いを直した。",
+          "tests_added": [
+            "tests/test_structure.py: 認識する書き方 APPENDIX_YES に 13 件足した（括弧・かぎ括弧の中の「。」2 件、語・番号の後ろが「空白 + 英小文字」の和文・英文 8 件、番号のない「Appendix questionnaire」「付録 web 調査票」、「資料1．」、「資料2 iPad の画面.」）。APPENDIX_NO から、RE_APPENDIX に合うようになった 2 件を移した。APPENDIX_SENTENCES に 6 件足した（「．」で終わる和文 2 件、「Appendix 1 lists ….」「Appendix shows the data.」「Appendix abstract.」「資料1　架空の授業プリント。」）",
+            "tests/test_structure.py: test_sentences_are_not_appendix_headings で、appendix_sentence が返す形の名前も確かめるようにした",
+            "tests/test_structure.py: test_appendix_headings_with_period_inside_or_lower_case_word を新しく足した（3 パターン）。対象は、括弧の中に「。」がある最初の資料（principle の r01 に当たる）、2 つ目からの資料 3 つ（r02・r04 と、回帰の点検の lower_head に当たる。本文のスタイルの「資料3 iPad の画面」も含む）、英小文字の英文の見出し（r03・r03b に当たる）",
+            "tests/test_structure.py: test_sentence_paragraphs_do_not_start_appendix に足した。文とみなした段落の判断（applied=False）について、英文要旨の段落と資料の中の段落それぞれの文言・場所、4 章、AI 依頼文の推定を確かめる",
+            "tests/test_structure.py: test_sentence_shaped_heading_in_abstract_gets_style_guidance を新しく足した。「資料1　…。」の段落に出る、見出しのスタイルを付ける案内を確かめる。ほかの段落の案内と、案内どおり sec1 のスタイルにすると資料になることも確かめる",
+            "tests/test_structure.py: test_japanese_paragraph_in_abstract_is_reported の期待を新しい案内に合わせた（冒頭の要確認の文も確かめる）",
+            "tests/test_structure.py: test_appendix_after_references_is_warned に「資料3　架空の調査問題（一部抜粋。）」を足し、知らせる件数を 3 件にした",
+            "tests/test_ai.py: test_set_role_p_after_abstract_keeps_abstract を新しく足した。次を確かめる: abstract の後ろの段落への p で英文要旨のままになること、その判断の文言、後ろの資料の見出しへの p で見出しのない資料になること、冗長な abstract の後ろの見出しのスタイルの段落への p で見出しのない資料になること",
+            "tests/test_ai.py: test_sentence_decision_is_not_recorded_for_ai_roles を新しく足した。AI が役割を指定した段落には、文とみなした判断を記録しないことを確かめる",
+            "tests/test_notes.py: test_note_overlap_is_reported_only_for_same_numbers を新しく足した。手で書いた注が「3)」で Word の注が 2 つのときは知らせず、手で書いた注が「2)」のときだけ [2] で知らせることを確かめる",
+            "tests/test_pdfmatch.py: test_route2_keeps_abstract_appendix_border の docstring だけ直した（文の形の例を「資料－1 shows the worksheet.」にした）"
+          ],
+          "pytest_result": "- Python 3.13: 820 passed。Python 3.10: 820 passed（PYTHONPATH=src で venv310 を使った）。修正前は 796 件。\n- 修正前のコードで流すと、39 件が失敗する。appendix_sentence だけを足した写し（scratchpad/e/fix2/pre_shim）を pytest_src.sh で流した。\n  - 39 件のうち 18 件は、新しい appendix_sentence が返す形の名前を確かめるもの。\n  - 残りは、見出しの判定・資料の組み立て・判断・案内・AI の p・引用文献の後ろの知らせのテスト。\n  - 番号の重なりのテストは修正前でも合格する（変異を見つけるためのテスト）。\n- ruff check src tests tools: 202 件。修正前と同じで、HEAD（203 件）より増えていない。この回の作業中に 1 件（RUF015）が出たので直した。\n- この回の変異 16 件は、すべてテストが見つけた（scratchpad/e/fix2/mut/results.json）。ほかに効かない条件 2 つを変異で見つけ、コードから消した。",
+          "measures": "**golden**（scratchpad/e/fix2/golden/manifest.json）\n- 23 件すべてで不変性・最終・DTD・J-STAGE が合格した。\n- XML・レポート・AI 依頼文のハッシュは、23 件すべて修正前（回帰の点検 2 回目の作業ツリー）と同じ。\n- 0.23.1 との違いは前回と同じ。\n  - XML が違うのは sample_structure の 2 件だけ（fixture に足した D3・D4 の要素）。\n  - レポートの違い: sample_full 3 件と JASME_template 2 件の 4 章の資料の見出しの判断 1 行、sample_edge の M-009 の場所の表記、sample_structure、pdfcheck route1・route2 の 13 章の定型文 1 行。\n  - AI 依頼文の違いは、役割の一覧・SYSTEM_PROMPT・除外の一覧の案内・資料の推定の行。いくつかは本体を diff して確かめた。\n\n**td1〜3**（ルート1・ルート2、--ai manual）\n- 修正前との比較: XML・レポート本文・AI 依頼文・標準エラー・終了コード（1。手動モードの最初の実行）がすべて同じ。違うのはツールの行（コミット）と出力先のパスだけ。最後の ai_assist の変更の後に流し直しても同じ。ルート2 の直した docx は、日時などでバイト列だけ違う。\n- 0.23.1 との比較:\n  - XML は同じ。\n  - レポートで違うのは、td3 の 4 章の資料の見出しの判断（表の見出しを含めて 3 行）、ルート2 の 13 章の定型文 1 行、ツールの行。\n  - AI 依頼文は 9〜10 行違う。\n- 不変性・最終・DTD は合格し、J-STAGE のチェックは問題なし。XML が同じなので、XML に入らなかった画像は増えていない。\n- td1〜3 には、文末脚注・脚注（separator だけ）、文の形の資料の見出し、英文要旨の和文がないことを確かめた。\n\n**独立の反例**（oracle の run_e.py）\n- 作業ツリー 37/39、修正前 37/39、0.23.1 15/39。\n- 残る N09・R06 は、前回と同じ偽陽性（案内の文言に「set_role」の語があるだけで判定している）。\n- A12 は警告の文言だけが変わり、OK のまま。\n\n**点検の反例**\n- principle r2 の gen*.py で 51 件を作り直して変換した。全件で不変性・最終・DTD・J-STAGE が合格した。\n  - r01・r04: 資料 1 つになり、英文要旨は 1 段落。修正前は資料 0、英文要旨 3〜4 段落、abstract_ja が出ていた。\n  - r02・r03b: 資料が 2 つになった（修正前は 1 つにつながっていた）。r03: 資料になった。\n  - r10・r11: app_after_refs の要確認が出るようになった（修正前は出なかった）。\n  - r05: 「．」で終わる文を文とみなし、applied=False の判断が残る（修正前は誤って資料の見出しにしていた）。\n  - c11・c20・c21: 文とみなした判断が 1 行増えた。c17・c17b・c19: note_overlap の文言が変わった。c04b・c09a: 和文の警告の文言が変わった。\n  - それ以外は修正前と同じ。0.23.1 との違いは E で意図した AI 指定の形だけ。\n- 回帰の点検の lower_head 3 件: 0.23.1 と同じ資料になった。\n- 回帰の点検の ai_p: abstract_then_p が abstract_only と同じになった（英文要旨 3 段落、資料 1 つ）。p_first・p_second は修正前と同じ。\n\n**自分で作った反例 7 件**（scratchpad/e/fix2/own）\n- すべて合格。\n- 「付録 web 調査票」「資料1 iPad の画面.」は 0.23.1 と同じく資料になる。abstract の後ろの 2 つの p も英文要旨のまま。\n- 次の 2 件は文とみなすので、0.23.1 と違う（applied=False の判断が残る。残る限界として文書に書いた）。\n  - 2 つ目の資料の見出し「資料2　架空の調査票。」: 前の資料につながる。\n  - 最初の資料の見出し「Appendix 1 questionnaire.」: 英文要旨に入る。",
+          "deviations": "**指摘どおりにしなかった点・指摘の外で足した点**\n\n1. 指摘 1・4 の和文の規則は、試作 A（括弧の外の「。」を数える）にしなかった。「語・番号の後ろにかな・漢字があり、段落が「。」か「．」で終わる」にした。\n   - 理由: 括弧の深さを数えると、数式の「x < y」などの「<」で狂う。\n   - 理由: この書き方なら、「，．」で書く原稿の文（「資料1，2は…である．」）も文とみなせる。1 回目の規則でも試作 A でも、これは見出しになっていた。\n   - 英文の規則には、試作 A の「「.」などで終わる」と、回帰の点検の試作の「かな・漢字がない」の両方を入れた。\n\n2. RE_APPENDIX の「番号のない語の後ろが空白 + 英小文字なら認識しない」先読みを外し、appendix_sentence の英文の判定にまとめた。「付録 web 調査票」「Appendix questionnaire」を 0.23.1 と同じにするため。\n   - この結果、「.」のない「Appendix shows the data」は見出しになる（APPENDIX_NO から外し、「.」付きの形を APPENDIX_SENTENCES に入れた）。\n   - 「.」で終わらない英文要旨の文はまずないので、こちらを採った。\n\n3. 次の見出しは、0.23.1 では見出しだったが、今も文とみなす（直していない）。\n   - 「。」「．」で終わる見出し（「資料1　授業プリント。」）\n   - 英小文字の語で「.」で終わる英文の見出し（「Appendix 1 questionnaire.」）\n   - 理由: 「資料1、2は…である。」などの文と、文字だけでは見分けられない。\n   - 代わりに、判断の一覧（applied=False）と依頼文の推定に残す。英文要旨に入ったときの要確認は、見出しのスタイルを付ける案内にした。\n   - 2 つ目からの資料では前の資料につながり、要確認は出ない（4 章の判断だけ）。\n   - DESIGN 7 章、FIX_PLAN の残る限界と暫定 (5)、DEVELOPMENT の残っている課題に書いた。\n\n4. 指摘 2 の判断の文言は、位置で分けた。\n   - 最初の資料の位置: Word の見出しのスタイルを主に書き、AI でもできることを添える。\n   - 2 つ目からの資料: AI の app_heading だけを書く。\n   - 理由: 2 つ目からの資料では、見出しのスタイルを付けても資料の中の段落になる（by_style は英文要旨の直後だけで効く）。\n\n5. 指摘 3 は、見出しの形で始まる段落の警告を変えただけでなく、要確認（冒頭・14 章・Colab・コマンドライン）とほかの段落の警告も、見出しのスタイルを付ける案内（見出しがなければ見出しを付ける）にそろえた。要確認は 1 件にまとめて出るので、一部の段落にしか当てはまらない案内にならないようにするため。\n\n6. 指摘 5（nit）は、試作どおり見出しでない段落への p だけを英文要旨のままにした。\n   - 見出しの形・見出しのスタイルの段落への p は、今までどおり見出しのない資料にする。英文要旨の段落への冗長な abstract の後ろで、最初の資料の見出しに p が付いても、1 回目の問題（見出しと資料が英文要旨に入る）が戻らないようにするため。\n   - 指摘の外で足したこと: この p の判断が「段落の役割を「本文段落」とした」と出て、何も変わらないのに採用と読めた。そこで「英文要旨の段落のままにした」と記録するようにした（ai_assist.apply_ops）。\n   - SYSTEM_PROMPT は変えていない。AI 依頼文の golden を変えないためで、プロンプトにある p の説明は見出しへの p だけなので、食い違わない。\n\n7. 指摘 6（nit）: overlap_manual_only の変異は、新しいテストで見つかる。回帰の点検のもう一つの変異 overlap_word_too は等価なので、テストを足していない。attach_word_notes の時点では Word の注の FnNode.number は None で、番号は後で builder.word_note_marks が付けるため。\n\n8. 自分の変異テストで見つけた、効かない条件 2 つを消した。\n   - 文とみなす判断の `not ai`: AI が指定した段落は前の分岐で決まり、ここに来ない。\n   - ai_abstract を資料の始まりで戻す行: 資料が始まった後に app が None に戻るのは AI の abstract のときだけで、そこで ai_abstract はまた True になる。\n\n**文書とコードの食い違い（直したもの）**\n\na. DEVELOPMENT.md の「残っている課題」の資料の行（指摘 2）。\nb. FIX_PLAN の E 節「実装で決めたこと」の「番号なしの「Appendix」の後ろが空白と英小文字なら認識しない」。コードは「資料」「付録」「附録」にも当てはめていた。今回この規則を appendix_sentence に移したので、文書もそれに合わせた。\nc. tests/test_pdfmatch.py の境の検証の docstring の「「資料－1 shows …」のような文の形」。今の規則で文になるのは「.」で終わる形だけ。\nd. DESIGN 6 章・STYLE_MAPPING・README の「「。」を含む段落は除く」（1 回目の規則の書き方）。\ne. FIX_PLAN の「確かめた数」の見出し（「1 回目の修正の後」のまま 2 回目の数を足したので、注記した）。\n\n**直していない食い違い**\n前回から残る pdfmatch.target_paragraphs の docstring とコメントの「資料は照合しない」。B2.1 の控えとぶつかるので、そのままにした。",
+          "open_issues": "- 「。」「．」で終わる資料の見出しと、英小文字の語で「.」で終わる英文の見出しは、文とみなす（0.23.1 との違い）。2 つ目からの資料ではレポートの 4 章の判断に出るだけで、要確認は出ない。試験運用で 4 章に「資料の見出しにしなかった」が出たら、利用者に見てもらう必要がある。\n- 逆に次の段落は見出しとみなす（判断の一覧に残り、AI の abstract・p で戻せる）: 「Appendix 1, which …」のような英文の文、「資料1，2の比較」のような「。」で終わらない和文の行、「.」で終わらない英文。\n- 文とみなした判断（applied=False）は、英文要旨の正しい文（「(Appendix 1) lists ….」）にも出る。そのため 4 章と AI 依頼文の推定が 1 行増える。実際の AI が、これを見て誤って app_heading を提案しないかは確かめていない。\n- 暫定の判断は、利用者にまだ確かめていない: 引用文献の後ろの資料は警告だけ、customMarkFollows の文末脚注、手で書いた注との番号の重なり、英文の題目・副題への set_role、削除された参照だけの注、資料の見出しの文の形の判定。\n- 実際の AI での app_heading・abstract・p と、J-STAGE の試験登載での文末脚注・見出しのない資料などの表示は、まだ確かめていない。\n- 実験の結果・ログ・スクリプトは /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/fix2/ に残した。docx・XML・PDF・td の出力は消し、tests/__pycache__ も消した。ディスクの空きは 23GB。\n- B2.1（照合 pdfmatch の守り）は保留のまま。"
+        },
+        "findings": [
+          {
+            "lens": "principle",
+            "severity": "nit",
+            "file": "src/jasme_jats/structure.py",
+            "line": 77,
+            "problem": "文の形の判定（appendix_sentence）は、段落の終わりが「。」「．」「.」「?」「!」ちょうどのときだけ文とみなします。このため、次のような文が資料の見出しになります。\n- ピリオドの後ろに手で書いた注番号が続く文（「資料1、2は…である。1)」「(Appendix 1) lists ….1)」）\n- コロンで終わる英文（「(Appendix 1) lists …:」）\n- かぎ括弧で終わる文（「資料1、2の問いは「なぜだろう。」」）\n\n起きることは 2 つです。\n- 英文要旨の段落が、そこから資料（app）に移る。\n- 2 つ目の資料の位置では、資料の中の文が新しい資料の見出しになる。\n\n0.23.1（括弧で始まる形や、番号の後ろが読点の形を認識しなかった）と修正前（「。」が段落のどこかにあれば文）は、どれも元の場所のままでした。文字は落ちません。知らせは 4 章の判断（applied=True）だけで、要確認は出ません。\n\nこの種類は、DESIGN 7 章に「「。」「．」で終わらない和文の行…「.」で終わらない英文は見出しとみなす」として書かれています。td1〜3 では、手で書いた注番号は、どれも「。」の前に置かれていました（「。」の後ろに置いたものはない）。そのため頻度は低いとみて、nit にしました。",
+            "evidence": "確かめ方は 3 つ。\n\n(1) 判定を比べた（r3/re/probe.py と cases.json の 89 個。結果は base・pre1・pre2・wt の json）。次の文字列は、0.23.1 と修正前では見出しでなく、作業ツリーでは見出しになる。\n- 「資料1、2は架空の授業の記録である。1)」\n- 「（資料1）に示すように、架空の児童は考えた。2)」\n- 「(Appendix 1) lists the fictional tasks:」\n- 「(Appendix 1) lists the fictional tasks.)」\n- 「資料1、2は架空の授業の記録である。」」\n\n(2) 架空の docx を 3 版で変換した（r3/own/gen_own.py。結果は r3/cx/out_own/<版>/<ケース>/summary.json）。\n- o01（資料1 の 3 段落目が「資料1、2は架空の授業の記録である。」と上付きの「1)」）: 0.23.1 と修正前は、資料 1 つに段落 3 つ。作業ツリーは資料 2 つになり、この文が資料2 の title になる。判断は M-002（applied=True）だけで、actions は空。\n- o03（英文要旨の「(Appendix 1) lists the fictional tasks used in the lesson.」と上付きの「1)」）: 0.23.1 と修正前は、trans-abstract が 3 段落。作業ツリーは trans-abstract が 1 段落になり、この文を title とする app ができて、要旨の最後の文がその中に入る。actions は空。\n- o02（同じ文がコロンで終わる）: o03 と同じ。\n- o05（「…の問いは「なぜだろう。」」）: o01 と同じ。\n- 4 件とも、不変性・最終・DTD・J-STAGE は合格した。\n\n(3) 直し方を試した（r3/proto/proto_structure.diff）。\n- RE_JA_SENTENCE_END を `[。．](?:[0-9０-９]{1,3}[)）])?[\\s　]*$` に、RE_EN_SENTENCE_END を `[.?!](?:[0-9]{1,3}\\))?[\\s　]*$` に変えた。\n- 本体のテストは 820 件すべて合格した（pytest_src.sh。WHICH で写しを使っていることを確かめた）。\n- 89 個のうち判定が変わったのは、注番号で終わる 3 つだけだった。「（下線は筆者。）」「「なぜだろう。」の…」などの見出しは、見出しのまま。\n- o01・o03 は 0.23.1 と同じ場所に戻り、applied=False の判断が残った。o02（コロン）は変わらない。",
+            "fix": "次の 2 つのどちらかにする。\n- 試作のとおり、RE_JA_SENTENCE_END と RE_EN_SENTENCE_END で、句点・ピリオドの直後の手で書いた注番号（「1)」「１）」）を許す。括弧だけを許すと「（下線は筆者。）」が文に戻るので、数字のある形だけにする。あわせて APPENDIX_SENTENCES に「資料1、2は…である。1)」「(Appendix 1) lists ….1)」を足す。\n- 規則を変えないなら、DESIGN 7 章と FIX_PLAN の残る限界に、「「。」の後ろに手で書いた注番号が続く文（「…である。1)」）や、コロンで終わる英文も見出しとみなす（英文要旨の段落が資料に移る）」と書き足す。"
+          },
+          {
+            "lens": "principle",
+            "severity": "nit",
+            "file": "tests/test_structure.py",
+            "line": 197,
+            "problem": "この回に足した規則のうち、次の 3 つはテストで守られていません（変異が残ります）。\n- 英文の文の判定の「空白 + 英小文字」の条件（structure.py 122 行の RE_APPENDIX_SENTENCE.match(rest)）\n- 文の終わりの「?」「!」\n- 文の終わりの後ろの空白\n\n前回の nit の修正（note_overlap の文言）にも、テストがありません。\n\nなかでも 1 つ目の条件を外すと、英小文字の語のない、「.」で終わる英文の見出しがすべて文になります。例は「Appendix B.」（README 253 行の例）、「Appendix 1: Questionnaire.」です。最初の資料なら、見出しと資料の段落が英文要旨に入ります。それでもテストは 820 件すべて合格します。",
+            "evidence": "r3/mut/run_mut.py で変異 23 件を作り、本体のテストをすべて流した（pytest_src.sh。結果は results.json）。15 件はテストが見つけた。残った 8 件は次のとおり。\n- en_no_lower_check: 122 行を `if RE_EN_SENTENCE_END.search(rest):` に変えた。820 passed。\n  - この写しでは、「Appendix B.」「Appendix 1.」「Appendix A. Fictional questionnaire.」「Appendix 1: Questionnaire.」「Appendix 1 – Questionnaire.」が見出しでなくなる。作業ツリーと 0.23.1 では、どれも見出し。\n  - docx o09（「Appendix 1: Questionnaire.」と Q1 の段落）をこの写しで変換すると、trans-abstract が 3 段落になり、app は 0 件。作業ツリーでは資料 1 つ。\n- en_end_period_only（[.?!] を [.] にした）: 820 passed。\n- ja_end_no_trailing_ws・en_end_no_trailing_ws（終わりの後ろの空白を許さない）: どちらも 820 passed。\n- overlap_wording_old（report.py 848 行を「本文からのリンクは」に戻した）: 820 passed。\n- overlap_wording_old_st（structure.py 2011 行を同じように戻した）: 820 passed。\n- sentence_everywhere（`if not starts and (in_abstract or app is not None)` を `if not starts` にした）: 820 passed。違いが出るのは、Abstract の見出しのない英文要旨の最初の段落だけ。\n- p_keep_abs_no_inabs: 外しても同じ動きになる（app が None で ai_abstract が真なら in_abstract も真）。\n\n修正の担当の変異 16 件には、これらは入っていなかった。",
+            "fix": "次のテストを足す。\n- APPENDIX_YES に「Appendix B.」「Appendix 1: Questionnaire.」「Appendix A. Fictional questionnaire.」を足す。\n- APPENDIX_SENTENCES に「Appendix 1 lists the fictional tasks?」「…!」と、終わりの後ろに空白のある「資料1、2は架空の授業の記録である。　」「Appendix 1 lists the fictional tasks. 」を足す。test_sentences_are_not_appendix_headings の名前の判定は、s.rstrip().endswith(...) にする。\n- test_note_overlap_is_reported_only_for_same_numbers（tests/test_notes.py 531 行）で、10 章の警告と要確認の top の文に「本文からリンクしている注は」があることも確かめる。"
+          },
+          {
+            "lens": "principle",
+            "severity": "nit",
+            "file": "docs/STYLE_MAPPING.md",
+            "line": 31,
+            "problem": "STYLE_MAPPING.md 29〜31 行は「「資料を配布した。」「資料1、2は授業の記録である。」のような「。」か「．」で終わる和文の文と、…英文の文は除く。除いた段落もレポートの 4 章に記録する」と書いています。この書き方では「資料を配布した。」も 4 章に記録されるように読めます。\n\n実際のコードでは、判断の一覧に記録するのは、RE_APPENDIX に合うのに文とみなした段落だけです。「資料を配布した。」は RE_APPENDIX に合わないので、記録しません。appendix_sentence は形に合わなければ '' を返し、note_appendix_sentence は sentence が空でないときだけ呼ばれます。DESIGN 6 章の「形に合うが文とみなした段落も…判断の一覧」は、コードと合っています。",
+            "evidence": "架空の docx で確かめた（make_article の appendix に「資料1　架空の授業プリント」「資料を配布した。」「資料1、2は架空の授業の記録である。」の 3 段落を入れ、_mechanical で組み立てた）。判断は 2 件だけだった。\n- d23: 見出しとした（applied=True）\n- d25: 「資料1、2は…」を文とみなした（applied=False）\n「資料を配布した。」の d24 には、判断がない。",
+            "fix": "コードに合わせて書き直す。例:「…のような文は除く（形に合うが文とみなした「資料1、2は授業の記録である。」のような段落は、レポートの 4 章に記録する。「資料を配布した。」のように形に合わない段落は記録しない）」。"
+          },
+          {
+            "lens": "regression",
+            "severity": "nit",
+            "file": "tests/test_structure.py",
+            "line": 197,
+            "problem": "appendix_sentence の英文の規則にある 2 つの条件と、和文の文末の後ろの空白を許すことを守るテストがありません。2 つの条件は、語・番号の直後が「空白 + 英小文字」であること（RE_APPENDIX_SENTENCE.match）と、段落の終わりの判定です。APPENDIX_YES の英文の見出しには「.」で終わるものがありません（「.」で終わるのは和文の「資料2 iPad の画面.」だけ）。このため、規則を「英小文字がどこかにあり、「.」で終わる英文は文」に弱めても、本体のテストがすべて合格します。「.」で終わる英文はすべて文、に弱めても同じです。そうなると、0.23.1 と作業ツリーで見出しの形（「Appendix 1. Questionnaire for teachers.」「Appendix 1 Questionnaire.」「Appendix A Questionnaire for the fictional lesson.」）が黙って文になり、最初の資料なら英文要旨に入ります。和文の文末の後ろの空白（「…。 」）を許す [\\s　]* を外しても、合格します。",
+            "evidence": "確かめ方は 2 つ（scratchpad/e/review/regression/r3/）。\n(1) 変異テスト（mut/run_mut.py。fix2 の run_mut.py と同じ手順で、test_structure・test_notes・test_ai・test_pdfmatch・test_pipeline の 648 件）。次の 3 つは、どれも 648 passed で生き残った。\n- en_lower_anywhere: RE_APPENDIX_SENTENCE.match(rest) を .search(rest) に変える\n- en_no_lower_check: 条件を RE_EN_SENTENCE_END.search(rest) だけにする\n- ja_end_no_ws: RE_JA_SENTENCE_END から [\\s　]* を外す\nほかの 5 つ（close_dropped・kana_whole_text・back_regex_only・aiassist_msg_always_old・aiassist_msg_any_p）は、テストが見つけた。\n(2) probe_heads.py で判定を比べた。「Appendix 1. Questionnaire for teachers.」「Appendix A Questionnaire for the fictional lesson.」「Appendix 1 Questionnaire.」は、0.23.1 の RE_APPENDIX でも作業ツリーの appendix_heading でも見出し（appendix_sentence は ''）。「資料1　架空の授業プリント。 」（後ろに半角空白・全角空白）は、作業ツリーで文の形になった。今の判定は 0.23.1 と同じで、悪くなってはいない。守るテストがないことだけが問題。",
+            "fix": "tests/test_structure.py の APPENDIX_YES に「Appendix 1. Questionnaire for teachers.」「Appendix A Questionnaire for the fictional lesson.」を足す（大文字で始まる語の後ろに英小文字があり、「.」で終わる英文の見出し）。APPENDIX_SENTENCES に「資料1，2は架空の記録である。　」のような文末の後ろに空白がある文を足す。足した後に、上の 3 つの変異をテストが見つけることを確かめる。"
+          }
+        ],
+        "failedLens": []
+      }
+    ],
+    "remaining": [
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "src/jasme_jats/structure.py",
+        "line": 77,
+        "problem": "文の形の判定（appendix_sentence）は、段落の終わりが「。」「．」「.」「?」「!」ちょうどのときだけ文とみなします。このため、次のような文が資料の見出しになります。\n- ピリオドの後ろに手で書いた注番号が続く文（「資料1、2は…である。1)」「(Appendix 1) lists ….1)」）\n- コロンで終わる英文（「(Appendix 1) lists …:」）\n- かぎ括弧で終わる文（「資料1、2の問いは「なぜだろう。」」）\n\n起きることは 2 つです。\n- 英文要旨の段落が、そこから資料（app）に移る。\n- 2 つ目の資料の位置では、資料の中の文が新しい資料の見出しになる。\n\n0.23.1（括弧で始まる形や、番号の後ろが読点の形を認識しなかった）と修正前（「。」が段落のどこかにあれば文）は、どれも元の場所のままでした。文字は落ちません。知らせは 4 章の判断（applied=True）だけで、要確認は出ません。\n\nこの種類は、DESIGN 7 章に「「。」「．」で終わらない和文の行…「.」で終わらない英文は見出しとみなす」として書かれています。td1〜3 では、手で書いた注番号は、どれも「。」の前に置かれていました（「。」の後ろに置いたものはない）。そのため頻度は低いとみて、nit にしました。",
+        "evidence": "確かめ方は 3 つ。\n\n(1) 判定を比べた（r3/re/probe.py と cases.json の 89 個。結果は base・pre1・pre2・wt の json）。次の文字列は、0.23.1 と修正前では見出しでなく、作業ツリーでは見出しになる。\n- 「資料1、2は架空の授業の記録である。1)」\n- 「（資料1）に示すように、架空の児童は考えた。2)」\n- 「(Appendix 1) lists the fictional tasks:」\n- 「(Appendix 1) lists the fictional tasks.)」\n- 「資料1、2は架空の授業の記録である。」」\n\n(2) 架空の docx を 3 版で変換した（r3/own/gen_own.py。結果は r3/cx/out_own/<版>/<ケース>/summary.json）。\n- o01（資料1 の 3 段落目が「資料1、2は架空の授業の記録である。」と上付きの「1)」）: 0.23.1 と修正前は、資料 1 つに段落 3 つ。作業ツリーは資料 2 つになり、この文が資料2 の title になる。判断は M-002（applied=True）だけで、actions は空。\n- o03（英文要旨の「(Appendix 1) lists the fictional tasks used in the lesson.」と上付きの「1)」）: 0.23.1 と修正前は、trans-abstract が 3 段落。作業ツリーは trans-abstract が 1 段落になり、この文を title とする app ができて、要旨の最後の文がその中に入る。actions は空。\n- o02（同じ文がコロンで終わる）: o03 と同じ。\n- o05（「…の問いは「なぜだろう。」」）: o01 と同じ。\n- 4 件とも、不変性・最終・DTD・J-STAGE は合格した。\n\n(3) 直し方を試した（r3/proto/proto_structure.diff）。\n- RE_JA_SENTENCE_END を `[。．](?:[0-9０-９]{1,3}[)）])?[\\s　]*$` に、RE_EN_SENTENCE_END を `[.?!](?:[0-9]{1,3}\\))?[\\s　]*$` に変えた。\n- 本体のテストは 820 件すべて合格した（pytest_src.sh。WHICH で写しを使っていることを確かめた）。\n- 89 個のうち判定が変わったのは、注番号で終わる 3 つだけだった。「（下線は筆者。）」「「なぜだろう。」の…」などの見出しは、見出しのまま。\n- o01・o03 は 0.23.1 と同じ場所に戻り、applied=False の判断が残った。o02（コロン）は変わらない。",
+        "fix": "次の 2 つのどちらかにする。\n- 試作のとおり、RE_JA_SENTENCE_END と RE_EN_SENTENCE_END で、句点・ピリオドの直後の手で書いた注番号（「1)」「１）」）を許す。括弧だけを許すと「（下線は筆者。）」が文に戻るので、数字のある形だけにする。あわせて APPENDIX_SENTENCES に「資料1、2は…である。1)」「(Appendix 1) lists ….1)」を足す。\n- 規則を変えないなら、DESIGN 7 章と FIX_PLAN の残る限界に、「「。」の後ろに手で書いた注番号が続く文（「…である。1)」）や、コロンで終わる英文も見出しとみなす（英文要旨の段落が資料に移る）」と書き足す。"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "tests/test_structure.py",
+        "line": 197,
+        "problem": "この回に足した規則のうち、次の 3 つはテストで守られていません（変異が残ります）。\n- 英文の文の判定の「空白 + 英小文字」の条件（structure.py 122 行の RE_APPENDIX_SENTENCE.match(rest)）\n- 文の終わりの「?」「!」\n- 文の終わりの後ろの空白\n\n前回の nit の修正（note_overlap の文言）にも、テストがありません。\n\nなかでも 1 つ目の条件を外すと、英小文字の語のない、「.」で終わる英文の見出しがすべて文になります。例は「Appendix B.」（README 253 行の例）、「Appendix 1: Questionnaire.」です。最初の資料なら、見出しと資料の段落が英文要旨に入ります。それでもテストは 820 件すべて合格します。",
+        "evidence": "r3/mut/run_mut.py で変異 23 件を作り、本体のテストをすべて流した（pytest_src.sh。結果は results.json）。15 件はテストが見つけた。残った 8 件は次のとおり。\n- en_no_lower_check: 122 行を `if RE_EN_SENTENCE_END.search(rest):` に変えた。820 passed。\n  - この写しでは、「Appendix B.」「Appendix 1.」「Appendix A. Fictional questionnaire.」「Appendix 1: Questionnaire.」「Appendix 1 – Questionnaire.」が見出しでなくなる。作業ツリーと 0.23.1 では、どれも見出し。\n  - docx o09（「Appendix 1: Questionnaire.」と Q1 の段落）をこの写しで変換すると、trans-abstract が 3 段落になり、app は 0 件。作業ツリーでは資料 1 つ。\n- en_end_period_only（[.?!] を [.] にした）: 820 passed。\n- ja_end_no_trailing_ws・en_end_no_trailing_ws（終わりの後ろの空白を許さない）: どちらも 820 passed。\n- overlap_wording_old（report.py 848 行を「本文からのリンクは」に戻した）: 820 passed。\n- overlap_wording_old_st（structure.py 2011 行を同じように戻した）: 820 passed。\n- sentence_everywhere（`if not starts and (in_abstract or app is not None)` を `if not starts` にした）: 820 passed。違いが出るのは、Abstract の見出しのない英文要旨の最初の段落だけ。\n- p_keep_abs_no_inabs: 外しても同じ動きになる（app が None で ai_abstract が真なら in_abstract も真）。\n\n修正の担当の変異 16 件には、これらは入っていなかった。",
+        "fix": "次のテストを足す。\n- APPENDIX_YES に「Appendix B.」「Appendix 1: Questionnaire.」「Appendix A. Fictional questionnaire.」を足す。\n- APPENDIX_SENTENCES に「Appendix 1 lists the fictional tasks?」「…!」と、終わりの後ろに空白のある「資料1、2は架空の授業の記録である。　」「Appendix 1 lists the fictional tasks. 」を足す。test_sentences_are_not_appendix_headings の名前の判定は、s.rstrip().endswith(...) にする。\n- test_note_overlap_is_reported_only_for_same_numbers（tests/test_notes.py 531 行）で、10 章の警告と要確認の top の文に「本文からリンクしている注は」があることも確かめる。"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "docs/STYLE_MAPPING.md",
+        "line": 31,
+        "problem": "STYLE_MAPPING.md 29〜31 行は「「資料を配布した。」「資料1、2は授業の記録である。」のような「。」か「．」で終わる和文の文と、…英文の文は除く。除いた段落もレポートの 4 章に記録する」と書いています。この書き方では「資料を配布した。」も 4 章に記録されるように読めます。\n\n実際のコードでは、判断の一覧に記録するのは、RE_APPENDIX に合うのに文とみなした段落だけです。「資料を配布した。」は RE_APPENDIX に合わないので、記録しません。appendix_sentence は形に合わなければ '' を返し、note_appendix_sentence は sentence が空でないときだけ呼ばれます。DESIGN 6 章の「形に合うが文とみなした段落も…判断の一覧」は、コードと合っています。",
+        "evidence": "架空の docx で確かめた（make_article の appendix に「資料1　架空の授業プリント」「資料を配布した。」「資料1、2は架空の授業の記録である。」の 3 段落を入れ、_mechanical で組み立てた）。判断は 2 件だけだった。\n- d23: 見出しとした（applied=True）\n- d25: 「資料1、2は…」を文とみなした（applied=False）\n「資料を配布した。」の d24 には、判断がない。",
+        "fix": "コードに合わせて書き直す。例:「…のような文は除く（形に合うが文とみなした「資料1、2は授業の記録である。」のような段落は、レポートの 4 章に記録する。「資料を配布した。」のように形に合わない段落は記録しない）」。"
+      },
+      {
+        "lens": "regression",
+        "severity": "nit",
+        "file": "tests/test_structure.py",
+        "line": 197,
+        "problem": "appendix_sentence の英文の規則にある 2 つの条件と、和文の文末の後ろの空白を許すことを守るテストがありません。2 つの条件は、語・番号の直後が「空白 + 英小文字」であること（RE_APPENDIX_SENTENCE.match）と、段落の終わりの判定です。APPENDIX_YES の英文の見出しには「.」で終わるものがありません（「.」で終わるのは和文の「資料2 iPad の画面.」だけ）。このため、規則を「英小文字がどこかにあり、「.」で終わる英文は文」に弱めても、本体のテストがすべて合格します。「.」で終わる英文はすべて文、に弱めても同じです。そうなると、0.23.1 と作業ツリーで見出しの形（「Appendix 1. Questionnaire for teachers.」「Appendix 1 Questionnaire.」「Appendix A Questionnaire for the fictional lesson.」）が黙って文になり、最初の資料なら英文要旨に入ります。和文の文末の後ろの空白（「…。 」）を許す [\\s　]* を外しても、合格します。",
+        "evidence": "確かめ方は 2 つ（scratchpad/e/review/regression/r3/）。\n(1) 変異テスト（mut/run_mut.py。fix2 の run_mut.py と同じ手順で、test_structure・test_notes・test_ai・test_pdfmatch・test_pipeline の 648 件）。次の 3 つは、どれも 648 passed で生き残った。\n- en_lower_anywhere: RE_APPENDIX_SENTENCE.match(rest) を .search(rest) に変える\n- en_no_lower_check: 条件を RE_EN_SENTENCE_END.search(rest) だけにする\n- ja_end_no_ws: RE_JA_SENTENCE_END から [\\s　]* を外す\nほかの 5 つ（close_dropped・kana_whole_text・back_regex_only・aiassist_msg_always_old・aiassist_msg_any_p）は、テストが見つけた。\n(2) probe_heads.py で判定を比べた。「Appendix 1. Questionnaire for teachers.」「Appendix A Questionnaire for the fictional lesson.」「Appendix 1 Questionnaire.」は、0.23.1 の RE_APPENDIX でも作業ツリーの appendix_heading でも見出し（appendix_sentence は ''）。「資料1　架空の授業プリント。 」（後ろに半角空白・全角空白）は、作業ツリーで文の形になった。今の判定は 0.23.1 と同じで、悪くなってはいない。守るテストがないことだけが問題。",
+        "fix": "tests/test_structure.py の APPENDIX_YES に「Appendix 1. Questionnaire for teachers.」「Appendix A Questionnaire for the fictional lesson.」を足す（大文字で始まる語の後ろに英小文字があり、「.」で終わる英文の見出し）。APPENDIX_SENTENCES に「資料1，2は架空の記録である。　」のような文末の後ろに空白がある文を足す。足した後に、上の 3 つの変異をテストが見つけることを確かめる。"
+      }
+    ],
+    "incomplete": null
+  },
+  "workflowProgress": [
+    {
+      "type": "workflow_phase",
+      "index": 1,
+      "title": "Design"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 2,
+      "title": "Implement"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 3,
+      "title": "Verify"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 4,
+      "title": "Finalize"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 5,
+      "title": "Review"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 6,
+      "title": "Fix"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 7,
+      "title": "Recheck"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 1,
+      "label": "design",
+      "phaseIndex": 1,
+      "phaseTitle": "Design",
+      "agentId": "ac709f01e71d5b48f",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793026736198,
+      "queuedAt": 1793026736142,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「E（0.24.0）: 注（Word の文末脚注）と資料の見出し（N6・D4・D3）」を作るチームの一員です。\nHEAD は main の e2dbf73（0.23.1。detached HEAD）。作業ツリーは HEAD と同じ（コミットしていない差分なし）で、E の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で、別の控え（67a854b）にある。E では pdfmatch.py・pdfdocx.py に、D4 が必要とする箇所（pdfmatch._para_seq の注の鍵…",
+      "promptFramed": true,
+      "lastProgressAt": 1793028349774,
+      "tokens": 420938,
+      "toolCalls": 107,
+      "durationMs": 1613573,
+      "resultPreview": "{\"design_doc\":\"/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/DESIGN_E.md\",\"decisions\":\"設計書に書き、試作で確かめた。試作は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/design/src（0.23.1 の写しに patch.py・patch2.py を当てたもの。主な部分だけ）。正規表現の最終案と一覧は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratch…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 2,
+      "label": "oracle_e",
+      "phaseIndex": 1,
+      "phaseTitle": "Design",
+      "agentId": "a199c3466fe61a86a",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793026736199,
+      "queuedAt": 1793026736143,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「E（0.24.0）: 注（Word の文末脚注）と資料の見出し（N6・D4・D3）」を作るチームの一員です。\nHEAD は main の e2dbf73（0.23.1。detached HEAD）。作業ツリーは HEAD と同じ（コミットしていない差分なし）で、E の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で、別の控え（67a854b）にある。E では pdfmatch.py・pdfdocx.py に、D4 が必要とする箇所（pdfmatch._para_seq の注の鍵…",
+      "promptFramed": true,
+      "lastProgressAt": 1793027524006,
+      "tokens": 222031,
+      "toolCalls": 54,
+      "durationMs": 787802,
+      "resultPreview": "{\"dir\":\"/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/oracle/ (gen_e.py: docx generator. run_e.py: compares expected with actual. cases_e.json: the case list. overlap_check.py: checks overlap with real papers. results_base0231.json / log_base0231.txt: results on 0.23.1. results_base_copy.json / log_base_copy.txt: same run against the base0231_src copy.…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 3,
+      "label": "impl",
+      "phaseIndex": 2,
+      "phaseTitle": "Implement",
+      "agentId": "abeea3a3f83942216",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793028352513,
+      "queuedAt": 1793028352487,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "単位 E（N6・D4・D3）を、設計 /tmp/claude-0/-home-user-jstgx…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「E（0.24.0）: 注（Word の文末脚注）と資料の見出し（N6・D4・D3）」を作るチームの一員です。\nHEAD は main の e2dbf73（0.23.1。detached HEAD）。作業ツリーは HEAD と同じ（コミットしていない差分なし）で、E の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で、別の控え（67a854b）にある。E では pdfmatch.py・pdfdocx.py に、D4 が必要とする箇所（pdfmatch._para_seq の注の鍵…",
+      "promptFramed": true,
+      "lastProgressAt": 1793032718888,
+      "tokens": 415030,
+      "toolCalls": 350,
+      "durationMs": 4366374,
+      "resultPreview": "{\"changed_files\":[\"/home/user/jstgxmlcng_JASME/src/jasme_jats/model.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/docx_reader.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/structure.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/emit.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/builder.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/pdfmatch.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 4,
+      "label": "verify",
+      "phaseIndex": 3,
+      "phaseTitle": "Verify",
+      "agentId": "a58f1beb74c779be2",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793032723061,
+      "queuedAt": 1793032723037,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "作業ツリーの単位 E は、出力を止めるほどの問題がなく、物差し…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「E（0.24.0）: 注（Word の文末脚注）と資料の見出し（N6・D4・D3）」を作るチームの一員です。\nHEAD は main の e2dbf73（0.23.1。detached HEAD）。作業ツリーは HEAD と同じ（コミットしていない差分なし）で、E の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で、別の控え（67a854b）にある。E では pdfmatch.py・pdfdocx.py に、D4 が必要とする箇所（pdfmatch._para_seq の注の鍵…",
+      "promptFramed": true,
+      "lastProgressAt": 1793033399208,
+      "tokens": 272982,
+      "toolCalls": 67,
+      "durationMs": 676146,
+      "resultPreview": "{\"passed_all\":true,\"measures\":\"作業ツリーの単位 E は、出力を止めるほどの問題がなく、物差しはすべて合格でした。直した方がよい点が 1 件（レポートのリンクの表示）、細かい点が 5 件あります。検証用の作業ファイルは /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/verify/ にあり、作業ツリーのファイルは変えていません。\\n\\n1. pytest\\n- Python 3.13・3.10 とも 767 passed。\\n- 自分の実行で tests/__pycache__ ができたので消しました。\\n\\n2. ruff（ruff check src tests tools）\\n- 作業ツリー 202 件、HEAD（git…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 5,
+      "label": "fix_verify",
+      "phaseIndex": 3,
+      "phaseTitle": "Verify",
+      "agentId": "a4bf7de1b3535188d",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793033401578,
+      "queuedAt": 1793033401574,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "確かめで見つかった問題は should 1 件と nit 5 件でした。shou…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「E（0.24.0）: 注（Word の文末脚注）と資料の見出し（N6・D4・D3）」を作るチームの一員です。\nHEAD は main の e2dbf73（0.23.1。detached HEAD）。作業ツリーは HEAD と同じ（コミットしていない差分なし）で、E の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で、別の控え（67a854b）にある。E では pdfmatch.py・pdfdocx.py に、D4 が必要とする箇所（pdfmatch._para_seq の注の鍵…",
+      "promptFramed": true,
+      "lastProgressAt": 1793035904117,
+      "tokens": 525978,
+      "toolCalls": 171,
+      "durationMs": 2502537,
+      "resultPreview": "{\"changed_files\":[\"/home/user/jstgxmlcng_JASME/src/jasme_jats/structure.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/report.py\",\"/home/user/jstgxmlcng_JASME/tests/test_notes.py\",\"/home/user/jstgxmlcng_JASME/tests/test_pdfmatch.py\",\"/home/user/jstgxmlcng_JASME/docs/DESIGN.md\",\"/home/user/jstgxmlcng_JASME/docs/DEVELOPMENT.md\"],\"summary\":\"確かめで見つかった問題は should 1 件と nit 5 件でした。should はすべて直し、nit のうち 3…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 6,
+      "label": "finalize",
+      "phaseIndex": 4,
+      "phaseTitle": "Finalize",
+      "agentId": "abf7366c38570eab2",
+      "model": "claude-sonnet-5-5",
+      "state": "done",
+      "startedAt": 1793035908117,
+      "queuedAt": 1793035908110,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "仕上げ(finalize)を行った。 1. 版を 0.24.0 にした(__init__.p…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「E（0.24.0）: 注（Word の文末脚注）と資料の見出し（N6・D4・D3）」を作るチームの一員です。\nHEAD は main の e2dbf73（0.23.1。detached HEAD）。作業ツリーは HEAD と同じ（コミットしていない差分なし）で、E の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で、別の控え（67a854b）にある。E では pdfmatch.py・pdfdocx.py に、D4 が必要とする箇所（pdfmatch._para_seq の注の鍵…",
+      "promptFramed": true,
+      "lastProgressAt": 1793036065220,
+      "tokens": 122932,
+      "toolCalls": 14,
+      "durationMs": 157103,
+      "resultPreview": "{\"changed_files\":[\"/home/user/jstgxmlcng_JASME/src/jasme_jats/__init__.py\",\"/home/user/jstgxmlcng_JASME/pyproject.toml\",\"/home/user/jstgxmlcng_JASME/notebooks/JASME_docx_to_JSTAGE_XML.ipynb\",\"/home/user/jstgxmlcng_JASME/README.md\",\"/home/user/jstgxmlcng_JASME/docs/FIX_PLAN.md\"],\"summary\":\"仕上げ(finalize)を行った。\\n1. 版を 0.24.0 にした(__init__.py と pyproject.toml)。python tools/make_notebook.py でノートブックを作り直した…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 7,
+      "label": "review:principle",
+      "phaseIndex": 5,
+      "phaseTitle": "Review",
+      "agentId": "a9d01f3d00211f9ba",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793036067434,
+      "queuedAt": 1793036067407,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "作業ツリー（e2dbf73 に単位 E を積んだもの。git status は変…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「E（0.24.0）: 注（Word の文末脚注）と資料の見出し（N6・D4・D3）」の実装を点検する担当です。\nHEAD は main の e2dbf73（0.23.1。detached HEAD）。作業ツリーは HEAD と同じ（コミットしていない差分なし）で、E の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で、別の控え（67a854b）にある。E では pdfmatch.py・pdfdocx.py に、D4 が必要とする箇所（pdfmatch._para_seq の注の…",
+      "promptFramed": true,
+      "lastProgressAt": 1793038159786,
+      "tokens": 565913,
+      "toolCalls": 147,
+      "durationMs": 2092351,
+      "resultPreview": "{\"checked\":\"作業ツリー（e2dbf73 に単位 E を積んだもの。git status は変更 28 件のまま）を、原則と文字の不変性の観点で点検した。ファイルは変えていない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/review/principle/ に置いた（results_cx.json、results_td.json、cx/gen*.py、cx/run_case.py、cx/drive.sh、logs/）。\\n\\n1. 読んだもの\\n- FIX_PLAN の E の節、決定事項 7・8、付録 D3・D4、DESIGN.md の注と資料の章、DEVELOPMENT.md の「守るべき原則」。\\n- src の diff を全…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 8,
+      "label": "review:regression",
+      "phaseIndex": 5,
+      "phaseTitle": "Review",
+      "agentId": "aa55152e164a443f9",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793036067435,
+      "queuedAt": 1793036067407,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "点検したのは作業ツリーのコミットしていない差分（git status …",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「E（0.24.0）: 注（Word の文末脚注）と資料の見出し（N6・D4・D3）」の実装を点検する担当です。\nHEAD は main の e2dbf73（0.23.1。detached HEAD）。作業ツリーは HEAD と同じ（コミットしていない差分なし）で、E の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で、別の控え（67a854b）にある。E では pdfmatch.py・pdfdocx.py に、D4 が必要とする箇所（pdfmatch._para_seq の注の…",
+      "promptFramed": true,
+      "lastProgressAt": 1793037005498,
+      "tokens": 246391,
+      "toolCalls": 64,
+      "durationMs": 938061,
+      "resultPreview": "{\"checked\":\"点検したのは作業ツリーのコミットしていない差分（git status は 28 件。src 11、tests 8、docs 5、README・ノートブック・pyproject・fixture）。HEAD は e2dbf73（0.23.1）。作業ツリーのファイルは変えていない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/review/regression/ の下に置いた。\\n\\n1. pytest\\n- Python 3.13・3.10（venv310、PYTHONPATH=src）とも 773 passed。\\n- 自分の実行でできた tests/__pycache__ は消した。\\n\\n2. ruff（ruff che…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 9,
+      "label": "review:user",
+      "phaseIndex": 5,
+      "phaseTitle": "Review",
+      "agentId": "adbfdde3bbe421f82",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793037008467,
+      "queuedAt": 1793036067407,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "点検は利用者への見え方と文書の観点で行った。作業ツリーのフ…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「E（0.24.0）: 注（Word の文末脚注）と資料の見出し（N6・D4・D3）」の実装を点検する担当です。\nHEAD は main の e2dbf73（0.23.1。detached HEAD）。作業ツリーは HEAD と同じ（コミットしていない差分なし）で、E の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で、別の控え（67a854b）にある。E では pdfmatch.py・pdfdocx.py に、D4 が必要とする箇所（pdfmatch._para_seq の注の…",
+      "promptFramed": true,
+      "lastProgressAt": 1793037378708,
+      "tokens": 184711,
+      "toolCalls": 38,
+      "durationMs": 370240,
+      "resultPreview": "{\"checked\":\"点検は利用者への見え方と文書の観点で行った。作業ツリーのファイルは変えていない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/review/user/ の下に置き、最後に大きな出力（docx・xml・zip・画像と、td1〜3 の出力すべて）を消した。\\n\\n1. 物差し\\n- pytest（3.13）: 773 passed。\\n- tests/__pycache__ は残っていない。\\n- ruff check src tests tools: 202 件で、仕上げの担当の報告と同じ。\\n- ノートブック: 写しで tools/make_notebook.py を実行し、notebooks/JASME_docx_to_…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 10,
+      "label": "fix:1",
+      "phaseIndex": 6,
+      "phaseTitle": "Fix",
+      "agentId": "a603af28d53ac5d15",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793038162369,
+      "queuedAt": 1793038162365,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "1 回目の点検の指摘のうち、should の 4 件はすべて直した。nit…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「E（0.24.0）: 注（Word の文末脚注）と資料の見出し（N6・D4・D3）」を作るチームの一員です。\nHEAD は main の e2dbf73（0.23.1。detached HEAD）。作業ツリーは HEAD と同じ（コミットしていない差分なし）で、E の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で、別の控え（67a854b）にある。E では pdfmatch.py・pdfdocx.py に、D4 が必要とする箇所（pdfmatch._para_seq の注の鍵…",
+      "promptFramed": true,
+      "lastProgressAt": 1793040763343,
+      "tokens": 618842,
+      "toolCalls": 192,
+      "durationMs": 2600973,
+      "resultPreview": "{\"changed_files\":[\"/home/user/jstgxmlcng_JASME/src/jasme_jats/structure.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/emit.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/report.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/ai_assist.py\",\"/home/user/jstgxmlcng_JASME/tests/test_structure.py\",\"/home/user/jstgxmlcng_JASME/tests/test_notes.py\",\"/home/user/jstgxmlcng_JASME/tests/test_ai.py\",\"/home/…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 11,
+      "label": "review:principle",
+      "phaseIndex": 7,
+      "phaseTitle": "Recheck",
+      "agentId": "a25afbb30d3d51087",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793040766164,
+      "queuedAt": 1793040766157,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "2 回目の原則の点検（1 回目の修正の後）。作業ツリーのコミッ…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「E（0.24.0）: 注（Word の文末脚注）と資料の見出し（N6・D4・D3）」の実装を点検する担当です。\nHEAD は main の e2dbf73（0.23.1。detached HEAD）。作業ツリーは HEAD と同じ（コミットしていない差分なし）で、E の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で、別の控え（67a854b）にある。E では pdfmatch.py・pdfdocx.py に、D4 が必要とする箇所（pdfmatch._para_seq の注の…",
+      "promptFramed": true,
+      "lastProgressAt": 1793042283288,
+      "tokens": 453332,
+      "toolCalls": 139,
+      "durationMs": 1517123,
+      "resultPreview": "{\"checked\":\"2 回目の原則の点検（1 回目の修正の後）。作業ツリーのコミットしていない差分（28 ファイル。修正だけの差分は fix1/fix_only_src.diff）を読み、0.23.1（base0231_src）・修正前（fix1/pre_pkg）・作業ツリーの 3 版で実験した。リポジトリのファイルは変えていない（git status は 28 ファイル・1803/253 行のまま。HEAD の ruff には一時的な git worktree を使い、消した）。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/review/principle/r2/ にある（まとめは results_r2.json。docx・XML・td の…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 12,
+      "label": "review:regression",
+      "phaseIndex": 7,
+      "phaseTitle": "Recheck",
+      "agentId": "a793c1c3bb4b214db",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793040766164,
+      "queuedAt": 1793040766158,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "点検の対象は、作業ツリー（e2dbf73 の上に積んだ、コミットし…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「E（0.24.0）: 注（Word の文末脚注）と資料の見出し（N6・D4・D3）」の実装を点検する担当です。\nHEAD は main の e2dbf73（0.23.1。detached HEAD）。作業ツリーは HEAD と同じ（コミットしていない差分なし）で、E の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で、別の控え（67a854b）にある。E では pdfmatch.py・pdfdocx.py に、D4 が必要とする箇所（pdfmatch._para_seq の注の…",
+      "promptFramed": true,
+      "lastProgressAt": 1793041386718,
+      "tokens": 205499,
+      "toolCalls": 55,
+      "durationMs": 620552,
+      "resultPreview": "{\"checked\":\"点検の対象は、作業ツリー（e2dbf73 の上に積んだ、コミットしていない E の差分）。\\nファイルは変更していない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/review/regression/r2/ に置いた（まとめは results_r2.json）。\\n\\n■ 修正の差分\\n- 修正前の写し（fix1/pre_pkg/jasme_jats）と今の src を自分で diff した（r2/fix_src_now.diff、300 行）。\\n- fix1/fix_only_src.diff は appendix_heading の部分などが欠けていて、全体を写していない。点検は自分の diff で行った。\\n\\n…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 13,
+      "label": "fix:2",
+      "phaseIndex": 6,
+      "phaseTitle": "Fix",
+      "agentId": "aad22aa2434747c8c",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793042285405,
+      "queuedAt": 1793042285400,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "点検 2 回目の指摘（should 2 件・nit 4 件）をすべて直した。…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「E（0.24.0）: 注（Word の文末脚注）と資料の見出し（N6・D4・D3）」を作るチームの一員です。\nHEAD は main の e2dbf73（0.23.1。detached HEAD）。作業ツリーは HEAD と同じ（コミットしていない差分なし）で、E の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で、別の控え（67a854b）にある。E では pdfmatch.py・pdfdocx.py に、D4 が必要とする箇所（pdfmatch._para_seq の注の鍵…",
+      "promptFramed": true,
+      "lastProgressAt": 1793044967110,
+      "tokens": 543814,
+      "toolCalls": 163,
+      "durationMs": 2681704,
+      "resultPreview": "{\"changed_files\":[\"/home/user/jstgxmlcng_JASME/src/jasme_jats/structure.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/report.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/ai_assist.py\",\"/home/user/jstgxmlcng_JASME/tests/test_structure.py\",\"/home/user/jstgxmlcng_JASME/tests/test_ai.py\",\"/home/user/jstgxmlcng_JASME/tests/test_notes.py\",\"/home/user/jstgxmlcng_JASME/tests/test_pdfmatch.py\",\"/home/…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 14,
+      "label": "review:principle",
+      "phaseIndex": 7,
+      "phaseTitle": "Recheck",
+      "agentId": "ade18d28c411071c3",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793044970061,
+      "queuedAt": 1793044970054,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "点検 3 回目（2 回目の修正の後）。作業ツリーの差分を読み、2 …",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「E（0.24.0）: 注（Word の文末脚注）と資料の見出し（N6・D4・D3）」の実装を点検する担当です。\nHEAD は main の e2dbf73（0.23.1。detached HEAD）。作業ツリーは HEAD と同じ（コミットしていない差分なし）で、E の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で、別の控え（67a854b）にある。E では pdfmatch.py・pdfdocx.py に、D4 が必要とする箇所（pdfmatch._para_seq の注の…",
+      "promptFramed": true,
+      "lastProgressAt": 1793046726755,
+      "tokens": 485940,
+      "toolCalls": 147,
+      "durationMs": 1756693,
+      "resultPreview": "{\"checked\":\"点検 3 回目（2 回目の修正の後）。作業ツリーの差分を読み、2 回目の修正の前の写し（scratchpad/e/fix2/pre_src。以下「修正前」）と 0.23.1（base0231_src）と比べた。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/review/principle/r3/ に置き、まとめは results_r3.json にある。リポジトリのファイルは変えていない（git status は修正の差分だけ。tests/__pycache__ はない）。\\n\\n■ 2 回目の修正の差分\\n変わった src は structure.py・report.py・ai_assist.py の 3 つだけ（dif…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 15,
+      "label": "review:regression",
+      "phaseIndex": 7,
+      "phaseTitle": "Recheck",
+      "agentId": "a290d1502343f325c",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793044970061,
+      "queuedAt": 1793044970055,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Third-round review (regression lens) after fix r2. I change…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「E（0.24.0）: 注（Word の文末脚注）と資料の見出し（N6・D4・D3）」の実装を点検する担当です。\nHEAD は main の e2dbf73（0.23.1。detached HEAD）。作業ツリーは HEAD と同じ（コミットしていない差分なし）で、E の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で、別の控え（67a854b）にある。E では pdfmatch.py・pdfdocx.py に、D4 が必要とする箇所（pdfmatch._para_seq の注の…",
+      "promptFramed": true,
+      "lastProgressAt": 1793045531397,
+      "tokens": 179157,
+      "toolCalls": 51,
+      "durationMs": 561333,
+      "resultPreview": "{\"checked\":\"Third-round review (regression lens) after fix r2. I changed no files. Experiments are under /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/e/review/regression/r3/. Large outputs are deleted; logs and scripts are kept. tests/__pycache__ (made by my run) is deleted.\\n\\n**What I read**\\n- The fix r2 diff against the pre-fix source (scratchpad/e/…"
+    }
+  ],
+  "totalTokens": 5463490,
+  "totalToolCalls": 1759
+}

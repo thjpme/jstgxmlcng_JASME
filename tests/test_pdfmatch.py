@@ -253,7 +253,8 @@ def test_endnote_numbers_and_text_follow_pdf_in_route2(journal, meta, tmp_path, 
 def test_route2_keeps_abstract_appendix_border(journal, meta, tmp_path, monkeypatch):
     """ルート2: 直すと英文要旨と資料の境が動く違い（英文要旨の「資料-1 …」を PDF の「資料－1 …」に直すと、資料の見出しになる）は
     直さない（pdfdocx._structure で段落の領域も比べる。修正計画の D3）。13 章に直さなかった理由を出し、英文要旨のまま。
-    段落は見出しの形（「資料－1 Worksheet …」）にする（「資料－1 shows …」のような文の形は、直しても資料の見出しにならない）。"""
+    段落は見出しの形（「資料－1 Worksheet …」）にする（「資料－1 shows the worksheet.」のような文の形は、直しても資料の見出しに
+    ならない）。"""
     b = mf.Builder()
     body = mf.front_ja(b, "境の検証", "―英文要旨と資料―", [("架空大学", "試験\u3000十郎")])
     body += [mf.para(mf.S["sec1"], "１．はじめに"), mf.para(mf.S["body"], "本文の段落である。")]

@@ -58,8 +58,8 @@ RE_FN_TEXT = re.compile(r"^\s*(?:注|註|注釈|Notes?)\s*$")
 # Ⅰ-Ⅻ・ⅰ-ⅻ・①-⑳で、前に空白と全角のハイフン「－」・ハイフン「‐」、後ろに枝番（「資料1-2」）を許す。番号の直後には、
 # 空白・コロン・ピリオド・読点・括弧・ダッシュ・行末だけを許す（「資料1を配布した」「資料12の結果」は本文の文）。ASCII の
 # ハイフン「-」は語の直後に許さない（「資料-1」は本文の文とみなす。枝番の区切りにだけ使う）。番号がないときは、語の直後に
-# 空白・コロン・括弧・ダッシュ・行末だけを許し（「資料、図表」「資料.」は本文の文）、語の後ろが「空白 + 英小文字」なら
-# 認識しない（「Appendix shows …」は英文要旨の文）
+# 空白・コロン・括弧・ダッシュ・行末だけを許す（「資料、図表」「資料.」は本文の文）。この形に合う文（「資料1、2は…である。」
+# 「Appendix shows ….」）は appendix_sentence で見分ける
 _APP_OPEN = "【［\\[〔〈《＜<(（"
 _APP_CLOSE = "】］\\]〕〉》＞>)）"
 _APP_DASH = "－‐‒–—―"          # ASCII のハイフン「-」は入れない（枝番の区切りにだけ使う）
@@ -68,10 +68,14 @@ RE_APPENDIX = re.compile(
     rf"^{_WS}[{_APP_OPEN}]?{_WS}(?:資料|付録|附録|Appendix)"
     rf"(?:{_WS}[－‐]?{_WS}(?:{_APP_NUM})(?:[-{_APP_DASH}](?:{_APP_NUM}))*"                 # 番号（前に全角のハイフン、後ろに枝番）
     rf"(?=[\s\u3000:：.．、,，{_APP_OPEN}{_APP_CLOSE}{_APP_DASH}]|$)"                      # 番号の直後
-    rf"|(?![\s\u3000]+[a-z])(?=[\s\u3000:：{_APP_OPEN}{_APP_CLOSE}{_APP_DASH}]|$))")       # 番号のないとき、語の直後
-# RE_APPENDIX に合う段落のうち、文の形のものは資料の見出しとみなさない（appendix_heading）: 語・番号（と閉じ括弧）の後ろが
-# 「空白 + 英小文字」の段落（「(Appendix 1) lists …」「Appendix A shows …」の英文の文）
+    rf"|(?=[\s\u3000:：{_APP_OPEN}{_APP_CLOSE}{_APP_DASH}]|$))")                           # 番号のないとき、語の直後
+# RE_APPENDIX に合う段落のうち、文の形のもの（appendix_sentence。資料の見出しとみなさない）を見分ける規則。和文の文は、語・番号の
+# 後ろにかな・漢字があり、段落が「。」か「．」で終わるもの（「資料1、2は…である。」。括弧・かぎ括弧の中の「。」〈「資料2　…
+# （下線は筆者。）」〉は段落の終わりでないので数えない）。英文の文は、語・番号（と閉じ括弧）の後ろが「空白 + 英小文字」で、
+# かな・漢字がなく、段落が「.」「?」「!」で終わるもの（「(Appendix 1) lists ….」。「Appendix 1 questionnaire」「資料2 iPad の画面」は見出し）
 RE_APPENDIX_SENTENCE = re.compile(rf"[{_APP_CLOSE}]*[\s\u3000]+[a-z]")
+RE_JA_SENTENCE_END = re.compile(r"[。．][\s\u3000]*$")
+RE_EN_SENTENCE_END = re.compile(r"[.?!][\s\u3000]*$")
 # かな・漢字（英文要旨の中の和文の段落の判定。config.RE_JA_CHARS は全角英数字も含むので使わない）
 RE_KANA_KANJI = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff々]")
 ABSTRACT_JA_RATIO = 0.3        # 英文要旨の段落のうち、かな・漢字がこの割合以上なら和文の段落とみなして知らせる
@@ -100,15 +104,31 @@ def note_mark(s: str) -> Optional[tuple]:
     return m.start(1), m.end(1), num_of(m.group("n1") or m.group("n2") or m.group("n3"))
 
 
-def appendix_heading(text: str) -> bool:
-    """段落の文字が資料（付録）の見出しの形か（英文要旨の後ろの資料の始まり〈build_front_en〉と、引用文献などの後ろの資料の
-    知らせ〈build_back〉で使う）。
+def appendix_sentence(text: str) -> str:
+    """資料の見出しの形（RE_APPENDIX）に合う段落が文の形なら、その形の名前（判断の一覧の文言に使う）。合わない・文の形でなければ ''。
 
-    RE_APPENDIX に合い、文の形でないもの。「。」を含む段落（和文の文。「資料1、2は授業の記録である。」「（資料1）に示すように、
-    …。」）と、語・番号の後ろが「空白 + 英小文字」の段落（英文の文。RE_APPENDIX_SENTENCE）は、英文要旨や資料の中の文とみなす。
+    和文の文: 語・番号の後ろにかな・漢字があり、段落が「。」か「．」で終わる（「資料1、2は授業の記録である。」「（資料1）に
+    示すように、…。」）。括弧・かぎ括弧の中の「。」（「資料2　児童の記述（下線は筆者。）」「資料1　問い「なぜだろう。」の…」）は
+    段落の終わりでないので、見出しのまま。英文の文: 語・番号（と閉じ括弧）の後ろが「空白 + 英小文字」で、かな・漢字がなく、
+    段落が「.」「?」「!」で終わる（「(Appendix 1) lists ….」）。英文の終わりがない「Appendix 1 questionnaire」と、和文の
+    「資料2 iPad の画面」は見出しのまま（0.23.1 と同じ）。
     """
     m = RE_APPENDIX.match(text)
-    return bool(m) and "。" not in text and not RE_APPENDIX_SENTENCE.match(text, m.end())
+    if not m:
+        return ""
+    rest = text[m.end():]
+    if RE_KANA_KANJI.search(rest):
+        return "「。」か「．」で終わる和文の文" if RE_JA_SENTENCE_END.search(rest) else ""
+    if RE_APPENDIX_SENTENCE.match(rest) and RE_EN_SENTENCE_END.search(rest):
+        return "番号などの後ろが英小文字の語で、「.」などで終わる英文の文"
+    return ""
+
+
+def appendix_heading(text: str) -> bool:
+    """段落の文字が資料（付録）の見出しの形か（英文要旨の後ろの資料の始まり〈build_front_en〉と、引用文献などの後ろの資料の
+    知らせ〈build_back〉で使う）。RE_APPENDIX に合い、文の形（appendix_sentence）でないもの。
+    """
+    return bool(RE_APPENDIX.match(text)) and not appendix_sentence(text)
 
 
 def unreferenced_note_reason(key: str, deleted: bool) -> str:
@@ -1707,6 +1727,7 @@ class Classifier:
         in_abstract = False
         app = None
         pending_name = None
+        ai_abstract = False         # AI が abstract を指定した段落があった（後ろで資料が始まっていなければ、そこから英文要旨が続く）
         for b, role in items:
             if isinstance(b, Table):
                 troles = self.table_roles(b)
@@ -1744,21 +1765,30 @@ class Classifier:
             text = _para_text(b)
             ai = b.src in self.overrides
             by_style = by_text = False
+            sentence = ""
+            # 「資料1　…」などの見出しの形の段落（文の形の段落は除く。appendix_heading）と、英文要旨の後ろの、章・節・項見出しの
+            # スタイルの段落（英文要旨の中に見出しは来ないので、資料の始まりとみなす。決定事項 8(a)。資料の中の見出しのスタイルの
+            # 段落は、今までどおり資料の中の段落）。AI の指定がなければ、ここから資料を始める
+            head_text = (in_abstract or app is not None) and appendix_heading(text)
+            head_style = in_abstract and app is None and (self.style_role(b) if ai else role) in HEADING_LEVEL
             if ai and role in ("abstract", "p"):
                 starts = False              # AI が資料の見出しではないと指定した（文字・見出しのスタイルより優先）
             elif role == "app_heading":
                 starts = True               # AI が資料の見出しと指定した
-            elif (in_abstract or app is not None) and appendix_heading(text):
-                starts = by_text = True     # 「資料1　…」などの見出しの形の段落（文の形の段落は除く。appendix_heading）
+            elif head_text:
+                starts = by_text = True
             else:
-                # 英文要旨の後ろの、章・節・項見出しのスタイルの段落（英文要旨の中に見出しは来ないので、資料の始まりとみなす。
-                # 決定事項 8(a)）。資料の中の見出しのスタイルの段落は、今までどおり資料の中の段落
-                starts = by_style = in_abstract and app is None and role in HEADING_LEVEL and b.role_origin == "style"
-            if ai and role == "abstract" and app is not None:
+                starts = by_style = head_style and b.role_origin == "style"
+                if not starts and (in_abstract or app is not None):
+                    # 見出しの形に合うが、文とみなした段落（判断の一覧に記録する。下。AI が役割を指定した段落は、上で決まる）
+                    sentence = appendix_sentence(text)
+            if ai and role == "abstract":
                 app = None                  # AI の指定で英文要旨に戻す（後ろの段落も、次の資料の見出しまで英文要旨）
-            elif ai and role == "p" and app is None:
+                ai_abstract = True
+            elif ai and role == "p" and app is None and not (in_abstract and ai_abstract and not (head_text or head_style)):
                 # AI が資料の中の段落と指定した段落の前に資料がない（最初の資料の見出しへの p など）: 見出しのない資料を始め、
-                # その最初の段落にする（資料の文字を英文要旨に入れない。英文要旨に戻すのは abstract だけ）
+                # その最初の段落にする（資料の文字を英文要旨に入れない。英文要旨に戻すのは abstract だけ）。ただし、AI が
+                # abstract で英文要旨に戻した後ろの、見出しでない段落への p は、英文要旨のまま（資料を始めない）
                 app = AppNode(title=None)
                 plan.apps.append(app)
                 in_abstract = False
@@ -1786,6 +1816,8 @@ class Classifier:
             if app is not None:
                 plan.region[b.src] = "app"
                 plan.locations[b.src] = f"資料{len(plan.apps)} 第{len(app.children) + 1}要素"
+                if sentence:
+                    self.note_appendix_sentence(b, text, sentence, first=False)
                 if role in HEADING_LEVEL or self.guess_heading(b, strict=False):
                     app.children.append(PNode(b))   # 資料内の見出しは段落として出力
                 else:
@@ -1810,17 +1842,35 @@ class Classifier:
                 plan.abstract.append(b)
                 plan.locations[b.src] = f"英文要旨 第{len(plan.abstract)}段落"
                 in_abstract = True
+                if sentence:
+                    self.note_appendix_sentence(b, text, sentence, first=True)
                 if plan.lang == "ja":
-                    self.check_abstract_ja(b, text)
+                    self.check_abstract_ja(b, text, sentence)
             else:
                 plan.locations[b.src] = "英文部分"
                 plan.exclude(b, "英文部分の、題目・著者・要旨以外の段落")
 
-    def check_abstract_ja(self, b, text):
+    def note_appendix_sentence(self, b, text, sentence, first):
+        """「資料」などで始まり資料の見出しの形（RE_APPENDIX）に合うが、文の形（appendix_sentence）なので資料の見出しにしなかった
+        段落を、判断の一覧に記録する（applied=False。レポートの 4 章と、AI 依頼文の「推定:」に載る）。
+
+        文の形の判定で見出しを文と誤ったときに、気づいて直せるように（最初の資料なら見出しと資料の段落が英文要旨に入り、2 つ目
+        からの資料なら前の資料につながる）。first: 英文要旨の段落（最初の資料の見出しの位置）か。
+        """
+        where = "英文要旨の段落のまま" if first else "前の資料の段落のまま"
+        how = ("Word でその段落に章・節・項見出しのスタイルを付けて変換し直すと、文字はそのままで資料になる（AI による補完では、"
+               "set_role の app_heading で資料にできる）") if first else "AI による補完の set_role の app_heading で資料にできる"
+        self.plan.decide("mechanical", "style", b.src,
+                         f"段落「{text.strip()[:20]}」は「資料」「付録」「附録」「Appendix」で始まるが、{sentence}の形なので、"
+                         f"資料の見出しにしなかった（{where}）。資料の見出しなら、{how}", applied=False)
+
+    def check_abstract_ja(self, b, text, sentence=""):
         """英文要旨の段落に、かな・漢字が 3 割以上あれば知らせる（資料などの和文が英文要旨に入っているかもしれない）。
 
         自動では移さない。判断の記録（applied=False。AI 依頼文の「推定:」に載り、AI が app_heading を提案できる）と、
-        10 章の警告と、要確認の知らせ（report.actions の abstract_ja）にする。
+        10 章の警告と、要確認の知らせ（report.actions の abstract_ja）にする。sentence: 段落が「資料1　…。」のように資料の見出しの
+        形で始まるが、文の形なので資料の見出しにしなかった（appendix_sentence）。このときは、見出しを付ける案内ではなく、その段落に
+        見出しのスタイルを付ける案内にする（文字を変えずに資料にできる）。
         """
         plan = self.plan
         t = "".join(text.split())
@@ -1831,8 +1881,13 @@ class Classifier:
         plan.decide("mechanical", "style", b.src,
                     f"英文要旨の段落「{head}」は、かな・漢字が 3 割以上ある（資料などの和文が英文要旨に入っているかもしれない）。"
                     "自動では移していない", applied=False)
-        plan.warnings.append(f"{b.src}: 英文要旨の段落「{head}」に、かな・漢字が 3 割以上あります。資料などの和文なら、Word でその前に"
-                             "資料の見出し（「資料1」など）を付けて変換し直してください")
+        if sentence:
+            how = (f"この段落は「資料」などで始まりますが、{sentence}の形なので、資料の見出しにしていません。資料の見出しなら、Word で"
+                   "この段落に章・節・項見出しのスタイルを付けて変換し直してください（文字はそのままで資料になります）")
+        else:
+            how = ("資料などの和文なら、Word で資料の見出しの段落に章・節・項見出しのスタイルを付けて（見出しがなければ、資料の前に"
+                   "「資料1」などの見出しを付けて）変換し直してください")
+        plan.warnings.append(f"{b.src}: 英文要旨の段落「{head}」に、かな・漢字が 3 割以上あります。{how}")
 
     def add_author_en(self, p) -> Author:
         plan = self.plan
@@ -1953,8 +2008,8 @@ class Classifier:
         if plan.note_overlap:
             marks = "、".join(self.journal.fn_mark.format(n=k) for k in plan.note_overlap)
             plan.warnings.append(f"手で書いた注と Word の脚注・文末脚注が両方あり、注の番号 {marks} が重なっています（Word の注の番号は"
-                                 "本誌の形式で 1 から付けるため）。注の一覧に、同じ番号の別の注が並びます（本文からのリンクは、"
-                                 "それぞれ正しい注を指します）。Word でどちらかの書き方にそろえて、変換し直してください")
+                                 "本誌の形式で 1 から付けるため）。注の一覧に、同じ番号の別の注が並びます（本文からリンクしている"
+                                 "注は、それぞれ正しい注を指します）。Word でどちらかの書き方にそろえて、変換し直してください")
         for n, fn in nodes:
             label = f"{note_label(fn.word_id)}（注 {n}）"
             if not fn.linked:

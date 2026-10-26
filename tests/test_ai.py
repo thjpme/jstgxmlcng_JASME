@@ -756,6 +756,73 @@ def test_set_role_p_on_first_appendix_heading(journal, meta, tmp_path):
     assert res.plan.region[src] == "app" and res.plan.apps[0].title is None
 
 
+def test_set_role_p_after_abstract_keeps_abstract(journal, meta, tmp_path):
+    # AI が資料の見出しを abstract で英文要旨に戻し、その後ろの段落（資料の中の段落）に p も指定したとき、p の段落から見出しのない
+    # 資料を始めない（英文要旨のまま。次の資料の見出しまで英文要旨に戻すという abstract の意味のとおり）。後ろの資料の見出しへの p は、
+    # 前に資料がないので、今までどおり見出しのない資料の最初の段落になる
+    path = tmp_path / "back.docx"
+    mf.make_article(path, "英文要旨に戻す検証用文書", _body,
+                    appendix=[mf.para(S["abs"], "Appendix 1: The fictional second abstract paragraph"),
+                              mf.para(S["abs"], "The fictional third abstract paragraph."),
+                              mf.para(S["abs"], "資料2\u3000架空の授業プリント"), mf.para(S["abs"], "架空のプリントの本文。")])
+    _, plan, _ = _mechanical(path, journal)
+    by_text = {p.plain(): s for s, p in plan.paras.items()}
+    head, third, head2 = (by_text[t] for t in ("Appendix 1: The fictional second abstract paragraph",
+                                               "The fictional third abstract paragraph.", "資料2\u3000架空の授業プリント"))
+    assert plan.region[third] == "app" and [a.title.src for a in plan.apps] == [head, head2]
+    res = _manual(path, [_set_role(head, "abstract"), _set_role(third, "p")], meta, journal, tmp_path / "out")
+    assert res.ai.rejected == [] and res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    root = load(res)
+    assert _abstract(root) == ["Small article abstract.", "Appendix 1: The fictional second abstract paragraph",
+                               "The fictional third abstract paragraph."]
+    assert _apps(root) == [("資料2\u3000架空の授業プリント", ["架空のプリントの本文。"])]
+    [d] = [d for op, d in res.ai.accepted if op["src"] == third]       # 役割が変わらなかったことを、そのとおりに記録する
+    assert d.message == ("段落を資料の中の段落（p）にする指定だが、AI の abstract で英文要旨に戻した後ろの段落なので、英文要旨の段落の"
+                         "ままにした。試験") and d.location == "英文要旨 第3段落"
+    res = _manual(path, [_set_role(head, "abstract"), _set_role(third, "p"), _set_role(head2, "p")], meta, journal, tmp_path / "out2")
+    assert res.ai.rejected == [] and res.fidelity.ok and res.dtd_valid
+    root = load(res)
+    assert _abstract(root) == ["Small article abstract.", "Appendix 1: The fictional second abstract paragraph",
+                               "The fictional third abstract paragraph."]
+    assert _apps(root) == [("", ["資料2\u3000架空の授業プリント", "架空のプリントの本文。"])]
+    assert [d.message for op, d in res.ai.accepted if op["src"] == head2] == ["段落の役割を「本文段落」とした。試験"]
+    # 英文要旨の段落への abstract（指定しても変わらない）の後ろでも、最初の資料の見出し（見出しのスタイルの段落）への p は、見出しの
+    # ない資料の最初の段落になる（見出しと資料の段落を英文要旨に入れない）
+    path = tmp_path / "style.docx"
+    mf.make_article(path, "英文要旨に戻す検証用文書", _body,
+                    appendix=[mf.para(S["sec1"], "授業の記録"), mf.para(S["body"], "架空の記録の本文。")])
+    _, plan, _ = _mechanical(path, journal)
+    by_text = {p.plain(): s for s, p in plan.paras.items()}
+    res = _manual(path, [_set_role(by_text["Small article abstract."], "abstract"), _set_role(by_text["授業の記録"], "p")],
+                  meta, journal, tmp_path / "out3")
+    assert res.ai.rejected == [] and res.fidelity.ok and res.dtd_valid
+    root = load(res)
+    assert _abstract(root) == ["Small article abstract."]
+    assert _apps(root) == [("", ["授業の記録", "架空の記録の本文。"])]
+
+
+def test_sentence_decision_is_not_recorded_for_ai_roles(journal, meta, tmp_path):
+    # 見出しの形に合うが文とみなした段落の判断（「…資料の見出しにしなかった」。applied=False）は、AI が役割を指定した段落には
+    # 記録しない（AI が決めたことなので、4 章と依頼文で、資料の見出しにできるという案内を繰り返さない）
+    path = tmp_path / "sentence.docx"
+    mf.make_article(path, "文の形の段落の検証用文書", _body, abstract=["Small article abstract.", "(Appendix 1) lists the fictional tasks."],
+                    appendix=[mf.para(S["abs"], "資料1\u3000架空の授業プリント"),
+                              mf.para(S["abs"], "資料2（後掲）に示すように、架空の問いを並べた。")])
+    _, plan, _ = _mechanical(path, journal)
+    by_text = {p.plain(): s for s, p in plan.paras.items()}
+    s1, s2 = by_text["(Appendix 1) lists the fictional tasks."], by_text["資料2（後掲）に示すように、架空の問いを並べた。"]
+
+    def sentence_decisions(plan):
+        return [d.src for d in plan.decisions if "資料の見出しにしなかった" in d.message]
+    assert sentence_decisions(plan) == [s1, s2]               # 機械処理では記録する
+    res = _manual(path, [_set_role(s1, "abstract"), _set_role(s2, "p")], meta, journal, tmp_path / "out")
+    assert res.ai.rejected == [] and res.fidelity.ok and res.dtd_valid
+    assert sentence_decisions(res.plan) == []
+    root = load(res)
+    assert _abstract(root) == ["Small article abstract.", "(Appendix 1) lists the fictional tasks."]
+    assert _apps(root) == [("資料1\u3000架空の授業プリント", ["資料2（後掲）に示すように、架空の問いを並べた。"])]
+
+
 def test_set_role_problem_rules(journal):
     # set_role の可否は set_role_problem の 1 か所で決める（回答の検証と、依頼文の除外の一覧の案内で使う。N6）
     from jasme_jats.ai_assist import set_role_problem
