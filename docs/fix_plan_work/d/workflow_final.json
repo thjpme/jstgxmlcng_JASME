@@ -1,0 +1,400 @@
+{
+ "impl": {
+  "changed_files": [
+   "src/jasme_jats/report.py",
+   "src/jasme_jats/pipeline.py",
+   "src/jasme_jats/colab.py",
+   "src/jasme_jats/cli.py",
+   "src/jasme_jats/ai_assist.py",
+   "tools/make_notebook.py",
+   "notebooks/JASME_docx_to_JSTAGE_XML.ipynb",
+   "tests/conftest.py",
+   "tests/test_pipeline.py",
+   "tests/test_colab.py",
+   "tests/test_notebook.py",
+   "tests/test_pdfmatch.py",
+   "tests/test_ai.py",
+   "tests/test_figure_body.py",
+   "docs/DESIGN.md",
+   "docs/DEVELOPMENT.md",
+   "README.md"
+  ],
+  "summary": "単位 D（U2・M4・N5）を、作業ツリーのコミットしていない差分として実装した（コミット・版上げ・FIX_PLAN の記録はしていない）。設計メモは /tmp/claude-0/-home-user-jstgxmlcng-JASME/fb4d86bb-6ffb-5369-990a-10fe830c8789/scratchpad/d/DESIGN_D.md。\n\nU2（report.py）: `Action(level, key, top, checklist, box_title, box_detail, cli)` と `actions(r)` を追加。並びは次のとおり（level は「要対応」か「要確認」）。\n- fidelity・dtd（新）・upload（新、jstage_issues と zip_issues）・ai_error（新、見出しは手動と API で書き分け）・ai_pending（新、決定事項 5(c)）・partial・forced・figbody・images・lost: すべて要対応\n- pdf_fallback（新、要対応）\n- pdf_unread（ルート1 で読めない、新）・pdf_diff・pdf_unfixed（ルート2 で直せなかった箇所・残る違い。枠と CLI だけ）・pdf_suspect（新）・pdf_ignored（冒頭の行と枠が新、14 章の行は今のまま）・textbox・endnote（枠が新）: すべて要確認\n\nrender の冒頭と 14 章は actions のループで出す。今ある文は 1 文字も変えずに移し、並びも 0.23.0 と同じにした（冒頭は、PDF の知らせと暫定の知らせの前にルート2 の固定の案内を出す。14 章は PDF の項目を先にし、「[x] 画像はすべて Graphics/」は lost・暫定の知らせの前に出す）。\n- ルート2 の「docx を直してから変換しました」の案内、14 章の「Word で開き、変更履歴を確認する」と「直せなかった箇所」の行は、固定の部分（fx is not None のとき）に残した。\n- not_zipped は 10 章の警告のままにした。\n- colab の枠の文面（unplaced_box・missing_images_box・lost_images_box・figure_body_box・pdf_diff_box・_marks_note）は report に移した（unplaced_text、images_action などの関数）。colab の関数は、report の文面で枠を作る薄い関数として残した。\n\nほかのファイル:\n- pipeline.Result: `needs_action` と `pdf_fallback` の property を追加。ok の意味は変えていない。\n- colab: `result_boxes(res, level=None, skip=())` を追加。\n- cli.main: add_images の後に actions の cli 文をすべて標準エラーに出し、`return 1 if res.needs_action else 0` にした（2 は中止のまま）。\n- make_notebook.py:\n  - 手順 5・6 の個別の枠を result_boxes に置き換えた。手順 5 は ai_pending を除き、PDF に合わせられなかったときの 1 行を足した。\n  - 手順 8 は、要対応がひとつでもあれば一度止める。画像だけのときは今の文面のまま。止めたかの記録は _NEEDS_ACTION_OK に変え、手順 9 で片付ける。ダウンロードの後に result_boxes を出す。説明は「（PDF の文字を読めたとき）」にした。\n  - ノートブックは作り直した。\n\nM4: `report.pdf_fallback`・`pdf_suspect` を追加。pdf_summary と、作り方の行の判定もこれを使う。pdf_diff_box は not pc.ok のときも枠を出す（ルート2 は「出版版 PDF に合わせられませんでした」で要対応、ルート1 は「照合できませんでした」で要確認）。別の記事の疑いの枠も出す。\n\nN5: cli で --ai api のとき API キーがなければ ap.error で止める（終了コード 2）。call_api は TypeError を out.error にする。\n\n文書: DESIGN 3 章に「利用者への知らせ（report.actions）」の節を足し、4.4（PDF を読めないとき）と 6.1（図の本体の終了コード）を直した。DEVELOPMENT はコードの構成の表、守るべき原則の 8、テストの節、よくある拡張、Colab の節、残っている課題の行を直した。README は手順 8、要対応・要確認の見方、終了コードの意味（--meta なしでも 1 など）を直した。",
+  "tests_added": [
+   "tests/test_pipeline.py::test_upload_issues_are_needs_action",
+   "tests/test_pipeline.py::test_cli_exits_1_on_upload_issues",
+   "tests/test_pipeline.py::test_cli_template_needs_image_until_given",
+   "tests/test_pipeline.py::test_fidelity_failure_is_needs_action",
+   "tests/test_pipeline.py::test_manual_mode_before_answer_is_needs_action",
+   "tests/test_colab.py::test_result_boxes_follow_actions",
+   "tests/test_colab.py::test_result_boxes_before_answer_in_manual_mode",
+   "tests/test_notebook.py::test_step8_stops_once_when_action_is_needed",
+   "tests/test_notebook.py::test_step8_does_not_stop_without_action",
+   "tests/test_notebook.py::test_steps5_and_6_show_result_boxes（test_steps5_and_6_show_lost_images_box を置き換え）",
+   "tests/test_notebook.py::test_step8_shows_result_boxes（test_step8_shows_lost_images_box を置き換え）",
+   "tests/test_pdfmatch.py::test_route2_with_unreadable_pdf_converts_original（M4 の確かめを追加: 枠・冒頭・14 章・CLI 1 と標準エラー、ルート1 は照合できませんでした・0）",
+   "tests/test_pdfmatch.py::test_wrong_pdf_changes_nothing（別の記事の PDF の枠・要確認を追加）",
+   "tests/test_pdfmatch.py::test_route2_with_broken_pdf_is_needs_action",
+   "tests/test_pdfmatch.py::test_route2_without_pypdfium2_is_needs_action",
+   "tests/test_pdfmatch.py::test_route2_fully_fixed_has_no_action",
+   "tests/test_ai.py::test_cli_stops_without_api_key",
+   "tests/test_ai.py::test_call_api_reports_missing_key",
+   "既存の書き換え: tests/test_pipeline.py::test_cli_images_option（1 回目 == 1）、tests/test_pdfmatch.py::test_colab_box_and_cli_route（--meta examples/meta_example.toml を足して 0 のまま）、tests/test_figure_body.py::test_caption_less_table_becomes_figure_body（--meta を足し、== 1）、tests/conftest.py に META_EXAMPLE"
+  ],
+  "pytest_result": "- Python 3.13 では 682 passed、3.10（venv310、PYTHONPATH=src）でも 682 passed。\n- 足したテストと書き換えたテスト 21 件を 0.23.0 の src（scratchpad/d/base023_src、git archive 3e0f0d6）で流すと、18 件が落ちた。新しい関数の ImportError か、終了コード・枠・冒頭の AssertionError。\n- 0.23.0 でも通った 3 件は、意図どおり: test_steps5_and_6_show_result_boxes と test_step8_shows_result_boxes は作業ツリーの make_notebook.py を見るので src によらない。test_colab_box_and_cli_route は --meta を足しただけで、どちらの版でも 0。",
+  "measures": "- ruff check src tests tools: 199 件（0.23.0 は 197 件）。cli.py の I001 が 1 件減り、tests/test_notebook.py の S102（exec。既存の手順のテストと同じ書き方）が 3 件増えた。足した関数の中の I001 は直した。\n- golden（scratchpad/d/impl/golden_wt/manifest.json と c/golden_final/manifest.json を比べた）:\n  - XML と AI依頼文は全ケースで同じ。\n  - レポートが違うのは *_manual の 10 ケースだけで、違いは 14 章の 1 行「- [ ] **AI の回答をまだ反映していない**（手動モード）…」が足されたこと（ai_pending、決定事項 5(c)）。冒頭・ほかの 14 章の行は同じ。\n  - split・AI の模擬回答（FULL・FLOAT）・pdfcheck のルート1・2 のレポートは同じ。\n- Colab の枠の HTML: missing・figbody・pdf のルート1・ルート2・unplaced（partial の有無）・lost を 0.23.0 の src と比べ、すべて同じハッシュだった（scratchpad/d/impl/boxes.py）。\n- td1〜3（--route pdf --ai manual --meta meta_example.toml）:\n  - XML・ZIP（中身のハッシュ）・AI依頼文は 0.23.0 と同じ。\n  - レポートの違いは、冒頭に新しい要確認「照合に使わなかった PDF の文字が N 件あります（13 章の最後）」（td1 は 11 件、td2 は 21 件、td3 は 13 件）と、14 章の ai_pending の 1 行だけ。今ある冒頭・14 章の知らせはそのまま残った。\n  - 終了コードは 0.23.0 で 0・0・0 だったものが 1・1・1 になった。設計どおり: 手動モードで回答なしは要対応で、td3 は画像不足も要対応（0.23.0 では td3 も画像不足で 0 だった）。\n  - 標準エラーは、要対応（回答待ち、td3 は画像も）と要確認（直せなかった箇所、照合に使わなかった文字、td3 はテキストボックス）を出した。\n- 片付け: git worktree（wt023）は削除し、td の出力・golden の本体・probe の出力も消した。tests/__pycache__ も消した。df の空きは 23G。",
+  "deviations": "FIX_PLAN（D）と違えたこと:\n1. Action に cli の欄を足した（FIX_PLAN は 6 項目）。コマンドラインだけの文面（画像の「--images で指定するか」など）があるため。\n2. 決定事項 5(c)（手動モードで回答を貼り戻す前の出力は要対応）を、ai_pending として入れた。D の節の Action の一覧には書かれていない。\n   - 冒頭は今の output_note のままにし、14 章・枠・CLI に出す。手順 5 の枠では skip する。\n   - このため、golden の *_manual のレポートに 14 章の 1 行が増えた。コマンドラインの --ai manual（回答なし）も 1 を返すようになった（td1〜3 もそのため 1）。\n3. 図の本体（figbody）は、今の冒頭の文が「要対応」なので要対応にし、CLI の終了コードも 1 になった。B3 のコメント・DESIGN 6.1・test_figure_body の「終了コードは変えない」は、コードに合わせて直した。\n4. 既存テストの書き換えは、FIX_PLAN の 2 つ（test_cli_images_option と、test_pdfmatch の 274・278 行。今は 305・309 行）のほかに 3 つあった。\n   - test_figure_body の TABLEFIG の CLI: --meta がないと 1 になり、図の本体も要対応になる。\n   - test_notebook の手順 5・6 の枠の確かめと、手順 8 の import の確かめ: result_boxes に置き換えたため、テストを置き換えた。\n5. 要確認の pdf_unfixed（ルート2 で直せなかった箇所・残る違い）は、冒頭・14 章には出さず（固定の案内・行がある）、枠と CLI だけにした。FIX_PLAN にはこの項目の扱いが書かれていない。今の Colab の枠を actions に載せるため。\n6. 暫定の知らせ（textbox・endnote）と pdf_ignored には、0.23.0 になかった Colab の赤い枠を足した（今の文面から作った）。\n7. CLI の AI のエラーの行は「AI: …」から「要対応: <見出し>。…」に変えた。見出しを Colab とそろえるため。\n8. 手順 8 の止め方: 要対応が画像だけなら今の文面、ほかもあれば「要対応が N 件あります（上の赤い枠: 見出し…）…」の文面にした（ai_pending があれば手順 6 を案内）。\n\n文書とコードの食い違いとして見つけたもの:\n1. DEVELOPMENT.md の Colab の節は、手順 5・6 の枠を missing_images_box と lost_images_box だけと書いていたが、コードは AI のエラー・途中で切れた回答・unplaced・figure_body・pdf_diff の枠も出していた。result_boxes に合わせて書き直した。\n2. README の「変換レポートの見方」は、CLI の終了コード 1 を XML に入らなかった画像のときだけと読める書き方だったが、コードは不変性・DTD の不合格と、仮に置いた図表でも 1 を返していた。終了コードの節を足して直した。\n3. DESIGN 6.1 の「終了コードは変えない」（図の本体）は、今回の変更でコードと食い違うので直した。\n4. FIX_PLAN の行番号（report.render L283〜315 など）は 0.18.1 当時のもので、今とは違う。FIX_PLAN は直していない（仕上げ担当）。\n5. FIX_PLAN の付録 M4 は「test_pdfmatch.py の 274・278 行」と書いているが、今は 305・309 行（直していない）。\n6. FIX_PLAN の「計画全体で足した作業」は、D で CLAUDE.md に「利用者に知らせることは report.actions() に足す。終了コードは 0/1/2」を書くとしている。CLAUDE.md は今回の担当に挙がっていないので直していない（DEVELOPMENT.md の守るべき原則には足した）。",
+  "open_issues": "- 仕上げ担当の作業がまだ:\n  - 版を 0.23.1 に上げる（__init__.py と pyproject.toml）→ python tools/make_notebook.py → test_notebook_is_up_to_date を確かめる。\n  - FIX_PLAN の D の記録（触ったファイル・既存テストの書き換え・上の違え）。\n  - CLAUDE.md の原則の追加（知らせは report.actions、終了コードは 0/1/2）。\n  - 変更点の知らせ。CLI の終了コードの意味が変わったこと: --meta なし、画像不足、--ai manual で回答なし、図の本体が見つからないときも 1。\n- 判断を仰ぎたい点:\n  - ai_pending（決定事項 5(c)）でコマンドラインの手動モードの最初の実行が 1 を返すこと。CLI だけ例外にするかは利用者の判断。\n  - pdf_ignored（照合に使わなかった PDF の文字）の要確認の赤い枠は、実際の出版版 PDF ではほぼ毎回出る（td1〜3 すべて）。多すぎないかを試験運用で確かめる（DEVELOPMENT の残っている課題に記録した）。\n  - 別の記事の PDF の疑いは要確認のまま（決定事項 4）。\n- 難しい変更ではないが、原則・回帰・利用者向けの点検（文面の読みやすさ、手順 8 の止め方の文面）は、別の担当が行う前提。\n- 0.23.0 の src の写しは /tmp/claude-0/-home-user-jstgxmlcng-JASME/fb4d86bb-6ffb-5369-990a-10fe830c8789/scratchpad/d/base023_src に残した（ほかの担当が使う）。"
+ },
+ "verify": {
+  "passed_all": true,
+  "measures": "pytest 3.13 と 3.10 はどちらも 682 passed。ruff は 199 件で、0.23.0 の 197 件より 2 件多い（実装の報告どおり）。\ngolden（23 ケース、0.23.0 の src と作業ツリーで同じ条件で作り直して比べた）:\n- XML と AI 依頼文は全ケースで同じ。\n- レポートが違うのは *_manual の 10 ケースだけで、違いは 14 章に同じ 1 行（ai_pending「AI の回答をまだ反映していない」）が加わっただけ。冒頭とほかの行は同じ。\n- split・AI の模擬回答・pdfcheck のルート1・2 は同じ。\ntd1〜3（--route pdf --ai manual --meta meta_example.toml）:\n- XML・ZIP の中身・直した docx の中身は 0.23.0 と同じ（変更履歴の日付を除いたハッシュで比べた）。\n- レポートの違いは次の 3 つだけ。\n  - 版の行にコミット番号が付くこと。\n  - 冒頭に新しい要確認「照合に使わなかった PDF の文字が N 件あります（13 章の最後）」が加わること（td1 は 11 件、td2 は 21 件、td3 は 13 件）。\n  - 14 章に ai_pending の 1 行が加わること。\n- 終了コードは 0・0・0 から 1・1・1 になった。理由は、手動モードで回答なしが要対応（決定事項 5(c)）になったことと、td3 は画像不足もあること。設計どおり。\n- 標準エラーには、要対応と要確認の一覧が出た。\nCLI（実行して確かめた）:\n- --ai api で API キーなしは、終了コード 2 で ap.error の文面。\n- --meta なしは 1 で EMSGM230E を出した。\n- 一般の正常な変換は 0。\n- 画像不足、J-STAGE のチェックの要対応、PDF を読めない（ルート2 は 1、ルート1 は 0）、壊れた PDF、pypdfium2 なしは、追加されたテストが 1 と標準エラーを確かめている（通っている）。\n手順 8 のセルを exec した結果:\n- 何もない res は止まらずにダウンロードし、枠は空だった。\n- 要確認だけの res（ルート1 の pdf_diff）は止まらずにダウンロードし、赤い枠が出た。\n- 画像不足の res は 1 回目で今の文面のまま止まり、2 回目でダウンロードした。\n- jstage 要対応の res は 1 回目で止まり、2 回目でダウンロードして枠が残った（追加テストで確認）。\n手順 5・6 のセルは result_boxes に置き換わっていた（テスト済み）。\nFIX_PLAN の付録 U2・M4 のテスト項目は、すべてテストに入っていることを確かめた。\nノートブックを python tools/make_notebook.py で作り直したが、差分は実装後と変わらなかった。\n実験の出力と tests の __pycache__ は消した。ディスクの空きは 23G。",
+  "problems": [
+   {
+    "severity": "should",
+    "where": "report.py の pdf_ignored（冒頭の要確認）と colab の赤い枠",
+    "problem": "「照合に使わなかった PDF の文字が N 件」の要確認が、実際の出版版 PDF（td1〜3）で毎回、冒頭と赤い枠に出る。利用者がいつも出る警告として読み飛ばす恐れがある。",
+    "evidence": "td1 は 11 件、td2 は 21 件、td3 は 13 件で、0.23.0 の冒頭にはなかった。実装担当も open_issues に挙げている。",
+    "fix": "今回は設計どおりなので反映は止めない。試験運用で多すぎると分かったら、しきい値を設けるか、枠だけにして冒頭から外すかを利用者に相談する。DEVELOPMENT の「残っている課題」に記録済み。"
+   },
+   {
+    "severity": "should",
+    "where": "cli.py の --ai manual（回答なし）の終了コード",
+    "problem": "コマンドラインで --ai manual の最初の実行（依頼文を作る段階）が終了コード 1 になる。この段階では回答がまだないのが正常な流れで、スクリプトから呼ぶと失敗に見える。",
+    "evidence": "td1〜3 は 0 から 1 になった。tests/test_ai.py などの手動モードの CLI は --meta なしで 1 を返すものもある。実装の deviations 2 にも書いてある。",
+    "fix": "決定事項 5(c) のとおりなので不具合ではない。CLI だけ例外にするかは利用者の判断で、変更点の知らせ（README と版の説明）に明記する。"
+   },
+   {
+    "severity": "nit",
+    "where": "cli.py の add_images の ValueError と、存在しない docx",
+    "problem": "終了コードの意味（0・1・2）と合わない箇所が 2 つ残っている。--images の指定の誤りが 1（中止なのに要対応と同じコード）、存在しない docx はトレースバックで 1 になる。",
+    "evidence": "cli.py の `print(f\"画像: {e}\"...); return 1`。`jasme_jats /nonexistent.docx` は FileNotFoundError のトレースバックで終了コード 1。README 268 行と cli.py の docstring は 1 を要対応、2 を中止と説明している。",
+    "fix": "--images の誤りは 2 にそろえるか、README に例外として書く。存在しない docx は ap.error で 2 にするとよい。今回の範囲外なら残る課題に記録する。"
+   },
+   {
+    "severity": "nit",
+    "where": "docs/FIX_PLAN.md（D の節・付録 U2/M4）",
+    "problem": "行番号（report.render L283〜315、test_pdfmatch の 274・278 行、cli.py L95〜106 など）が 0.18.1 当時のままで、今のコードと合わない。",
+    "evidence": "実装は test_pdfmatch の該当箇所が今は 305・309 行付近と報告している。FIX_PLAN の D の記録は仕上げ担当の作業として残っている。",
+    "fix": "仕上げ担当が D の記録を書くときに、行番号の注意を添えるか直す。"
+   },
+   {
+    "severity": "nit",
+    "where": "CLAUDE.md",
+    "problem": "FIX_PLAN が D で CLAUDE.md に書くとした「知らせは report.actions() に足す。終了コードは 0/1/2」がまだ入っていない。DEVELOPMENT.md の守るべき原則 8 には入っている。",
+    "evidence": "git status に CLAUDE.md の変更がない。",
+    "fix": "仕上げ担当が CLAUDE.md の原則に 1 行足す。"
+   },
+   {
+    "severity": "nit",
+    "where": "版（__init__.py・pyproject.toml）とレポートの版の行",
+    "problem": "版が 0.23.0 のままで、作業ツリーの変換レポートに「0.23.0（コミット 3e0f0d6）」と出る。0.23.0 の変換と、版の行で見分けられない。",
+    "evidence": "td1〜3 のレポート 4 行目の差。",
+    "fix": "仕上げ担当が 0.23.1 に上げ、python tools/make_notebook.py を実行して、test_notebook_is_up_to_date を通す。"
+   }
+  ]
+ },
+ "pre": {
+  "changed_files": [
+   "/home/user/jstgxmlcng_JASME/src/jasme_jats/cli.py",
+   "/home/user/jstgxmlcng_JASME/tests/test_pipeline.py",
+   "/home/user/jstgxmlcng_JASME/README.md",
+   "/home/user/jstgxmlcng_JASME/docs/DEVELOPMENT.md",
+   "/home/user/jstgxmlcng_JASME/docs/DESIGN.md"
+  ],
+  "summary": "確かめで出た 2 つの should と、範囲内の nit 1 つ（cli の終了コード）を、作業ツリーのコミットしていない差分として直した。コミット、版上げ、FIX_PLAN と CLAUDE.md の記録はしていない（仕上げ担当の作業）。\n\nshould 1（pdf_ignored が実際の PDF で毎回、冒頭と赤い枠に出る）:\n- 指摘の fix 欄が「今回は設計どおりなので反映は止めない」としていて、DEVELOPMENT の「残っている課題」の 0.23.1 の行にも記録済みだった。\n- コードは変えていない。\n\nshould 2（--ai manual の最初の実行が終了コード 1 になる）:\n- 決定事項 5(c) のとおりなので、コードは変えていない。\n- README の終了コードの節に、次のことを明記した。\n  - 手動モードの最初の実行の 1 は、回答を待っているという知らせで、失敗ではない。\n  - スクリプトから呼ぶときは、依頼文ができていれば次に進めばよい。\n  - 0.23.0 までは 0 だった。\n- DEVELOPMENT の「残っている課題」の 0.23.1 の行に 2 点を足した。\n  - 決定事項 5(c) のとおり 1 にしたこと（README に「失敗ではない」と明記したこと）。\n  - スクリプトから呼ぶ人に紛らわしければ、コマンドラインだけ 0 にするかを利用者に相談すること。\n- 版の説明（変更点の知らせ）にも書くのは、仕上げ担当に残した。\n\nnit 3（cli.py の終了コードの意味のずれ）:\n- docx・--meta・--pdf・--ai-response のファイルや --images のフォルダが見つからないとき、変換の前に ap.error で止めるようにした（終了コード 2）。\n  - 文面は「〈変換する docx|--meta|…〉 のファイルが見つかりません: パス」と「--images のフォルダが見つかりません: パス」。\n  - これまではトレースバックが出て 1 になっていた。\n- add_images の ValueError（読めない画像）は 1 から 2 にした。画像は 1 枚も入れず、ZIP とレポートは変換のときのままになる。\n- 文書を合わせた。\n  - cli.py の docstring と README の終了コードの節（2 になる場合の一覧）。\n  - DESIGN 7 章の add_images の行（読めない画像は ValueError で 1 枚も入れない。コマンドラインは 2）。\n  - DEVELOPMENT のテストの節と残っている課題の行。\n- テスト test_cli_input_errors_exit_2 を足した。0.23.0 の src では FileNotFoundError で落ちることを確かめた（pytest の pythonpath を -o pythonpath=tests で外して流した）。\n\nnit 4〜6（FIX_PLAN の行番号、CLAUDE.md の原則、版上げ）は、指摘の fix 欄のとおり仕上げ担当の作業なので触っていない。",
+  "tests_added": [
+   "tests/test_pipeline.py::test_cli_input_errors_exit_2"
+  ],
+  "pytest_result": "- Python 3.13 では 683 passed（682 件に、足した 1 件が加わった）。\n- 3.10（venv310、PYTHONPATH=src）でも 683 passed。\n- 足したテストを 0.23.0 の src（base023_src/src。-o pythonpath=tests で pyproject の pythonpath=src を外した）で流すと、FileNotFoundError で落ちる。\n- 注: pyproject の pythonpath は [\"src\", \"tests\"] なので、PYTHONPATH を変えるだけでは作業ツリーの src を読んでしまう。",
+  "measures": "- ruff check src tests tools は 199 件。実装の担当の時点と同じで、0.23.0 の 197 件との差の内訳（cli の I001 が 1 件減り、test_notebook の S102 が 3 件増えた）は変わらない。足したコードでは増えていない。\n- golden（scratchpad/d/fixv/golden を作り、c/golden_final/manifest.json〈0.23.0〉と比べた）:\n  - XML と AI依頼文は全 23 ケースで同じ。\n  - レポートが違うのは *_manual の 10 ケースだけ。本体を diff すると、違いはどれも 14 章の 1 行「- [ ] **AI の回答をまだ反映していない**（手動モード）…」が足されたことだけだった（ai_pending、決定事項 5(c)）。\n- td1〜3（--route pdf --ai manual --meta meta_example.toml で、作業ツリーと 0.23.0 の src の両方を変換した）:\n  - XML と ZIP（中身のハッシュ）は 3 本とも 0.23.0 と同じ。\n  - レポートの違いは次の 3 つだけで、ほかの冒頭・14 章の知らせはそのまま残った。\n    - 版の行（作業ツリーには「コミット 3e0f0d6」が付く。nit 6）\n    - 冒頭の要確認「照合に使わなかった PDF の文字が N 件」（td1 は 11 件、td2 は 21 件、td3 は 13 件）\n    - 14 章の ai_pending の 1 行\n  - 終了コードは、作業ツリーが 1・1・1、0.23.0 が 0・0・0。設計どおり。\n  - 標準エラーは実装の担当の報告と同じ内容（回答待ち、td3 は画像 2 件の要対応、要確認の各行）。\n- 片付け: td の出力・golden の本体・ハッシュの一時ファイルは消した（scratchpad/d/fixv に golden.log だけ残る）。tests/__pycache__ も消した。df の空きは 23G。",
+  "deviations": "直さなかった指摘と理由:\n1. should 1（pdf_ignored が毎回出る）: 指摘の fix 欄のとおり今回は設計どおりで、DEVELOPMENT の残っている課題に記録済みだったので、コードは変えていない。しきい値を設けるか、冒頭から外して枠だけにするかは、試験運用の後に利用者に相談する。\n2. should 2（--ai manual の最初の実行が 1）: 決定事項 5(c) のとおりなので不具合ではない。コードは変えず、README と DEVELOPMENT に明記した。コマンドラインだけ例外にするかは利用者の判断。版の説明（変更点の知らせ）への記載は、仕上げ担当に残した。\n3. nit 4（FIX_PLAN の行番号が 0.18.1 当時のまま）、nit 5（CLAUDE.md に知らせと終了コードの原則がない）、nit 6（版が 0.23.0 のまま）: 指摘の fix 欄が仕上げ担当の作業としているので、触っていない。\n\n設計と違えたこと:\n4. nit 3 の --images の誤り（読めない画像）は、README に例外として書く案ではなく、2（中止）にそろえた。add_images は検査で ValueError を出すと 1 枚も書き込まずに止まるので、利用者が入れようとした画像が入らないまま終わる。書誌情報の誤りと同じ「入力の誤りで中止」とみなした。\n\n文書とコードの食い違い:\n5. README の「2 は変換の中止」と cli.py の docstring は、--images の誤りが 1 を返し、存在しないファイルがトレースバックで 1 になるコードと食い違っていた。この食い違いは、コードを直したうえで、両方の文書を合わせた。\n6. pyproject の pytest の pythonpath が \"src\" を先に入れるため、実装の担当の報告にある「0.23.0 の src で流す」は、PYTHONPATH だけでは作業ツリーの src を読んでしまう（-o pythonpath=tests が要る）。これはテストの手順の注意で、DEVELOPMENT には書いていない。",
+  "open_issues": "- 仕上げ担当の作業がまだ残っている:\n  - 版を 0.23.1 に上げる → python tools/make_notebook.py を実行する → test_notebook_is_up_to_date を確かめる。\n  - FIX_PLAN の D の記録を書く（行番号が 0.18.1 当時のものである注意、test_pdfmatch の 305・309 行、今回の cli の 2 の追加も含める）。\n  - CLAUDE.md の原則に 1 行足す（知らせは report.actions()、終了コードは 0/1/2）。\n  - 版の説明（変更点の知らせ）に書く。--ai manual の最初の実行が 1 になること（失敗ではない）と、ファイルやフォルダがないとき・--images の画像を読めないときは 2 になること。\n- 利用者の判断を仰ぎたい点:\n  - コマンドラインの手動モードの最初の実行だけ 0 にするか。\n  - pdf_ignored の要確認が実際の PDF で毎回出ることへの対処（しきい値を設けるか、冒頭から外して枠だけにするか）。試験運用の後に決める。\n- 0.23.0 の src を使うテストを流すときは、-o pythonpath=tests が要る（pyproject の pythonpath=src が先に入るため）。"
+ },
+ "fin": {
+  "changed_files": [
+   "src/jasme_jats/__init__.py",
+   "pyproject.toml",
+   "notebooks/JASME_docx_to_JSTAGE_XML.ipynb",
+   "docs/FIX_PLAN.md",
+   "CLAUDE.md",
+   "docs/fix_plan_repro_tests.py"
+  ],
+  "summary": "仕上げ担当として、版を 0.23.1 に上げ（__init__.py・pyproject.toml）、python tools/make_notebook.py でノートブックを作り直した。docs/FIX_PLAN.md は、反映の順序の表の D を「（実装済み）」にし、D の節に実装で決めたこと（Action の一覧と並び）・設計と違えたこと・テスト・確かめた数・残る限界・文書とコードの食い違いを書いた。「同じファイルを触る順」の節には D で触ったファイルを入れた。CLAUDE.md には、知らせは report.actions() に足す、終了コードは 0/1/2、の 1 項目を足した。docs/fix_plan_repro_tests.py の冒頭には、D の再現テストはもともとなく tests/ に足したことを書いた。DESIGN.md・DEVELOPMENT.md・README.md は、実装担当と修正担当が直したあとの内容が実装と合っていることを確かめた（直す必要はなかった）。実際の論文の文字や一時ファイルは差分に入っていない。tests/__pycache__ は消した。コミットはしていない。",
+  "tests_added": [],
+  "pytest_result": "Python 3.13 で 683 passed。Python 3.10（venv310、PYTHONPATH=src）でも 683 passed。test_notebook_is_up_to_date も通る。",
+  "measures": "- ruff check src tests tools は 199 件で、実装・修正担当の時点から変わらない。0.23.0 は 197 件で、差の内訳は FIX_PLAN の D の節に書いた。\n- git status は、変更したファイル（M）だけで、新規の未追跡ファイルはない。git diff に tests/private の文字や一時ファイルは入っていない。\n- golden と td1〜3 は、実装担当と修正担当が測った結果を FIX_PLAN の D の節に転記した。この担当では再測定していない。版の変更だけなので、XML・ZIP は変わらない。\n- 版の行がレポートで 0.23.0 から 0.23.1 に変わる。",
+  "deviations": "設計（FIX_PLAN の D）と違えたこと。実装担当の報告のとおりで、FIX_PLAN の D の節に「設計と違えたこと」として記録した。\n- Action に cli の欄を足した。\n- 決定事項 5(c) を ai_pending として入れた。\n- 図の本体 figbody を要対応にした。\n- pdf_unfixed・textbox・endnote・pdf_ignored の赤い枠を新しく足した。\n- 既存テストの書き換えが計画の 2 つより多かった。\n- 修正担当が、docx・--meta・--pdf・--ai-response のファイル、--images のフォルダ、読めない画像を、終了コード 2 の中止にそろえた。\n\n文書とコードの食い違い。\n- 直したもの。\n  - DEVELOPMENT の Colab の節が、手順 5・6 の枠を 2 つだけと書いていた。\n  - README の終了コードの説明が、1 を画像だけのときと読める書き方だった。\n  - DESIGN 6.1 の「終了コードは変えない」。\n  - README の「2 は中止」と cli の docstring が、実際のコードと食い違っていた。\n- 直さなかったもの。FIX_PLAN の D の節と付録 U2・M4 の行番号（report.render L283〜315、test_pdfmatch の 274・278 行など）が 0.18.1 当時のまま。今のコードには合わない。履歴として残し、D の節に注記した。\n- FIX_PLAN は元から、5(b)（PDF がないとき）を「今までどおり 14 章のチェックリストだけ」としている。実装はこれと同じ。\n- pyproject の pytest の pythonpath が src を先に入れるので、0.23.0 の src でテストを流すには -o pythonpath=tests が要る。FIX_PLAN の D の節に書いた。DEVELOPMENT.md には書いていない。",
+  "open_issues": "- この単位の主な論点は 2 つ。どちらも利用者の判断を仰ぐ。\n  - コマンドラインの --ai manual の最初の実行（回答なし）が終了コード 1 になる。決定事項 5(c) のとおりで失敗ではない。スクリプトから呼ぶ人に紛らわしければ、コマンドラインだけ 0 にするかを相談する。\n  - 「照合に使わなかった PDF の文字が N 件」の要確認が、実際の出版版 PDF（td1〜3）では毎回出る。試験運用で多すぎたら、しきい値を設けるか、冒頭から外して枠だけにするかを相談する。\n- 終了コードの意味の変更を、利用者向けの変更点の知らせに書く必要がある。docs/CHANGES.md などの更新履歴はまだない（FIX_PLAN の「計画全体で足した作業」にある提案）。README の終了コードの節には書いてある。\n  - --meta なし、画像不足、手動モードで回答なし、図の本体が見つからない、が 1 になる。\n  - ファイル・フォルダがない、読めない画像、API キーなしが 2 になる。\n- 別の記事の PDF の疑いは、実際の出版版 PDF で試していないので要確認のまま。\n- 難しい変更の点検（原則・回帰・利用者向けの 3 観点）は、この単位では実装・確かめ・修正の担当が済ませた。手順 8 の止め方の文面の読みやすさは、実際の Colab で確かめる。\n- git commit はまとめ役が行う。"
+ },
+ "reviews": [
+  {
+   "checked": "原則・網羅の観点で、作業ツリーのコミットしていない差分（git diff・git status。22 ファイル）を点検した。リポジトリのファイルは変えていない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/fb4d86bb-6ffb-5369-990a-10fe830c8789/scratchpad/d/review/principle/ に置き、終わった後に大きな出力を消した（スクリプトだけ残した。ディスクの空きは 23G）。\n\n1. コードを読んだ。\n- report.py の Action・actions()・pdf_actions()・render の冒頭と 14 章。\n- pipeline.Result.needs_action・pdf_fallback と forced_floats・pending_ai。\n- colab.result_boxes と、薄い関数になった各 *_box。\n- cli.main の ap.error・return 2・return 1 if res.needs_action。\n- ai_assist.call_api の TypeError。\n- make_notebook.py の手順 5・6・8・9。\n- 0.23.0 の report.render（冒頭と 14 章）・colab・cli・ノートブックの手順 5・6・8 と、1 行ずつ突き合わせた。\n\n2. 25 の場合で res を作り、0.23.0 の src（base023_src）と作業ツリーで比べた（exp.py・cmp.py）。\n- 場合の一覧:\n  - FULL と --meta なし、受付日の誤り、TEMPLATE の画像不足、引用文献の画像（lost）、テキストボックス・文末脚注（暫定の知らせ）、NOTES、TABLEFIG の図の本体。\n  - 手動モード: 回答待ち（FULL・FLOAT）、読めない回答、placements が足りない回答、途中で切れた回答。\n  - API: 偽の call_provider で、エラー・エラーと図表・途中で切れた回答。\n  - PDF: ルート1・2 の PDFCHECK、壊れた PDF のルート1・2、別の記事の PDF のルート1・2。\n  - 不変性・最終出力の再チェック・DTD の不合格（res を書き換えて render し直した）。\n- 確かめたこと:\n  - XML の sha256 と ZIP の中身のハッシュは、25 件すべて 0.23.0 と同じ。\n  - 冒頭の段落と 14 章の行のうち、0.23.0 にあったものは 25 件すべてで 1 つも落ちず、並びも同じ。増えたのは次だけ（設計どおり）。\n    - 冒頭: upload・dtd・ai_error・pdf_fallback・pdf_unread・pdf_suspect。\n    - 14 章: 上の 6 つと fidelity・ai_pending。\n  - Colab の枠: 0.23.0 の手順 5（API・手動の別も含む）・6・8 で出ていた枠の HTML は、すべて result_boxes の出力の部分文字列として同じ文面で残った。\n  - 新しい枠: upload・dtd・fidelity・pdf_fallback・pdf_unread・pdf_suspect・暫定の知らせ・ai_pending（手順 8 だけ）。\n  - CLI: 0.23.0 の標準エラーの行は、「AI: {error}」が「要対応: {見出し}。{error}」に変わっただけで、ほかは同じ文のまま残った。\n  - 終了コードは次のとおりで、ほかは 0.23.0 と同じ。\n    - 0→1: --meta なし（EMSGM230E）、受付日の誤り、TEMPLATE、TABLEFIG、手動の回答待ち、読めない回答、API のエラー、ルート2 で PDF を読めない。\n    - 0 のまま: ルート1 で読めない、別の記事の PDF の疑い、ルート1 の違い、暫定の知らせ。\n    - 1 のまま: 不変性・DTD の不合格、図表の仮置き、lost。\n- 決定事項 4・5 との照合: すべてそのとおりだった。\n  - (a) AI の回答を反映できなかったときは要対応。\n  - (b) PDF がないときは、14 章の pdf_checklist_line だけ。\n  - (c) 手動モードの回答待ちは要対応。冒頭は output_note のまま。手順 5 では skip で枠を出さない。\n  - (d) 不変性の不合格は要対応で、手順 8 は止まってからダウンロードできる。\n  - 4: ルート2 で PDF を読めないときは、続けて要対応で知らせる。別の記事の疑いは要確認。\n\n3. 手順 8 のセルを、生成したノートブックの文字列のまま exec した（step8.py）。\n- 一度止まり、2 回目と 3 回目はダウンロードした場合: 回答待ち、TEMPLATE と回答待ち（画像の案内と手順 6 の案内の両方が出る）、不変性の不合格、ルート2 で PDF を読めない。\n- 止まらずにダウンロードし、枠だけ出た場合: ルート1 で読めない、ルート1 の違い。\n\n4. td1〜3（--route pdf --ai manual --meta meta_example.toml）を 0.23.0 と作業ツリーで変換した。\n- XML、jasme_31_1.zip の中身、直した docx（w:date を除く）は、すべて同じ。\n- 冒頭は、要確認 pdf_ignored が 1 段落増えただけ（11・21・13 件）。14 章は ai_pending の 1 行が増えただけ。どちらも並びは同じ。\n- 0.23.0 の標準エラーの行（td3 の 2 行）は落ちていない。\n- 終了コードは 0・0・0 から 1・1・1。\n\n5. 物差し。\n- pytest: Python 3.13 で 683 passed、3.10（venv310）で 683 passed。\n- ruff: 199 件（0.23.0 は 197 件。実装の報告どおり）。\n- golden（23 件）: XML・AI 依頼文は 0.23.0 と同じ。レポートの違いは *_manual の 10 件の 14 章に、ai_pending の 1 行が足されただけ。\n- 足したテストと書き換えたテスト（test_pipeline・test_colab・test_notebook・test_pdfmatch・test_ai・test_figure_body）を 0.23.0 の src で流すと、21 件が落ちた（-o pythonpath=tests）。\n\n6. 変異テスト（src を写して 1 か所ずつ変えた。mut.sh）。\n- テストが捕まえた: ai_pending・pdf_fallback・upload・figbody・lost・ai_error・dtd・fidelity・暫定の知らせを要確認にする、pdf_unread・pdf_suspect を要対応にする、result_boxes の skip を外す。\n- テストが捕まえなかった（全部通った）: forced（図表の仮置き）を要確認にする、partial（途中で切れた回答）を要確認にする、pdf_ignored を要対応にする、冒頭の並びを逆にする。\n- forced を要確認にした版で FLOAT の placements が足りない回答を --meta 付きで変換すると、終了コードが 0 になり、手順 8 も止まらないことを確かめた。\n- partial だけ（placements は読めて operations の途中で切れた回答）は、0.23.0 では標準エラーに「要対応」と出るのに終了コードは 0 だった。今は 1（設計どおり）。\n\n7. 計算された依頼文との食い違い。依頼文は「ZIP に入れなかったファイル・入力値の正規化も actions() に集める」と書くが、正本の FIX_PLAN D は not_zipped を 10 章の警告のままとしている。実装は FIX_PLAN のとおり。\n- not_zipped: 0.23.0 と同じく 1 章・10 章と CLI の「※」の行に出る。\n- 入力値の正規化（input_notes）: 0.23.0 と同じく 11 章と、CLI・Colab 手順 3 の「※」の行に出る。\n- どちらも落ちていない。\n\n8. 文書とコードの食い違い（直すのはどれも文書の側）。\n- 新しく見つけたもの。\n  - tests/test_floats.py の FIXME 相当の注記。FIX_PLAN 付録 U2 の「tests/test_floats.py の 134 行目は、もとから 1 を期待しているのでそのまま」は、D の後は --meta がないために EMSGM230E で 1 になる。図表の仮置きの終了コードを確かめるテストにはなっていない（下の should）。\n  - make_notebook の手順 8 の説明「要対応（赤い枠）が残っているときは」は、要確認の枠も同じ赤い枠なので、枠の色では区別できない（今の文で大きな害はない。指摘にはしない）。\n- 確かめて食い違いがなかったもの:\n  - DESIGN 3 章の「14 章は PDF の項目を先に、残りを actions の順に並べる（0.23.0 までの並びと同じ）」と冒頭の並び。\n  - pipeline.Result.needs_action の「ok でなければ必ず真」。final_ok が None になる経路は、final_check がいつも実行されるのでない。\n  - README の終了コードの節、DEVELOPMENT の原則 8 と Colab の節、CLAUDE.md の追記、cli の docstring。API キーなしは ap.error なので「引数の誤り」に入る。\n  - FIX_PLAN D の「実装で決めたこと」「設計と違えたこと」。\n- 既に報告済みのもの（再掲）: FIX_PLAN D の節と付録 U2・M4 の行番号が 0.18.1 当時のまま（注記済み）。",
+   "findings": [
+    {
+     "severity": "should",
+     "file": "tests/test_floats.py",
+     "line": 169,
+     "problem": "図表の仮置き（forced）と途中で切れた回答（partial）の要対応を確かめていたコマンドラインのテスト 3 か所が、D の後は別の理由で合格している。test_floats.py の 169 行・527 行と test_figure_body.py の 261 行で、どれも --meta がない。--meta がないと EMSGM230E の要対応になって終了コードが 1 になるので、forced・partial が要対応でなくなっても合格する。0.23.0 では、この 3 か所の == 1 は図表の仮置きによる 1 だけを確かめていた。D でこの守りが弱くなった。",
+     "evidence": "src を写して、_forced_action の level を TO_CHECK にした版を作った。tests の test_pipeline・test_colab・test_notebook・test_pdfmatch・test_ai・test_lost_images・test_floats・test_figure_body は 603 件すべて合格した。同じ版で、FLOAT に s2 の placements を除いた回答を渡して --meta meta_example.toml 付きで CLI を実行すると、終了コードが 0 になり、手順 8 も止まらなかった（作業ツリーでは 1 で、止まる）。partial を TO_CHECK にした版も 603 件すべて合格した。0.23.0 の cli は `ai_applied and res.plan.unplaced_floats` で return 1 だった。そのころは --meta がないことは終了コードに関係しなかったので、このテストは図表の仮置きによる 1 を確かめていた。",
+     "fix": "3 か所の cli_main に `--meta str(META_EXAMPLE)`（conftest）を足し、== 1 のままにする。forced だけの場合、partial と forced の場合、figbody と forced の場合のそれぞれで、要対応の 1 を確かめる形にする。あわせて、partial だけの場合（placements は最後まで読めて operations の途中で切れた回答。cut_cases の a）も --meta 付きで == 1 になり、標準エラーに「要対応: AI の回答が途中で切れていました」が出ることを足す。0.23.0 ではこの場合の終了コードは 0 だった。FIX_PLAN 付録 U2 の「tests/test_floats.py の 134 行目は…そのまま」も、--meta を足したことに直す。"
+    },
+    {
+     "severity": "nit",
+     "file": "tests/test_pdfmatch.py",
+     "line": 1,
+     "problem": "2 つのことを決めているテストがない。1 つ目は、照合に使わなかった PDF の文字（pdf_ignored）が要確認であること（終了コード 0、手順 8 は止まらない）。2 つ目は、レポートの冒頭の並び（要対応 → ルート2 の固定の案内 → PDF の知らせ → 暫定の知らせ。DESIGN 3 章で 0.23.0 と同じと書いている並び）。実際の出版版 PDF ではほぼ毎回出る知らせなので、誤って要対応にすると、td1〜3 のような普通の変換がすべて手順 8 で止まり、終了コードも 1 になる。",
+     "evidence": "変異テストで、_pdf_ignored_action を NEEDS_ACTION にした版も、render の早い組の並びを逆にした版も、関係する 8 ファイルの 603 件がすべて合格した。並びは golden とこの点検の比較（25 件と td1〜3 で、0.23.0 と同じ並び）では確かめたが、pytest では守られていない。",
+     "fix": "ignored_lines が出る小さな PDF の場合（test_pdfmatch の既存の受付日・誌名の行の fixture）で、actions の pdf_ignored の level が「要確認」で needs_action が False になることを足す。冒頭の並びは、不変性の不合格と暫定の知らせが同時に出る res（prov.docx の fidelity.ok を False にする）で、冒頭の段落の順を確かめる 1 件を足す。任意。"
+    }
+   ]
+  },
+  {
+   "checked": "単位 D の回帰とテストの点検。作業ツリーの未コミットの差分（git diff・git status。変更ファイル 22、新規の未追跡ファイルなし）を、0.23.0（3e0f0d6）と比べた。リポジトリのファイルは変えていない（自分が作った tests/__pycache__ だけ消した）。\n\n## 物差し\n- pytest は Python 3.13 で 683 passed、3.10（venv310、PYTHONPATH=src）でも 683 passed。test_notebook_is_up_to_date も通る。\n- ruff check src tests tools は 199 件。0.23.0 の worktree では 197 件。\n  - ファイルと規則ごとに比べた差は 2 つだけ。cli.py の I001 が 1 から 0、test_notebook.py の S102 が 14 から 17。報告のとおり。\n\n## golden（23 ケース）\n- 0.23.0 の src（base023_src。git show 3e0f0d6 と同じことを確かめた）と作業ツリーの src で、同じ条件で作り直して比べた。保存してある c/golden_final の manifest とも比べたが、結果は同じ。\n- XML と AI 依頼文は全ケースで同じ。\n- レポートが違うのは *_manual の 10 ケースだけ。本体を diff すると、違いは 14 章に同じ 1 行（ai_pending「AI の回答をまだ反映していない」）が加わっただけ。冒頭とほかの行は 1 文字も変わっていない。\n- split・AI の模擬回答・pdfcheck のルート1/2 は同じ。\n\n## td1〜3\n- 条件: --route pdf --ai manual --meta meta_example.toml。作業ツリーと 0.23.0 の src で変換した。\n- XML、記事フォルダの全ファイル、アップロード用 ZIP、直した docx は同じ。docx は変更履歴の日付（w:date）を除いて比べた。\n- レポートの違いは次の 3 つだけ。\n  - 版の行。\n  - 冒頭の要確認「照合に使わなかった PDF の文字が N 件」（11・21・13 件）。\n  - 14 章の ai_pending の行。\n- 終了コードは 0・0・0 から 1・1・1 になった。td3 は 0.23.0 でも画像不足の要対応を標準エラーに出していたのに 0 だった。今は 1 で、設計どおり。\n- 標準エラーには、0.23.0 で出ていた行（画像不足・テキストボックス）がそのまま残り、ai_pending・pdf_unfixed・pdf_ignored が加わった。\n- Colab の枠の HTML も比べた。\n  - missing・lost・figure_body・unplaced は 0.23.0 と同じ。\n  - pdf_diff_box は、0.23.0 の HTML が前半にそのまま残り、後ろに pdf_ignored の枠が足されている（td1 で確かめた）。\n\n## 0.23.0 の知らせが黙って落ちていないか（コードを読んで突き合わせた）\n- 冒頭: fidelity・partial・forced・figbody・images・lost・ルート2 の固定の案内・pdf_diff・provisional・output_note。文面も順番も同じ。\n- 14 章: PDF の行・固定の行・pdf_diff・ignored・partial・forced・figbody・images・「画像はすべて Graphics/」・lost・provisional。並びは保たれている。\n- 手順 5: 0.23.0 では、AI のエラー・切れた回答・unplaced（API だけ）・missing・lost・figbody・pdf の枠を出していた。今は result_boxes がそれを置き換えている。\n  - unplaced と forced の条件が同じことも確かめた。pipeline の forced_floats は pending_ai のときだけ空になる。\n- 手順 6・8 も同じく置き換えている。\n- CLI: 0.23.0 の各行は actions の cli 文に移っている。\n  - 0.23.0 で 1 だった場合は、今もすべて 1。例外は --images の読めない画像で、設計どおり 2 になった。\n  - 0.23.0 の `ai_applied and unplaced_floats` の 1 は、forced の要対応で同じ条件になる。\n- final_ok が None のときの扱いは、Result.ok と同じ。\n\n## テスト\n- 追加・書き換えたテスト 22 件を 0.23.0 の src で流した（-o pythonpath=tests）。19 件が ImportError か AssertionError で落ちた。\n  - 通った 3 件は、ノートブックの文字列を確かめるもの 2 件と、--meta を足しただけの test_colab_box_and_cli_route。どれも、そうなるのが当然のもの。\n- FIX_PLAN の付録の U2・M4 のテスト項目と、「点検で足したテスト」はすべて tests に入っている。\n- 手順 8 には exec テストがある。止まる・止まらない・画像だけのとき、の 3 つ。\n- 手順 5・6 は文字列の確かめだけで、exec テストはない。代わりに、生成されたセルを pyflakes（ruff F）で見た。未定義の名前はノートブックの変数だけで、消した import（error_box など）を使い残した所はない。\n- README の終了コードの節（0/1/2 と、1 や 2 になる例）は、cli.main・argparse・AIRequiredError・add_images の実装と合っている。\n\n## 網羅の守り（変異テスト）\n- report.actions の Action を 1 つずつ外した変異 17 個は、すべてテストで落ちた。\n- level を入れ替えた変異 17 個のうち、14 個は落ちた。落ちなかった 3 つは指摘に書いた。\n  - partial（要対応を要確認に）。\n  - pdf_unfixed（要確認を要対応に）。\n  - pdf_ignored（要確認を要対応に）。\n- make_notebook.py の手順 8 の `_todo` の level の絞り込みを外した変異は、test_notebook_is_up_to_date しか落とさなかった。要確認だけの res で手順 8 が止まらないことを、振る舞いとして確かめるテストがない。\n- 点検用のテストを tests の写しの中に書いて確かめた。\n  - ルート1 の PDFCHECK（要確認だけ）で手順 8 を実行するテストは、元のコードでは通り、変異では落ちる。\n  - 同じ docx を変換し直して、要対応の中身（EMSGM106E から EMSGM230E）が変わっても key が同じ場合、2 回目の手順 8 は止まらない。\n\n## 文書とコードの食い違い\n- 直す側として指摘したもの:\n  - FIX_PLAN の D の「確かめた数」の「Colab の枠の HTML は、変えない方針の枠（…pdf…）が 0.23.0 と同じ」。照合に使わなかった文字のある実際の PDF では、pdf_diff_box に新しい枠が足される（0.23.0 の部分は変わらない）。\n  - cli.py の docstring と README の「指定したファイル・フォルダがない」。実装の is_file は、ある /dev/fd のパイプも「見つかりません」にする。\n- 実装と仕上げの担当が挙げ、確かめたもの:\n  - FIX_PLAN の D の節と付録の行番号が、0.18.1 当時のまま（注記あり）。\n  - FIX_PLAN の 5(b) は実装と同じ。\n  - pyproject の pythonpath。\n  - CLAUDE.md の 1 項目は、仕上げ担当が入れた。\n- ほかに、DESIGN の 3 章・4.4・6.1・7 章、DEVELOPMENT の表・原則 8・テスト・Colab の節・残っている課題、README の終了コードは、実装と合っていた。\n- ノートブックは生成物と一致している。\n\n## 後片付け\n- 実験は scratchpad/d/review/regression の下で行い、終わったら消した。\n  - 消したもの: worktree、td の出力、golden の出力、変異の写し。\n  - 残っているのは小さな script だけ（76K）。\n- tests/__pycache__ は消した。\n- ディスクの空きは 23G。",
+   "findings": [
+    {
+     "severity": "should",
+     "file": "tests/test_pdfmatch.py",
+     "line": 1,
+     "problem": "level の入れ替えを確かめるテストが足りない（網羅の守り）。次の 3 つの変異では、683 件がすべて通る。(1) pdf_ignored を要確認から要対応にする。(2) pdf_unfixed を要確認から要対応にする。(3) partial（AI の回答が途中で切れていた）を要対応から要確認にする。(1) と (2) が要対応になると、実際の出版版 PDF では毎回、終了コードが 1 になり、手順 8 で止まる。td1〜3 では pdf_ignored が毎回出ている。(3) が要確認になると、切れた回答の要対応が、終了コードと手順 8 から黙って落ちる。",
+     "evidence": "report.py の Action の生成部分を書き換えた変異で、全テストを流した（PYTHONPATH に変異した src、-o pythonpath=tests）。level_pdf_ignored、level_pdf_unfixed、level_partial はどれも「683 passed」だった。ほかの level の入れ替え 14 個と、Action を外す変異 17 個は、すべて落ちた。0.23.0 には actions がない。0.23.0 の CLI は、partial だけでは 0 を返していた。",
+     "fix": "次の 3 つのテストを足す。(1) pdf_ignored のある結果（test_running_heads_are_listed_in_report の res など）で、{a.level for a in actions(res) if a.key == 'pdf_ignored'} == {TO_CHECK} と not res.needs_action を確かめる。(2) ルート2 で直せなかった箇所のある結果（test_colab_box_and_cli_route など）で、pdf_unfixed の level が TO_CHECK であることを確かめる。(3) 切れた回答の結果（test_cut_response_applies_only_finished_placements など）で、partial の level が NEEDS_ACTION で res.needs_action が真であることを確かめる。"
+    },
+    {
+     "severity": "should",
+     "file": "tools/make_notebook.py",
+     "line": 551,
+     "problem": "手順 8 で、要確認だけなら止まらないこと（`_todo` を level で絞ること）を確かめる exec テストがない。test_step8_does_not_stop_without_action は、知らせがまったくない結果（FULL）でしか確かめていない。絞り込みを外して、要確認でも止まるようにしても、振る舞いのテストは落ちない。",
+     "evidence": "tests ほかの写しの中で、make_notebook.py の `_todo = [a for a in actions(res) if a.level == NEEDS_ACTION]` を `_todo = list(actions(res))` に変えて test_notebook.py を流した。落ちたのは test_notebook_is_up_to_date（生成物の一致の確かめ）だけで、11 件は通った。写しの中の点検用テストでは、ルート1 の PDFCHECK（要確認 pdf_diff だけ）で手順 8 を exec した。元のコードではダウンロードして通り、変異では SystemExit で落ちた。0.23.0 の手順 8 は、画像不足のときしか止まらなかった。",
+     "fix": "tests/test_notebook.py に、要確認だけの結果で手順 8 が止まらないテストを足す。PDFCHECK・PDFCHECK_PDF・route='docx' で変換し、actions の level がすべて要確認で、needs_action が偽であることを確かめる。そのうえで exec すると 1 回でダウンロードし、ダウンロードの後に赤い枠（「出版版 PDF と文字が違う箇所」）を出すことを確かめる。"
+    },
+    {
+     "severity": "nit",
+     "file": "src/jasme_jats/cli.py",
+     "line": 57,
+     "problem": "入力ファイルの確かめに path.is_file() を使っているため、プロセス置換（/dev/fd/NN）や /dev/stdin のように、通常のファイルではないが読めるパスを「ファイルが見つかりません」として 2 で止める。0.23.0 では、このまま変換できた。",
+     "evidence": "`python -m jasme_jats sample_full.docx --meta <(cat examples/meta_example.toml) --out … --no-metafile-conversion` を両方の版で実行した。作業ツリーは終了コード 2 で「--meta のファイルが見つかりません: /dev/fd/63」。0.23.0 の src では 0。Colab の利用者には関係ない。",
+     "fix": "`not path.exists() or path.is_dir()` で確かめる（--images のフォルダは今のまま is_dir）。直さないなら、README の終了コードの節に「通常のファイルだけ」と書く。"
+    },
+    {
+     "severity": "nit",
+     "file": "src/jasme_jats/ai_assist.py",
+     "line": 470,
+     "problem": "call_api が、try の中の TypeError をすべて「API キーが見つかりません」にする。API キー以外の TypeError も同じ見出しになる。たとえば、pyproject の anthropic>=1.0 が許す古い SDK では、fallbacks・output_config を受け付けない。そのとき出る「unexpected keyword argument」も、API キーの問題として知らせてしまう。0.23.0 ではトレースバックで落ちていた。今は止まらないが、見出しが誤っている（本文には e が付く）。",
+     "evidence": "ai_assist.call_api のコードを読んだ（`except TypeError as e:` の範囲が、send() と latest_opus() の全体にかかっている）。今の環境の anthropic 2.3.0 は fallbacks と output_config を受け付ける（inspect.signature で確かめた）。古い SDK は試していない。",
+     "fix": "api_key がない（引数にも環境変数にもない）か、e の文に \"authentication\" が含まれるときだけ「API キーが見つかりません」にする。それ以外の TypeError は「AI の呼び出しに失敗しました: {e}」にする。"
+    },
+    {
+     "severity": "nit",
+     "file": "tools/make_notebook.py",
+     "line": 552,
+     "problem": "手順 8 で一度止めたかどうかを覚える key は、docx と、Action の key と、足りない画像の名前でできている。同じ docx を書誌情報を直して変換し直し、別のアップロード時チェックの問題が残った場合、key が同じ（\"upload\"）なので、2 回目は止まらずにダウンロードする。ダウンロードの後には赤い枠を出す。0.23.0 では upload でまったく止まらなかったので、悪くなってはいない。",
+     "evidence": "tests の写しの中の点検用テストで確かめた。FULL を受付日の誤りで変換し（EMSGM106E）、手順 8 で止まって、2 回目でダウンロードする。続けて開始ページなしで変換し直す（EMSGM230E）と、needs_action は真なのに、手順 8 は 1 回目でダウンロードした（テストが通った）。",
+     "fix": "key に、要対応の中身（box_title、または upload のメッセージ ID）を入れる。そのままにするなら、DEVELOPMENT の Colab の節に、止めるのは同じ docx・同じ種類の要対応につき一度だけと書く。"
+    },
+    {
+     "severity": "nit",
+     "file": "docs/FIX_PLAN.md",
+     "line": 454,
+     "problem": "「確かめた数」の「Colab の枠の HTML は、変えない方針の枠（missing・figbody・pdf・unplaced・lost）が 0.23.0 と同じ」は、fixture については正しい。しかし照合に使わなかった文字のある実際の PDF では、pdf_diff_box に pdf_ignored の新しい枠が後ろに足される（別の記事の疑いがあれば pdf_suspect も）。文書を実装に合わせて正確にしたほうがよい。",
+     "evidence": "td1 で、両方の版の colab.pdf_diff_box(res) の HTML を作って比べた。0.23.0 の 1293 文字は、作業ツリーの 2033 文字の先頭とそのまま一致し、後ろに「照合に使わなかった PDF の文字が 11 件あります（要確認）」の枠が足されていた。td3 では、0.23.0 は空文字、作業ツリーは pdf_ignored の枠（605 文字）だった。",
+     "fix": "「pdf_diff_box は、0.23.0 の枠を変えずに、pdf_ignored・pdf_suspect の新しい枠を後ろに足す」と書き直す。"
+    },
+    {
+     "severity": "nit",
+     "file": "tests/test_notebook.py",
+     "line": 195,
+     "problem": "手順 5・6 のセルは、文字列が含まれるかを確かめるだけで、exec テストがない（点検の観点にある「手順 5・6・8 のセルの exec テスト」は、手順 8 にしかない）。result_boxes の呼び出しの引数の誤りや、変換の後の分岐（elif res.pdf_fallback）の誤りは、文字列の確かめでは見つからない。",
+     "evidence": "test_steps5_and_6_show_result_boxes は `in src` と index の比較だけ。生成されたセルを ruff --select F（pyflakes）で見たところ、未定義の名前はノートブックの変数（AI・PROVIDER・res など）だけで、今のコードに誤りはない。",
+     "fix": "手順 6 のセルを、fake_display と、変換を済ませた res、convert を monkeypatch した ns で exec し、AI のエラーの枠（「貼り付けた回答を読み込めませんでした」）がレポートより前に表示されることを確かめるテストを足す（任意）。"
+    }
+   ]
+  }
+ ],
+ "failedFirst": [],
+ "firstFindings": [
+  {
+   "lens": "principle",
+   "severity": "should",
+   "file": "tests/test_floats.py",
+   "line": 169,
+   "problem": "図表の仮置き（forced）と途中で切れた回答（partial）の要対応を確かめていたコマンドラインのテスト 3 か所が、D の後は別の理由で合格している。test_floats.py の 169 行・527 行と test_figure_body.py の 261 行で、どれも --meta がない。--meta がないと EMSGM230E の要対応になって終了コードが 1 になるので、forced・partial が要対応でなくなっても合格する。0.23.0 では、この 3 か所の == 1 は図表の仮置きによる 1 だけを確かめていた。D でこの守りが弱くなった。",
+   "evidence": "src を写して、_forced_action の level を TO_CHECK にした版を作った。tests の test_pipeline・test_colab・test_notebook・test_pdfmatch・test_ai・test_lost_images・test_floats・test_figure_body は 603 件すべて合格した。同じ版で、FLOAT に s2 の placements を除いた回答を渡して --meta meta_example.toml 付きで CLI を実行すると、終了コードが 0 になり、手順 8 も止まらなかった（作業ツリーでは 1 で、止まる）。partial を TO_CHECK にした版も 603 件すべて合格した。0.23.0 の cli は `ai_applied and res.plan.unplaced_floats` で return 1 だった。そのころは --meta がないことは終了コードに関係しなかったので、このテストは図表の仮置きによる 1 を確かめていた。",
+   "fix": "3 か所の cli_main に `--meta str(META_EXAMPLE)`（conftest）を足し、== 1 のままにする。forced だけの場合、partial と forced の場合、figbody と forced の場合のそれぞれで、要対応の 1 を確かめる形にする。あわせて、partial だけの場合（placements は最後まで読めて operations の途中で切れた回答。cut_cases の a）も --meta 付きで == 1 になり、標準エラーに「要対応: AI の回答が途中で切れていました」が出ることを足す。0.23.0 ではこの場合の終了コードは 0 だった。FIX_PLAN 付録 U2 の「tests/test_floats.py の 134 行目は…そのまま」も、--meta を足したことに直す。"
+  },
+  {
+   "lens": "principle",
+   "severity": "nit",
+   "file": "tests/test_pdfmatch.py",
+   "line": 1,
+   "problem": "2 つのことを決めているテストがない。1 つ目は、照合に使わなかった PDF の文字（pdf_ignored）が要確認であること（終了コード 0、手順 8 は止まらない）。2 つ目は、レポートの冒頭の並び（要対応 → ルート2 の固定の案内 → PDF の知らせ → 暫定の知らせ。DESIGN 3 章で 0.23.0 と同じと書いている並び）。実際の出版版 PDF ではほぼ毎回出る知らせなので、誤って要対応にすると、td1〜3 のような普通の変換がすべて手順 8 で止まり、終了コードも 1 になる。",
+   "evidence": "変異テストで、_pdf_ignored_action を NEEDS_ACTION にした版も、render の早い組の並びを逆にした版も、関係する 8 ファイルの 603 件がすべて合格した。並びは golden とこの点検の比較（25 件と td1〜3 で、0.23.0 と同じ並び）では確かめたが、pytest では守られていない。",
+   "fix": "ignored_lines が出る小さな PDF の場合（test_pdfmatch の既存の受付日・誌名の行の fixture）で、actions の pdf_ignored の level が「要確認」で needs_action が False になることを足す。冒頭の並びは、不変性の不合格と暫定の知らせが同時に出る res（prov.docx の fidelity.ok を False にする）で、冒頭の段落の順を確かめる 1 件を足す。任意。"
+  },
+  {
+   "lens": "regression",
+   "severity": "should",
+   "file": "tests/test_pdfmatch.py",
+   "line": 1,
+   "problem": "level の入れ替えを確かめるテストが足りない（網羅の守り）。次の 3 つの変異では、683 件がすべて通る。(1) pdf_ignored を要確認から要対応にする。(2) pdf_unfixed を要確認から要対応にする。(3) partial（AI の回答が途中で切れていた）を要対応から要確認にする。(1) と (2) が要対応になると、実際の出版版 PDF では毎回、終了コードが 1 になり、手順 8 で止まる。td1〜3 では pdf_ignored が毎回出ている。(3) が要確認になると、切れた回答の要対応が、終了コードと手順 8 から黙って落ちる。",
+   "evidence": "report.py の Action の生成部分を書き換えた変異で、全テストを流した（PYTHONPATH に変異した src、-o pythonpath=tests）。level_pdf_ignored、level_pdf_unfixed、level_partial はどれも「683 passed」だった。ほかの level の入れ替え 14 個と、Action を外す変異 17 個は、すべて落ちた。0.23.0 には actions がない。0.23.0 の CLI は、partial だけでは 0 を返していた。",
+   "fix": "次の 3 つのテストを足す。(1) pdf_ignored のある結果（test_running_heads_are_listed_in_report の res など）で、{a.level for a in actions(res) if a.key == 'pdf_ignored'} == {TO_CHECK} と not res.needs_action を確かめる。(2) ルート2 で直せなかった箇所のある結果（test_colab_box_and_cli_route など）で、pdf_unfixed の level が TO_CHECK であることを確かめる。(3) 切れた回答の結果（test_cut_response_applies_only_finished_placements など）で、partial の level が NEEDS_ACTION で res.needs_action が真であることを確かめる。"
+  },
+  {
+   "lens": "regression",
+   "severity": "should",
+   "file": "tools/make_notebook.py",
+   "line": 551,
+   "problem": "手順 8 で、要確認だけなら止まらないこと（`_todo` を level で絞ること）を確かめる exec テストがない。test_step8_does_not_stop_without_action は、知らせがまったくない結果（FULL）でしか確かめていない。絞り込みを外して、要確認でも止まるようにしても、振る舞いのテストは落ちない。",
+   "evidence": "tests ほかの写しの中で、make_notebook.py の `_todo = [a for a in actions(res) if a.level == NEEDS_ACTION]` を `_todo = list(actions(res))` に変えて test_notebook.py を流した。落ちたのは test_notebook_is_up_to_date（生成物の一致の確かめ）だけで、11 件は通った。写しの中の点検用テストでは、ルート1 の PDFCHECK（要確認 pdf_diff だけ）で手順 8 を exec した。元のコードではダウンロードして通り、変異では SystemExit で落ちた。0.23.0 の手順 8 は、画像不足のときしか止まらなかった。",
+   "fix": "tests/test_notebook.py に、要確認だけの結果で手順 8 が止まらないテストを足す。PDFCHECK・PDFCHECK_PDF・route='docx' で変換し、actions の level がすべて要確認で、needs_action が偽であることを確かめる。そのうえで exec すると 1 回でダウンロードし、ダウンロードの後に赤い枠（「出版版 PDF と文字が違う箇所」）を出すことを確かめる。"
+  },
+  {
+   "lens": "regression",
+   "severity": "nit",
+   "file": "src/jasme_jats/cli.py",
+   "line": 57,
+   "problem": "入力ファイルの確かめに path.is_file() を使っているため、プロセス置換（/dev/fd/NN）や /dev/stdin のように、通常のファイルではないが読めるパスを「ファイルが見つかりません」として 2 で止める。0.23.0 では、このまま変換できた。",
+   "evidence": "`python -m jasme_jats sample_full.docx --meta <(cat examples/meta_example.toml) --out … --no-metafile-conversion` を両方の版で実行した。作業ツリーは終了コード 2 で「--meta のファイルが見つかりません: /dev/fd/63」。0.23.0 の src では 0。Colab の利用者には関係ない。",
+   "fix": "`not path.exists() or path.is_dir()` で確かめる（--images のフォルダは今のまま is_dir）。直さないなら、README の終了コードの節に「通常のファイルだけ」と書く。"
+  },
+  {
+   "lens": "regression",
+   "severity": "nit",
+   "file": "src/jasme_jats/ai_assist.py",
+   "line": 470,
+   "problem": "call_api が、try の中の TypeError をすべて「API キーが見つかりません」にする。API キー以外の TypeError も同じ見出しになる。たとえば、pyproject の anthropic>=1.0 が許す古い SDK では、fallbacks・output_config を受け付けない。そのとき出る「unexpected keyword argument」も、API キーの問題として知らせてしまう。0.23.0 ではトレースバックで落ちていた。今は止まらないが、見出しが誤っている（本文には e が付く）。",
+   "evidence": "ai_assist.call_api のコードを読んだ（`except TypeError as e:` の範囲が、send() と latest_opus() の全体にかかっている）。今の環境の anthropic 2.3.0 は fallbacks と output_config を受け付ける（inspect.signature で確かめた）。古い SDK は試していない。",
+   "fix": "api_key がない（引数にも環境変数にもない）か、e の文に \"authentication\" が含まれるときだけ「API キーが見つかりません」にする。それ以外の TypeError は「AI の呼び出しに失敗しました: {e}」にする。"
+  },
+  {
+   "lens": "regression",
+   "severity": "nit",
+   "file": "tools/make_notebook.py",
+   "line": 552,
+   "problem": "手順 8 で一度止めたかどうかを覚える key は、docx と、Action の key と、足りない画像の名前でできている。同じ docx を書誌情報を直して変換し直し、別のアップロード時チェックの問題が残った場合、key が同じ（\"upload\"）なので、2 回目は止まらずにダウンロードする。ダウンロードの後には赤い枠を出す。0.23.0 では upload でまったく止まらなかったので、悪くなってはいない。",
+   "evidence": "tests の写しの中の点検用テストで確かめた。FULL を受付日の誤りで変換し（EMSGM106E）、手順 8 で止まって、2 回目でダウンロードする。続けて開始ページなしで変換し直す（EMSGM230E）と、needs_action は真なのに、手順 8 は 1 回目でダウンロードした（テストが通った）。",
+   "fix": "key に、要対応の中身（box_title、または upload のメッセージ ID）を入れる。そのままにするなら、DEVELOPMENT の Colab の節に、止めるのは同じ docx・同じ種類の要対応につき一度だけと書く。"
+  },
+  {
+   "lens": "regression",
+   "severity": "nit",
+   "file": "docs/FIX_PLAN.md",
+   "line": 454,
+   "problem": "「確かめた数」の「Colab の枠の HTML は、変えない方針の枠（missing・figbody・pdf・unplaced・lost）が 0.23.0 と同じ」は、fixture については正しい。しかし照合に使わなかった文字のある実際の PDF では、pdf_diff_box に pdf_ignored の新しい枠が後ろに足される（別の記事の疑いがあれば pdf_suspect も）。文書を実装に合わせて正確にしたほうがよい。",
+   "evidence": "td1 で、両方の版の colab.pdf_diff_box(res) の HTML を作って比べた。0.23.0 の 1293 文字は、作業ツリーの 2033 文字の先頭とそのまま一致し、後ろに「照合に使わなかった PDF の文字が 11 件あります（要確認）」の枠が足されていた。td3 では、0.23.0 は空文字、作業ツリーは pdf_ignored の枠（605 文字）だった。",
+   "fix": "「pdf_diff_box は、0.23.0 の枠を変えずに、pdf_ignored・pdf_suspect の新しい枠を後ろに足す」と書き直す。"
+  },
+  {
+   "lens": "regression",
+   "severity": "nit",
+   "file": "tests/test_notebook.py",
+   "line": 195,
+   "problem": "手順 5・6 のセルは、文字列が含まれるかを確かめるだけで、exec テストがない（点検の観点にある「手順 5・6・8 のセルの exec テスト」は、手順 8 にしかない）。result_boxes の呼び出しの引数の誤りや、変換の後の分岐（elif res.pdf_fallback）の誤りは、文字列の確かめでは見つからない。",
+   "evidence": "test_steps5_and_6_show_result_boxes は `in src` と index の比較だけ。生成されたセルを ruff --select F（pyflakes）で見たところ、未定義の名前はノートブックの変数（AI・PROVIDER・res など）だけで、今のコードに誤りはない。",
+   "fix": "手順 6 のセルを、fake_display と、変換を済ませた res、convert を monkeypatch した ns で exec し、AI のエラーの枠（「貼り付けた回答を読み込めませんでした」）がレポートより前に表示されることを確かめるテストを足す（任意）。"
+  }
+ ],
+ "rounds": [
+  {
+   "round": 1,
+   "fix": {
+    "changed_files": [
+     "/home/user/jstgxmlcng_JASME/src/jasme_jats/ai_assist.py",
+     "/home/user/jstgxmlcng_JASME/src/jasme_jats/cli.py",
+     "/home/user/jstgxmlcng_JASME/tools/make_notebook.py",
+     "/home/user/jstgxmlcng_JASME/notebooks/JASME_docx_to_JSTAGE_XML.ipynb",
+     "/home/user/jstgxmlcng_JASME/tests/test_floats.py",
+     "/home/user/jstgxmlcng_JASME/tests/test_figure_body.py",
+     "/home/user/jstgxmlcng_JASME/tests/test_pdfmatch.py",
+     "/home/user/jstgxmlcng_JASME/tests/test_lost_images.py",
+     "/home/user/jstgxmlcng_JASME/tests/test_notebook.py",
+     "/home/user/jstgxmlcng_JASME/tests/test_pipeline.py",
+     "/home/user/jstgxmlcng_JASME/tests/test_ai.py",
+     "/home/user/jstgxmlcng_JASME/docs/FIX_PLAN.md",
+     "/home/user/jstgxmlcng_JASME/docs/DEVELOPMENT.md",
+     "/home/user/jstgxmlcng_JASME/README.md"
+    ],
+    "summary": "D（0.23.1）の点検 1 回目の指摘を直した。直したのは should 3 件と nit 6 件（nit は全件）。docx の文字、XML・ZIP の形、レポートの文面には触れていない。\n- should 1（CLI の == 1 が別の理由で通っていた）: 次の 3 か所に --meta META_EXAMPLE を足し、要対応の key も確かめるようにした。test_floats の仮置き（[\"forced\"]）、test_floats の切れた回答（[\"partial\",\"forced\"]）、test_figure_body の仮置き（[\"forced\"]）。test_floats の仮置きでは、標準エラーにアップロード時チェックの要対応が出ないことも確かめる。partial だけの場合も足した（test_cut_response_placements_are_validated。placements は全部読めて、operations の途中で切れた回答）。要対応が [\"partial\"] だけであること、--meta 付きの CLI が 1 を返すこと、標準エラーに「要対応: AI の回答が途中で切れていました。」が出ることを確かめる。\n- should 2（level の入れ替えの守り）: test_running_heads_are_listed_in_report（docx・pdf の 2 ルート）で、actions が {pdf_diff または pdf_unfixed: 要確認, pdf_ignored: 要確認} だけであることと、needs_action が偽であることを確かめる。test_colab_box_and_cli_route では、直せなかった箇所があるとき {pdf_unfixed: 要確認} だけで、needs_action が偽であることを確かめる。partial の level は should 1 のテストで確かめている。\n- should 3（手順 8 で要確認だけなら止めない）: test_step8_does_not_stop_with_only_checks を足した。PDFCHECK をルート1 で変換すると actions は pdf_diff（要確認）だけになる。このとき 1 回の実行でダウンロードし、その後に「出版版 PDF と文字が違う箇所」の枠を出すことを確かめる。\n- nit（冒頭の並び）: test_running_heads で fidelity と DTD を不合格にして、並びが 注意（不変性）→ DTD → ルート2 の固定の案内（ルート1 では pdf_diff）→ pdf_ignored になることを確かめる。test_lost_images では、不変性の注意 → テキストボックス → 文末脚注 の並びを確かめる。\n- nit（cli の入力ファイルの確かめ）: is_file を「ないか、フォルダ」に変えた。/dev/fd/NN は 0.23.0 と同じく通り、フォルダは 2 で止まる。テストは test_cli_input_errors_exit_2 に足した（フォルダを渡す場合と、os.pipe の /dev/fd 経由で --meta を渡し 0 になる場合）。\n- nit（call_api の TypeError）: API キーが引数にも環境変数 ANTHROPIC_API_KEY にもないか、メッセージに authentication を含むときだけ「API キーが見つかりません」にする。それ以外は「AI の呼び出しに失敗しました: {e}」にする。test_call_api_other_type_error_is_not_api_key を足した。\n- nit（手順 8 で止めたかどうかの key）: 記録を docx と repr([(key, box_title, box_detail)]) と足りない画像の名前にした。DEVELOPMENT の Colab の節にもそう書いた。test_step8_stops_once_when_action_is_needed には、同じ docx を開始ページなしで変換し直すと（EMSGM106E が EMSGM230E に変わる）もう一度止まり、次の押下でダウンロードすることを足した。\n- nit（手順 6 の exec）: test_step6_shows_ai_error_box_before_report を足した。読めない回答を貼り付けて手順 6 のセルを実行すると、「貼り付けた回答を読み込めませんでした」の赤い枠がレポートの Markdown より前に出ることを確かめる。\n- nit（FIX_PLAN 454 行目）: 「pdf_diff_box は、0.23.0 の枠を変えずに、pdf_ignored・pdf_suspect の新しい枠を後ろに足す」と書き直し、td1・td3 の事実も書いた。付録 U2 の「tests/test_floats.py の 134 行目は…そのまま」も、--meta を足したことに直した。\n- 文書: FIX_PLAN の D の節（実装で決めたこと、既存テストの書き換え、テスト、確かめた数）、DEVELOPMENT（テストの段落、手順 8 の止め方）、README（終了コードの節に「AI の回答が途中で切れていた」が 1 になること、フォルダを渡すと 2 になること）を合わせた。ノートブックは python tools/make_notebook.py で作り直した。",
+    "tests_added": [
+     "tests/test_floats.py::test_cut_response_placements_are_validated（partial だけの要対応、--meta 付き CLI が 1、標準エラー。既存のテストに足した）",
+     "tests/test_floats.py::test_missing_placement_is_reported_after_ai（--meta を足した。要対応の key が forced だけ、アップロード時チェックの要対応が出ない）",
+     "tests/test_floats.py::test_cut_response_applies_only_finished_placements（--meta を足した。要対応が partial・forced）",
+     "tests/test_figure_body.py::test_unplaced_float_notice_lists_its_paragraphs（--meta を足した。要対応が forced だけ）",
+     "tests/test_pdfmatch.py::test_running_heads_are_listed_in_report（pdf_ignored・pdf_diff・pdf_unfixed が要確認、needs_action が偽、冒頭の並び）",
+     "tests/test_pdfmatch.py::test_colab_box_and_cli_route（pdf_unfixed が要確認、needs_action が偽）",
+     "tests/test_lost_images.py::test_provisional_notices_for_textbox_and_endnote（冒頭の並び: 要対応の後に暫定の知らせ）",
+     "tests/test_notebook.py::test_step8_does_not_stop_with_only_checks（新規）",
+     "tests/test_notebook.py::test_step8_stops_once_when_action_is_needed（変換し直して別の要対応が残れば、もう一度止まる）",
+     "tests/test_notebook.py::test_step6_shows_ai_error_box_before_report（新規）",
+     "tests/test_pipeline.py::test_cli_input_errors_exit_2（フォルダを渡すと 2、/dev/fd/NN は 0）",
+     "tests/test_ai.py::test_call_api_other_type_error_is_not_api_key（新規）"
+    ],
+    "pytest_result": "Python 3.13 は 686 passed、Python 3.10（venv310、PYTHONPATH=src）も 686 passed。修正前は 683 件で、新しく足したテストは 3 件。",
+    "measures": "- ruff check src tests tools: 203 件。0.23.0 の worktree の 197 件と、ファイル・コードごとに比べた。違いは cli.py の I001 が 1 件減ったことと、tests/test_notebook.py の S102（exec）が 14 件から 21 件に 7 件増えたことだけ（実装の時点で +3、今回の手順 6・8 のテストで +4）。\n- golden（23 件）: XML と AI 依頼文は 0.23.0（c/golden_final）と同じ。レポートが違うのは *_manual の 10 件で、どれも 14 章に ai_pending の 1 行（「AI の回答をまだ反映していない」）が足されただけ（diff で 1 行ずつ確かめた）。修正前と同じ結果。\n- td1〜3（--route pdf --ai manual --meta meta_example.toml）: XML と ZIP の中身（エントリごとのハッシュ）は 0.23.0 と同じ。レポートの違いは、冒頭に要確認「照合に使わなかった PDF の文字が N 件」が 1 行増えたことと、14 章に ai_pending の 1 行が増えたことだけ。終了コードは 0.23.0 の 0・0・0 から 1・1・1 になり、設計どおり（手動モードで回答なしが要対応。td3 は画像不足も要対応）。標準エラーには、要対応（ai_pending、td3 は images も）と要確認（pdf_ignored、td1 は pdf_unfixed、td3 は textbox）が出た。\n- 変異テスト: リポジトリの写しを書き換え、関係する 8 ファイルを流した（LibreOffice を並行して動かすと揺れる test_template_emf_conversion は外した。書き換えない写しは 605 passed）。指摘にあった変異は、どれも落ちるようになった。forced を要確認にする、partial を要確認にする、pdf_ignored を要対応にする、pdf_unfixed を要対応にする、手順 8 の _todo の絞り込みを外す、key を元に戻す。今回の修正の守りを外す変異も落ちる（TypeError をすべて API キーの問題にする、is_file に戻す、冒頭の早い組の並びを逆にする）。\n- 後片付け: git worktree（0.23.0）を消した。td・golden・変異の出力も消し、残りは 28K。tests と src の __pycache__ も消した。ディスクの使用率は 41%。",
+    "deviations": "- should 1 の「figbody と forced の場合」は、実際には forced だけだった。test_figure_body.py の 261 行（test_unplaced_float_notice_lists_its_paragraphs）では、cells・float_text のどちらも、要対応の key は [\"forced\"] だけ（figbody は出ない）。テストはその事実で書いた（要対応の key == [\"forced\"]）。figbody の要対応による 1 は、もとからある test_caption_less_table_becomes_figure_body（TABLEFIG、--meta 付き）が確かめている。\n- 手順 8 の key は、指摘の案の「box_title、または upload のメッセージ ID」ではなく、(key, box_title, box_detail) の repr にした。upload の box_title は件数しか含まず、EMSGM106E から EMSGM230E に変わっても同じになるため、本文（メッセージの一覧）まで入れた。セルの文字列の中に \\n を書けないので、join ではなく repr にした。\n- 冒頭の並びのテストでは、指摘の案（prov.docx）に加えて、test_running_heads に DTD の不合格を足した。要対応が 2 つ並ぶようにして、早い組の中の並びも確かめるため。\n- 文書とコードの食い違い（コードに合わせて文書を直したもの）:\n  - FIX_PLAN の「確かめた数」の「Colab の枠の HTML は、変えない方針の枠（…pdf…）が 0.23.0 と同じ」。pdf_diff_box は、照合に使わなかった文字があると pdf_ignored の枠を後ろに足す。\n  - FIX_PLAN 付録 U2 の「test_floats.py の 134 行目はそのまま」。D の後は --meta が要るので、--meta を足したと書いた。\n  - DEVELOPMENT の手順 8 の説明。止めたかどうかの記録の中身と、要確認だけなら止めないことが書かれていなかった。\n  - README の終了コードの節。AI の回答が途中で切れていたときの 1（0.23.0 では 0）が書かれていなかった。フォルダを渡したときの 2 も足した。\n- 直さなかったもの: FIX_PLAN の D の節と付録 U2・M4 の行番号（0.18.1 当時のまま。節に注記がある）。test_floats の docstring と FIX_PLAN の「付録の 134 行目」の行番号も、今のファイル（169 行付近）とは合わないが、付録の他の行番号と同じく当時のまま残した。",
+    "open_issues": "- 手順 8 の止めた記録には box_detail の全文が入る。DTD のエラーや upload の一覧が長いと記録の文字列も長くなるが、globals に置くだけなので害はない。\n- 冒頭の並びのテストで確かめているのは、早い組（要対応）、固定の案内、PDF の知らせ、暫定の知らせの順まで。PDF の知らせどうしの並び（pdf_fallback → … → pdf_ignored）は pdf_actions の並びに任せていて、テストで守っているのは pdf_diff・pdf_unfixed → pdf_ignored だけ。\n- 既に FIX_PLAN の「残る限界」にあるものは、そのまま残る。照合に使わなかった文字の要確認が td1〜3 で毎回出ること、コマンドラインの手動モードの最初の実行が 1 になること。\n- E をやるかの判断はまとめ役に任せる（この担当の範囲外）。"
+   },
+   "findings": [
+    {
+     "lens": "principle",
+     "severity": "nit",
+     "file": "docs/FIX_PLAN.md",
+     "line": 519,
+     "problem": "「D（0.23.1）で触ったファイル」の tests の一覧に test_floats.py と test_lost_images.py がない。点検 1 回目の修正で、test_floats は CLI の --meta と要対応の key の確かめを、test_lost_images は冒頭の並びの確かめを足しているので、どちらも D で変更している。同じ節の「既存テストの書き換え」と、DEVELOPMENT のテストの段落には、この 2 つが書かれている。",
+     "evidence": "git diff --stat で tests/test_floats.py（27 行）と tests/test_lost_images.py（7 行）が変更されている。FIX_PLAN 519 行付近の一覧は「tests の conftest.py・test_pipeline.py・test_colab.py・test_notebook.py・test_pdfmatch.py・test_ai.py・test_figure_body.py」だけ。",
+     "fix": "一覧に test_floats.py・test_lost_images.py を足す（コードに合わせて文書を直す）。"
+    },
+    {
+     "lens": "regression",
+     "severity": "nit",
+     "file": "docs/FIX_PLAN.md",
+     "line": 519,
+     "problem": "「D（0.23.1）で触ったファイル」の一覧が実際の差分と合わない。tests/test_floats.py・tests/test_lost_images.py（点検 1 回目の修正で変えた）、docs/fix_plan_repro_tests.py、pyproject.toml・src/jasme_jats/__init__.py（版上げ）、notebooks/JASME_docx_to_JSTAGE_XML.ipynb（作り直し）が載っていない。引き継いだ人が D の範囲を確かめるときに漏れる。",
+     "evidence": "git diff --stat（HEAD 3e0f0d6 との比較）では 24 ファイルが変わっている。519 行の一覧にある tests は conftest・test_pipeline・test_colab・test_notebook・test_pdfmatch・test_ai・test_figure_body だけで、src は report・pipeline・colab・cli・ai_assist だけ。tools/make_notebook.py の「ノートブックは作り直し」はある。",
+     "fix": "一覧に、tests の test_floats.py・test_lost_images.py、docs の fix_plan_repro_tests.py、版上げの pyproject.toml・src/jasme_jats/__init__.py、作り直した notebooks/JASME_docx_to_JSTAGE_XML.ipynb を足す。"
+    },
+    {
+     "lens": "regression",
+     "severity": "nit",
+     "file": "docs/fix_plan_repro_tests.py",
+     "line": 1,
+     "problem": "D の注記では、再現と直した後の振る舞いのテストを足した先を test_pipeline・test_colab・test_notebook・test_pdfmatch・test_ai と書いている。実際には test_floats.py・test_figure_body.py・test_lost_images.py にも足した。",
+     "evidence": "git diff docs/fix_plan_repro_tests.py の追加行。test_floats（切れた回答の --meta 付き CLI・partial だけの場合）、test_figure_body（仮置きの要対応）、test_lost_images（冒頭の並び）は、D のテストとして変えている。DEVELOPMENT のテストの段落には、この 3 つも載っている。",
+     "fix": "注記の一覧に tests/test_floats.py・tests/test_figure_body.py・tests/test_lost_images.py を足す（DEVELOPMENT のテストの段落と合わせる）。"
+    }
+   ],
+   "failedLens": []
+  }
+ ],
+ "remaining": [
+  {
+   "lens": "principle",
+   "severity": "nit",
+   "file": "docs/FIX_PLAN.md",
+   "line": 519,
+   "problem": "「D（0.23.1）で触ったファイル」の tests の一覧に test_floats.py と test_lost_images.py がない。点検 1 回目の修正で、test_floats は CLI の --meta と要対応の key の確かめを、test_lost_images は冒頭の並びの確かめを足しているので、どちらも D で変更している。同じ節の「既存テストの書き換え」と、DEVELOPMENT のテストの段落には、この 2 つが書かれている。",
+   "evidence": "git diff --stat で tests/test_floats.py（27 行）と tests/test_lost_images.py（7 行）が変更されている。FIX_PLAN 519 行付近の一覧は「tests の conftest.py・test_pipeline.py・test_colab.py・test_notebook.py・test_pdfmatch.py・test_ai.py・test_figure_body.py」だけ。",
+   "fix": "一覧に test_floats.py・test_lost_images.py を足す（コードに合わせて文書を直す）。"
+  },
+  {
+   "lens": "regression",
+   "severity": "nit",
+   "file": "docs/FIX_PLAN.md",
+   "line": 519,
+   "problem": "「D（0.23.1）で触ったファイル」の一覧が実際の差分と合わない。tests/test_floats.py・tests/test_lost_images.py（点検 1 回目の修正で変えた）、docs/fix_plan_repro_tests.py、pyproject.toml・src/jasme_jats/__init__.py（版上げ）、notebooks/JASME_docx_to_JSTAGE_XML.ipynb（作り直し）が載っていない。引き継いだ人が D の範囲を確かめるときに漏れる。",
+   "evidence": "git diff --stat（HEAD 3e0f0d6 との比較）では 24 ファイルが変わっている。519 行の一覧にある tests は conftest・test_pipeline・test_colab・test_notebook・test_pdfmatch・test_ai・test_figure_body だけで、src は report・pipeline・colab・cli・ai_assist だけ。tools/make_notebook.py の「ノートブックは作り直し」はある。",
+   "fix": "一覧に、tests の test_floats.py・test_lost_images.py、docs の fix_plan_repro_tests.py、版上げの pyproject.toml・src/jasme_jats/__init__.py、作り直した notebooks/JASME_docx_to_JSTAGE_XML.ipynb を足す。"
+  },
+  {
+   "lens": "regression",
+   "severity": "nit",
+   "file": "docs/fix_plan_repro_tests.py",
+   "line": 1,
+   "problem": "D の注記では、再現と直した後の振る舞いのテストを足した先を test_pipeline・test_colab・test_notebook・test_pdfmatch・test_ai と書いている。実際には test_floats.py・test_figure_body.py・test_lost_images.py にも足した。",
+   "evidence": "git diff docs/fix_plan_repro_tests.py の追加行。test_floats（切れた回答の --meta 付き CLI・partial だけの場合）、test_figure_body（仮置きの要対応）、test_lost_images（冒頭の並び）は、D のテストとして変えている。DEVELOPMENT のテストの段落には、この 3 つも載っている。",
+   "fix": "注記の一覧に tests/test_floats.py・tests/test_figure_body.py・tests/test_lost_images.py を足す（DEVELOPMENT のテストの段落と合わせる）。"
+  }
+ ],
+ "incomplete": null
+}

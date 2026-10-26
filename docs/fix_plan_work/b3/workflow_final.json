@@ -1,0 +1,663 @@
+{
+ "design": {
+  "design_doc": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/fb4d86bb-6ffb-5369-990a-10fe830c8789/scratchpad/b3/DESIGN_B3.md",
+  "decisions": "N17（AI でも位置を決められない図表）: アンカー段落のすぐ後ろに仮に置く。これは items（build_body に渡る本文の領域のブロックの並び）での差し込み位置 src_index[アンカー段落]+1 で、AI の after と同じ形にする。アンカー段落が本文の段落（plan.body_seq）でなければ本文の最後に置く。本文の最後は BODY_END=float(\"inf\") で、本文の領域の最後の要素の後ろ（最後の章の終わり、後付けの前）。中身を組めない図形は、本文の冒頭へ移すのをやめる。役割は今までどおり build_body のループで決め、そのうえで自分の差し込みの一覧に入れる（raw: 要素の id → 一覧）。こうすると、どの図表もキャプションの番号順（float_number）に並ぶ。番号がなければ後ろに置き、同じ番号なら docx の順。手動モードで回答を貼り戻す前も同じ経路を通る。\nB3 では、アンカー段落が本文の段落でない場合は起きない（place_floats は本文にアンカーのある図形だけを扱い、図形の中に図形はない）。分岐は provisional_target に切り出して単体テストで確かめ、F（N7）がそのまま使えるようにする。\n\nN16（AI が本文の外の段落を指定した図表）: _placement_problem は変えない（不採用のまま）。float_placements で次の条件を満たす指定を、本文の最後に置く印（{\"where\":\"end\"}）として ends に記録する。条件は、after の region が AFTER_BODY_REGIONS（notes/ack/fn/refs/back/front_en/app）にあり、位置を決められない図形で、まだ採用された指定がないこと。不採用の理由には「本文の最後に仮に置いた」と書き足す。組み合わせは AI の items を使わず、機械的に組めれば組み、組めなければ中身をそのまま出す。front_ja・図形の中・セル・存在しない ID は N17 の扱い（アンカー段落の後ろ）にする。同じ図形について後ろに正しい指定があれば、そちらを採用する（ends は out と別に持つ）。\n\n知らせ: 項目は分けない（冒頭・3章・14章・Colab・CLI は 1 つの項目のまま）。図表ごとに plan.float_place(fid) で置いた位置を示す（「段落「…」の後ろ」または「本文の最後」）。アンカー段落が空なら、前にある文字のある段落で示す。本文の最後に置いた図表だけ、3章と Colab で理由を添える。要約の行には内訳を出す（例「アンカー段落の後ろ 2 件・本文の最後 1 件」）。文言の案はすべて設計書 1.6 にある。\n\nN15: placements → operations → notes の順を、RESPONSE_SCHEMA（properties と required）・SYSTEM_PROMPT・MANUAL_EXAMPLE・FIELD_GUIDE・manual_prompt で指示する。途中で切れた回答から閉じている placements の要素だけを読む案は採る（API モードでは順を変えるだけでは何も残らないため）。読む範囲は厳密に決める。\n- json.loads の誤りが末尾で切れた形（cut_at_end）のときだけ読む。\"Unterminated string\"、または \"Expecting\" で、残りが空か true/false/null/数の書きかけ。\n- 最上位の JSON を、キーと値の組ごとに raw_decode で読む。\n- placements は、最後まで書かれた要素だけを集める。途中で切れた要素とその後ろは読まない。\n- operations と notes は使わない。\n読めた要素は float_placements で検証する。知らせは AIOutcome.partial に入れ、要対応としてレポートの冒頭・2章・14章、Colab の枠、CLI に出す。API の 4 社は、上限で切れたときに raw を残して cut=True にする。閉じのない ```json は、最後までを JSON として扱う（_json_text）。\n却下した案: 切れた operations の要素も読む案、閉じ括弧を補う案。決めなかったこと: 回答を短くさせる指示、Gemini の propertyOrdering。\n\nN18: float_mechanical の最初で cell_figures を試す。条件は、表がちょうど 1 つで、表の外にキャプション・文字・画像・グループ画像がないこと。戻り値は 3 通り:\n- False: この形ではない。今までの扱いに進む。\n- None: 組み方が決まらないので AI に任せる。表キャプションがある、キャプション以外の文字や入れ子の表がある、図キャプションが 2 つ以上で画像とキャプションが別のセルにある、のどれか。\n- 組んだ要素: 図キャプションが表全体で 1 つなら、全セルの画像で図 1 つ。2 つ以上なら、どのセルも「画像とキャプション 1 つ」か「空白だけ」のときに、セルごとの図。\n表は出さない（セルにはキャプション以外の文字がないので落ちない。空白は exclude_blank）。画像と文字が同じ段落は決定事項 1 と同じ扱い。振る舞いの変化: 図の左上がアンカー段落にある図形で None になるものは、AI なしでは止まる。\n\nN19: assemble_floats で画像が見つからないとき、table_for_figure を使う。captions_below（下）なら直前、上なら直後の、キャプションのない表を FigNode.tables に入れる（決定事項 22）。間にほかの段落があるときは組まない（空白は flat にない）。上の場合、直後の表の次が表キャプションなら組まない。要対応（plan.figure_issues）にするのは、近くに表の候補があるのに組めなかったときだけ（理由は 6 通り）。候補がないものは今までどおり決定だけにする（sample_edge のレポートと依頼文は変えない）。知らせは 3章（種類「図の本体」）、冒頭、14章、Colab の figure_body_box、CLI に出す。終了コードは変えない。",
+  "changes": "structure.py:\n- 定数 BODY_END と AFTER_BODY_REGIONS を足す。\n- FloatInfo に where / end_why / end_after を足す。\n- ArticlePlan に figure_issues と float_place(fid) を足す。\n- pipeline._float_caption を structure.float_caption に移す。\n- build_body: raw の差し込みへ振り分ける（out = raw.get(id(b), flat)）。order=-1 の行は消す。\n- place_floats: 戻り値を (rest, inserts, raw) にする。provisional_target を新設する。決定の文言を「指定がなければ{place}に仮に置く」にし、docstring も直す。\n- float_mechanical の先頭に N18 の分岐を入れる。cell_caption と cell_figures を新設する。\n- assemble_floats で table_for_figure（新設）を呼ぶ。\n\nai_assist.py:\n- RESPONSE_SCHEMA の順、SYSTEM_PROMPT への 1 文、MANUAL_EXAMPLE・FIELD_GUIDE の順、manual_prompt の書き方の項目。\n- AIOutcome に cut と partial を足す。\n- call_api / call_openai / call_sakana / call_gemini: 上限で切れたら raw を残して cut=True にする。\n- _json_text、cut_at_end、parse_cut_response を新設する。parse_response の取り出しと案内も直す。\n- float_placements に ends の処理を入れる。\n\npipeline.py:\n- _read_cut と PARTIAL_MSG を足し、API と手動の読み取りを直す。\n- output_note、forced_floats・unresolved_after の文言（near を消し、3 通りの書き出しにする。REGION_JA を使う）。\n- figbody の 3章の行。\n- Result.forced_floats のコメント。\n\nreport.py: UNRES_JA[\"figbody\"]、float_places(plan) を足す。要約の行、冒頭（図表の位置・図の本体・途中で切れた回答）、2章、14章、render_ai_only を直す。\n\ncolab.py: unplaced_box の文言を図形ごとの位置にする。figure_body_box を新設する。\n\ncli.py: 位置の表示、partial、図の本体の要対応。\n\ntools/make_notebook.py: 手順 5 と 6 に partial の枠と figure_body_box を足す。その後ノートブックを作り直す。\n\nほか:\n- 版を 0.22.0 にする（__init__.py・pyproject.toml）。\n- tests/make_fixtures.py に make_b3_cells、make_b3_tablefig、make_b3_place を足し、__main__ と docstring にも加える。conftest に CELLS・TABLEFIG（ALL_DOCS に入れる）と PLACE を足す。\n- docs/DESIGN.md の 5章・6.1・7章、DEVELOPMENT のテストの節、FIX_PLAN の B3 の記録を直す。\n- pdfmatch.py、pdfdocx.py、builder.py、docx_reader.py、floats.py、fidelity.py は触らない。\n\n試作は scratchpad/b3/design/src にあり、差分は proto_*.diff。設計書の 9章に、試作から直すべき点を書いた。",
+  "tests": "fixture（架空の文字で make_fixtures.py に足す。案は scratchpad/b3/design/fixtures_b3.py。その関数だけを呼んで作る）:\n- make_b3_cells → sample_b3_cells.docx（ALL_DOCS に入れる）\n  - s1: 1行2列。各セルに画像と図1・図2。\n  - s2: 2行1列。1行目に画像2つ、2行目に図3。\n  - variant（テストの中で tmp_path に作る）: columns、text（セルに「（a）」）、tabcap、down、mixed。\n- make_b3_tablefig → sample_b3_tablefig.docx（ALL_DOCS に入れる）\n  - 図1: 表の直後の図キャプション（組む）。\n  - 図2: 表との間に段落がある（要対応）。\n  - 図3: 表キャプションの付いた表の直後（要対応）。\n  - variant above: 図キャプションを図の上に置く原稿で、直後の表を組む。\n- make_b3_place → sample_b3_place.docx（AI が要るので ALL_DOCS に入れない）\n  - s1: アンカー段落から 3 cm 下。\n  - s2・s3: 同じアンカー段落に、docx の順で図3・図2。\n  - s4: 空の段落に結び付いた図。\n  - 注の節を置く。\n  - variant outside: 注の段落に図形を結び付ける。\n\n模擬の AI 回答は ai_response_sample_float.json から、テストの中で作る:\n- placements が先頭の回答。\n- 途中で切れた回答 (a)〜(d): (a) operations の文字列の途中、(b) \"operations\": の直後、(c) 2つ目の placements の要素の途中、(d) 閉じのない ```json。\n- 読まない回答: (e) operations が先頭で切れたもの、(f) 途中に飾りの引用符があるもの。\n- 注・引用文献・英文要旨・題目・図形の中を after にした回答。\n- placements が空のもの、一部の図形を抜いたもの。\n\n確かめること:\n- 今の test_floats の 4 件を直す（本文の冒頭 → アンカー段落の後ろ、文言）。\n- N17: 番号順、空のアンカー段落、provisional_target の単体テスト。\n- N16: 本文の最後に置く、不採用の理由、3章の詳細、要約の内訳、後ろに来た正しい指定が優先されること。\n- 本文の外に結び付いた図形は 0.21.0 と同じ扱い（F で扱う）。\n- N15: 見本・スキーマ・依頼文の順。parse_cut_response が (a)〜(d) を読み、(e)(f) は読まないこと。Unterminated string の案内。(c) を変換すると partial が入り error が空になり、s1 だけ採用され、残りはアンカー段落の後ろに forced として置かれ、知らせが出ること。test_ai で 4 社が raw/cut を返し、API モードで一部が反映されること。\n- N18: AI なしで図に組めること（graphic の数、table-wrap がないこと、決定、画像、不変性）。columns/text/tabcap では AIRequiredError。down と mixed。\n- N19: 組めること、figure_issues と各知らせ、above の場合、sample_edge が変わらないこと。\n- test_colab: unplaced_box を実際の plan で確かめる。figure_body_box。",
+  "acceptance": "pytest: 3.13・3.10 ともすべて合格。tests/ に一時ファイルや __pycache__ を残さない。\n\nruff（ruff check src tests tools）: 0.21.0 にない指摘を増やさない（この環境では 0.21.0 でも 197 件ある。ファイルと規則で比べる）。\n\ngolden（19件）で違ってよいもの:\n- prompt 10件（*_manual の 8件と sample_full_ai・sample_float_ai）の N15 の文言。sample_float はさらに、段落の場所（第N要素）と決定の文言。\n- sample_float_manual の xml・report。s1・s2・s3 がアンカー段落の後ろに来て、F 番号が振り直され、文言が変わる。\n- それ以外の xml・report（split の 7件、pdfcheck の 2件、sample_float_ai を含む）は同じであること。試作で確かめた。\n- 新しく足す 4件（sample_b3_cells と sample_b3_tablefig の manual・split）は合格することだけを見る。\n\ntd1〜3（--ai manual。回答なしと、空の回答を貼ったとき）の、試作で確かめた結果:\n- 共通: 不変性・最終・DTD・J-STAGE のチェックは合格。XML に入らなかった画像は 0、出力した画像の数は同じ。本文の段落の文字と並びは 0.21.0 と同じ（ハッシュが一致）。\n- td1: 冒頭にあった F1〜F4・T1・T2 が、それぞれのアンカー段落の後ろに移る。F 番号はキャプションの番号順になる。\n- td2: 冒頭の F1・T1・T2 がアンカー段落の後ろに移る。図3・図4 は N18 で図になる。図2 は N19 で fig の中の table-wrap になる。T 番号が詰まる。「対応する図が見つからない」4件と警告1件がなくなる。不変性チェックの「XML に出力」の件数が 2 減る（セルの画像だけの段落が graphic になるため）。\n- td3: XML・レポートとも同じ。\n\n利用者の指摘のうち、「XML の冒頭に図表が来る」は td1・td2 で起きなくなる。「図1 が表のように見える」は、決定事項 22 のとおり fig の中の table-wrap のまま（変えるのは位置だけ）。td2 で表に見えていた図3・図4 は図になる。",
+  "risks": "1. アンカー段落の後ろは近い位置にすぎない。2段組ではアンカー段落と別の段・ページにある図が多い（td1 の s6 は 9 cm 下）。手で移す作業は残る。\n2. アンカー段落が画像の段落でその後ろに図キャプションが続くとき、差し込みが 2つ以上あると画像とキャプションが組にならない（前 2 要素しか探さない）。AI の指定でも同じ。\n3. 図の左上がアンカー段落にある図形で、セルに画像と図キャプションがあるのに組み方が決まらないものは、0.21.0 と違い AI なしでは止まる（AIRequiredError）。\n4. N19 の誤り: 別の理由で画像が見つからない図キャプションの隣に、たまたまキャプションのない表があると、その表を図に入れてしまう。captions_below は、画像の図がない原稿では「下」とみなす。\n5. N18 は図形の中の表だけが対象。本文の表のセルに画像と図キャプションが並ぶものは、今までどおりキャプションのない表として出る。\n6. 途中で切れた回答から反映するのは placements だけ。リンクは出し直しが要る。API モードで出し直しても、また切れることがある。\n7. 回答を placements から書くかは AI 次第。Claude・ChatGPT・Gemini・Sakana・チャットとも試験運用で確かめる。先頭に書かれずに切れたときは、0.21.0 と同じく何も反映しない。\n8. 本文の外に結び付いた図形と、AI がアンカー段落を exclude にした図形は、今までどおりの扱いになる（F の N7 で扱う）。\n9. F・T 番号、段落の場所、決定の番号（M-00N）が 0.21.0 と変わる。AI のリンク先は retarget_ops で読み替える。\n10. 3章の「場所」は、空のアンカー段落では段落 ID のまま。\n11. 試作は確かめ用なので、設計書 9章の差し替えが必要（文言の重なり、API の読み取りの順、他の 3 社、colab・cli・notebook、ruff の 4件）。\n\n設計の作業で作ったもの:\n- tests/__pycache__: 私のスクリプトが作ったので消した。\n- 消したもの: 0.21.0 の td の変換出力、写したリポジトリ、試作の docx、golden の本体（manifest は残した）。\n- 残したもの: scratchpad/b3/design の下の結果の JSON・ログ・スクリプト・試作の src・差分。td_*.json は構造の要約だけで、レポートの文字は取り除いた。\n- 実際の論文の文字は、設計書と試作に書き写していない。"
+ },
+ "oracle": {
+  "dir": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/fb4d86bb-6ffb-5369-990a-10fe830c8789/scratchpad/b3/oracle/ （このパスは /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/b3/oracle/ と同じ場所。中身は次のとおり）\n- gen_b3.py: 生成器。tests/make_fixtures.py の部品（Builder・front_ja・front_en・tail・para・drawing・textbox・group・table・cell・png_bytes）を import して docx を作る。make_fixtures.py は変えていない。sys.dont_write_bytecode を立てているので tests/__pycache__ はできない（できていないことも確かめた）。\n- cases/<ID>/doc.docx と cases/<ID>/case.json（30 件。ほかに一覧の cases.json）。case.json には、題名、AI の方法（none/manual）、模擬の AI 回答の雛形、切る位置（cut）、期待（expect）、exact/either の区別、注記が入る。docx は合わせて 1.5MB で、run_b3.py の入力なので残した。python gen_b3.py でいつでも作り直せる。\n- run_b3.py: 期待と実際を比べる道具。\n- check_overlap.py: 架空の文字が実際の論文と重なっていないかを確かめる。\n- base_run.log と out_base/: 0.21.0 で流した結果。out_base/results.json と、ケースごとの run/ に変換レポート・AI依頼文.txt・stdout.txt・response.json がある。docx・xml・zip・画像は消した。\n- 回答の中の段落 ID は雛形では \"@p:<段落の冒頭の文字>\" と \"@img:<図形ID>\"（その図形の中の画像だけの段落）と書いてある。run_b3.py が依頼文の段落一覧から実際の ID に置き換え、その結果を out/<ID>/response.json に保存する。",
+  "cases": "共通の文書: 和文の冒頭、1 章（段落 A「架空の観測では…」、B「この段落に観測図の図形が結び付いている…」、C、D「図1に示したように…」）、2 章（E「以上の観測から…」、F「今後は…」）、注（N1「1) この観測は…」、N2）、引用文献 1 件、英文の部分。図形は 2.5 cm 以上下にずらしたテキストボックス（画像の段落と図キャプション「図1　雲の形の分類」）で、位置を決められない。どのケースでも、終了コードが 2 でなければ次も確かめる: 不変性・最終出力・DTD・J-STAGE のチェックがすべて合格、「XML に入らなかった画像」が出ない。\n\n■ N16・N17: 位置を決められない図表の置き場所（AI は手動モード）\n- P01 [exact] B に図形、回答を貼る前 → 図1 が B のすぐ後ろ。CLI・レポート 1 章／3 章（と手動モードの案内）に「本文の冒頭」がない。図表の位置の要対応は出ない。終了コード 0。\n- P02 [exact] B に図形、placements が空 → B のすぐ後ろ、要対応あり、「本文の冒頭」なし（CLI・1／3／14 章）、終了コード 1。\n- P03 [exact] 回答が after=D → D の直後、要対応なし、終了コード 0。\n- P04 [exact] 回答が after=注の段落 N1 → 本文の最後（本文の要素の並びの最後）。要対応の文言に「最後／末尾／終わり」のどれかがある。「本文の冒頭」なし、終了コード 1。\n- P05 [exact] 回答が after=引用文献の段落 → P04 と同じ。\n- P06 [exact] 図形が注の段落 N1 に結び付き、回答を貼る前 → 本文の最後。\n- P07 [exact] P06 の文書で placements が空 → 本文の最後、要対応（文言に「最後」など）、終了コード 1。\n- P08 [exact] 図形が引用文献の段落に結び付き、placements が空 → 本文の最後、要対応、画像を失わない。\n- P09 [exact] 図形が和文の冒頭（副題）の段落に結び付き、placements が空 → 本文の最後、図1 が graphic つきの図になる、要対応、終了コード 1、画像を失わない。\n- P10 [either] 図形が和文の冒頭の最後の段落（セクション区切り）に結び付き、placements が空 → 本文の最初か最後のどちらか。図1 は graphic つき、「本文の冒頭」の文言なし。要対応の有無は問わない。\n- P11 [exact] 同じ段落 B に図1・図2 の 2 つの図形（docx の順も番号順）、placements が空 → B の後ろに 図1・図2、要対応あり、終了コード 1。\n- P12 [either] P11 で、docx では図2 の図形が先 → B の後ろに 図1・図2 か 図2・図1 のどちらか。\n- P13 [either] 図1 は B、図2 は E に結び付く。placements を先頭に書き、s1 は閉じて s2 が \"caption\": [ で切れた回答 → 「途中で切れ」の案内が出る。図1 は D の後（閉じた要素を読んだ場合）か B の後。図2 は E のすぐ後ろ。「本文の冒頭」なし。\n- P14 [exact] operations・notes の後の placements が s1 の途中で切れた回答 → 案内が出る。図1 は B の後、図2 は E の後。\n- P15 [exact] s1 の reason の文字列の途中で切れた回答（Unterminated string）→ 案内が出る（N15）。図1 は B の後、図2 は E の後。\n- P16 [either] placements は先頭で閉じ、後ろの operations の reason の文字列の途中で切れた回答 → 案内が出る。両方とも答えた位置（D の後・F の後）か、両方ともアンカー段落の後（B の後・E の後）のどちらか。\n- P17 [exact] グループ図形（縦の位置がページ基準）、placements が空 → B の後、graphic つき、要対応、終了コード 1。\n\n■ N18: 表のセルに画像とキャプションが並ぶ図形（図形の左上はアンカー段落の左上で、位置は機械的に決まる。--ai none）\n- T01 [exact] 1 つのセルに画像とキャプション → 終了コード 0。アンカー段落の前に図1（graphic つき、table-wrap なし）。本文に表が残らない。\n- T02 [exact] 横に並んだ 2 つのセルに、それぞれ画像とキャプション → アンカー段落の前に 図1・図2（どちらも graphic つき）。表が残らない。\n- T03 [exact] 画像の行とキャプションの行が別（2 列）→ T02 と同じ。\n- T04 [either] 2 行目のセルが 図1 のキャプションと表1 の表キャプション → 次のどれか: (a) 終了コード 2（AI に任せる）、(b) 今までどおり表のまま、(c) 図1 だけ組んで残りを要対応で知らせる。どの場合も、キャプションが「表」で始まる図は作らない。\n- T05 [either] 2 行目が 図1 のキャプションと、キャプションでない文字 → 終了コード 2 か、今までどおり表のまま。\n- T06 [either] T03 と同じ図形を 2.5 cm 下にずらし、回答を貼る前 → アンカー段落の後に、図1・図2（組んだ場合）か表のまま。「本文の冒頭」なし、終了コード 0。\n\n■ N19: 本文の流れの中の表と、画像のない図キャプション（--ai none）\n- U00 [exact] 対照（表キャプションつきの表と、画像のある図）→ 表1・図1 の順、要対応なし。\n- U01 [exact] 表の直後に画像のない図キャプション → 図1 の中に table-wrap（決定事項 22）、表は残らない、要対応なし。並びは「前の段落・図1・後の段落」。\n- U02 [either] キャプションが表の上 → 組む（表が残らない）か、組まずに要対応で知らせるか。\n- U03 [exact] 表とキャプションの間に本文の段落 → 組まない（図1 に table-wrap なし、表は残る）、要対応あり。\n- U04 [exact] 表に表キャプション（表1）がある → 組まない、表1 は表のまま、要対応あり。\n- U05 [exact] 表・画像の段落・図キャプションの順 → 図1 は graphic つきで table-wrap なし、表は残る（キャプションに画像があるので N19 は当てはまらない）。\n- U06 [exact] テキストボックス（アンカー段落の位置）の中の表と画像のない図キャプション → アンカー段落の前に、table-wrap 入りの図1、終了コード 0（今までの動きを守るためのケース）。",
+  "runner": "1. cd /tmp/claude-0/-home-user-jstgxmlcng-JASME/fb4d86bb-6ffb-5369-990a-10fe830c8789/scratchpad/b3/oracle\n2. （docx を作り直すときだけ）PYTHONDONTWRITEBYTECODE=1 python gen_b3.py [リポジトリ]。既定のリポジトリは /home/user/jstgxmlcng_JASME。\n3. PYTHONDONTWRITEBYTECODE=1 python run_b3.py --src <比べる src。例: /home/user/jstgxmlcng_JASME/src または worktree の src> --out <出力先> [--only P01,T02] [--keep]\n\n動き:\n- ケースごとに `cd /tmp && PYTHONPATH=<src> python -m jasme_jats doc.docx --meta examples/meta_example.toml --route docx --ai <none|manual> [--ai-response response.json] --out <出力先>/<ID>/run` を実行する。\n- 回答のあるケースでは、その前に回答なしの手動モードで pre/ に依頼文を作り、段落 ID を読み替え、cut の位置で回答を切ってから渡す。\n- 結果は 1 件ずつ OK/FAIL で出し、FAIL には外れた期待とその根拠（〔〕の中）を書く。最後に「n/30 件が期待どおり」と出し、全件 OK なら終了コード 0。<出力先>/results.json には、実際の値（終了コード、本文の要素の並び、図の組み方、要対応の行、途中で切れた案内の有無）と、判定を書く。\n- --keep を付けなければ、docx・xml・zip・画像は消す。\n\n比べ方:\n- 本文の要素の並び: body の中で sec か body の直下にある p（文字の冒頭）、fig（\"fig:\" とキャプションの先頭の語）、fig の外の table-wrap（\"tw:\" とキャプションの先頭の語。キャプションがなければ \"-\"）を順に並べる。tests/test_floats.py の body_sequence と同じ考え方。\n- 要対応: レポートの冒頭と 1 章で「要対応」を含む行（表の行を除く）。図表の位置についての要対応は、そのうち「図表／図形／位置」を含む行。\n- 文言: CLI の出力、レポートの 1 章・3 章・14 章に「本文の冒頭」があるかを見る。\n\n架空の文字の確かめ: python check_overlap.py。docx の段落と回答の reason・notes を、tests/private の docx 3 件・PDF 8 件と比べる。結果は 12 文字以上の一致 0 件（59 段落と 1030 段落・ページを比べた）。",
+  "base_result": "0.21.0（作業ツリーの今の src、45d8314）では 7/30 件が期待どおりで、23 件が外れた。外れたものが B3 で直す対象。ログは /tmp/claude-0/-home-user-jstgxmlcng-JASME/fb4d86bb-6ffb-5369-990a-10fe830c8789/scratchpad/b3/oracle/base_run.log、詳しい値は out_base/results.json。\n\n期待どおりだった 7 件: P03（正しい after）、P10、T04、T05、U00、U05、U06。T04・T05 が通ったのは「今までどおり表のまま」の場合として。\n\n外れた 23 件:\n- 「本文の冒頭」に置く（N17）: P01・P02・P11・P12・P14・P15・P17 で、図表が本文の要素の最初に来る。CLI に「位置を決められなかった図表を本文の冒頭に仮に置きました」と出て、レポートの 1 章・3 章・14 章（P01 では手動モードの案内）にも「本文の冒頭」が残る。\n- 注・引用文献の後ろと答えた回答（N16）: P04・P05 とも本文の冒頭に置かれ、要対応の文言は「本文の冒頭に仮に置いています」のまま。\n- 本文の外の段落に結び付いた図形は、どれも「位置を決められなかった図表」として扱われず、本文の最後に来ない（ほかのケースで足りないもの）:\n  - P06・P07（注）: 図が fn の中に inline-graphic とキャプションの文字として入る。要対応は出ず、終了コード 0。\n  - P08（引用文献）: 図形の中身が引用文献の項目（B2・B3）になり、画像が XML に入らない。要対応は「XML に入らなかった画像」だけ。\n  - P09（副題）: 冒頭部の装飾として除外され、画像が XML に入らず、図1 もない。\n- 途中で切れた回答（N15）:\n  - P13・P14（Expecting… で回答の最後で切れた）: 案内は出るが、閉じている s1 も含めて placements がすべて失われ、本文の冒頭に置かれる。\n  - P15・P16（Unterminated string）: 案内が出ない。P16 は placements が先頭で閉じているのに失われる。\n- N18:\n  - T01・T02・T03: 図形を表（tw:-）のままアンカー段落の前に出し、図に組まない（AI なしでも止まらない）。\n  - T06: 表のまま本文の冒頭に置き、文言にも「本文の冒頭」が残る。\n- N19:\n  - U01: キャプションのない table-wrap と、キャプションだけの fig（graphic・table-wrap なし）が並ぶ。td2 の 3 章の T5→F2 と同じ形。\n  - U02: 同じく組まず、要対応も出ない。\n  - U03・U04: 組まない点は期待どおり。ただし要対応が出ない。\n\nどのケースでも、不変性・最終出力・DTD・J-STAGE のチェックは合格。XML に入らなかった画像は P08・P09 の 2 件だけ。",
+  "notes": "- 実装・DESIGN_B3.md と、structure.py の place_floats・float_mechanical・assemble_floats は読んでいない。0.21.0 の動きは、python -m jasme_jats を実行した出力だけで確かめた。そのほかに読んだのは、指定のもの（FIX_PLAN の B3 と決定事項 21・22、DESIGN 5 章・6.1、ai_assist の書式、make_fixtures の部品、test_floats、模擬回答）と、文言を探すための grep 1 回（ai_assist の「途中で切れ」、cli・report の「入らなかった」）だけ。\n- td1・td2 の 0.21.0 の出力の構造（タグと文字数だけ。文字は書き写していない）から、次のことが分かった。\n  - N19 の実例は、図形の中ではなく本文の流れの中にある（td2 の 3 章で、キャプションのない table-wrap T5 の直後に、キャプションだけの fig F2）。そこで U01〜U05 は本文の流れの中のケースにし、図形の中の形は U06（今までの動きを守るケース）にした。\n  - N18 の実例は td2 の s2（キャプションなし／中身: 表）。\n- 判断を含む期待で、まとめ役に見てほしいもの:\n  1. P06〜P09（本文の外の段落に結び付いた図形）を exact で「本文の最後・要対応」とした。根拠は、決定事項 21 の「アンカー段落が本文でなければ本文の最後」と、FIX_PLAN のテストの項目「本文の外の段落に結び付いた図形」。ただし 0.21.0 は、これらを「位置を決められなかった図表」にしていない（注では fn に入れ、引用文献・冒頭では画像を失う）。B3 の設計がこれを対象外とするなら、P06・P07 は either に変える（fn に残す案も許す）のが妥当。P08・P09 は、0.21.0 でも「XML に入らなかった画像」になるので、直すほうがよい。\n  2. N18 の T01〜T03 は、図形をアンカー段落の位置に置き（位置は機械的に決まる）、組み方だけを見た。図形の位置が決まらないときに組み方まで機械的にするかは決めかねるので、T06 は either にした。T04・T05（組み方が一つに決まらない形）では、0.21.0 はアンカー段落の位置の図形を AI に送らず、表のまま出す。そのため「AI に任せる（AI なしでは止まる）」と「表のまま」のどちらも許した。\n  3. P12（同じ段落の 2 つの図形で、docx の順と番号の順が違う）と P13・P16（途中で切れた回答の、閉じた placements を読み取るか）は either にした。N15 の FIX_PLAN の記述は「検討する」なので。\n  4. 要対応の文言は、正確な語を決めずに、要点だけを確かめている。①要対応があるか。②「本文の冒頭」が残っていないか。③本文の最後に置いたときは「最後／末尾／終わり」のどれかがあるか。Colab の枠は確かめていない（CLI とレポートだけ）。報告書の 4 章の推定の一覧（M-00x）の「指定がなければ本文の冒頭に仮に置く」は見ていない。B3 で直す範囲（冒頭・3 章・14 章）に入っていないので。\n- 既存の tests/test_floats.py は、0.21.0 の「本文の冒頭」を前提に書かれている（test_missing_placement_is_reported_after_ai、test_unplaced_simple_float_is_paired_at_body_start、test_manual_mode_before_response_places_floats_at_body_start）。B3 の実装でこれらも直す必要がある。\n- ruff: 道具（スクラッチの 3 本）には、書き方についての指摘（C408 など）が 2 件残っている。リポジトリには手を入れていない（git status は docs/FIX_PLAN.md の既存の変更だけ）。ディスクの空きは 24GB。"
+ },
+ "impl": {
+  "changed_files": [
+   "/home/user/jstgxmlcng_JASME/src/jasme_jats/structure.py",
+   "/home/user/jstgxmlcng_JASME/src/jasme_jats/ai_assist.py",
+   "/home/user/jstgxmlcng_JASME/src/jasme_jats/pipeline.py",
+   "/home/user/jstgxmlcng_JASME/src/jasme_jats/report.py",
+   "/home/user/jstgxmlcng_JASME/src/jasme_jats/colab.py",
+   "/home/user/jstgxmlcng_JASME/src/jasme_jats/cli.py",
+   "/home/user/jstgxmlcng_JASME/tools/make_notebook.py",
+   "/home/user/jstgxmlcng_JASME/notebooks/JASME_docx_to_JSTAGE_XML.ipynb",
+   "/home/user/jstgxmlcng_JASME/tests/make_fixtures.py",
+   "/home/user/jstgxmlcng_JASME/tests/conftest.py",
+   "/home/user/jstgxmlcng_JASME/tests/test_floats.py",
+   "/home/user/jstgxmlcng_JASME/tests/test_ai.py",
+   "/home/user/jstgxmlcng_JASME/tests/test_colab.py",
+   "/home/user/jstgxmlcng_JASME/tests/test_reader.py",
+   "/home/user/jstgxmlcng_JASME/tests/test_figure_body.py",
+   "/home/user/jstgxmlcng_JASME/tests/fixtures/sample_b3_cells.docx",
+   "/home/user/jstgxmlcng_JASME/tests/fixtures/sample_b3_tablefig.docx",
+   "/home/user/jstgxmlcng_JASME/tests/fixtures/sample_b3_place.docx",
+   "/home/user/jstgxmlcng_JASME/docs/DESIGN.md",
+   "/home/user/jstgxmlcng_JASME/docs/DEVELOPMENT.md",
+   "/home/user/jstgxmlcng_JASME/README.md"
+  ],
+  "summary": "B3 を設計書（DESIGN_B3.md）に沿って実装した。コミットはしていない（作業ツリーの差分）。版は 0.21.0 のまま。FIX_PLAN.md には触っていない。\n\nN17・N16（決定事項 21）:\n- structure.place_floats は、位置を決められない図表を本文の冒頭に置くのをやめた。今は items の「アンカー段落の位置 + 1」に差し込む。中身をそのまま出す図形の要素は raw に入れる。build_body が役割を決めてから、その図形の差し込みの一覧に入れる。\n- 仮の位置は provisional_target（staticmethod）で決める:\n  - AI が本文の外の段落を指定した（where=\"end\" の印）とき、またはアンカー段落が body_seq にないときは、本文の最後（BODY_END）。\n  - それ以外は、アンカー段落の後ろ。\n- 同じ位置に置く図表は、キャプションの番号順に並ぶ。\n- 足したもの:\n  - FloatInfo の where・end_why・end_after\n  - ArticlePlan.float_place（「段落「…」の後ろ」か「本文の最後」。空のアンカー段落は、前の文字のある段落で示す）\n  - figure_issues\n  - float_caption（pipeline から移した）\n- ai_assist.float_placements: 本文の外（AFTER_BODY_REGIONS）の段落の後ろを指定した不採用の指定に、本文の最後に置く印を付ける。同じ図形の正しい指定が後ろにあれば、そちらを採用する。不採用の理由には、印を実際に使ったときだけ「図表は本文の最後に仮に置いた」を足す。\n- 文言は、置いた位置に合わせて次を直した: pipeline（output_note、3 章の詳細の 3〜5 通り、forced_floats）、report（要約の行の内訳、冒頭、14 章）、colab.unplaced_box（図形ごとの位置と理由）、cli。\n\nN15:\n- RESPONSE_SCHEMA・SYSTEM_PROMPT・MANUAL_EXAMPLE・FIELD_GUIDE・manual_prompt を、placements → operations → notes の順にした。\n- 新しく作ったもの:\n  - _json_text（閉じのない ```json は最後まで）\n  - cut_at_end（Unterminated string、または Expecting の後ろが空か値の書きかけ）\n  - parse_cut_response（キーと値、placements の要素を raw_decode で 1 つずつ読む。閉じた要素だけを集め、operations・notes は使わない）\n- parse_response の案内を cut_at_end にした。\n- AIOutcome に cut と partial を足した。API の 4 社とも、上限で切れた回答の raw を残して cut=True にする。\n- pipeline._read_cut と PARTIAL_MSG を足した:\n  - API モードで cut のときも、まず parse_response を試す。\n  - 一部を反映したときは誤りを消し、partial を要対応として出す: レポートの冒頭・2 章・14 章、render_ai_only、Colab の手順 5・6（make_notebook）、CLI。\n\nN18:\n- float_mechanical の最初で cell_figures を試す。戻り値は False / None / 組んだ要素の 3 通り。\n- セルの画像を本体、セルのキャプションを図のキャプションにして組み、表は出さない。\n- 画像と文字が同じ段落は、決定事項 1 と同じ扱い。キャプションの続きも含める。セルの空白は exclude_blank。\n- 画像だけのセルとキャプションだけのセルが並ぶ表は cell_pairs で組む。同じ列の上下か同じ行の左右に隣り合う組の向きが、表全体で一つに決まるときだけ組む。\n- float_summary に、表のセルのキャプションと画像を含めた。\n\nN19:\n- assemble_floats で画像が見つからないとき、table_for_figure を使う。下なら直前、上なら直後の、キャプションのない表を FigNode.tables に入れる。\n- 近くに表の候補があるのに組めないときは、6 通りの理由を plan.figure_issues に入れる。知らせは 3 章（種類「図の本体」）、冒頭、14 章、colab.figure_body_box、CLI に出す。終了コードは変えない。\n\n文書: docs/DESIGN.md（5 章・6.1・7 章）、docs/DEVELOPMENT.md（コードの構成・テスト・残っている課題）、README.md を直した。\n\nテスト用の docx: make_b3_cells・make_b3_tablefig・make_b3_place を足した（その関数だけを呼んで作った。既存の fixture は作り直していない）。conftest に CELLS・TABLEFIG（ALL_DOCS に入れた）と PLACE を足した。",
+  "tests_added": [
+   "tests/test_floats.py: test_mechanical_placement_and_request（書き直し: アンカー段落の後ろ・s2 は N18 で図3・図4・float_place）",
+   "tests/test_floats.py: test_link_targets_follow_figures_after_rebuild（書き直し: 1 回目の ID を動的に求めて読み替えを確かめる）",
+   "tests/test_floats.py: test_missing_placement_is_reported_after_ai（書き直し: アンカー段落の後ろ・文言・要約の行・3 章・14 章・CLI 1）",
+   "tests/test_floats.py: test_unplaced_simple_float_is_paired_after_anchor（改名・書き直し）",
+   "tests/test_floats.py: test_manual_mode_before_response_places_floats_after_anchor（改名・書き直し）",
+   "tests/test_floats.py: test_unplaced_floats_go_after_anchor_in_number_order",
+   "tests/test_floats.py: test_provisional_target_and_place",
+   "tests/test_floats.py: test_ai_placement_after_back_matter_goes_to_body_end（注・引用文献・英文の部分の 3 件）",
+   "tests/test_floats.py: test_ai_placement_after_title_or_shape_stays_after_anchor（題目・図形の中の 2 件）",
+   "tests/test_floats.py: test_correct_placement_after_back_matter_one_is_used",
+   "tests/test_floats.py: test_float_anchored_outside_body_is_kept_as_before",
+   "tests/test_floats.py: test_cut_response_applies_only_finished_placements",
+   "tests/test_floats.py: test_cut_response_placements_are_validated",
+   "tests/test_floats.py: test_unreadable_cut_response_is_reported",
+   "tests/test_ai.py: test_response_format_puts_placements_first",
+   "tests/test_ai.py: test_cut_response_keeps_finished_placements（a〜d）",
+   "tests/test_ai.py: test_cut_response_does_not_guess（e・f）",
+   "tests/test_ai.py: test_api_cut_answers_are_kept（Claude・OpenAI・Gemini・Sakana）",
+   "tests/test_ai.py: test_api_mode_applies_finished_placements_of_cut_answer",
+   "tests/test_colab.py: test_ai_required_and_unplaced_boxes（実際の plan で書き直し）",
+   "tests/test_colab.py: test_figure_body_box",
+   "tests/test_figure_body.py（新規）: test_cell_figures_without_ai",
+   "tests/test_figure_body.py: test_cell_figures_left_to_ai_when_not_unique（text・tabcap・cross・extra）",
+   "tests/test_figure_body.py: test_table_with_caption_but_no_image_stays_a_table",
+   "tests/test_figure_body.py: test_cell_figures_of_unplaced_float_and_mixed_paragraph（down・mixed）",
+   "tests/test_figure_body.py: test_caption_less_table_becomes_figure_body（CLI の表示・終了コード 0 も）",
+   "tests/test_figure_body.py: test_caption_above_figure_takes_following_table",
+   "tests/test_figure_body.py: test_table_near_caption_that_cannot_be_the_body（below_next・above_prev・above_tabcap・above_gap）",
+   "tests/test_figure_body.py: test_figure_without_image_or_table_nearby_is_unchanged（sample_edge）",
+   "tests/test_pipeline.py: test_fidelity_and_dtd（ALL_DOCS に足した CELLS・TABLEFIG で、strict・split の 4 件）",
+   "tests/test_reader.py: test_reader_matches_canonical（CELLS・TABLEFIG・PLACE を足した）"
+  ],
+  "pytest_result": "python -m pytest -q -p no:cacheprovider の結果:\n- Python 3.13: 609 passed（変更前は 566 passed）。\n- Python 3.10（venv310、PYTHONPATH=src）: 609 passed。\n\n足したテストを 0.21.0 の src（base021_src。pytest_src.sh で WHICH が 0.21.0 であることを確かめた）で流すと、39 failed / 570 passed:\n- 落ちたもの: 新しいテストと、書き直したテストのすべて。\n- 0.21.0 でも通るもの（意図した守りのテスト）: test_correct_placement_after_back_matter_one_is_used、test_float_anchored_outside_body_is_kept_as_before、test_table_with_caption_but_no_image_stays_a_table、新しい fixture の test_fidelity_and_dtd・test_reader。\n\nruff check src tests tools: 195 件（0.21.0 は 197 件）。ファイルと規則で比べて、新しい指摘は 0 件（減ったのは pipeline の I001 が 1 件、test_colab の I001 が 1 件）。\n\ntests/__pycache__ はない。tests/ に一時ファイルも残していない。",
+  "measures": "golden（19 件を golden_base〈0.20.0・0.21.0 と同じ〉と比べた。本体も diff した）:\n- 同じ（xml・report・prompt とも）: split の 7 件、pdfcheck_route1・route2。\n- 違うのは prompt だけ（N15 の文言のみ。hunk の見出しを除いた diff が同じであることを確かめた）: *_manual の 7 件と sample_full_ai。\n- sample_float_ai: xml と report は同じ。prompt は N15 の文言に加えて、1 回目の組み立ての違いが出る:\n  - 仮の位置が変わったので、段落の場所（第N要素）と「指定がなければ段落「…」の後ろに仮に置く」が変わる。\n  - s2 が N18 で F2・F3 になるので、図の一覧が変わり、「図3・図4 に対応する図が見つからない」の行がなくなる。\n- sample_float_manual: xml・report・prompt が違う。\n  - s1・s2・s3 がアンカー段落の後ろに来る。本文の最初の要素は章。\n  - s2 が図3・図4 の図になる（N18）。F 番号は F1〜F5。\n  - 3 章の未解決が 9 → 3 件、XML に出力が 33 → 31 件になる（セルの画像だけの段落が graphic になるため）。\n  - 画像の番号の並び、文言が変わる。\n- 新しい 4 件（sample_b3_cells・sample_b3_tablefig の manual・split）は、不変性・最終・DTD 合格、J-STAGE のチェック 0 件。\n\ntd1〜3（--route docx --ai manual。回答なしと、空の回答。0.21.0 と比べた）:\n- 6 通りとも:\n  - 不変性・最終・DTD・J-STAGE は合格（0.21.0 と同じ）。\n  - XML に入らなかった画像は 0 → 0。画像の数は 5・2・4 で同じ。\n  - 本文の段落（章・節の直下の p）の文字と並びのハッシュは一致した。\n  - XML の文字の集まり（p・title・td・th・label）も一致した。\n- td1:\n  - 冒頭にあった F1〜F4・T1・T2 が、それぞれのアンカー段落の後ろに移る。F 番号は図1〜図6 の順。\n  - レポートの違い: 1 章（要約・冒頭の文言）、3 章（文言。「注が番号順に参照されていない」の行がなくなる）、4 章（判断の場所）、9 章（画像の並び）、14 章（空の回答のとき）。\n- td2:\n  - 図1・表4 がアンカー段落の後ろに移る。\n  - 図3・図4 が N18 で図（graphic 各 1）になる。図2 が N19 で fig の中の table-wrap になる。T 番号が詰まる。\n  - 3 章の未解決が 7 → 3 件、警告が 1 → 0 件、図へのリンクが 19 → 21 件、XML に出力が 316 → 314 件。\n  - 「本文中のどこからも参照されていない図: F4」の行が新しく出る（図4 が図になったため）。\n- td3: XML は 0.21.0 とバイト単位で同じ、レポートも同じ。依頼文は N15 の文言だけが違う。\n- td1・td2 の図表の並びは、設計の担当の試作（td_proto.json）と一致した。\n\n独立の反例（run_b3.py）: 26/30 件が OK（0.21.0 は 7/30 件）。\n- OK: P01〜P05、P10〜P17、T01〜T06、U00〜U06。T03 も通る（下の「設計と違えたこと」の 1）。\n- FAIL: P06〜P09 の 4 件。注・引用文献・副題の段落に結び付いた図形で、出力は 0.21.0 とまったく同じ（並び・図・終了コード・要対応）。\n\nこれらの期待は、本文の外に結び付いた図形を「位置を決められない図表」にする変更（N7）を前提にしている。N7 は修正計画の F（split_regions の本文の外の図形・決定事項 10）の担当で、設計書 1.1 も B3 の対象外としている。そのため、反例の期待は B3 の範囲を超えていると判断し、反例のファイルは変えていない。B3 では、置き場所の規則（provisional_target の「アンカー段落が本文でなければ本文の最後」）だけを用意し、単体テストで確かめた。P08・P09 の画像の出力漏れも 0.21.0 からあるもので、今までどおり要対応（XML に入らなかった画像）として知らせる。\n\n結果の要約は scratchpad/b3/impl/summary.json、oracle_out/results.json、td/td_compare.json（構造だけで、論文の文字は入っていない）にある。",
+  "deviations": "1. N18 で、画像の行とキャプションの行が分かれた表（2×2 で 1 行目に画像、2 行目に図3・図4。sample_float の s2、反例 T03）も、機械的に組むことにした（cell_pairs）。\n   - 設計書は「列ごとか行ごとか決められない」として、これを None（AI に任せる）にしていた。\n   - しかし、列の上下か行の左右に隣り合う組で、表全体で向きが一つに決まるなら、組み方は一つに決まる。FIX_PLAN の「組み方が一つに決まらないときだけ AI」にも、反例 T03（exact）にも合う。\n   - 互い違い（cross）、キャプションのない 3 つ目の画像（extra）、結合セルは、今までどおり None にした。\n   - このため、sample_float_manual で s2 が図3・図4 の図になる。設計書の columns の variant は、組める形になったので使わず、cross・extra をテストにした。\n2. セルに画像がなく、図キャプションと問題文だけがある表は、None ではなく False にした（この形ではないので、今までどおり表のまま）。\n   - 設計書どおり None にすると、図の左上がアンカー段落にある図形でも、AI なしでは変換が止まる。\n   - しかも AI の検証（表全体とセルの段落を両方使えない）でも組めないので、要対応が増えるだけで後退する。\n   - 守りのテスト test_table_with_caption_but_no_image_stays_a_table を足した。\n3. N16 の不採用の理由の「図表は本文の最後に仮に置いた」は、印を実際に使ったときだけ足す。設計書の案では、後ろに正しい指定がある場合にも誤って付く。\n4. 3 章の詳細を 2 通り足した: 「AI の回答が途中で切れていて、この図表の位置の指定を読み取れなかったため」と「AI の回答を反映できなかったため（2 章）」。PARTIAL_MSG の書き出しは「図表の位置の指定（placements）のうち…」にした。要対応の見出し（「AI の回答が途中で切れていました」）は、レポート・CLI・Colab の側で付ける。出し直しの案内は、Colab の手順番号の代わりに「チャットでは…頼み、新しい回答を貼り付けて変換し直す。API で自動実行するときは、もう一度変換する」とした（CLI にも合う）。\n5. float_summary は、表のセルのキャプションと画像も数える。直さないと、N18 の図形の判断が「キャプションなし／中身: 表」になって食い違う。sample_float と td の判断の文言が変わる。\n6. table_for_figure の候補の判定は、試作より厳しくした。後ろの表は、表キャプションが付いていないことを確かめる。前の表は、out の TableNode のキャプションを見る。\n7. 図の本体の知らせの文言は、設計書案の「間の段落を除いて」をやめて、「間にほかの段落を挟まずに置いてから」にした（段落を消すと読まれないように）。\n8. テストの置き場所:\n   - N18・N19 は新しいファイル tests/test_figure_body.py に分けた。\n   - N15 の読み取りは test_ai.py、仮の位置と、切れた回答での変換は test_floats.py に置いた。\n   - 0.21.0 で個別に落ちるように、新しい関数はテストの中で import した。\n9. 役割外の文書: README.md の「本文の冒頭に仮に置き」も、実装に合わせて直した。\n10. 役割の分け方に従ったこと:\n    - tools/make_notebook.py は、手順 5・6 に partial の枠と figure_body_box を足した。テスト（test_notebook_is_up_to_date）を通すため、python tools/make_notebook.py でノートブックも作り直した。版は 0.21.0 のままで、版上げとその後の作り直しは仕上げの担当。\n    - FIX_PLAN の B3 の記録は書いていない（仕上げの担当）。",
+  "open_issues": "- 反例 P06〜P09 が落ちる理由は、本文の外の段落に結び付いた図形（注・引用文献・副題）が 0.21.0 のままだから。これは修正計画の F（N7・決定事項 10）で直す。F で本文の外の図形を place_floats に通せば、provisional_target がそのまま「本文の最後」に置く。\n- 仮の位置（アンカー段落の後ろ）は近い位置にすぎない。2 段組では、別の段・ページの図表が多い。\n- アンカー段落が画像の段落で、その後ろに図キャプションが続く形で、差し込みが 2 つ以上あると、画像とキャプションが組にならない（設計の限界 2。DESIGN 7 章に書いた）。\n- AI が placements を最初に書くかは、Claude・ChatGPT・Gemini・Sakana・チャットとも試験運用で確かめる必要がある。\n- 途中で切れた回答から反映するのは位置の指定だけで、リンクは出し直しが要る。\n- 図キャプションを図の上に置く原稿でも、画像の図がなければ「下」とみなす。反例 U02 の形では組まずに要対応になる（either の許す範囲）。\n- N19 は、別の理由で画像が見つからない図に、隣のキャプションのない表を入れてしまうことがある（DESIGN 7 章に書いた）。\n- 振る舞いの変化（AI なしで止まる場合が増えた）: 図の左上がアンカー段落にある図形で、セルに画像と図キャプションがあり、組み方が決まらないもの（表キャプション、「（a）」などの文字、互い違いの組）は、0.21.0 と違って AI なしでは止まる（設計どおり）。\n- 仕上げの担当に残したこと:\n  - 版を 0.22.0 にする（__init__.py・pyproject.toml）。\n  - python tools/make_notebook.py で作り直す。\n  - FIX_PLAN の B3 の節に、実装の記録と上の deviations を書く。\n  - 新しい docx 3 件と tests/test_figure_body.py を git add する（今は未追跡）。\n- 後片付け: worktree は消した。td の出力（実際の論文の XML・レポート）、golden の本体、変種の docx も消した。結果の JSON・ログ・スクリプトは scratchpad/b3/impl に残した（3.1MB。ディスクの空きは 24GB）。"
+ },
+ "verify": {
+  "passed_all": false,
+  "measures": "作業ツリー（45d8314 に B3 の未コミットの差分。版は 0.21.0 のまま）を測った。ファイルは変えていない。実験はすべて /tmp/claude-0/-home-user-jstgxmlcng-JASME/fb4d86bb-6ffb-5369-990a-10fe830c8789/scratchpad/b3/verify/ の下に置いた。\n\n■ pytest\n- 3.13: 609 passed（exit 0）。\n- 3.10（venv310、PYTHONPATH=src）: 609 passed。\n- tests/__pycache__ は、3.13 の実行でできた分を消した。tests/ に一時ファイルは残っていない。\n- 注意: pyproject の pythonpath=[\"src\",\"tests\"] が先に効くため、PYTHONPATH で別の src を指してもテストはリポジトリの src を読む。別の src で流すには -o pythonpath=tests が要る。\n\n■ 変異テスト（-o pythonpath=tests。4 ファイル 80 件）\n- 落ちる（テストが守っている）: m1（Unterminated string を切れた形にしない）7 件、m2（仮の位置を冒頭に戻す）16 件、m3（N19 で直前の表を取らない）2 件、m5（後ろの正しい指定を優先しない）1 件、m7（アンカー段落が本文でないときの分岐を消す）1 件。\n- 生き残る:\n  - m6（table_for_figure の after() にある表キャプションの確かめ）。テストが足りない（nit）。\n  - m4（cell_pairs の len(found)!=1 を not found に）。2 つの向きで同時に組める表はほぼ作れないので、実質は同じ動きの変異とみた。\n\n■ ruff（ruff check src tests tools）\n- 195 件（0.21.0 の worktree は 197 件）。\n- ファイルと規則の組で比べると、新しい指摘は 0 件。減ったのは pipeline と test_colab の I001 が 1 件ずつ。\n\n■ golden（19 件を golden_base と比べた）\n- 同じ: split の 7 件、pdfcheck_route1・2。\n- prompt だけが違う: *_manual の 7 件と sample_full_ai。8 件とも、行番号を除いた diff が同じハッシュで、中身は N15 の文言だけ（SYSTEM_PROMPT の順の指示、回答の書き方の行、見本の placements を先頭に、FIELD_GUIDE の順）。\n- sample_float_ai: xml と report は同じ。prompt は N15 の文言に加えて次が変わる。\n  - 第N要素\n  - 「指定がなければ段落「…」の後ろに仮に置く」\n  - s2 が N18 で図3・図4（F2・F3）になり、「対応する図が見つからない」の 6 行がなくなる\n- sample_float_manual: xml・report・prompt が違い、どれも意図どおり。\n  - s1・s2・s3 がそれぞれのアンカー段落の後ろに来て、本文の最初の要素は章。\n  - s2 が graphic 付きの図 2 つになる。\n  - 3 章の未解決が 9 → 3 件、要約の行は「アンカー段落の後ろに仮に配置」。\n  - 画像の番号が XML の順に並ぶ。\n- 新しい 4 件（sample_b3_cells・sample_b3_tablefig の manual・split）は、不変性・最終・DTD 合格、J-STAGE のチェック 0 件。\n\n■ td1〜3（CLI、--route docx --ai manual。0.21.0 の写しと作業ツリーで比べた）\n- 模擬の AI 回答は td1・td2 の段落 ID で作った（文字は入れていない）。9 通り:\n  - none: 回答なし\n  - empty: placements が空\n  - good: 正しい指定\n  - missing: 1 図形の指定を抜いたもの\n  - outside: 注・引用文献・英文の部分・題目の段落の後ろを指定\n  - cut: ```json の閉じなし。3 つ目の要素の途中で切れる\n  - cutops: placements は閉じていて、operations の文字列の途中で切れる\n  - cutfirst: 最初の reason の途中で切れる\n  - cutold: 0.21.0 の順で operations の途中で切れる\n- すべての組み合わせで次を確かめた。\n  - 不変性・最終・DTD・J-STAGE のチェックは合格。\n  - XML に入らなかった画像は 0 件のまま。\n  - p・title・td・th・label の文字の集まりのハッシュは 0.21.0 と同じ。\n  - 本文の段落の並びのハッシュも、配置の指定を反映した違いがある cut・cutops を除いて同じ。\n- 0.21.0 では本文の冒頭に図表があったが、新しい版ではどのシナリオでも最初の要素が章。\n- 置き場所:\n  - none・empty・missing: 図表はアンカー段落の後ろ（キャプションの番号順）。\n  - outside: 本文の外を指定した図表は本文の最後（td1 は 3 件、td2 は 3 件）。題目を指定した s6 はアンカー段落の後ろ。\n  - 2 章の不採用の理由に「図表は本文の最後に仮に置いた」が付く。3 章には「AI が本文の外（注／引用文献／英文の部分）の段落 dN の後ろを指定したが…」と出る。\n  - 要約の行は「アンカー段落の後ろ 2 件・本文の最後 3 件」。CLI の表示は「s1（本文の最後）…」。\n- 途中で切れた回答:\n  - cut: s1・s2 だけを反映し、要対応「AI の回答が途中で切れていました」がレポートの冒頭・2 章・14 章・CLI に出る。残った図形の 3 章の理由は「途中で切れていて…読み取れなかった」。\n  - td2 の cutops は 3 件すべてを反映し、終了コードは 1 から 0 になる。\n  - cutfirst・cutold は読めない回答として扱い、Unterminated string にも「途中で切れている可能性」の案内が付く。3 章の理由は「AI の回答を反映できなかったため（2 章）」。\n- N18・N19（td2）: 図3・図4 が graphic 付きの図になり、図2 が fig の中の table-wrap になる。T 番号が詰まる。\n- td3: XML は 0.21.0 とバイト単位で同じ（--ai none でも同じ）。\n- Colab の枠（in-process で確かめた）:\n  - unplaced_box は図形ごとに「段落「…」の後ろ」か「本文の最後（AI が注などの本文の外の段落の後ろを指定したため）」を示す。\n  - figure_body_box は理由付きの 2 件（sample_b3_tablefig）。\n- 文言は、何が起きたか・どこを見るか・何をするかが分かる。\n\n■ API モード（sample_float。call_provider を偽物に差し替え）\n- 上限で placements の後ろが切れた回答: 誤りは空、partial あり、3 件を採用。\n- 上限で止まったが JSON は完全な回答: ふつうに読む。\n- placements の前で切れた回答: 誤りは「長すぎて途中で切れました」のまま。\n\n■ 独立の反例（oracle/run_b3.py）: 26/30 件が OK\n- FAIL は P06〜P09 の 4 件で、実装の担当の報告と同じ。\n- どれも注・引用文献・副題の段落に結び付いた図形で、出力は 0.21.0 と同じ（下の problems の 2）。\n\n■ 自作の反例（cx/gen.py。架空の文字。manual で比べた）\n- c1（表キャプションの段落がアンカー）: 表キャプションと表は組のままで、図は表の後ろに入る。\n- c2（画像の段落がアンカーで、後ろに図キャプション）: 図1 の組は保たれる。\n- c4（キャプションを上に置く原稿）: 問題なし。\n- c5（表のセルの図で、位置が決まらない）: アンカー段落の後ろに図 2 つ。\n- c3: 下の problems の 3。\n- 5 件とも不変性・DTD は合格。\n\n■ 回答の読み取り（parse_probe.py。13 通り）\n- 下の problems の 1 の後退を見つけた。\n\n■ 後片付け\n- worktree は消した。td・反例の出力（XML・docx・zip）、golden の本体、変異の src も消した。\n- 結果の JSON（文字を含まない構造だけ）・ログ・スクリプトは残した（3.5MB。ディスクの空きは 24GB）。",
+  "problems": [
+   {
+    "severity": "should",
+    "where": "src/jasme_jats/ai_assist.py _json_text / parse_response",
+    "problem": "閉じの ``` がない ```json のコードブロックの後ろに文字が続く回答を、0.21.0 は読めたが、作業ツリーでは読めなくなった（後退）。_json_text は閉じがないとき最後まで取るので、後ろの文字が JSON に入り「Extra data」になる。0.21.0 は、正規表現に合わないときに find(\"{\")〜rfind(\"}\") で切り出していたので読めた。",
+    "evidence": "parse_probe.py の \"```json\\n{完全な JSON}\\n以上です。\":\n- 0.21.0（base021_src）: parse=OK 2\n- 作業ツリー: parse=ERR「2 行目 1 文字目で JSON として読めません（Extra data）」、parse_cut_response=None\n手動モードでこの回答を貼ると、AI 補完がまったく反映されない（図表は仮の位置、終了コード 1）。\nほかの形（閉じのあるブロックと後ろの文字、閉じのない切れた回答、前置きの文字）は、どちらの版でも同じ結果。",
+    "fix": "parse_response で json.loads が「Extra data」で失敗したときだけ、今までどおり t[:t.rfind(\"}\")+1] で読み直す（または _json_text が閉じのないブロックの中身を返すときに、parse_response の側で 0.21.0 の rfind の切り出しを試す）。parse_cut_response は今の全体の文字のままにする（途中で切れた回答を rfind で切ると、閉じた要素の判定が変わるため）。テストに「閉じなしのブロックの後ろに文字」を足す。"
+   },
+   {
+    "severity": "should",
+    "where": "docs/FIX_PLAN.md B3 の N17・テストの計画、structure.place_floats（provisional_target の end/anchor の分岐）",
+    "problem": "FIX_PLAN の B3（正本）と決定事項 21 の「アンカー段落が本文でなければ本文の最後に置く」が、B3 では働かない。place_floats は今までどおり、本文にアンカーのある図形しか扱わない。そのため、注・引用文献・副題の段落に結び付いた図形は、今までどおりその領域の段落になる。要対応も出ない（P06・P07）。画像は XML に入らない（P08・P09。lost_images としては知らせる）。設計書 1.1 は、これを F（N7）に回すと決めている。しかし FIX_PLAN の B3 の節は、この規則とテスト（本文の外の段落に結び付いた図形）を B3 の範囲に書いたままで、記録が食い違う。",
+    "evidence": "oracle/run_b3.py: P06〜P09 が FAIL（26/30）。\n- P07（注の段落に結び付いた図形・位置を答えない回答）: 本文の最後に図がない、要対応の行 0 件、終了コード 0（期待は 1）。\n- P08・P09: XML に入らなかった画像あり、要対応の行 0 件。\n- 0.21.0 とまったく同じ出力。\nprovisional_target の (\"end\",\"anchor\") の枝は、単体テスト（test_provisional_target_and_place）でしか通らない。",
+    "fix": "どちらかにする。(a) まとめ役が FIX_PLAN の B3 の節に「決定事項 21 の後半（アンカー段落が本文でない図形）は、place_floats に本文の外の図形を通す F（N7）で効く。B3 では規則（provisional_target）だけを用意した」と記録し、利用者への説明にも書く。(b) B3 で、本文の外（AFTER_BODY_REGIONS・front_ja）の段落にアンカーのある図形を place_floats に通し、本文の最後に置いて要対応にする（F の split_regions の変更と重なるので、(a) を勧める）。"
+   },
+   {
+    "severity": "nit",
+    "where": "src/jasme_jats/structure.py Classifier.table_for_figure",
+    "problem": "N19 は、位置を決められない図形をアンカー段落の後ろに仮に置いたときの表（図形の中身）も「直前のキャプションのない表」として取る。その結果、本文の画像のない図キャプションの図に、別の図形の表が入る。さらに要対応の知らせでは、その本文の図（F1）が「位置を決められない図形の中身」として「移す対象」に入る。0.21.0 では、図形の中身は本文の冒頭にあったので、この組み合わせは起きなかった。",
+    "evidence": "cx/gen.py の c3: テキストボックスの中にキャプションのない表 2 つ（3 cm 下）。アンカー段落の直後に、本文の画像のない「図1」のキャプション。\n- 作業ツリーの XML: … table-wrap fig:図1（中に table-wrap）…。4 章に「キャプションのない表 t3 を図の本体として組んだ」。\n- 空の回答のとき、3 章と冒頭に「XML の段落「…」の後ろにある F1・T1 を正しい位置に移すこと」と出る。F1 は本文の図キャプションを含む。\n不変性・DTD は合格で、文字は落ちない。",
+    "fix": "table_for_figure の候補から、浮動配置の図形の中の表（Table の段落に float_id / in_textbox があるもの。または place_floats の raw に入った要素）を除く。または DESIGN 7 章の限界 4 に「仮に置いた図形の表を取ることがある」と書き足す。"
+   },
+   {
+    "severity": "nit",
+    "where": "src/jasme_jats/pipeline.py PARTIAL_MSG",
+    "problem": "途中で切れた回答の知らせは「API で自動実行するときは、もう一度変換します」とだけ書く。API モードでは、同じ依頼をもう一度出すと、同じ上限でまた切れることが多い。設計書の限界 6（そのときは手動モードを使う）が、利用者への文言に入っていない。",
+    "evidence": "PARTIAL_MSG の末尾:「…頼み、新しい回答を貼り付けて変換し直します。API で自動実行するときは、もう一度変換します）。」\nCLI・レポートの冒頭・Colab の手順 5 にも同じ文が出る（API の模擬で partial=True を確かめた）。",
+    "fix": "「API で自動実行するときは、もう一度変換します（また途中で切れるときは、手動モードでチャットに出し直してもらいます）」のように 1 句足す。"
+   },
+   {
+    "severity": "nit",
+    "where": "tests/test_figure_body.py（table_for_figure の after()）",
+    "problem": "table_for_figure の after() にある「次（または前）が表キャプションの表は候補にしない」の確かめを、どのテストも守っていない。after() を常に True にする変異でも、4 ファイル 80 件がすべて通る。",
+    "evidence": "mut.sh m6: 'return not (j + 1 < n and flat[j + 1][0] == \"table_caption\") and flat[j - 1][0] != \"table_caption\"' → 'return True'。-o pythonpath=tests で、tests/test_floats.py・test_ai.py・test_figure_body.py・test_colab.py の 80 passed。",
+    "fix": "変種を 1 つ足す。下に置く原稿で、画像のない図キャプションの直後に「キャプションのない表＋表キャプション」（表キャプションを表の下に置く書き方）が続く形にし、理由が「直後にキャプションのない表があるが…」にならないこと（その表は表として残ること）を確かめる。"
+   },
+   {
+    "severity": "nit",
+    "where": "仕上げ（src/jasme_jats/__init__.py・pyproject.toml・docs/FIX_PLAN.md・git の追跡）",
+    "problem": "反映の前の仕上げが、まだ済んでいない（役割の分け方どおり）。版は 0.21.0 のまま、FIX_PLAN の B3 の節の実装の記録（deviations 1〜10、上の problems の 2 の扱い）もない。新しい fixture 3 件と tests/test_figure_body.py は未追跡。",
+    "evidence": "git status: ?? tests/fixtures/sample_b3_cells.docx、sample_b3_place.docx、sample_b3_tablefig.docx、tests/test_figure_body.py。__init__.py の __version__ は 0.21.0。",
+    "fix": "仕上げの担当が、版を 0.22.0 にする → python tools/make_notebook.py → pytest。FIX_PLAN の B3 の節に記録を書き、新しいファイルを git add する。"
+   }
+  ]
+ },
+ "pre": {
+  "changed_files": [
+   "/home/user/jstgxmlcng_JASME/src/jasme_jats/ai_assist.py",
+   "/home/user/jstgxmlcng_JASME/src/jasme_jats/structure.py",
+   "/home/user/jstgxmlcng_JASME/src/jasme_jats/pipeline.py",
+   "/home/user/jstgxmlcng_JASME/tests/test_ai.py",
+   "/home/user/jstgxmlcng_JASME/tests/test_figure_body.py",
+   "/home/user/jstgxmlcng_JASME/docs/DESIGN.md",
+   "/home/user/jstgxmlcng_JASME/docs/DEVELOPMENT.md"
+  ],
+  "summary": "直したのは should の 2 件と nit 3 件。should 2 は案 (a)（F で効くと記録する）にした。nit 6（仕上げ）は役割の外なので触っていない。コミットはしていない（作業ツリーの差分）。触っていないもの: FIX_PLAN.md、pdfmatch.py、pdfdocx.py、ノートブック、fixture。\n\nshould 1（後退）: ai_assist.parse_response に _before_trailing_text を足した。\n- json.loads の誤りが「Extra data」のときだけ、最後の } までで読み直す。後ろの文字に } があるとき（JSON が 2 つ続くときなど）は、今までどおり読めない回答にする。\n- これで、閉じの ``` のないコードブロックの後ろに文字が続く回答が、0.21.0 と同じく読める。\n- parse_cut_response は変えていない。\n- テスト test_parse_response_reads_json_before_trailing_text を足した。手動モードの変換で、図表がすべて配置されることも確かめる。\n\nshould 2: 案 (a) にした。\n- コードとテストは、すでに (a) の形になっている（provisional_target の規則だけを用意し、本文の外に結び付いた図形は今までどおりの扱い。test_float_anchored_outside_body_is_kept_as_before）。\n- DESIGN.md 6.1 の、矛盾して読めた文を直した。「アンカー段落が本文でなければ本文の最後」は、F（N7）で本文の外の図形を place_floats に通すときに効く（B3 は規則だけ）、と書いた。place_floats の docstring にも「今は起きない」と書き足した。\n- FIX_PLAN の記録と利用者への説明は、まとめ役の役割なので書いていない。書く文の案は open_issues に置いた。\n\nnit 3（仮に置いた図形の表を、本文の図の本体に取る）: 「同じ置き場所の要素」だけで、図キャプションの前後を見るようにした。\n- place_floats が、仮の位置に置いた図形の差し込みを返す。build_body がそれを Classifier.provisional（flat の要素の id → 図形の ID）にし、table_for_figure がそれで前後を見る。\n- これで、仮の位置の図形の中身と、その外の図キャプション・表は組にならない。\n- 逆に、間に図形の中身を仮に置いていても、docx で隣り合う本文の表と図キャプションは組にする（直す前は、ここで誤った「間にほかの段落がある」の要対応が出ていた）。\n- あわせて、直前の表の TableNode が out の最後にあるという条件を外した（どのテストでも確かめられていなかった）。表キャプションが 2 つ上にある表でも、「直前の表に表キャプションが付いている」の要対応を出す。\n\nnit 4: PARTIAL_MSG に「また途中で切れるときは、「手動（チャットに貼り付け）」に切り替えて変換し、依頼文をチャットに貼り付けて回答してもらいます」を足した。\n\nnit 5: 表キャプションの付いた表を候補にしないことを確かめる変種を 3 つ足した。\n\n文書は DESIGN.md の 5 章・6.1・7 章と、DEVELOPMENT.md のテストの説明を直した。",
+  "tests_added": [
+   "tests/test_ai.py: test_parse_response_reads_json_before_trailing_text（閉じのないブロック・ブロックなし・閉じたブロックの中の後ろの文字は読む。JSON が 2 つ・後ろの文字に } があるときは Extra data で読まない。parse_cut_response は None。手動モードの変換ですべての図表が配置される）",
+   "tests/test_ai.py: test_api_mode_applies_finished_placements_of_cut_answer（足した確かめ: 「また途中で切れるときは、「手動（チャットに貼り付け）」に切り替えて」の文言）",
+   "tests/test_figure_body.py: test_table_with_its_own_caption_is_not_a_candidate（3 件: below_tabcap_after・above_tabcap_gap・above_tabcap_first。表キャプションの付いた表は、図の本体の候補にも要対応にもしない）",
+   "tests/test_figure_body.py: test_provisional_float_is_not_paired_with_outside（3 件: float_table〈図形の中の表を本文の図に入れない。知らせの移す対象は T1・T2〉、float_between〈図キャプションと本文の表の間に図形を仮に置いても組にする〉、float_caption〈キャプションだけの図形に本文の表を入れない〉）",
+   "tests/test_figure_body.py: test_table_near_caption_that_cannot_be_the_body の変種 below_tabcap_gap（表キャプション・段落・表・図キャプションの順。「直前の表に表キャプション「表1…」が付いている」）"
+  ],
+  "pytest_result": "python -m pytest -q -p no:cacheprovider の結果:\n- Python 3.13: 617 passed（直す前は 609 passed）。\n- Python 3.10（venv310、PYTHONPATH=src）: 617 passed。\n\n直す前の作業ツリー（写し prefix/src。-o pythonpath で読ませた）で流すと、tests/test_ai.py と tests/test_figure_body.py は 6 failed / 42 passed。\n- 落ちたもの: trailing_text、API の文言、below_tabcap_gap、provisional の 3 件。\n- 通るもの: own_caption の 3 件。これは変異の守りのテスト。\n\n変異（mut.sh で 5 ファイルを流した）:\n- after() を常に True にする（m6）: 3 failed。\n- 次の表キャプションの確かめを外す: 2 failed。前の表キャプションの確かめを外す: 1 failed。\n- 置き場所の絞り込みを外す: 3 failed。\n\nruff check src tests tools: 195 件。直す前と、ファイル・規則ごとに同じ（新しい指摘は 0 件）。\n\ntests/__pycache__ はない。tests/ に一時ファイルも残していない。",
+  "measures": "golden（23 件）:\n- 直す前の作業ツリーと、ハッシュですべて同じ。直す前の manifest は、確かめの担当のものと一致した。\n- 0.21.0（golden_base）と同じ名前の 19 件の違いは、確かめの担当が本体を diff して理由を書いたものと同じ:\n  - prompt だけが違う 8 件（*_manual の 7 件と sample_full_ai）。hunk の見出しを除いた diff は 8 件とも同じで、N15 の文言（placements を最初に書かせる文・見本の順・項目の説明の順）だけ。\n  - sample_float_ai は prompt だけ、sample_float_manual は xml・report・prompt が違う（仮の位置と N18 による違い）。\n  - ほかの 9 件は同じ。\n- 新しい 4 件（sample_b3_cells・sample_b3_tablefig の manual・split）は、不変性・最終・DTD 合格、J-STAGE のチェック 0 件。\n\ntd1〜3（0.21.0・直す前・直した後の 3 つで比べた。td1・td2 は模擬回答 10 通り、td3 は回答なし。計 21 通り）:\n- 直した後の XML は、直す前とすべて同じ。違うのは trailing（閉じのないブロックの後ろに文字が続く回答）だけ。\n- trailing は、直す前は読めず、図表が仮の位置のままだった（td2 の終了コード 0 → 1。0.21.0 は 0）。直した後は 0.21.0 と同じく読めて、XML とレポートは同じ回答を後ろの文字なしで渡したとき（good）と一致した（終了コード 0）。\n- レポートの違いは cut・cutops の 2 行（PARTIAL_MSG の文言）と trailing だけ。\n- 21 通りとも、不変性・最終・DTD・J-STAGE は合格（0.21.0 と同じ）。XML に入らなかった画像は 0 → 0。XML の文字の集まりのハッシュは 0.21.0 と一致した。\n- td2 の N19（本文の図キャプションと本文の表）は今までどおり組む。td1・td2 の F1（同じ図形の中の表とキャプション）は float_mechanical による組で、変わらない。\n\n独立の反例:\n- oracle/run_b3.py: 26/30。直す前と同じで、P06〜P09 は案 (a) により B3 の範囲外。\n- parse_probe:\n  - unclosed_fence_trailing が 0.21.0 と同じ OK 2 に戻った（直す前は ERR）。\n  - plain_trailing_text も OK 2 になった（0.21.0 は ERR。新しく読めるようになった形）。\n  - ほかの 11 形は直す前と同じ。\n- 確かめの担当の cx（c1〜c5）:\n  - c3 は、図形の表 2 つが表のまま残り、図1 はキャプションだけになった（0.21.0 と同じ組み方）。空の回答の知らせも、0.21.0 と同じく「T1・T2 を移す」に戻った（直す前は「F1・T1」）。\n  - c1・c2・c4・c5 は直す前と同じ。\n- 実装の担当の stress.py: 直す前と同じ。\n- 新しく作った乱数の反例（fuzz_n19.py。架空の文字）:\n  - 図形を混ぜたもの 150 件×2 種と、本文だけのもの 200 件で、変換の失敗・チェックの不合格・画像の出力漏れは 0 件。\n  - 図形ありで直す前と違った 66 件は、仮の位置をまたぐ組と、誤った要対応がなくなったもの。図形のない文書は同じ。\n  - 本文だけで違った 4 件は、表キャプションが 2 つ上にある表で「直前の表に表キャプション」の要対応が新しく出たもの（図の組み方は同じ）。\n\n結果は /tmp/claude-0/-home-user-jstgxmlcng-JASME/fb4d86bb-6ffb-5369-990a-10fe830c8789/scratchpad/b3/fix_verify/ にある:\n- summary.json（測定のまとめ）\n- td/results_all.json（構造とハッシュだけで、論文の文字は入っていない）\n- golden_new/manifest.json と golden_pre/manifest.json\n- fuzz/*.json、oracle_out/results.json\n- my_src.diff・my_tests.diff・my_docs.diff（直す前の作業ツリーとの差分）",
+  "deviations": "1. should 1: 確かめの担当が示した 1 つ目の案（Extra data のときだけ rfind で読み直す）を、閉じのないブロックに限らず、どの形にも使った。\n   - そのため、0.21.0 が読めなかった次の形も読める（後ろに } がない場合）:\n     - 「{完全な JSON}\\n以上です。」（ブロックなし）\n     - 閉じたブロックの中で、JSON の後ろに文字があるもの\n   - 前置きの文字はもともと読み飛ばしていたので、それとそろえた。JSON が最後まで書かれていて検証も通るときだけ読むので、推測で直すことにはならない。\n   - 0.21.0 とまったく同じにしたいときは、_before_trailing_text を、閉じのないブロックの中身のときだけに絞れば済む。\n\n2. should 2: 案 (a) にした。理由は、確かめの担当の勧めと、修正計画の F の N7（split_regions の変更・決定事項 10 の AI なしで止める）と重なるため。\n   - 案 (a) の「まとめ役が FIX_PLAN に記録し、利用者に説明する」は、まとめ役の役割なので行っていない。FIX_PLAN.md には触っていない。書く文の案は open_issues に置いた。\n   - 反例の P06〜P09 は、F まで落ちたままになる。\n\n3. nit 3 は、勧められた「図形の表を候補から除く」よりも一歩進めた。同じ置き場所の要素だけで、図キャプションの前後を数える。\n   - 除くだけだと、図キャプションと本文の表の間に仮の図形が入る形が残る。キャプションが上の原稿で、図キャプションの段落に図形を結び付けた形などだ。そこでは誤った「間にほかの段落がある」の要対応か、組まない結果になる。\n   - 今の作り方なら docx で隣り合う組を保てる。図形を混ぜない文書では、組み方が直す前と同じ（golden・td・乱数の 200 件で確かめた）。\n   - 画像と図キャプションの組み方は変えていない（DESIGN 7 章の限界 2 に書き足した）。\n\n4. table_for_figure の「直前の表の TableNode が out の最後にある」という条件を外した（どのテストでも確かめられていなかった）。\n   - 表キャプション → ほかの段落 → 表 → 画像のない図キャプション、の順や、表キャプションが 2 つ続く順で、「直前の表に表キャプション「…」が付いている」の要対応が新しく出る（XML は同じ）。\n   - 表キャプションが表のすぐ上にある形では、今までもこの要対応を出していた。それと同じ意味なのでそろえた。below_tabcap_gap のテストで固定した。\n\n5. nit 6（版を 0.22.0 にする、ノートブックの作り直し、FIX_PLAN の B3 の記録、git add）は、仕上げの担当の役割なので行っていない。\n   - ノートブックは、変えた文言（PARTIAL_MSG）を変換のときに読むだけなので、作り直す必要はない（test_notebook_is_up_to_date は通る）。",
+  "open_issues": "- まとめ役へ（should 2・案 (a)）: FIX_PLAN の B3 の節に書く文の案。\n  「N17 の後半（決定事項 21 の『アンカー段落が本文でなければ本文の最後に置く』）は、B3 では仮に置く位置の規則（structure.Classifier.provisional_target）だけを用意した。今の place_floats は本文にアンカーのある図形しか扱わない。そのため、注・引用文献・副題などの段落に結び付いた図形は、今までどおりその領域の段落として扱われ、本文の最後には置かれない（中の画像は XML に入らず、要対応の『XML に入らなかった画像』として知らせる）。後半が効くのは、F（N7・決定事項 10）で本文の外に結び付いた図形を place_floats に通すとき（split_regions の変更と重なるので F で行う）。B3 のテストの『本文の外の段落に結び付いた図形』は、今までどおりの扱いを守るテスト（test_float_anchored_outside_body_is_kept_as_before）にした。」\n  利用者への説明の案: 「AI が注などの段落の後ろと答えた図表は、本文の最後に置きます。注・引用文献などの段落に結び付けた図形の図は、今までどおり『XML に入らなかった画像』として知らせます（修正計画の F で直します）。」\n- 仕上げの担当へ:\n  - 版を 0.22.0 にする → python tools/make_notebook.py → pytest。\n  - FIX_PLAN の B3 の節に、実装の記録（実装の担当の deviations 1〜10 と、この報告の deviations 1〜4）を書く。\n  - 新しいファイルを git add する（tests/fixtures/sample_b3_cells.docx・sample_b3_place.docx・sample_b3_tablefig.docx、tests/test_figure_body.py。今は未追跡）。\n- 残る限界（DESIGN 7 章に書いた）:\n  - 画像と図キャプションの組み方は、仮に置いた図形とその外を区別しない（キャプションだけの図形のキャプションは、今までどおり隣の画像と組にすることがある）。\n  - 仮の図表が 2 つ以上、画像の段落とそのキャプションの間に入ると組にならない。\n- 確かめてほしいこと:\n  - 本文だけの文書でも、表キャプションが表の 2 つ上にある形（間に段落、または表キャプションが 2 つ続く）で、「直前の表に表キャプション」の要対応が新しく出る（deviations 4）。乱数の本文だけの 200 件中 4 件で、図の組み方は同じ。\n- 後片付け:\n  - cx の docx、golden の本体、直す前の写しの fixture は消した。td の出力も、変換ごとに消した。\n  - 残したのは、結果の JSON・ログ・スクリプト・差分と、直す前の src・docs・テストの写し（prefix/。fixture は消した）。scratchpad/b3/fix_verify は 6.8MB で、ディスクの空きは 24GB。"
+ },
+ "fin": {
+  "summary": "B3 の仕上げをした。版を 0.22.0 にし、ノートブックを作り直した。FIX_PLAN の B3 の節に実装の記録を書いた。コミットはしていない。",
+  "changed_files": [
+   "/home/user/jstgxmlcng_JASME/src/jasme_jats/__init__.py",
+   "/home/user/jstgxmlcng_JASME/pyproject.toml",
+   "/home/user/jstgxmlcng_JASME/notebooks/JASME_docx_to_JSTAGE_XML.ipynb",
+   "/home/user/jstgxmlcng_JASME/docs/FIX_PLAN.md",
+   "/home/user/jstgxmlcng_JASME/docs/fix_plan_repro_tests.py"
+  ],
+  "tests_added": [],
+  "pytest_result": "Python 3.13: 617 passed。Python 3.10（venv310）: 617 passed。ruff check src tests tools は 195 件で、0.21.0 の 197 件から増えていない。tests/__pycache__ は消した。",
+  "measures": "この担当では測り直していない。golden・td1〜3・反例の数は、実装・確かめ・確かめの修正の各担当の報告にある数を FIX_PLAN の B3 の節にそのまま書いた。golden は 19 件のうち split の 7 件と pdfcheck の 2 件が同じ。*_manual の 7 件と sample_full_ai、sample_float_ai は prompt だけが違う。sample_float_manual は xml・report・prompt が違う。td1〜3 は不変性・最終・DTD・J-STAGE が合格し、XML に入らなかった画像は 0 → 0。独立の反例は 26/30 件が OK で、0.21.0 は 7/30 件。",
+  "deviations": "docs/DESIGN.md・docs/DEVELOPMENT.md・README.md は、前の担当が実装に合わせて直していた。読んで実装と合っていたので、この担当では変えていない。FIX_PLAN の N15〜N19 の項目の行は書き直していない。決定事項 25 と B2.1 の保留の記録は変えていない。B3 の節の「残る限界」の 1 番目に、決定事項 21 の後半（アンカー段落が本文でないとき本文の最後）は B3 では規則だけで、F（N7）で効くと書いた。反例 P06〜P09 は F まで落ちたまま。tests/private の docx の文字から作った 12 文字の並びと、git diff の変更行および tests/test_figure_body.py を突き合わせた。一致は 0 件だった。新しい docx の fixture 3 件の中身は突き合わせていない。",
+  "open_issues": "未追跡の tests/fixtures/sample_b3_cells.docx・sample_b3_place.docx・sample_b3_tablefig.docx と tests/test_figure_body.py は git add していない。コミットと反映はまとめ役の作業。AI が placements を最初に書くかは、各 AI での試験運用で確かめる。"
+ },
+ "reviews": [
+  {
+   "checked": "作業ツリー（45d8314 に B3 の未コミットの差分。版は 0.22.0）を点検した。ファイルは変えていない。実験はすべて /tmp/claude-0/-home-user-jstgxmlcng-JASME/fb4d86bb-6ffb-5369-990a-10fe830c8789/scratchpad/b3/review/principle/ に置いた。主なもの: run_case.py（1 件を変換し、不変性・DTD・画像と、段落ごとの出力位置・文字のハッシュを JSON にする）、compare.py、drive.py、gen_own.py、gen_route2.py、fuzz.py、summary.json、cmp/、res/、fuzz2/cmp.json。比べる相手は base021_src（0.21.0）。\n\n■ コードを読んだ範囲\n- structure.py: place_floats・provisional_target、build_body の raw の差し込み、BODY_END、cell_figures・cell_pairs、float_mechanical、float_from_spec、assemble_floats・table_for_figure、float_place・float_caption・float_summary。\n- ai_assist.py: RESPONSE_SCHEMA の順、_json_text・_before_trailing_text・cut_at_end・parse_cut_response、float_placements の「本文の最後」の印。\n- pipeline.py: _read_cut、API の cut、forced_floats と figure_issues の文言。report・colab・cli の文言。\n- builder・emit・fidelity・docx_reader・pdfmatch・pdfdocx は 0.21.0 と同じ。\n- 確かめたこと:\n  - XML の段落の文字は、今までどおり builder（fig・caption_more・table・PNode）の Emitter.span だけを通る。\n  - XML への経路に、文字列を書き換えるコードはない（20 字に切るのは知らせの文だけ）。\n  - 除外の記録: セルの空白だけの段落は _drop_blank → exclude_blank。画像の段落の空白は builder.fig の blank。仮に置く図形の中身も、今までと同じ build_body のループで役割を決める。\n  - 途中で切れた回答の読み取りは、raw_decode で最後まで書かれた要素だけを読む。閉じ括弧を補うなどの推測の直しはしない。\n\n■ pytest・ruff・golden\n- pytest: 3.13 は 617 passed、3.10（venv310）も 617 passed。\n- ruff: 195 件（0.21.0 は 197 件）。\n- golden: 報告どおり。\n  - split の 7 件と pdfcheck_route1・2 が同じ。\n  - *_manual の 7 件、sample_full_ai、sample_float_ai は prompt だけが違う。\n  - sample_float_manual は xml・report・prompt が違う。\n  - 新しい 4 件は不変性・最終・DTD・J-STAGE とも合格。\n\n■ 反例（変換は 0.21.0 と作業ツリーの両方）\n- oracle の 30 件: 両版とも不変性・最終・DTD は合格。\n  - XML に入らなかった画像は P08・P09 だけで、0.21.0 と同じ。\n  - T04・T05 は、作業ツリーでは AI なしで止まる（文書にある変化）。\n- 自作の 17 件（架空の文字。セルの画像と文字が同じ段落、キャプションの続き、全角空白の段落、縦の結合、キャプションの中の脚注・数式、AI のセル指定、本文の最後、途中で切れた回答、画像入りの表の N19、仮に置く図形の中の表と図キャプションなど）:\n  - 不変性・最終・DTD は合格で、画像はすべて出力した。\n  - 空白以外の文字の集まりは 0.21.0 と同じ。\n- 乱数の 240 件（B3 の形を混ぜた）: 作業ツリーは 240/240 が合格し、XML に入らなかった画像は 0 件。\n  - 空白以外の文字の集まりが違ったのは 3 件だけ。どれも、途中で切れた回答の位置の指定を反映したため、0.21.0 では除外していたテキストボックスの文字を出力したもの（減った文字はない）。\n\n■ テストデータ\n- td1〜3 のルート1: 21 通り（td1・td2 は模擬回答 10 通り、td3 は回答なし）。\n  - すべて不変性・最終・DTD・J-STAGE は合格し、XML に入らなかった画像は 0 → 0。\n  - 空白以外の文字の集まりは 0.21.0 と同じ。\n- td1〜3 のルート2: 5 通り。\n  - チェックはすべて合格。\n  - td2 の直した docx が 0.21.0 と違う（findings 1）。\n\n■ 後片付け\n- 大きな出力は消した: docx・pdf・xml・zip・画像、golden の本体、td のレポート・依頼文（原稿の文字を含むため）。\n- 文字を含まない JSON・ログ・スクリプトは残した。\n- tests/__pycache__ は消した。tests/ の一時ファイルはない。",
+   "findings": [
+    {
+     "severity": "should",
+     "file": "src/jasme_jats/structure.py",
+     "line": 843,
+     "problem": "N18（cell_figures）で、docx では表のセルの段落（図キャプション、画像と同じ段落の文字）を、図のキャプションと本文の段落にした。そのため、ルート2（Colab の初期値）で PDF と照合して直す段落が変わり、docx の表のセルの段落も照合して直すようになった。これは DESIGN 4.4 の「表のセル…は照合しない・直さない」（L397・L417）と食い違う。B3 の記録と確かめにも出ていない（td1〜3 は --route docx だけで測っている。golden の pdfcheck には表のセルの図がない）。td2 のルート2 では、直した docx と XML の文字が 0.21.0 と 1 文字違う。",
+     "evidence": "【方法】run_case.py で、0.21.0 の写しと作業ツリーを --route pdf --ai manual で変換した。直した docx の段落ごとの文字のハッシュと、直し（Fix）を比べた。\n\n【td2（回答なし・正しい回答の 2 通り）】\n- 0.21.0 は d214 を直さない（照合しない表のセル）。\n- 作業ツリーは d214 に全角・半角の直し（width）を 1 件当て、全角の数字 1 字を半角にする。d214 は図形 s2 の表のセルの図キャプションで、N18 で図4 のキャプションになる。\n- XML の文字の集まりも、この 1 文字だけ違う。13 章の照合した段落は 774 → 775 件。\n- チェックはすべて合格。XML に入らなかった画像は 0 → 0。\n- td1・td3 の直しは 0.21.0 と同じ。\n\n【架空の反例（gen_route2.py）】原稿と出版社が直した想定の docx を作り、後者を LibreOffice で PDF にした。\n- R05（セルのキャプションの番号を全角から半角に直した PDF）: 作業ツリーだけが、セルのキャプション「図１＋全角空白＋題」を「図1題」に直す（width と、隣の全角空白を消す space）。PDF の行には全角空白がある。DESIGN 4.4（L355〜356）にある既知の限界が、表のセルのキャプションにも及んだ形。\n- R03（本文の図）・R04（表でない図形の図）: 対照。両版で同じ直しになる。\n- R06（セルの説明文の途中の語を PDF で直した）: 作業ツリーだけ、説明文が 13.2（直さなかった。要確認）に、セルのキャプションが 13.5（PDF に見つからない段落）に出る。冒頭の表に「直せなかった 1 箇所（要確認）」「PDF に見つからない段落 1 件」が増える。0.21.0 はどれも出さない。",
+     "fix": "反映の前に、どちらにするかを決めて記録する。\n(a) N18・N19 で組んだ図の、docx では表のセルの段落も、ルート2 の照合と直しの対象にする場合:\n- DESIGN 4.4 の「照合する段落」「直さない段落」に、この例外を書く。\n- FIX_PLAN の B3 の「確かめた数」に td1〜3 のルート2 の結果を、「残る限界」に、全角空白の既知の限界がセルのキャプションにも及ぶことを書く。\n- 表のセルの図を含む fixture で、ルート2 のテストか golden を足す。\n(b) 今までどおり対象外にする場合: 照合する段落を決める側（linker.body_paragraphs の文脈か、段落が docx の表のセルであることの印）で外す。pdfmatch.py に触るなら B2.1 と調整する。"
+    },
+    {
+     "severity": "should",
+     "file": "src/jasme_jats/structure.py",
+     "line": 1128,
+     "problem": "仮の位置に置いた図形の中身が、assemble_floats の組み方で、その外にある本文の要素と組になる。表キャプションと表の組み方（L1130 の直後 2 つ以内の表を探す規則、L1135 の直前のキャプションのない表に付ける規則）と、図キャプションと画像の組み方（L1097〜）で起き、相手は本文の表・表キャプション・図キャプション。B3 で中身をアンカー段落のすぐ後ろに置くようになったため起きる（0.21.0 は本文の冒頭なので組まなかった）。置き場所を区別するのは N19 の table_for_figure だけ。要対応の「手作業で…にある T1・T2／F1 を正しい位置に移すこと」が本文の表キャプション・表・図キャプションを含む要素を名指しするので、知らせどおりに移すと docx の本文の文字が別の場所に入る。",
+     "evidence": "【方法】gen_own.py で架空の docx を作った。手動モードで、位置を答えない回答（placements が空）を貼った。両版の plan.figures・plan.tables の中身（図形の中の段落か、本文の段落か）と、要対応の文を比べた。\n\n【O16】図形（3 cm 下）に画像とキャプションのない表 2 つ。その直後の本文に、表のない表キャプションがある。\n- 0.21.0: T2 は図形の表、T3 は本文の表キャプションだけ。\n- 作業ツリー: T2 は図形の 2 つ目の表に本文の表キャプションを付けたもの。\n- 3 章と冒頭の要対応は「…の後ろにある T1・T2 を正しい位置に移すこと」。\n\n【O06b】図形に表キャプションと画像。アンカー段落の直後に、本文のキャプションのない表がある。\n- 0.21.0: T1 は図形の表キャプションだけ、T2 は本文の表。\n- 作業ツリー: T1 は図形の表キャプションと本文の表。\n- 要対応は「…の後ろにある図表の中身を移すこと」。\n\n【O17】本文の画像の段落がアンカーで、図形はキャプションのない画像。その後ろに本文の図キャプションがある。\n- 0.21.0: F1 は本文の画像と本文の図キャプション（正しい組）。\n- 作業ツリー: F1 は図形の画像と本文の図キャプション。本文の画像はキャプションのない図になる。\n- 要対応は「…にある F1 を正しい位置に移すこと」。\n\n【共通】\n- 3 件とも不変性・最終・DTD は合格で、文字は落ちず、重ならない。\n- DESIGN 6.1（L580）は「仮に置いた図形の中身は…その外の図キャプション・表とは組にしない」と書く。\n- DESIGN 7 章（L604〜608）が限界として挙げるのは画像の組み方だけで、「仮の図表が 2 つ以上」と書く。O17 では仮の要素 1 つ（画像）で組が崩れる。",
+     "fix": "assemble_floats の次の 5 か所で、table_for_figure と同じく、置き場所が同じ（Classifier.provisional の値が同じ）要素だけを見る。\n- 図キャプションの画像を探す 2 か所（out の直前 2 つと、flat の直後 2 つ）\n- 表キャプションの表を探す所\n- 直前のキャプションのない表に付ける所\n- 本文スタイルの図表キャプションを推定するときの、隣の判定\n少なくとも、pipeline._float_ids と要対応の文で、本文の段落を含む図・表を「移す対象」に挙げないようにし、DESIGN 6.1 と 7 章を実装に合わせる。O06・O16・O17 の形をテストに足す。"
+    },
+    {
+     "severity": "nit",
+     "file": "src/jasme_jats/ai_assist.py",
+     "line": 831,
+     "problem": "cut_at_end は、誤りが Unterminated string なら、途中で切れた回答とみなす。そのため、最後まで書かれていても書き損じのある回答を、途中で切れた回答として扱う。位置の指定だけを反映し、リンク（operations）を捨て、要対応「AI の回答が途中で切れていました」を出す。0.21.0 は、どちらの形も読めない回答として扱っていた。DESIGN 5 章の「途中の書き損じ（飾りの引用符など）の回答は、今までどおり読めない回答として扱う」とも違う。",
+     "evidence": "【方法】parse_response と parse_cut_response を、両版で直接呼んだ。\n\n【形 (1)】最後まで書かれた回答で、最後の文字列（notes）の閉じだけが飾りの引用符。\n- 0.21.0: 読めない回答。飾りの引用符の案内が付く。\n- 作業ツリー: parse_cut_response が placements を返す。手動モードで貼ると、_read_cut が誤りを消すので、飾りの引用符の案内も出ない。\n\n【形 (2)】閉じた ```json ブロックの中の文字列に ``` がある回答。\n- 0.21.0: 読めない回答。\n- 作業ツリー: placements だけを読む。parse_response の誤りにも「途中で切れている可能性」の案内が付く。\n\n【影響】読んだ指定は float_placements で検証するので、文字の不変性には影響しない。",
+     "fix": "次のどちらかにする。\n- cut_at_end で、Unterminated string の文字列の始まり（e.pos）から最後までに SMART_QUOTES の文字か ``` があれば、切れた形とみなさない。\n- _json_text が閉じた ``` を見つけた回答は、途中で切れた回答として読まない。\nあわせて、2 つの形をテストに足す。"
+    },
+    {
+     "severity": "nit",
+     "file": "src/jasme_jats/ai_assist.py",
+     "line": 354,
+     "problem": "AI 依頼文の「# 位置を機械的に決めた図表」で、N18 でキャプション付きの図に組んだ図形を「（キャプションなし）」と示す。float_section は info.paras の役割だけを見て、表のセルのキャプションを数えないため。",
+     "evidence": "sample_b3_cells.docx を手動モードで変換した。AI依頼文.txt の 157〜159 行に「[s1]（キャプションなし）: 段落 [d13] の前に配置済み」とあり、s2・s3 も同じ。実際の出力では、s1〜s3 は図1〜図5 のキャプション付きの図になっている。0.21.0 では同じ図形をキャプションのない表として出していたので、表示と出力が合っていた。",
+     "fix": "固定の図表の行では、表のセルのキャプションも見る structure.float_caption(info) を使う。"
+    }
+   ]
+  },
+  {
+   "checked": "作業ツリー（45d8314 の上に B3 の未コミットの差分。版は 0.22.0）を、0.21.0（45d8314 の git worktree。終わってから消した）と比べた。ファイルは変えていない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/fb4d86bb-6ffb-5369-990a-10fe830c8789/scratchpad/b3/review/regression/ の下に置いた。\n\n■ 差分を読んだ範囲\n- structure.py: place_floats、provisional_target、build_body の raw と prov、cell_figures、cell_pairs、table_for_figure、float_place\n- ai_assist.py: 回答の書式の順、parse_response、_json_text、_before_trailing_text、cut_at_end、parse_cut_response、float_placements の ends\n- pipeline.py（_read_cut、forced_floats の文言）、report.py、colab.py、cli.py、make_notebook.py\n- テスト 5 ファイルと make_fixtures.py の差分\n\n■ pytest\n- 3.13: 617 件で exit 0。\n- 3.10（venv310、PYTHONPATH=src）: 617 passed。\n- ruff は 195 件（0.21.0 は 197 件）。ファイルと規則の組で比べると、新しい指摘は 0 件。減ったのは pipeline と test_colab の I001 が 1 件ずつ。\n\n■ golden（golden_base の 19 件と比べた。golden_base は 0.21.0 で作り直したものと同じだった）\n- 同じ: split の 7 件、pdfcheck_route1・2。\n- prompt だけが違う: *_manual の 7 件と sample_full_ai。8 件とも違いの行の md5 が同じで、中身は N15 の文言の 4 か所だけ。\n- sample_float_ai: xml と report は同じ。prompt には N15 の文言に加えて次の違いがある。\n  - s2 が N18 で F2・F3 に組まれる\n  - 第N要素の番号\n  - 「指定がなければ段落「…」の後ろに仮に置く」の文言\n  - 「対応する図が見つからない」の 6 行がなくなる\n- sample_float_manual: 本体を diff して、違いはすべて意図どおりと確かめた。\n  - s1・s2・s3 がそれぞれのアンカー段落の後ろに来る\n  - s2 が graphic 付きの図 2 つになる\n  - 3 章の未解決が 9 → 3 件\n  - 画像の名前が XML の順に付き直る。img1 → 31_1_01 で、中身の取り違えはない\n- 新しい 4 件（b3_cells と b3_tablefig の manual・split）: 不変性・最終・DTD・J-STAGE のチェックは合格。0.21.0 と比べた違いは、セルの図が fig になることと、表が fig の中の table-wrap になることだけ。\n\n■ td1〜3（CLI、--route docx --ai manual、21 通り）\n- 模擬の回答は none・empty・good・missing・outside・cut・cutops・cutfirst・cutold・trailing。\n- すべての組み合わせで次を確かめた。\n  - 不変性・最終・DTD・J-STAGE のチェックは合格。\n  - XML に入らなかった画像は 0 → 0、graphic の数は同じ。\n  - p・title・td・th・label の文字の集まりのハッシュは 0.21.0 と同じ。\n  - 図表の外の本文の段落の並びは、cut と cutops 以外で同じ。cut と cutops の違いは、反映した AI の指定が caption に入れなかった段落 3 つだけで、good のときの 0.21.0 と同じ扱い。\n- 本文の最初の要素は、0.21.0 では図か表だったが、作業ツリーではどの通りも章になる。\n- レポートの違いは 1・2・3・4・9・10・14 章。どれも次のどれかによる。\n  - 仮の位置の文言\n  - N18・N19 による図の数\n  - 「対応する図が見つからない」がなくなる\n  - 図表が冒頭になくなったので、注の初出の順の警告が変わる\n  - 画像の番号の順\n- td3 は XML がバイト単位で同じ。\n- 終了コードが変わったのは td2 の cutops（1 → 0）だけ。0.21.0 でも、AI の回答の誤りだけなら終了コードは 0 で、これと合う。\n\n■ 独立の反例 oracle/run_b3.py\n- 作業ツリーは 26/30 件が OK、0.21.0 は 7/30 件。\n- FAIL は P06〜P09 だけ。出力は 0.21.0 と同じ（違うのはパスだけ）。F に回すことは FIX_PLAN の B3 の節の「残る限界」とテストに書かれている。\n\n■ 足したテストを 0.21.0 の src で流した\n- 47 件が落ちた（test_figure_body 20、test_floats 15、test_ai 10、test_colab 2）。\n\n■ 変異（27 通り。テスト全体を -o pythonpath で流した）\n- 落ちる（テストが守っている）:\n  - N17: 仮の位置を冒頭にする、アンカー段落の前にする、本文でないアンカーの分岐を消す、番号順をやめる\n  - N16: 印を付けない、front_en を外す、後ろの正しい指定を優先しない\n  - N18: cell_figures を止める、stop を無視する\n  - N19: 機能を止める、表キャプションの付いた表を取る、仮の位置の区別をやめる、after() を常に True にする、上の向きの表キャプションの確かめを外す、out から消さない\n  - N15: Unterminated string の扱い、切れた形の判定を外す、Extra data の読み直しを止める、API の cut の誤り\n- 生き残る: n17_mech_when_end（同じ動きの変異）と、下の 3 件目の 6 件。\n\n■ 自作の反例（cx/gen.py、架空の文字。r1〜r8）\n- 本文の表のセルに画像があり、直後に図キャプション（r2）: fig の中の table-wrap に inline-graphic が入る。DTD・J-STAGE は合格。\n- キャプションの続きの段落（r3）: 問題なし。\n- キャプションのない表が 2 つ続く（r4）: 直前の表だけを取る。\n- 章の最後の段落がアンカー（r6）、仮に置いたキャプションだけの図形の後ろに本文の画像の図がある（r7）: 0.21.0 で冒頭にあった図表がアンカーの後ろに来る。組み間違いはない。\n- r1・r5・r8: 下の 1 件目。\n\n■ 回答の読み取り（parse/parse_probe.py。21 の形を両方の版で比べた）\n- 下の 2 件目以外は、同じか、作業ツリーのほうが読める。\n\n■ その他\n- 新しい fixture 3 件は make_b3_* で作り直すと、zip の中身が同じだった。\n- ノートブックは、写した make_notebook.py の出力とバイト単位で同じ。\n\n■ 後片付け\n- worktree、docx・xml・golden の本体、変異の src を消した。\n- 自分の pytest の実行でできた tests/__pycache__ を消した。\n- git status は点検の前と同じ。",
+   "findings": [
+    {
+     "severity": "should",
+     "file": "src/jasme_jats/structure.py",
+     "line": 796,
+     "problem": "N18 で、図の左上がアンカー段落にある図形（0.21.0 では、位置が機械的に決まり、表としてアンカー段落の前に出していた）が、新しい組み方で困る。セルに画像と図キャプションがあるのに組み方が一つに決まらないとき（「（a）」などの小見出し、本文のスタイルの出典、表キャプション、キャプションのないセルが混じる形）、cell_figures が None を返す。そのため、位置を決められない図表として扱われる。結果、AI を使わない設定では変換が止まる（0.21.0 では変換できた）。手動モードで回答を貼る前や、回答にその図形の指定がないときは、正しかった位置（アンカー段落の前）ではなく、アンカー段落の後ろに仮に置かれ、要対応になって終了コードは 1 になる。FIX_PLAN の B3 の設計の方針（正本）は「組み方が一つに決まらないときは今までどおり AI に任せる」と書いている。しかし、この図形は 0.21.0 では AI に任せていなかった。この振る舞いの変化を、利用者は決めていない（決定事項 21・22 には入っていない）。FIX_PLAN の「残る限界」と DESIGN に書いてあるだけである。",
+     "evidence": "cx/gen.py の反例（架空の文字）を、0.21.0 と作業ツリーで CLI で変換した（cx/results.json）。\n- r1（図の左上がアンカー段落の上にある図形。表のセルに画像と「（a）…」「（b）…」、下の行に図1 のキャプション）:\n  - 0.21.0: --ai none で終了コード 0。table-wrap はアンカー段落の前で、要対応はない。\n  - 作業ツリー: --ai none で終了コード 2（AIRequiredError）。manual では table-wrap がアンカー段落の後ろに来る。空の回答では終了コード 1 と「要対応: 位置を決められなかった図表が 1 件」。\n- r5（キャプションのセルに本文のスタイルの「出典：…」）と r8（左上のセルに画像とキャプション、右上に画像だけ、下の行にキャプションだけ）も同じ。\n- tests/test_figure_body.py の test_cell_figures_left_to_ai_when_not_unique の text・tabcap（s1 は位置が機械的に決まる）は、この中止を期待している。0.21.0 の src では、AIRequiredError が出ないので落ちる。",
+     "fix": "float_mechanical で、cell_figures が None のとき（組み方が決まらない）は None を返さない。その下の 0.21.0 の扱い（キャプションのない表として、アンカー段落の前に出す）に進めて、位置が機械的に決まる図形を 0.21.0 のままにする（`if cells is not False: return cells` を、cells が一覧のときだけ返す形にする）。位置を決められない図形は今までどおり AI に任せる。あるいは、今の扱い（AI なしでは止まる）にするなら、利用者に決めてもらい、決定事項として記録する。どちらでも、test_cell_figures_left_to_ai_when_not_unique の期待を合わせる。"
+    },
+    {
+     "severity": "nit",
+     "file": "src/jasme_jats/ai_assist.py",
+     "line": 816,
+     "problem": "_json_text は、閉じのない ``` も、コードブロックの始まりとして扱う（N15）。そのため、コードブロックに入っていない JSON の文字列の中に ``` があると、そこから後ろだけを JSON とみなして読めなくなる。0.21.0 では、閉じの ``` が要るので、回答全体を読めていた（後退）。たとえば notes に「```の記号」と書いた回答や、チャットのコピーボタンで中身だけをコピーした回答に、文字列の中の ``` がある場合。",
+     "evidence": "parse/parse_probe.py の \"json_then_fence_in_notes\"（{\"placements\": [2 件], \"operations\": [], \"notes\": [\"```の記号\"]}、コードブロックなし）:\n- 0.21.0: parse=OK 2\n- 作業ツリー: parse=ERR「回答の中に JSON（{ で始まり } で終わる部分）が見つかりません」、parse_cut_response=None\nほかの 20 の形では、作業ツリーが 0.21.0 と同じか、より多く読める（閉じのないブロックと後ろの文字、```JSON など）。",
+     "fix": "_json_text で、回答（strip 後）が { で始まるときは、コードブロックを探さずにそのまま返す。あるいは、閉じのない ``` を使うのは、それが回答の先頭（または前置きの行の直後）にあるときだけにする。テストに「コードブロックなしの JSON の文字列に ``` がある」形を足す。"
+    },
+    {
+     "severity": "nit",
+     "file": "src/jasme_jats/structure.py",
+     "line": 941,
+     "problem": "N18・N19 の新しい規則のうち、次の 6 つはどのテストも守っていない。変異で外してもテスト全体（617 件）が通る。\n(1) cell_pairs の「画像とキャプションが同じセルにある、またはキャプションが 2 つあるセルがあれば組まない」（L941）。これを外すと、そのセルのキャプションの文字が XML から落ちる。\n(2) cell_figures の「図キャプションが表全体で 1 つ」の枝（L894）。\n(3) cell_pairs の結合セルの確かめ。\n(4) セルのキャプションに、スタイルまたはキャプションの形（cell_caption）を求める条件。\n(5)・(6) table_for_figure の「間に段落が 2 つある」形（before(-3)・after(3)、L1239・L1251）。",
+     "evidence": "mut/mut.py（結果は mut/result_all.json）で、次の変異が全テストで failed=0 だった。\n- n18_mixed_cell_ok（L941 を if False に）\n- n18_single_cap_off\n- n18_merged_ok\n- n18_capstyle_any\n- n19_gap2only\n- n19_gap_after2only\nn18_mixed_cell_ok の src で cx の r8（左上のセルに画像と図1、右上に画像だけ、下の行に図2・図3 のキャプション）を --ai none で変換した。結果は「文字の不変性チェック: 不合格（段落 24 件中 20 件を出力、3 件は除外）」で、図1 のキャプションが落ちた。作業ツリーの src では、文字は落ちない（AI に任せる）。",
+     "fix": "tests/test_figure_body.py に、架空の文字で次の変種を足す。\n- r8 の形: 組まずに AI に任せ、文字が落ちないこと。\n- 横 1 行に画像 2 つとキャプション 1 つの表: 1 つの図に組むこと。\n- 結合セルのある 2 つのキャプションの表: AI に任せること。\n- セルの「図1は…」の文: キャプションにしないこと。\n- 図キャプションと表の間に段落が 2 つある形（下に置く原稿・上に置く原稿）: 「間にほかの段落がある」の要対応が出ること。"
+    }
+   ]
+  },
+  {
+   "checked": "利用者への見え方と文書の観点で、作業ツリーの B3 の差分を点検した。差分の中身は git diff・git status で読んだ。対象は src の ai_assist・structure・pipeline・report・colab・cli、tools/make_notebook.py、README・DESIGN・DEVELOPMENT・FIX_PLAN の B3 の節、tests。ファイルは変えていない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/fb4d86bb-6ffb-5369-990a-10fe830c8789/scratchpad/b3/review/user/ に置いた（run.sh・seq.py・leak.py と、文字を含まない *.seq）。\n\n■ td1・td2 の変換\n- CLI で --route docx --ai manual を使い、0.21.0（base021_src）と作業ツリーで、模擬回答 5 通りを流した。none／empty／outside（注・引用文献・付記の後ろを指定）／cut（途中で切れた回答）／good。模擬回答は確かめの担当が段落 ID で作ったもの。\n- 不変性・最終・DTD・J-STAGE のチェックは、20 通りすべてで合格した。\n- 2026-10-18 の指摘「XML の冒頭に図表が来る」は直っていた。0.21.0 は 9 通りで本文の最初の要素が図表だった。作業ツリーでは 10 通りとも章が最初に来る。\n  - td1: 冒頭にあった F1〜F4・T1・T2 が、それぞれのアンカー段落の後ろに移った。\n  - td2: 図1・表4 が移った。outside では、指定した 3 件が本文の最後（最後の章の中）に来た。\n- 「図1 が表のように見える」は、決定事項 22 のとおり変えていない。td1・td2 の図1 は、0.21.0 と同じく fig の中の table-wrap のまま。そのうえで td2 は次のとおり変わった。\n  - 図3・図4 が graphic の図になった（N18）。\n  - 図2 が fig の中の table-wrap になった（N19）。\n  - 3 章の未解決は 7 → 3 件に減った。\n\n■ レポート（td1 empty・cut、td2 outside、sample_b3_tablefig）\n- 冒頭・1 章・2 章・3 章・14 章を実際に読んだ。\n- 1 章: 「N 件（アンカー段落の後ろに仮に配置）」、または「本文の最後」。\n- 冒頭の要対応: 図表ごとに「XML の段落「…」の後ろにある F1」「XML の本文の最後にある F2」と書く。\n- 3 章: 理由を 4 通りに書き分ける（AI でも決まらない／本文の外の指定／途中で切れて読めない／回答を反映できない）。\n- 2 章: 不採用の理由に「本文の最後に仮に置いた」が付く。\n- 14 章: 文言は置いた位置と合っている。\n- 途中で切れた回答（cut）の要対応は、冒頭・2 章・14 章・AI判断一覧・CLI に出る。\n- 図の本体の要対応は、冒頭・3 章・14 章・CLI に出る。\n- 手動モードで回答を貼る前の出力でも、同じ位置の説明が出る。\n\n■ Colab\n- unplaced_box は、図形ごとの置いた位置と理由を示す（td2 の outside・cut を in-process で確かめた）。\n- 次の 2 つの表示は、手順 5 と手順 6 の両方に入っている。\n  - partial の赤い枠\n  - figure_body_box\n- ノートブックは、写しで tools/make_notebook.py を実行し、作り直した版とバイト単位で同じだった。\n\n■ 依頼文（sample_float の AI依頼文.txt を 0.21.0 と diff）\n- placements を先頭に書く指示が、次の 4 か所に入っていて、チャットの AI に伝わる形になっている。\n  - SYSTEM_PROMPT の 1 文\n  - 回答の書き方の箇条\n  - 見本（placements が先頭）\n  - FIELD_GUIDE の冒頭（placements の説明が先）\n- RESPONSE_SCHEMA の properties・required も、placements が先頭の順になっている。\n\n■ 確かめの指摘の後退が直ったか\n- 閉じのない ```json の後ろに文字が続く回答は、作業ツリーで読めた。\n- placements の前で切れた回答には「途中で切れている可能性」の案内が付く。0.21.0 では「JSON が見つかりません」だった。\n\n■ 版と文書\n- 版は __init__.py・pyproject.toml・ノートブックとも 0.22.0。\n- README・DESIGN（5 章・6.1・7 章）・DEVELOPMENT（構成表・テスト・残る課題）・FIX_PLAN（B3 の節・反映の順序の表・N15〜N19）は、実装と合っていた。\n  - 決定事項 21 の後半は F で効くことを、DESIGN・DEVELOPMENT・FIX_PLAN の「残る限界」に記録してある。\n  - 数（617 件、td2 の未解決 7 → 3 件など）は、測り直した値と一致した。\n- 「本文の冒頭」の文言は、src・tools・README から消えている。\n\n■ テストなど\n- pytest: 3.13 で 617 passed、3.10（venv310）で 617 passed。\n- ruff: 195 件。\n- tests/__pycache__ は消した。\n\n■ 実際の論文の文字が混じっていないか\n- tests/private の docx の文字から、和文字 5 字以上を含む 8 文字の並びを作り、次と突き合わせた。\n  - 新しい fixture 3 件\n  - git diff の追加行\n  - tests/test_figure_body.py\n- 一致したのは、誌名・「引用および参考文献」の見出し・ありふれた言い回しだけで、本文の写しはなかった。\n\n■ 後片付け\n- 大きな出力（xml・zip・docx・画像・レポート・依頼文）は消した。\n- 残した結果は 416K。ディスクの空きは 23GB。\n\nfindings はどれも nit で、反映を止めるものはない。",
+   "findings": [
+    {
+     "severity": "nit",
+     "file": "src/jasme_jats/structure.py",
+     "line": 720,
+     "problem": "仮の位置を「アンカー段落の位置 + 1」にしているので、アンカー段落が箇条書きの項目や引用（disp-quote）の段落だと、仮に置いた図表が箇条書き・引用を 2 つに分ける。利用者が図表を正しい位置に移しても、分かれたまま残る。知らせ（3 章・冒頭・Colab）にはそのことが書かれていない。AI が同じ段落の後ろを指定したときも同じように分かれるが、それは 0.21.0 からの扱い。B3 では、AI が位置を決めなかった場合（回答なし・空の回答）にも起きるようになった。",
+     "evidence": "seq.py で XML の本文の並びを、文字を出さずに比べた。\n- td1（none・empty）\n  - 0.21.0: 2 項目の bullet の list が 1 つ（図表は本文の冒頭）。\n  - 作業ツリー: 1 項目の list が 2 つになり、その間に fig F4 が入る。\n- td2（none・empty）\n  - 0.21.0: 4 段落の disp-quote が 1 つ。\n  - 作業ツリー: disp-quote が 3 段落と 1 段落に分かれ、間に F3・F4 が入る。\n- good（AI が同じ位置を指定した模擬回答）では、0.21.0 でも分かれていた。\n- 文字は落ちていない。不変性・DTD は合格。\n- 番号付きの箇条書きでは、label を出しているので、番号は振り直されない（builder.list_node）。",
+     "fix": "provisional_target で、アンカー段落が続いた箇条書きの項目や引用の段落の途中にあるときは、その並びの最後の段落の後ろを仮の位置にする（AI が指定した位置は今のまま）。手を入れないなら、DESIGN 7 章の限界に「仮の位置が箇条書き・引用の途中だと、それを分ける」と書き、3 章の説明に「移した後、分かれた箇条書き・引用はそのまま残る」と添える。sample_b3_place に、箇条書きの項目に結び付いた図形の変種を足して確かめる。"
+    },
+    {
+     "severity": "nit",
+     "file": "src/jasme_jats/ai_assist.py",
+     "line": 786,
+     "problem": "途中で切れた回答の案内「AI に続きを出力してもらうか、出し直してもらってください」が、B3 で \"Unterminated string\" のとき（placements の前で切れたときを含む）にも出るようになった。しかし「続き」を頼むと、AI は回答の後半だけを返す。それを手順 6 に貼っても読めないので、技術に詳しくない編集委員にはこの道が使えない。一方、PARTIAL_MSG と 14 章は「同じ形式で最初から出し直してください」と頼むよう書いている。手順 6 の後に赤い枠が 2 つ並ぶときは、それぞれ別の頼み方を勧める。\n- partial の枠: 「最初から出し直し」\n- unplaced_box: 「位置を決められなかった図表をすべて placements に書いて出し直し」\n利用者には、どちらを頼めばよいか分からない。README の手動モードの説明にも、回答が途中で切れたときの扱いがない。",
+     "evidence": "回答 '```json\\n{\"operations\": [{\"op\": \"link_citation\", \"reason\": \"途中' を parse_response に渡して比べた。\n- 0.21.0（base021_src）: 「回答の中に JSON … が見つかりません。…コードブロックで出し直すよう頼んでください」\n- 作業ツリー: 「…（Unterminated string starting at）。…回答が途中で切れている可能性があります。AI に続きを出力してもらうか、出し直してもらってください。」\ntd2 の cut の模擬回答を in-process で変換し、Colab の表示を確かめた。partial の枠と unplaced_box の両方が出て、頼み方の文言が違う（pipeline.PARTIAL_MSG と colab.unplaced_box）。",
+     "fix": "案内を「回答が途中で切れている可能性があります。チャットで「回答が途中で切れました。同じ形式で最初から出し直してください」と頼み、新しい回答を貼り付けてください（続きだけを貼り付けても読めません）」にそろえる。partial があるときは、unplaced_box の出し直しの文を省くか、PARTIAL_MSG の頼み方に合わせる。README の手動モードの段落に、途中で切れた回答の扱いを 1 文足す。"
+    },
+    {
+     "severity": "nit",
+     "file": "src/jasme_jats/cli.py",
+     "line": 122,
+     "problem": "コマンドラインの「位置を決められなかった図表を、仮の位置…に置きました」の一覧は、図形の ID（s1 など）と位置だけを示し、キャプションと XML の図表の ID（F2・T11 など）を示さない。s1 は XML にもレポートの冒頭にも出ないので、利用者は CLI の表示から XML のどの図表を移せばよいか分からない。レポートの冒頭（r.forced_floats）には「「図１ …」: XML の本文の最後にある F2」と出ている。Colab の枠も、キャプションは示すが、XML の ID は示さない。",
+     "evidence": "td2 の outside の stderr は次のとおり。\n- 作業ツリー: 「…: s1（本文の最後）、s2（本文の最後）、s3（本文の最後）」\n- 0.21.0: 「…: s1, s2, s3」\n同じ変換のレポートの冒頭では、図表ごとに、キャプションと「XML の本文の最後にある F2」「… F3・F4」「… T11」を示している。",
+     "fix": "CLI の一覧は、res.forced_floats（キャプションと、XML の位置・ID）を 1 行ずつ出す。Colab の unplaced_box も、pipeline._float_ids で求めた XML の ID を添える（例: 「・s1（「図1 …」、XML の F2）: 本文の最後」）。"
+    },
+    {
+     "severity": "nit",
+     "file": "src/jasme_jats/pipeline.py",
+     "line": 424,
+     "problem": "3 章の「図表の位置」の行の「場所」は、アンカー段落の位置（plan.locations）。アンカー段落が空の段落（出力しない段落）だと、位置がないので「d24」のような段落 ID がそのまま出て、利用者には手がかりにならない。B3 は float_place に、空のアンカー段落を前の文字のある段落で示す扱いを入れたが、場所の列にはその扱いが効いていない。0.21.0 も同じ表示で、悪くはなっていない。新しく見つけたもの。",
+     "evidence": "td1 の empty・none の 3 章で、「図表の位置」の 5 行のうち 1 行の場所が段落 ID だけになっている（0.21.0 も作業ツリーも同じ）。依頼文によると、この段落 ID は文字のない段落（図形 s2 のアンカー段落で、s3 はその前に機械的に配置済み）。同じ行の理由の欄は、前の段落の名前で「段落「…」の後ろに仮に置いた」と正しく示している。",
+     "fix": "unresolved_after に入れる src を、場所が引ける段落にする（float_place と同じく、body_seq でアンカー段落から前にさかのぼり、文字のある段落を使う）。または report の 3 章で、場所が見つからない float の行に「（空の段落。理由の欄の段落の後ろ）」と出す。"
+    },
+    {
+     "severity": "nit",
+     "file": "src/jasme_jats/report.py",
+     "line": 90,
+     "problem": "図の本体の要対応の対処（FIGURE_BODY_ACTION）は、「近くの表が図の本体なら、表を図キャプションのすぐ上に…置いてから変換し直す」だけを書く。理由が「直前の表に表キャプション「表1 …」が付いている」のとき、その表はすでに図キャプションのすぐ上にある。利用者は書かれたとおりにしても何も変わらず、何をすればよいか分からない。図の本体が画像のとき（画像が見つからない理由）の対処もない。",
+     "evidence": "sample_b3_tablefig を --ai none で変換し、CLI・レポートの冒頭・3 章を確かめた。「図3 表の直後の図キャプション」の理由は「直前の表に表キャプション「表1 表キャプションの付いた表」が付いている」で、対処は同じ文面の「表を図キャプションのすぐ上に…置いてから」。",
+     "fix": "理由ごとに対処を変える。表キャプションが付いているときは、「その表が表 N として正しいなら、この図の本体（画像）が docx にあるかを確かめる（ないときは図を用意する）。表がこの図の本体なら、表キャプションと図キャプションのどちらが正しいかを著者に確かめる」とする。間に段落があるときは今の文面のままにする。または、共通の文面に「画像が本体なら、画像がキャプションのすぐ隣にあるかを Word で確かめる」を足す。"
+    }
+   ]
+  }
+ ],
+ "failedFirst": [],
+ "firstFindings": [
+  {
+   "lens": "principle",
+   "severity": "should",
+   "file": "src/jasme_jats/structure.py",
+   "line": 843,
+   "problem": "N18（cell_figures）で、docx では表のセルの段落（図キャプション、画像と同じ段落の文字）を、図のキャプションと本文の段落にした。そのため、ルート2（Colab の初期値）で PDF と照合して直す段落が変わり、docx の表のセルの段落も照合して直すようになった。これは DESIGN 4.4 の「表のセル…は照合しない・直さない」（L397・L417）と食い違う。B3 の記録と確かめにも出ていない（td1〜3 は --route docx だけで測っている。golden の pdfcheck には表のセルの図がない）。td2 のルート2 では、直した docx と XML の文字が 0.21.0 と 1 文字違う。",
+   "evidence": "【方法】run_case.py で、0.21.0 の写しと作業ツリーを --route pdf --ai manual で変換した。直した docx の段落ごとの文字のハッシュと、直し（Fix）を比べた。\n\n【td2（回答なし・正しい回答の 2 通り）】\n- 0.21.0 は d214 を直さない（照合しない表のセル）。\n- 作業ツリーは d214 に全角・半角の直し（width）を 1 件当て、全角の数字 1 字を半角にする。d214 は図形 s2 の表のセルの図キャプションで、N18 で図4 のキャプションになる。\n- XML の文字の集まりも、この 1 文字だけ違う。13 章の照合した段落は 774 → 775 件。\n- チェックはすべて合格。XML に入らなかった画像は 0 → 0。\n- td1・td3 の直しは 0.21.0 と同じ。\n\n【架空の反例（gen_route2.py）】原稿と出版社が直した想定の docx を作り、後者を LibreOffice で PDF にした。\n- R05（セルのキャプションの番号を全角から半角に直した PDF）: 作業ツリーだけが、セルのキャプション「図１＋全角空白＋題」を「図1題」に直す（width と、隣の全角空白を消す space）。PDF の行には全角空白がある。DESIGN 4.4（L355〜356）にある既知の限界が、表のセルのキャプションにも及んだ形。\n- R03（本文の図）・R04（表でない図形の図）: 対照。両版で同じ直しになる。\n- R06（セルの説明文の途中の語を PDF で直した）: 作業ツリーだけ、説明文が 13.2（直さなかった。要確認）に、セルのキャプションが 13.5（PDF に見つからない段落）に出る。冒頭の表に「直せなかった 1 箇所（要確認）」「PDF に見つからない段落 1 件」が増える。0.21.0 はどれも出さない。",
+   "fix": "反映の前に、どちらにするかを決めて記録する。\n(a) N18・N19 で組んだ図の、docx では表のセルの段落も、ルート2 の照合と直しの対象にする場合:\n- DESIGN 4.4 の「照合する段落」「直さない段落」に、この例外を書く。\n- FIX_PLAN の B3 の「確かめた数」に td1〜3 のルート2 の結果を、「残る限界」に、全角空白の既知の限界がセルのキャプションにも及ぶことを書く。\n- 表のセルの図を含む fixture で、ルート2 のテストか golden を足す。\n(b) 今までどおり対象外にする場合: 照合する段落を決める側（linker.body_paragraphs の文脈か、段落が docx の表のセルであることの印）で外す。pdfmatch.py に触るなら B2.1 と調整する。"
+  },
+  {
+   "lens": "principle",
+   "severity": "should",
+   "file": "src/jasme_jats/structure.py",
+   "line": 1128,
+   "problem": "仮の位置に置いた図形の中身が、assemble_floats の組み方で、その外にある本文の要素と組になる。表キャプションと表の組み方（L1130 の直後 2 つ以内の表を探す規則、L1135 の直前のキャプションのない表に付ける規則）と、図キャプションと画像の組み方（L1097〜）で起き、相手は本文の表・表キャプション・図キャプション。B3 で中身をアンカー段落のすぐ後ろに置くようになったため起きる（0.21.0 は本文の冒頭なので組まなかった）。置き場所を区別するのは N19 の table_for_figure だけ。要対応の「手作業で…にある T1・T2／F1 を正しい位置に移すこと」が本文の表キャプション・表・図キャプションを含む要素を名指しするので、知らせどおりに移すと docx の本文の文字が別の場所に入る。",
+   "evidence": "【方法】gen_own.py で架空の docx を作った。手動モードで、位置を答えない回答（placements が空）を貼った。両版の plan.figures・plan.tables の中身（図形の中の段落か、本文の段落か）と、要対応の文を比べた。\n\n【O16】図形（3 cm 下）に画像とキャプションのない表 2 つ。その直後の本文に、表のない表キャプションがある。\n- 0.21.0: T2 は図形の表、T3 は本文の表キャプションだけ。\n- 作業ツリー: T2 は図形の 2 つ目の表に本文の表キャプションを付けたもの。\n- 3 章と冒頭の要対応は「…の後ろにある T1・T2 を正しい位置に移すこと」。\n\n【O06b】図形に表キャプションと画像。アンカー段落の直後に、本文のキャプションのない表がある。\n- 0.21.0: T1 は図形の表キャプションだけ、T2 は本文の表。\n- 作業ツリー: T1 は図形の表キャプションと本文の表。\n- 要対応は「…の後ろにある図表の中身を移すこと」。\n\n【O17】本文の画像の段落がアンカーで、図形はキャプションのない画像。その後ろに本文の図キャプションがある。\n- 0.21.0: F1 は本文の画像と本文の図キャプション（正しい組）。\n- 作業ツリー: F1 は図形の画像と本文の図キャプション。本文の画像はキャプションのない図になる。\n- 要対応は「…にある F1 を正しい位置に移すこと」。\n\n【共通】\n- 3 件とも不変性・最終・DTD は合格で、文字は落ちず、重ならない。\n- DESIGN 6.1（L580）は「仮に置いた図形の中身は…その外の図キャプション・表とは組にしない」と書く。\n- DESIGN 7 章（L604〜608）が限界として挙げるのは画像の組み方だけで、「仮の図表が 2 つ以上」と書く。O17 では仮の要素 1 つ（画像）で組が崩れる。",
+   "fix": "assemble_floats の次の 5 か所で、table_for_figure と同じく、置き場所が同じ（Classifier.provisional の値が同じ）要素だけを見る。\n- 図キャプションの画像を探す 2 か所（out の直前 2 つと、flat の直後 2 つ）\n- 表キャプションの表を探す所\n- 直前のキャプションのない表に付ける所\n- 本文スタイルの図表キャプションを推定するときの、隣の判定\n少なくとも、pipeline._float_ids と要対応の文で、本文の段落を含む図・表を「移す対象」に挙げないようにし、DESIGN 6.1 と 7 章を実装に合わせる。O06・O16・O17 の形をテストに足す。"
+  },
+  {
+   "lens": "principle",
+   "severity": "nit",
+   "file": "src/jasme_jats/ai_assist.py",
+   "line": 831,
+   "problem": "cut_at_end は、誤りが Unterminated string なら、途中で切れた回答とみなす。そのため、最後まで書かれていても書き損じのある回答を、途中で切れた回答として扱う。位置の指定だけを反映し、リンク（operations）を捨て、要対応「AI の回答が途中で切れていました」を出す。0.21.0 は、どちらの形も読めない回答として扱っていた。DESIGN 5 章の「途中の書き損じ（飾りの引用符など）の回答は、今までどおり読めない回答として扱う」とも違う。",
+   "evidence": "【方法】parse_response と parse_cut_response を、両版で直接呼んだ。\n\n【形 (1)】最後まで書かれた回答で、最後の文字列（notes）の閉じだけが飾りの引用符。\n- 0.21.0: 読めない回答。飾りの引用符の案内が付く。\n- 作業ツリー: parse_cut_response が placements を返す。手動モードで貼ると、_read_cut が誤りを消すので、飾りの引用符の案内も出ない。\n\n【形 (2)】閉じた ```json ブロックの中の文字列に ``` がある回答。\n- 0.21.0: 読めない回答。\n- 作業ツリー: placements だけを読む。parse_response の誤りにも「途中で切れている可能性」の案内が付く。\n\n【影響】読んだ指定は float_placements で検証するので、文字の不変性には影響しない。",
+   "fix": "次のどちらかにする。\n- cut_at_end で、Unterminated string の文字列の始まり（e.pos）から最後までに SMART_QUOTES の文字か ``` があれば、切れた形とみなさない。\n- _json_text が閉じた ``` を見つけた回答は、途中で切れた回答として読まない。\nあわせて、2 つの形をテストに足す。"
+  },
+  {
+   "lens": "principle",
+   "severity": "nit",
+   "file": "src/jasme_jats/ai_assist.py",
+   "line": 354,
+   "problem": "AI 依頼文の「# 位置を機械的に決めた図表」で、N18 でキャプション付きの図に組んだ図形を「（キャプションなし）」と示す。float_section は info.paras の役割だけを見て、表のセルのキャプションを数えないため。",
+   "evidence": "sample_b3_cells.docx を手動モードで変換した。AI依頼文.txt の 157〜159 行に「[s1]（キャプションなし）: 段落 [d13] の前に配置済み」とあり、s2・s3 も同じ。実際の出力では、s1〜s3 は図1〜図5 のキャプション付きの図になっている。0.21.0 では同じ図形をキャプションのない表として出していたので、表示と出力が合っていた。",
+   "fix": "固定の図表の行では、表のセルのキャプションも見る structure.float_caption(info) を使う。"
+  },
+  {
+   "lens": "regression",
+   "severity": "should",
+   "file": "src/jasme_jats/structure.py",
+   "line": 796,
+   "problem": "N18 で、図の左上がアンカー段落にある図形（0.21.0 では、位置が機械的に決まり、表としてアンカー段落の前に出していた）が、新しい組み方で困る。セルに画像と図キャプションがあるのに組み方が一つに決まらないとき（「（a）」などの小見出し、本文のスタイルの出典、表キャプション、キャプションのないセルが混じる形）、cell_figures が None を返す。そのため、位置を決められない図表として扱われる。結果、AI を使わない設定では変換が止まる（0.21.0 では変換できた）。手動モードで回答を貼る前や、回答にその図形の指定がないときは、正しかった位置（アンカー段落の前）ではなく、アンカー段落の後ろに仮に置かれ、要対応になって終了コードは 1 になる。FIX_PLAN の B3 の設計の方針（正本）は「組み方が一つに決まらないときは今までどおり AI に任せる」と書いている。しかし、この図形は 0.21.0 では AI に任せていなかった。この振る舞いの変化を、利用者は決めていない（決定事項 21・22 には入っていない）。FIX_PLAN の「残る限界」と DESIGN に書いてあるだけである。",
+   "evidence": "cx/gen.py の反例（架空の文字）を、0.21.0 と作業ツリーで CLI で変換した（cx/results.json）。\n- r1（図の左上がアンカー段落の上にある図形。表のセルに画像と「（a）…」「（b）…」、下の行に図1 のキャプション）:\n  - 0.21.0: --ai none で終了コード 0。table-wrap はアンカー段落の前で、要対応はない。\n  - 作業ツリー: --ai none で終了コード 2（AIRequiredError）。manual では table-wrap がアンカー段落の後ろに来る。空の回答では終了コード 1 と「要対応: 位置を決められなかった図表が 1 件」。\n- r5（キャプションのセルに本文のスタイルの「出典：…」）と r8（左上のセルに画像とキャプション、右上に画像だけ、下の行にキャプションだけ）も同じ。\n- tests/test_figure_body.py の test_cell_figures_left_to_ai_when_not_unique の text・tabcap（s1 は位置が機械的に決まる）は、この中止を期待している。0.21.0 の src では、AIRequiredError が出ないので落ちる。",
+   "fix": "float_mechanical で、cell_figures が None のとき（組み方が決まらない）は None を返さない。その下の 0.21.0 の扱い（キャプションのない表として、アンカー段落の前に出す）に進めて、位置が機械的に決まる図形を 0.21.0 のままにする（`if cells is not False: return cells` を、cells が一覧のときだけ返す形にする）。位置を決められない図形は今までどおり AI に任せる。あるいは、今の扱い（AI なしでは止まる）にするなら、利用者に決めてもらい、決定事項として記録する。どちらでも、test_cell_figures_left_to_ai_when_not_unique の期待を合わせる。"
+  },
+  {
+   "lens": "regression",
+   "severity": "nit",
+   "file": "src/jasme_jats/ai_assist.py",
+   "line": 816,
+   "problem": "_json_text は、閉じのない ``` も、コードブロックの始まりとして扱う（N15）。そのため、コードブロックに入っていない JSON の文字列の中に ``` があると、そこから後ろだけを JSON とみなして読めなくなる。0.21.0 では、閉じの ``` が要るので、回答全体を読めていた（後退）。たとえば notes に「```の記号」と書いた回答や、チャットのコピーボタンで中身だけをコピーした回答に、文字列の中の ``` がある場合。",
+   "evidence": "parse/parse_probe.py の \"json_then_fence_in_notes\"（{\"placements\": [2 件], \"operations\": [], \"notes\": [\"```の記号\"]}、コードブロックなし）:\n- 0.21.0: parse=OK 2\n- 作業ツリー: parse=ERR「回答の中に JSON（{ で始まり } で終わる部分）が見つかりません」、parse_cut_response=None\nほかの 20 の形では、作業ツリーが 0.21.0 と同じか、より多く読める（閉じのないブロックと後ろの文字、```JSON など）。",
+   "fix": "_json_text で、回答（strip 後）が { で始まるときは、コードブロックを探さずにそのまま返す。あるいは、閉じのない ``` を使うのは、それが回答の先頭（または前置きの行の直後）にあるときだけにする。テストに「コードブロックなしの JSON の文字列に ``` がある」形を足す。"
+  },
+  {
+   "lens": "regression",
+   "severity": "nit",
+   "file": "src/jasme_jats/structure.py",
+   "line": 941,
+   "problem": "N18・N19 の新しい規則のうち、次の 6 つはどのテストも守っていない。変異で外してもテスト全体（617 件）が通る。\n(1) cell_pairs の「画像とキャプションが同じセルにある、またはキャプションが 2 つあるセルがあれば組まない」（L941）。これを外すと、そのセルのキャプションの文字が XML から落ちる。\n(2) cell_figures の「図キャプションが表全体で 1 つ」の枝（L894）。\n(3) cell_pairs の結合セルの確かめ。\n(4) セルのキャプションに、スタイルまたはキャプションの形（cell_caption）を求める条件。\n(5)・(6) table_for_figure の「間に段落が 2 つある」形（before(-3)・after(3)、L1239・L1251）。",
+   "evidence": "mut/mut.py（結果は mut/result_all.json）で、次の変異が全テストで failed=0 だった。\n- n18_mixed_cell_ok（L941 を if False に）\n- n18_single_cap_off\n- n18_merged_ok\n- n18_capstyle_any\n- n19_gap2only\n- n19_gap_after2only\nn18_mixed_cell_ok の src で cx の r8（左上のセルに画像と図1、右上に画像だけ、下の行に図2・図3 のキャプション）を --ai none で変換した。結果は「文字の不変性チェック: 不合格（段落 24 件中 20 件を出力、3 件は除外）」で、図1 のキャプションが落ちた。作業ツリーの src では、文字は落ちない（AI に任せる）。",
+   "fix": "tests/test_figure_body.py に、架空の文字で次の変種を足す。\n- r8 の形: 組まずに AI に任せ、文字が落ちないこと。\n- 横 1 行に画像 2 つとキャプション 1 つの表: 1 つの図に組むこと。\n- 結合セルのある 2 つのキャプションの表: AI に任せること。\n- セルの「図1は…」の文: キャプションにしないこと。\n- 図キャプションと表の間に段落が 2 つある形（下に置く原稿・上に置く原稿）: 「間にほかの段落がある」の要対応が出ること。"
+  },
+  {
+   "lens": "user",
+   "severity": "nit",
+   "file": "src/jasme_jats/structure.py",
+   "line": 720,
+   "problem": "仮の位置を「アンカー段落の位置 + 1」にしているので、アンカー段落が箇条書きの項目や引用（disp-quote）の段落だと、仮に置いた図表が箇条書き・引用を 2 つに分ける。利用者が図表を正しい位置に移しても、分かれたまま残る。知らせ（3 章・冒頭・Colab）にはそのことが書かれていない。AI が同じ段落の後ろを指定したときも同じように分かれるが、それは 0.21.0 からの扱い。B3 では、AI が位置を決めなかった場合（回答なし・空の回答）にも起きるようになった。",
+   "evidence": "seq.py で XML の本文の並びを、文字を出さずに比べた。\n- td1（none・empty）\n  - 0.21.0: 2 項目の bullet の list が 1 つ（図表は本文の冒頭）。\n  - 作業ツリー: 1 項目の list が 2 つになり、その間に fig F4 が入る。\n- td2（none・empty）\n  - 0.21.0: 4 段落の disp-quote が 1 つ。\n  - 作業ツリー: disp-quote が 3 段落と 1 段落に分かれ、間に F3・F4 が入る。\n- good（AI が同じ位置を指定した模擬回答）では、0.21.0 でも分かれていた。\n- 文字は落ちていない。不変性・DTD は合格。\n- 番号付きの箇条書きでは、label を出しているので、番号は振り直されない（builder.list_node）。",
+   "fix": "provisional_target で、アンカー段落が続いた箇条書きの項目や引用の段落の途中にあるときは、その並びの最後の段落の後ろを仮の位置にする（AI が指定した位置は今のまま）。手を入れないなら、DESIGN 7 章の限界に「仮の位置が箇条書き・引用の途中だと、それを分ける」と書き、3 章の説明に「移した後、分かれた箇条書き・引用はそのまま残る」と添える。sample_b3_place に、箇条書きの項目に結び付いた図形の変種を足して確かめる。"
+  },
+  {
+   "lens": "user",
+   "severity": "nit",
+   "file": "src/jasme_jats/ai_assist.py",
+   "line": 786,
+   "problem": "途中で切れた回答の案内「AI に続きを出力してもらうか、出し直してもらってください」が、B3 で \"Unterminated string\" のとき（placements の前で切れたときを含む）にも出るようになった。しかし「続き」を頼むと、AI は回答の後半だけを返す。それを手順 6 に貼っても読めないので、技術に詳しくない編集委員にはこの道が使えない。一方、PARTIAL_MSG と 14 章は「同じ形式で最初から出し直してください」と頼むよう書いている。手順 6 の後に赤い枠が 2 つ並ぶときは、それぞれ別の頼み方を勧める。\n- partial の枠: 「最初から出し直し」\n- unplaced_box: 「位置を決められなかった図表をすべて placements に書いて出し直し」\n利用者には、どちらを頼めばよいか分からない。README の手動モードの説明にも、回答が途中で切れたときの扱いがない。",
+   "evidence": "回答 '```json\\n{\"operations\": [{\"op\": \"link_citation\", \"reason\": \"途中' を parse_response に渡して比べた。\n- 0.21.0（base021_src）: 「回答の中に JSON … が見つかりません。…コードブロックで出し直すよう頼んでください」\n- 作業ツリー: 「…（Unterminated string starting at）。…回答が途中で切れている可能性があります。AI に続きを出力してもらうか、出し直してもらってください。」\ntd2 の cut の模擬回答を in-process で変換し、Colab の表示を確かめた。partial の枠と unplaced_box の両方が出て、頼み方の文言が違う（pipeline.PARTIAL_MSG と colab.unplaced_box）。",
+   "fix": "案内を「回答が途中で切れている可能性があります。チャットで「回答が途中で切れました。同じ形式で最初から出し直してください」と頼み、新しい回答を貼り付けてください（続きだけを貼り付けても読めません）」にそろえる。partial があるときは、unplaced_box の出し直しの文を省くか、PARTIAL_MSG の頼み方に合わせる。README の手動モードの段落に、途中で切れた回答の扱いを 1 文足す。"
+  },
+  {
+   "lens": "user",
+   "severity": "nit",
+   "file": "src/jasme_jats/cli.py",
+   "line": 122,
+   "problem": "コマンドラインの「位置を決められなかった図表を、仮の位置…に置きました」の一覧は、図形の ID（s1 など）と位置だけを示し、キャプションと XML の図表の ID（F2・T11 など）を示さない。s1 は XML にもレポートの冒頭にも出ないので、利用者は CLI の表示から XML のどの図表を移せばよいか分からない。レポートの冒頭（r.forced_floats）には「「図１ …」: XML の本文の最後にある F2」と出ている。Colab の枠も、キャプションは示すが、XML の ID は示さない。",
+   "evidence": "td2 の outside の stderr は次のとおり。\n- 作業ツリー: 「…: s1（本文の最後）、s2（本文の最後）、s3（本文の最後）」\n- 0.21.0: 「…: s1, s2, s3」\n同じ変換のレポートの冒頭では、図表ごとに、キャプションと「XML の本文の最後にある F2」「… F3・F4」「… T11」を示している。",
+   "fix": "CLI の一覧は、res.forced_floats（キャプションと、XML の位置・ID）を 1 行ずつ出す。Colab の unplaced_box も、pipeline._float_ids で求めた XML の ID を添える（例: 「・s1（「図1 …」、XML の F2）: 本文の最後」）。"
+  },
+  {
+   "lens": "user",
+   "severity": "nit",
+   "file": "src/jasme_jats/pipeline.py",
+   "line": 424,
+   "problem": "3 章の「図表の位置」の行の「場所」は、アンカー段落の位置（plan.locations）。アンカー段落が空の段落（出力しない段落）だと、位置がないので「d24」のような段落 ID がそのまま出て、利用者には手がかりにならない。B3 は float_place に、空のアンカー段落を前の文字のある段落で示す扱いを入れたが、場所の列にはその扱いが効いていない。0.21.0 も同じ表示で、悪くはなっていない。新しく見つけたもの。",
+   "evidence": "td1 の empty・none の 3 章で、「図表の位置」の 5 行のうち 1 行の場所が段落 ID だけになっている（0.21.0 も作業ツリーも同じ）。依頼文によると、この段落 ID は文字のない段落（図形 s2 のアンカー段落で、s3 はその前に機械的に配置済み）。同じ行の理由の欄は、前の段落の名前で「段落「…」の後ろに仮に置いた」と正しく示している。",
+   "fix": "unresolved_after に入れる src を、場所が引ける段落にする（float_place と同じく、body_seq でアンカー段落から前にさかのぼり、文字のある段落を使う）。または report の 3 章で、場所が見つからない float の行に「（空の段落。理由の欄の段落の後ろ）」と出す。"
+  },
+  {
+   "lens": "user",
+   "severity": "nit",
+   "file": "src/jasme_jats/report.py",
+   "line": 90,
+   "problem": "図の本体の要対応の対処（FIGURE_BODY_ACTION）は、「近くの表が図の本体なら、表を図キャプションのすぐ上に…置いてから変換し直す」だけを書く。理由が「直前の表に表キャプション「表1 …」が付いている」のとき、その表はすでに図キャプションのすぐ上にある。利用者は書かれたとおりにしても何も変わらず、何をすればよいか分からない。図の本体が画像のとき（画像が見つからない理由）の対処もない。",
+   "evidence": "sample_b3_tablefig を --ai none で変換し、CLI・レポートの冒頭・3 章を確かめた。「図3 表の直後の図キャプション」の理由は「直前の表に表キャプション「表1 表キャプションの付いた表」が付いている」で、対処は同じ文面の「表を図キャプションのすぐ上に…置いてから」。",
+   "fix": "理由ごとに対処を変える。表キャプションが付いているときは、「その表が表 N として正しいなら、この図の本体（画像）が docx にあるかを確かめる（ないときは図を用意する）。表がこの図の本体なら、表キャプションと図キャプションのどちらが正しいかを著者に確かめる」とする。間に段落があるときは今の文面のままにする。または、共通の文面に「画像が本体なら、画像がキャプションのすぐ隣にあるかを Word で確かめる」を足す。"
+  }
+ ],
+ "rounds": [
+  {
+   "round": 1,
+   "fix": {
+    "changed_files": [
+     "/home/user/jstgxmlcng_JASME/src/jasme_jats/structure.py",
+     "/home/user/jstgxmlcng_JASME/src/jasme_jats/ai_assist.py",
+     "/home/user/jstgxmlcng_JASME/src/jasme_jats/pipeline.py",
+     "/home/user/jstgxmlcng_JASME/src/jasme_jats/linker.py",
+     "/home/user/jstgxmlcng_JASME/src/jasme_jats/report.py",
+     "/home/user/jstgxmlcng_JASME/src/jasme_jats/colab.py",
+     "/home/user/jstgxmlcng_JASME/src/jasme_jats/cli.py",
+     "/home/user/jstgxmlcng_JASME/tests/make_fixtures.py",
+     "/home/user/jstgxmlcng_JASME/tests/test_figure_body.py",
+     "/home/user/jstgxmlcng_JASME/tests/test_floats.py",
+     "/home/user/jstgxmlcng_JASME/tests/test_ai.py",
+     "/home/user/jstgxmlcng_JASME/tests/test_colab.py",
+     "/home/user/jstgxmlcng_JASME/tools/make_notebook.py",
+     "/home/user/jstgxmlcng_JASME/notebooks/JASME_docx_to_JSTAGE_XML.ipynb",
+     "/home/user/jstgxmlcng_JASME/README.md",
+     "/home/user/jstgxmlcng_JASME/docs/DESIGN.md",
+     "/home/user/jstgxmlcng_JASME/docs/DEVELOPMENT.md",
+     "/home/user/jstgxmlcng_JASME/docs/FIX_PLAN.md"
+    ],
+    "summary": "前回の試み（作業ツリー＝控え 24d4bc7。src は点検の時点〈fix_r1/pre_src〉から should 2・3、回答の読み取りの nit、float_section の nit、変異のテストまで進んでいた）を、差分と前回の作業スクリプト（fix_r1/tools/p_*.py）で確かめて引き継ぎ、残りを仕上げた。コミット・push・ブランチ操作はしていない。pdfmatch.py・pdfdocx.py には触っていない。既存の fixture は作り直していない（sample_b3_*.docx も 24d4bc7 とバイトまで同じ）。\n\nshould 3 件（すべて直した）:\n1. ルート2 の照合（structure.py:843）: 案 (b) を選んだ。N18 で組んだ図のキャプションと、画像と同じ段落の文字は docx では表のセルなので、ArticlePlan.cell_paras に記録し、linker.body_paragraphs が文脈 cell で返す（照合しない・直さない。0.21.0 と同じ）。td2 のルート2 は直した docx・直しが 0.21.0 と同じになり（全角・半角の直し 775→774 箇所）、R01・R05・R06 も 0.21.0 と同じ。DESIGN 4.4・6.1・7 章と FIX_PLAN に記録。\n2. 仮に置いた図形の中身の組み方（structure.py:1128）: assemble_floats の 5 か所（図キャプションの画像を前後に探す 2 か所、表キャプションの表を探す所、キャプションのない表に後ろの表キャプションを付ける所、キャプションの続き）と、本文スタイルの図表キャプションの推定の隣を、同じ置き場所の要素だけで見る（structure.same_place）。手作業で移す図表の知らせ（XML の ID）にも本文の段落を含む図表が出なくなった。O06・O06b・O16・O17 の形と、キャプションが図の上の原稿・推定の隣の形をテストに足した。\n3. 組み方が決まらないセルの図（structure.py:796）: cell_figures が組まないときは 0.21.0 の扱い（キャプションのない表）に進める。cx の r1・r5・r8、反例 T04・T05 は AI なしで止まらず 0.21.0 と同じ（終了コード 0、アンカー段落の前の表）。\n\nnit（すべて直した）: cut_at_end（飾りの引用符で閉じた文字列・閉じたコードブロックは切れた回答としない。切れた文字列の中の「“主張”について」は切れた回答として読む。案内は「途中で切れている」を優先）、float_section のキャプション表示、_json_text（{ で始まる回答はコードブロックを探さない・閉じは行の頭の ``` だけ）、変異で外れた 6 つの規則のテスト、仮の位置で箇条書き・引用を分けない（Classifier.run_end。AI の指定はずらさない）、途中で切れた回答の案内のそろえ（CUT_HINT・PARTIAL_MSG・unplaced_box の partial・README・ノートブックの手順 6）、CLI の一覧（図表ごとにキャプションと XML の位置・ID）と Colab の枠の XML の ID（pipeline._float_ids を structure.float_ids に移した）、3 章の場所（空のアンカー段落は前の段落の場所。pipeline._located）、図の本体の対処を理由ごと（report.figure_body_detail。共通の文面も補った）。版は 0.22.0 のまま（変更なし）。ノートブックは tools/make_notebook.py で作り直した。",
+    "tests_added": [
+     "tests/test_figure_body.py::test_cell_figures_not_unique_stay_a_table[text-s1|tabcap-s1|cross-s3|extra-s3]（旧 test_cell_figures_left_to_ai_when_not_unique の期待を 0.21.0 の扱いに書き直し、位置を決められない変種 down・down3 も確かめる）",
+     "tests/test_figure_body.py::test_cell_figures_guards[mixed_cell|vmerge|sentence]",
+     "tests/test_figure_body.py::test_cell_figures_one_caption_in_a_row",
+     "tests/test_figure_body.py::test_cell_figures_are_not_fixed_by_route2",
+     "tests/test_figure_body.py::test_cell_figures_are_listed_with_captions_in_request",
+     "tests/test_figure_body.py::test_table_near_caption_that_cannot_be_the_body[below_gap2|above_gap2]",
+     "tests/test_figure_body.py::test_provisional_float_is_not_paired_with_outside_captions[prov_tabcap|prov_tables|prov_image|prov_above_image|prov_bodycap_table]",
+     "tests/test_figure_body.py::test_caption_less_table_becomes_figure_body（期待を書き直し: 理由ごとの対処）",
+     "tests/test_floats.py::test_unplaced_float_does_not_split_list_or_quote[list|quote|blank_list]",
+     "tests/test_floats.py::test_float_row_location_for_empty_anchor",
+     "tests/test_floats.py::test_missing_placement_is_reported_after_ai（期待を書き直し: 文言と CLI の一覧）",
+     "tests/test_ai.py::test_complete_answers_are_not_read_as_cut",
+     "tests/test_ai.py::test_code_fence_marks_inside_strings_are_not_blocks",
+     "tests/test_ai.py::test_cut_inside_string_with_smart_quotes_is_cut",
+     "tests/test_ai.py::test_api_mode_applies_finished_placements_of_cut_answer（期待を強めた: API の誤りの文）",
+     "tests/test_colab.py::test_ai_required_and_unplaced_boxes（期待を書き直し: XML の ID と途中で切れた回答のとき）",
+     "tests/make_fixtures.py: list_item()、make_b3_place(variant=list|quote|blank_list)、make_b3_cells の variant の「+」の組み合わせと down3（既定の docx の中身は変わらない）"
+    ],
+    "pytest_result": "3.13: 637 passed / 3.10（venv310）: 637 passed。点検の時点（617 件）から 20 件を足し、5 つのテストの期待を書き直した。同じテストを点検の時点の src（fix_r1/pre_src）で流すと 24 件、0.21.0 の src で流すと 65 件が落ちる（意図した守り）。ruff check src tests tools: 194 件（0.21.0 は 197 件、点検の時点は 195 件。増えていない）。",
+    "measures": "結果は /tmp/claude-0/-home-user-jstgxmlcng-JASME/fb4d86bb-6ffb-5369-990a-10fe830c8789/scratchpad/b3/fix_r1/m/（summary.json、cmp/*.txt、res/*.json、oracle_wt、fuzz、mut、parse、golden_*/manifest.json。大きな出力は消した）。比べる相手は 0.21.0（b21/base021_src）と点検の時点（fix_r1/pre_src）。\n- golden（23 件、すべて不変性・最終・DTD・J-STAGE 合格）: golden_base（0.20.0・0.21.0）の 19 件とは点検の時点と同じ違いだけ（*_manual 7 件・sample_full_ai・sample_float_ai は prompt だけ、sample_float_manual は xml・report・prompt。split 7 件と pdfcheck_route1・2 は同じ）。点検の時点とは XML が 23 件とも同じで、違いは sample_float_manual のレポート（手動モードの文に「箇条書き・引用の途中なら、その終わり」）、sample_b3_cells_manual の依頼文（セルで組んだ図をキャプションで示す。nit）、sample_b3_tablefig_manual・split のレポート（図の本体の対処。nit）だけ。\n- td1〜3 ルート1（模擬回答 10 通り＋回答なし、21 件）: 不変性・最終・DTD・J-STAGE 合格、XML に入らなかった画像 0→0、空白を除いた文字の集まりは 0.21.0 と同じ。0.21.0 との違いは B3 で意図した位置・組み方・知らせ（partial など）だけ。点検の時点との違いは、td1 の箇条書き 1 つ・td2 の引用 1 つを仮の図表が分けなくなったこと（9 件）だけ。\n- td1〜3 ルート2（5 件）: 直した docx・直し・照合した結果が 0.21.0 と同じ（td2 の d214 を直さなくなった。全角・半角 775→774 箇所）。チェック合格、画像 0。\n- 独立の反例: 実装を見ない担当の 30 件は 26 件 OK（点検の時点と同じ。0.21.0 は 7 件。P06〜P09 は F まで）。T04・T05 は exit 2→0（0.21.0 と同じ表）。点検の担当の反例を作り直して 3 版で比べた: 原則 18 件・ルート2 の 6 件・回帰の 9 形×3 通り（27 件）。比べられた 74 件すべてで不変性・最終・DTD 合格、画像 0、空白を除いた文字は 0.21.0 と同じ。指摘の形（O06/O06b/O16/O17、r1/r5/r8、R01/R05/R06）は直った。乱数の反例 300 件: 失敗・不合格・画像漏れ 0（空白を除いた文字の違い 1 件は、途中で切れた回答から位置を読み、0.21.0 が除外していた図形の中の文字を出したもの。空白だけの違い 11 件）。回答の読み取り 34 形: 0.21.0 が読めた回答はすべて読め、点検の時点の後退（json_then_fence_in_notes・preface_no_fence_inner）は直った。変異 53 個: 51 個がテストで落ち、落ちない 2 個（n17_mech_when_end、n18_pairs_any）は結果の変わらない等価な変異。",
+    "deviations": "- should 1 は案 (b)（0.21.0 と同じく照合の対象外）を選んだ。照合する段落を決める側（linker.body_paragraphs の文脈）で外したので、pdfmatch.py には触っていない。案 (a) は、全角の数字の隣の全角空白を消す既知の限界がセルのキャプションに及び、セルの説明文が 13.2・13.5 に出るので採らなかった。代わりに、組んだ図のキャプションの PDF との違いは直らず 13 章にも出ない（0.21.0 と同じ。AI が組み合わせを指定したときは、0.21.0 と同じくふつうのキャプションとして照合する）。FIX_PLAN の「実装で決めたこと」に記録した。利用者の判断が要るほどの変更ではないと考えたが、セルのキャプションも直したいという要望があれば (a) を検討する。\n- nit cut_at_end: 提案は「e.pos から後ろに飾りの引用符があれば切れた形とみなさない」だったが、切れた文字列の中の「“主張”について」のような正しい飾りの引用符まで読めなくなるので、すぐ後ろが , ] } : の飾りの引用符（文字列を閉じているように見えるもの）だけを見る（RE_SMART_CLOSE）。読み取りの誤りの案内も、切れた形なら「途中で切れている」を優先する。\n- nit「箇条書き・引用を分ける」は、文書に書くだけでなく直した（run_end）。nit「3 章の場所」は、float_place と同じ文字のある段落ではなく、アンカー段落から前にさかのぼって場所（plan.locations）のある段落を使う（結果は同じ段落）。\n- nit FIGURE_BODY_ACTION: 3 章の図ごとの対処を理由ごとにし（表キャプションが付いているときは表を動かさない）、冒頭・CLI・Colab の共通の文面には両方の対処と画像の確かめを足した。\n- 直さなかった指摘はない。等価な変異 2 つにはテストを足していない（どの入力でも結果が変わらないため）。",
+    "open_issues": "- 再点検（2 回目の点検）が必要。とくに run_end（箇条書き・引用の判定を build_body の役割の決め方に合わせて先読みしている。迷う形は仮の位置をずらさない）と、same_place による組み方の制限（本文の画像に重ねたキャプションだけの図形を仮に置くと、本文の画像と組にならない。DESIGN 7 章と FIX_PLAN の残る限界に記録）を見てほしい。\n- ルート2 で、N18 で組んだ図のキャプションは直さない（0.21.0 と同じ）。利用者が直したいと言えば案 (a) を検討する。\n- 切れた文字列の中に「“A”, “B”」のような、すぐ後ろが「,」の飾りの引用符があると、途中で切れた回答として読まない（0.21.0 と同じく読めない回答。記録済み）。\n- P06〜P09（本文の外に結び付いた図形）は単位 F まで今までどおり。AI が placements を最初に書くかは試験運用で確かめる（変わらず）。\n- まとめ役へ: FIX_PLAN の B3 の節（実装したこと・実装で決めたこと・確かめた数・残る限界）、DESIGN 4.4・5・6.1・7 章、DEVELOPMENT のテストの説明と残っている課題、README を更新した。作業の記録と道具は /tmp/claude-0/-home-user-jstgxmlcng-JASME/fb4d86bb-6ffb-5369-990a-10fe830c8789/scratchpad/b3/fix_r1/m/（tools/drive3.py は 0.21.0・点検の時点・作業ツリーの 3 版比べ、mut/mut.py は今のコードに合わせた変異 53 個）。tests/__pycache__ は消した。"
+   },
+   "findings": [
+    {
+     "lens": "principle",
+     "severity": "nit",
+     "file": "src/jasme_jats/structure.py",
+     "line": 647,
+     "problem": "同じ段落に結び付いた 2 つの図形（画像だけの図形と、キャプションだけの図形）が、どちらも位置を決められないとき、1 つの図に組まなくなった。仮に置いた図形は、図形ごとに別の置き場所になるため（self.provisional の値が図形の ID）。\n- 0.21.0 と点検の時点は、1 つの図（F1）に組んでいた。\n- 作業ツリーは、キャプションだけの図 F1 と、キャプションのない図に分かれる。\n- 要対応の知らせは、2 つを別々に「移す」と書くだけで、1 つの図にまとめることは書かない。\n- DESIGN 6.1・7 章と FIX_PLAN の残る限界が挙げるのは「本文の画像に重ねたキャプションだけの図形」だけで、この形は書いていない。\n- 文字は落ちない。",
+     "evidence": "【方法】gen_r2.py の N07 を、placements が空の回答で 3 版変換した（drive3.py）。figs.py で、図ごとの画像の ID まで比べた。\n- N07 は架空の文字の docx。1 つの段落に、画像だけのテキストボックス s1 と、「図1…」だけのテキストボックス s2 が結び付いている。どちらもアンカー段落から離してある。\n\n【結果】\n- 0.21.0: F1 は img1 と図1（本文の冒頭）。\n- 点検の時点: 同じ組で、アンカー段落の後ろ。\n- 作業ツリー: F1（キャプションだけ、画像なし）と、キャプションのない図（img1）に分かれる。\n- 3 章の行は「キャプションなし: …にある図表の中身」と「「図1…」: …にある F1」の 2 つ。\n- 3 版とも、不変性・最終・DTD は合格。\n\n【補足】AI が s1 だけに位置を答えた回答（N07b）では、s2 は検証で採用されない（fig に本体がない）。このときは 3 版とも組にならない。だから違いが出るのは、AI がどちらにも答えなかったとき（空の回答、placements の前で切れた回答など）だけ。",
+     "fix": "次のどちらかにする。\n- 同じ差し込み位置に仮に置いた図形のうち、少なくとも次の 2 つが並ぶときは、同じ置き場所として数える（same_place で比べる値を、その形に限って差し込み位置にする）。\n  - キャプションだけの図形（float_mechanical がキャプションだけを返すもの）\n  - 画像だけの図形\n- 組まないままにするなら、DESIGN 7 章と FIX_PLAN の残る限界にこの形を足す。3 章の対処にも「キャプションだけの図と、画像だけの図が並ぶときは、1 つの図にまとめる」と添える。\n\nどちらでも、N07 の形をテストに足す。"
+    },
+    {
+     "lens": "principle",
+     "severity": "nit",
+     "file": "src/jasme_jats/structure.py",
+     "line": 1227,
+     "problem": "1 回目の修正で足した規則のうち 5 つは、外してもテスト全体（637 件）が通る。どの規則も 0.21.0 にはない。\n- m1: キャプションの続きの直前を、同じ置き場所で見る（L1224〜1228）。外すと、仮に置いた図形の後ろにある本文のキャプションの続き（出典）が、本文の図 F1 のキャプションから外れる。キャプションだけの図 F3 になり、点検の時点と同じ誤りに戻る。\n- m4: run_end が後ろを見るときに、空白だけの段落を飛ばす（L820）。\n- m5: run_end が、箇条書き・引用でない段落で止まる（L822〜823）。\n- m7: 画像の直後に図キャプションがあるかを、同じ置き場所で見る（L1243）。\n- m2: 図キャプションが図の上か下かを、同じ置き場所で数える（L1212〜1215）。\n\nFIX_PLAN の「B3 の規則を外す 53 の変異のうち 51 がテストで落ちる」は、この 5 つを含まない。",
+     "evidence": "【方法】mut/mut.py で、wt_src の写しに変異を 1 つずつ当てた。pytest -q -p no:cacheprovider -o pythonpath=<変異の src> tests で 637 件を流した。\n- m1・m2・m4・m5・m7 は 637 passed。\n- 対照の m6（run_end が図形の中身で止まる）と m8（表キャプションを並びのすぐ前の表に付ける）は落ちる。\n\n【出力が変わることの確かめ】mutcases.py で反例を変換し、作業ツリーと struct を比べた。m2 は figissues.py で figure_issues を比べた。\n- m1・N09: 作業ツリーの F1 のキャプションは続きを含む（0.21.0 と同じハッシュ）。m1 は続きが別の図 F3 になる。\n- m4・N03: 作業ツリーは disp-quote(3) の後ろに図。m4 は disp-quote(2)・図・disp-quote(1) に分かれる。\n- m5・N17: 作業ツリーは 1 つ目の箇条書きの後ろに図。m5 は、本文の段落を越えて、2 つ目の箇条書きの後ろに置く。\n- m7・N18: 作業ツリーは、本文の画像 X と「図2」を組にする（0.21.0 と同じ）。m7 は図2 がキャプションだけの図になり、X はキャプションのない図になる。\n- m2・N20: 作業ツリーは、要対応「直後の表の次に表キャプションがあり…」を出す。m2 は出さない。\n\nどれも不変性は合格で、変わるのは置き場所と組み方だけ。",
+     "fix": "N03・N09・N17・N18・N20 の形（架空の文字）を、次のテストの変種として足す（make_b3_place の variant などで作る）。\n- tests/test_floats.py の test_unplaced_float_does_not_split_list_or_quote\n- tests/test_figure_body.py の test_provisional_float_is_not_paired_with_outside_captions\n\nあわせて、FIX_PLAN の変異の数を直す。"
+    },
+    {
+     "lens": "principle",
+     "severity": "nit",
+     "file": "src/jasme_jats/pipeline.py",
+     "line": 409,
+     "problem": "位置を決められない図形の中身から、図の直後に本文の段落として出す文字がある（画像と文字が同じ段落の文字）。この段落は、要対応の「XML の段落「…」の後ろにある F1・F2 を正しい位置に移すこと」に入らない。冒頭・3 章・14 章・Colab・CLI のどれも同じ。\n- 知らせどおりに F1・F2 だけを移すと、図形の中の文字の段落が仮の位置に残る。docx の文字が別の場所に入る。\n- 単純な図形（画像と文字が同じ段落＋キャプション）では 0.21.0 からある。\n- B3 の N18 で、表のセルの図にも広がった。0.21.0 は表 T1 として示していたので、セルの文字も T1 と一緒に移せた。",
+     "evidence": "【N21】架空の文字の docx。図形（3 cm 下）に 1 行 2 列の表があり、右のセルの画像と同じ段落に「説明文：…」がある。空の回答で変換した。\n- 0.21.0: 本文の冒頭に table-wrap T1 がある（セルの文字も中に入る）。3 章は「XML の本文の冒頭にある T1 を…」。\n- 作業ツリー: アンカー段落の後ろに、F1・F2・p「説明文：…」の順に並ぶ。3 章・冒頭・CLI の行は「…の後ろにある F1・F2 を正しい位置…に移すこと」で、段落は挙げない。\n\n【N22】make_float_text(down_cm=3)（単純な図形）。0.21.0 も作業ツリーも、F1 の直後の p「説明文：…」を知らせに挙げない。\n\nどちらも、不変性・最終・DTD は合格。",
+     "fix": "次のどちらかにする。\n- 図形の中身から出した本文の段落があれば、知らせに足す（例:「F1・F2 と、その直後の段落「説明文：…」」）。対象は、float_mechanical・cell_figures・float_from_spec が entries に入れる (\"p\", q) の段落。structure.float_ids か、pipeline の where の作り方で足す。\n- 3 章の対処と冒頭に「図の直後にある、図形の中の文字の段落も一緒に移す」と添える。\n\n知らせは図表ごとに 1 行のままにする。"
+    },
+    {
+     "lens": "regression",
+     "severity": "should",
+     "file": "src/jasme_jats/structure.py",
+     "line": 752,
+     "problem": "1 回目の修正の same_place で、位置を決められない図形どうしが組にならなくなった（0.21.0 と修正前からの後退）。置き場所の区別を図形の ID で付けている（prov.append((fl.fid, entries)) と self.provisional）ため、同じアンカー段落の後ろに並べて仮に置いた 2 つの図形でも、片方の画像ともう片方の図キャプションは、別の置き場所とみなされて組にならない。Word の原稿でよくある形（画像の図形と、キャプションだけのテキストボックスを別々に浮かせる）で起きる。XML は、キャプションだけの F1（graphic なし）と、キャプションのない画像の図に分かれる。要対応の知らせは 2 つの図表を移すことしか言わず、2 つを 1 つの図に合わせることは書いていない。DESIGN 6.1・7 章と FIX_PLAN の「残る限界」にも、この形は書かれていない（書かれているのは、本文の画像と、キャプションだけの図形の場合だけ）。",
+     "evidence": "【方法】反例 r2/q/gen.py の q1 を、架空の文字で作った。\n- 本文の段落 1 つに、図形を 2 つ結び付けた。画像だけのテキストボックス（3 cm 下）と、「図1」のキャプションだけのテキストボックス（6.5 cm 下）。どちらも位置を決められない。\n- 3 版を、CLI の --ai manual と空の回答（placements が空）で変換した（r2/q/results.json）。\n\n【結果】\n- 0.21.0: 本文の冒頭に fig「図1」:graphic 1（1 つの図に組む）\n- 修正前: アンカー段落の後ろに fig「図1」:graphic 1\n- 作業ツリー: アンカー段落の後ろに fig「図1」:graphic 0 と、キャプションのない fig:graphic 1 の 2 つ\n- 作業ツリーの CLI の表示は「キャプションなし: XML の段落「…」の後ろにある図表の中身」「「図1…」: … の後ろにある F1」。\n- チェックはどれも合格で、文字は落ちていない。\n\n【案の試作】r2/proto で、置き場所を差し込む位置にした（prov.append((f\"@{target}\", entries))）。\n- q1 は 0.21.0・修正前と同じ 1 つの図になった。\n- q2〜q6 は作業ツリーと同じ。\n- pytest は 637 件すべて通った。\n- golden の 23 件は、作業ツリーと manifest が完全に一致した。\n- td1・td2 のルート1（none・empty・missing・cut）は、XML とレポートが作業ツリーと一致した。\n- 本文の要素と組にしないという、前の should 2 の守り（prov_* のテスト）も通る。",
+     "fix": "仮に置いた図形の置き場所の区別を、図形の ID ではなく差し込む位置（target）にする（例: prov.append((f\"@{target}\", entries))）。同じ位置に仮に置いた図形の中身どうしは組にし、本文の要素とは今までどおり組にしない。q1 の形（画像だけの図形と、キャプションだけの図形を、同じ段落に結び付ける）を tests/test_figure_body.py に足し、1 つの図（graphic 付きの F1）になることを確かめる。DESIGN 6.1 の「その図形の中身だけで数える」の書き方も合わせる。直さない場合は、DESIGN 7 章・FIX_PLAN の残る限界と、要対応の文言に、2 つの図形を 1 つの図に合わせる必要があることを書く。"
+    },
+    {
+     "lens": "regression",
+     "severity": "nit",
+     "file": "tests/test_ai.py",
+     "line": 471,
+     "problem": "test_complete_answers_are_not_read_as_cut は、docstring で「最後の文字列の閉じだけが飾りの引用符の回答（Unterminated string になる）」を確かめると書いている。しかし作る回答は '\"気づき”\\n ]\\n}' で、飾りの引用符の後ろに改行がある。そのため、JSON の読み取りの誤りは \"Invalid control character at\" になり、cut_at_end の Unterminated string の枝（RE_SMART_CLOSE）を通らない。この守り（1 回目の修正で足した nit の直し）を外しても、テストは通る。",
+     "evidence": "このテストの回答を json.loads に渡すと e.msg は 'Invalid control character at' になる。同じ回答の改行を除いた形（'\"気づき”]}'）なら 'Unterminated string starting at' になる。\n\n変異 smart_close_off（cut_at_end の return not RE_SMART_CLOSE.search(t[e.pos:]) を return True に）で、全テストが 637 passed（r2/mut/result.json）。\n\n1 行の回答 '…\"notes\": [\"abc”]}' では、parse_cut_response の結果が分かれる。\n- 作業ツリー: None（正しい）\n- 修正前: 2 件を読む\n\n修正前と作業ツリーの、この違いを守るテストはない。",
+     "fix": "飾りの引用符のすぐ後ろに ] } , が同じ行に続く形（例: full を 1 行の JSON にして、最後の notes の閉じを ” にする）を、このテストに足す。その形で parse_cut_response が None になり、parse_response の誤りに「飾りの引用符」の案内が出ることを確かめる。docstring も、実際に作る形に合わせる。"
+    },
+    {
+     "lens": "regression",
+     "severity": "nit",
+     "file": "src/jasme_jats/structure.py",
+     "line": 799,
+     "problem": "run_end と list_or_quote（仮の位置を箇条書き・引用の終わりにずらす、1 回目の修正の nit の直し）の次の 3 つの条件は、どのテストも守っていない。\n- 見出しと推定する段落は箇条書きにしない（guess_heading）\n- 図形の中の段落は数えない（in_shape）\n- 画像・別行数式のある段落は数えない\n\nとくに見出しの条件を外すと、次の形で、仮の図表が次の章・節に移る: アンカーが箇条書きの項目で、その後ろに、同じ番号の定義で本文スタイルの「２．おわりに」のような見出しが続く。",
+     "evidence": "r2/mut の変異で、次の 3 つは全テストが 637 passed だった。\n- run_end_heading_off（L799 を return (\"list\", b.numbering[0]) に）\n- run_end_inshape（in_shape(b) の条件を外す）\n- run_end_img（b.images or b.has_display_math を外す）\n\n反例 q6（項目の後ろに、同じ番号の定義の「まとめ」が続く）では、作業ツリーは意図どおりに動いた。ただし、見出しと推定される形は、テストにない。",
+     "fix": "tests/test_floats.py の test_unplaced_float_does_not_split_list_or_quote に、変種を足す。箇条書きの項目に結び付いた図形の後ろに、同じ番号の定義の、見出しと推定される段落（本文スタイルの番号付きの見出し）が続く形で、仮の図表が見出しの前（箇条書きの終わり）に置かれることを確かめる。画像のある項目が続く形も足す。"
+    }
+   ],
+   "failedLens": []
+  },
+  {
+   "round": 2,
+   "fix": {
+    "changed_files": [
+     "/home/user/jstgxmlcng_JASME/src/jasme_jats/structure.py",
+     "/home/user/jstgxmlcng_JASME/src/jasme_jats/pipeline.py",
+     "/home/user/jstgxmlcng_JASME/src/jasme_jats/colab.py",
+     "/home/user/jstgxmlcng_JASME/tests/test_figure_body.py",
+     "/home/user/jstgxmlcng_JASME/tests/test_floats.py",
+     "/home/user/jstgxmlcng_JASME/tests/test_ai.py",
+     "/home/user/jstgxmlcng_JASME/tests/make_fixtures.py",
+     "/home/user/jstgxmlcng_JASME/docs/DESIGN.md",
+     "/home/user/jstgxmlcng_JASME/docs/DEVELOPMENT.md",
+     "/home/user/jstgxmlcng_JASME/docs/FIX_PLAN.md",
+     "/home/user/jstgxmlcng_JASME/README.md"
+    ],
+    "summary": "点検（2 回目）の指摘 6 件を直した。差分はコミットせずに積んである。中断前のこの担当の作業は残っていなかったので、点検の時点の src・tests・docs を控えてから始めた（/tmp/claude-0/-home-user-jstgxmlcng-JASME/fb4d86bb-6ffb-5369-990a-10fe830c8789/scratchpad/b3/fix_r2/pre_src など）。\n\n(1) should と原則の nit 1（N07・q1）: 仮に置いた図形の置き場所を、図形の ID ではなく、仮に置いた位置（差し込み位置）で分けるようにした。直したのは structure.place_floats と Classifier.provisional（f\"@{target}\"）。\n- 同じ段落に結び付いた「画像だけの図形」と「キャプションだけの図形」は、また 1 つの図に組む（0.21.0 と同じ）。\n- 本文の要素とは今までどおり組にしない。別々の段落に結び付いた図形も組にしない。\n- same_place・assemble_floats・table_for_figure の docstring と、DESIGN 6.1・7 章も合わせた。\n\n(2) 原則の nit 3（N21・N22）: 手作業で移す知らせに、図形の中身から本文の段落として出した段落を、図表の ID と並べて示すようにした。\n- 新しい関数 structure.float_targets を作り、pipeline の where（レポートの冒頭・3 章・CLI）と colab.unplaced_box で使う。\n- 表示の例: 「F1・F2 と段落「説明文：…」」。\n- ID のある図表か段落があるときは、ID のない「キャプションのない図」も知らせに入れる。\n- 図表ごとに 1 行のまま。README にも 1 文足した。\n\n(3) 回帰の nit（run_end の条件）: 箇条書きの項目かどうかの判定（list_or_quote）を、組み立て（assemble_floats）と同じにした。\n- 画像だけの項目と、別行数式だけの項目の前で止める。\n- 画像と文字が同じ段落の項目は、項目として数える。今までは止めていたので、箇条書きが 2 つに分かれていた（N06）。\n\n(4) 守りのテストを足した。\n- tests/test_floats.py の箇条書き・引用のテストに 7 形: quote_blank(m4)・two_lists(m5)・list_heading・list_image・list_math・list_textbox・other_list。\n- tests/test_figure_body.py の仮に置いた図形の組み方のテストに 3 形: prov_caption_cont(m1)・prov_next_caption(m7)・prov_count_above(m2)。\n- 同じ段落・別々の段落に結び付いた 2 つの図形のテスト（2 件）と、知らせの中の段落のテスト（2 件）。\n- 飾りの引用符のすぐ後ろが同じ行の ]} になる回答（smart_close_off）。docstring も、実際に作る回答の形に合わせた。\n- 落ちなかった変異の分として、```JSON のコードブロックの後ろに { } のある説明と、途中で切れた回答の案内「続きだけを貼り付けても読めません」の確かめも足した。\n\n(5) FIX_PLAN の B3（実装で決めたこと・テスト・確かめた数・残る限界と、変異の数の注記）、DESIGN 6.1・7 章、DEVELOPMENT のテストの節と残っている課題を直した。\n\n版は 0.22.0 のまま。ノートブックは make_notebook.py と一致していたので、作り直していない。pdfmatch.py・pdfdocx.py には触っていない。",
+    "tests_added": [
+     "tests/test_figure_body.py::test_provisional_floats_at_same_place_are_paired[False,True]（同じ段落の 2 つの図形は 1 つの図、別々の段落なら組まない）",
+     "tests/test_figure_body.py::test_unplaced_float_notice_lists_its_paragraphs[cells,float_text]（3 章・冒頭・Colab・CLI の知らせに図形の中の段落）",
+     "tests/test_figure_body.py::test_provisional_float_is_not_paired_with_outside_captions に prov_caption_cont（m1）・prov_next_caption（m7）・prov_count_above（m2）",
+     "tests/test_floats.py::test_unplaced_float_does_not_split_list_or_quote に quote_blank（m4）・two_lists（m5）・list_heading・list_image・list_math・list_textbox・other_list（make_b3_place の variant）",
+     "tests/test_ai.py::test_complete_answers_are_not_read_as_cut に 1 行の回答で飾りの引用符の閉じ（Unterminated string）と ```JSON の閉じたブロック",
+     "tests/test_ai.py::test_parse_response_accepts_code_fence に ```json・```JSON と、後ろに { } のある説明",
+     "tests/test_floats.py::test_cut_response_applies_only_finished_placements に「最初から出し直して」「続きだけを貼り付けても読めません」の確かめ",
+     "期待を書き直したもの: test_provisional_float_is_not_paired_with_outside_captions の prov_tabcap・prov_tables（知らせに「とキャプションのない図」）"
+    ],
+    "pytest_result": "3.13: 651 passed。3.10（venv310）: 651 passed。ruff は 194 件で、統計は点検の時点とまったく同じ。同じテストを別の src で流した結果:\n- 2 回目の修正の前の src: 6 件が落ちる（意図した変更の分）。\n- 0.21.0 の src: 80 件が落ちる。",
+    "measures": "- golden（23 件）: XML・レポート・依頼文が、2 回目の修正の前とすべて同じ。全チェック合格。0.21.0 の golden_base（19 件）との違いは前回と同じ（*_manual 7 件と sample_full_ai・sample_float_ai は prompt だけ、sample_float_manual は xml・report・prompt）。最後の整理の後にもう一度流して、同じだった。\n- td1〜3 ルート1（模擬回答 10 通り＋回答なしの 21 件）: XML・レポートが 2 回目の修正の前と同じ。最終の作業ツリーでもう一度流して、21 件とも同じ。0.21.0 との違いは 1 回目の修正で書いたものと同じ。不変性・最終・DTD・J-STAGE は合格、XML に入らなかった画像は 0。\n- td1〜3 ルート2（5 件）: XML・レポートが同じ。直した docx は、変更履歴の日時のほかは同じ。\n- 点検の担当の反例: 次のすべてで、不変性・最終・DTD は合格、XML に入らなかった画像は 0。\n  - 原則の N01〜N20・N22・N07b（N21 は同じ形の X5）\n  - O01〜O17・O06b、R01〜R06\n  - 回帰の q1〜q6・r1〜r8（AI なしと空の回答）\n  - 確かめの反例 X1〜X6\n- 2 回目の修正の前との違いは、次の意図したものだけ。\n  - q1・N07・X1・X2・X3: 1 つの図（F1 に graphic）になり、2 つの図形の行がどちらも F1 を示す。0.21.0 も 1 つの図に組んでいた。\n  - N06・X6: 箇条書きを分けない。\n  - N19・N22・X5: 知らせに段落「説明文：…」が入る。\n- 乱数の反例 200 件（seed 4242、fuzz2）: 次のとおり。\n  - 失敗・不合格・画像の出力漏れは 0。空白を除いた文字は、0.21.0・修正の前と全件同じ。\n  - 組み方が修正の前と違うのは 5 件で、どれも同じ位置に仮に置いた別々の図形の中身を組んだもの。\n  - そのうち 4 件はキャプションだけの図と画像の組（2 件は 0.21.0 と同じ組、2 件は複数のキャプションのどれと組むかが 0.21.0 と違う）。\n  - 残る 1 件は、N19 でキャプションのない表を図の本体にしたもの。\n- 変異（作業ツリーの写しに 1 つずつ当てて、テスト全体を流した）: 47 個（原則 7・回帰 31・今回の 9）のうち 46 個が落ちる。\n  - 点検で落ちなかった m1・m2・m4・m5・m7・run_end_heading_off・run_end_inshape・run_end_img・smart_close_off・run_end_numid_any・fence_upper_off・partial_msg_tail は、すべて落ちるようになった。\n  - 残る colab_ids_off は、書き換えで消えた行への変異。同じ行への新しい変異 colab_targets_off は落ちる。\n- 結果の JSON・ログ・スクリプトは /tmp/claude-0/-home-user-jstgxmlcng-JASME/fb4d86bb-6ffb-5369-990a-10fe830c8789/scratchpad/b3/fix_r2/ に残した（summary.json、mut/sweep_merged.json、m/log_*.txt、fz/cases/cmp.json、golden_wt2/manifest.json）。大きな出力（docx・xml・zip・画像）は消した。tests/__pycache__ も消した。",
+    "deviations": "- (3) は指摘の範囲を少し超えた。指摘は「画像のある項目の形もテストに足す」だけだった。しかし今の規則のままテストを書くと、画像と文字が同じ段落の項目で箇条書きを 2 つに分ける動き（N06）を、テストで固めることになる。そこで list_or_quote の条件を、組み立てと同じにした（is_image_para・formula_node）。\n- 浮動配置でないテキストボックスの段落の前で止める規則は変えず、テストだけ足した。このため、その後ろに同じ箇条書きの項目が続くと、箇条書きが 2 つに分かれる。これは残る限界として DESIGN 7 章と FIX_PLAN に書いた。\n- 原則の nit 1（N07）は、should と同じ直し方にした（位置の決まらない図形はすべて、差し込み位置で置き場所を分ける）。指摘にあった「キャプションだけの図形と画像だけの図形のときだけ」の案は採らなかった。\n- N21・N22 は、指摘の案の 1 つ目（知らせに段落を足す）を選び、ID のない「キャプションのない図」も知らせに入れた。そのため、既存の 2 つのテスト（prov_tabcap・prov_tables）の期待を「…とキャプションのない図」に書き直した。\n- 指摘になかったテストも 3 つ足した: other_list、```JSON、PARTIAL_MSG の文。点検の担当の変異で、外してもテストが通っていたものの分。\n- 直さなかった指摘はない。",
+    "open_issues": "- 同じ位置に仮に置いた別々の図形（同じ箇条書きの別の項目に結び付いたもの、AI がどちらも本文の外の後ろと答えたもの）も組にする。0.21.0 と同じ扱いだが、キャプションが 2 つ以上あるときに画像をどのキャプションと組むかは推定にすぎず、乱数の反例 2 件で 0.21.0 と違った。どちらにしても、手作業で移すよう知らせに出る。\n- 箇条書きの途中に、浮動配置でないテキストボックスの段落があるときの分かれ方（上の残る限界）。\n- 作業中に、CLAUDE.md（2 項目）と FIX_PLAN.md の「毎回の共通作業」（1 項目）が、私以外によって書き足されていた。どちらも私は触っておらず、FIX_PLAN の上書きも起きていないことを確かめた。\n- CLAUDE.md の新しい項目に従って、文書とコードの食い違いを挙げる（どれも直した）。\n  - test_complete_answers_are_not_read_as_cut の docstring は「Unterminated string になる」としていたが、作る回答は Invalid control character になっていた。\n  - list_or_quote の画像・別行数式の条件が、assemble_floats と違っていた。\n  - FIX_PLAN の「53 の変異のうち 51 が落ちる」が、1 回目の修正の規則を含んでいなかった（注記した）。\n  - DESIGN 6.1 と colab.unplaced_box の docstring にあった「structure.float_ids」「その図形の中身」の書き方。\n- 直していない食い違いは見つからなかった。\n- origin のこのブランチは、作業の控えのコミット 13 個ぶん先にある（git status で確認。pull はしていない）。"
+   },
+   "findings": [
+    {
+     "lens": "principle",
+     "severity": "nit",
+     "file": "src/jasme_jats/structure.py",
+     "line": 1329,
+     "problem": "位置を決められない図形の中身にある、引用スタイルや自動番号（箇条書き）の段落（画像のある段落）が、隣の本文の disp-quote・list とまとめられる。\n- 原因: assemble_floats の引用・箇条書きのまとめ（L1329・L1344）は out[-1] だけを見て、置き場所（self.provisional）を見ない。1 回目の修正の same_place は、このまとめには効かない。\n- アンカー段落が引用・箇条書きの途中のとき: run_end でその終わりに置くので、図形の中身の先頭の段落が、本文の disp-quote・list の最後に入る。\n- アンカー段落のすぐ後ろに本文の引用・箇条書きが続くとき: 図形の中身の最後の段落から始まる disp-quote・list に、本文の段落・項目が入る。\n- 2 回目の修正の知らせはこの段落を「段落「…」」と示すが、本文の disp-quote・list の中にあることは書かない。\n- DESIGN 6.1 の「その外の要素と組にしない」に反する形で、DESIGN 7 章にも FIX_PLAN の残る限界にも書いていない。\n- 文字は落ちない。B3 の仮の位置（N17）から起きる形で、2 回目の修正で悪くなったものではない。",
+     "evidence": "【方法】架空の文字の docx（gen_r3.py の P03・P04、gen_r3b.py の P14〜P17）を、placements が空の回答で 3 版変換した。\n- P03: 引用の 1 つ目の段落に結び付いた図形（3 cm 下）。中身は、引用スタイルの画像と文字の段落、図キャプション 2 つ、画像。\n- P14: 図形の中身の最後が、同じ番号の定義の画像と文字の項目。アンカー段落の直後に、本文の 2 項目の箇条書き。\n\n【結果】\n- P03:\n  - 0.21.0: 冒頭に disp-quote(1)・F1・F2。本文の引用は disp-quote(2) のまま。\n  - 2 回目の修正の前と作業ツリー: disp-quote(3)。本文の 2 段落の後ろに、図形の段落と inline-graphic が入る。\n- P14:\n  - 0.21.0: list(1) と list(2) が別。\n  - 作業ツリー: list(3)。図形の項目が 1 つ目で、本文の 2 項目が続く。\n- P15 は disp-quote(3)、P16（単純な図形）は list(3)、P17 は disp-quote(3)。\n- 本文の list・disp-quote に図形の中身と本文の段落がまじる数（mixed_groups.py。乱数の反例 160 件＋上の反例の 181 件）:\n  - 0.21.0: 0 件\n  - 2 回目の修正の前・作業ツリー: 15 件\n  - td1〜3: 0 件\n- 不変性・最終・DTD・J-STAGE はどれも合格。\n\n【試作】proto_list_quote_place.diff（2 つのまとめに、同じ置き場所の条件を足す）で確かめた。\n- 混在は 0 件になった。\n- pytest 651 件が通った。\n- golden 23 件の manifest は、作業ツリーと同じだった。\n- td の 9 件の XML は、作業ツリーとバイト単位で同じだった。",
+     "fix": "assemble_floats の 2 つのまとめに条件を足す: where[id(out[-1])] == self.provisional.get(id(b), \"\") のときだけまとめる（試作のとおり）。\n\nあわせて、P03・P14 の形を test_provisional_float_is_not_paired_with_outside_captions の変種としてテストに足す。\n\n直さない場合は、次のようにする。\n- DESIGN 6.1・7 章と FIX_PLAN の残る限界に書く。\n- 3 章の対処に「本文の箇条書き・引用の中から出す」と添える。"
+    },
+    {
+     "lens": "principle",
+     "severity": "nit",
+     "file": "src/jasme_jats/structure.py",
+     "line": 352,
+     "problem": "手作業で移す知らせ（float_targets）の示し方が、実際の XML と合わない形が 2 つある。\n- 文字のない段落を「段落「」」と示す（2 回目の修正で新しく出る）。例: 引用スタイルの画像だけの段落。冒頭・3 章・Colab・CLI のどれも同じ。\n- 画像だけのグループ図形（キャプションなし）は、仮の位置に何も置かれず、画像はアンカー段落の中に残る。それでも知らせは「…の後ろにある図表の中身を移すこと」と書く。\n  - 0.21.0 も「本文の冒頭（…付近）」と書いていて、実際と合わなかった。\n- docstring の「図の直後に出す」も、中身をそのまま出す図形には当てはまらない。段落が図の前や、本文の disp-quote の中に出る。\n- 文字・画像は落ちない。",
+     "evidence": "【方法】架空の docx を、空の回答で 3 版変換した。\n\n【P17】先頭が引用スタイルの画像だけの段落。\n- 作業ツリー: CLI・3 章・冒頭は「…の後ろにある F1・F2 と段落「」」、Colab の枠は「XML の F1・F2 と段落「」」。\n- 2 回目の修正の前: 「F1・F2」。\n\n【P09】1 つの段落に、画像だけのグループ図形（3 cm 下）と、キャプションだけのテキストボックスが結び付いている。\n- 3 版とも、画像はアンカー段落の p の中の inline-graphic になる。\n- s1 の知らせは「XML の段落「…」の後ろにある図表の中身」（0.21.0 は「本文の冒頭（…付近）」）。\n\nどちらも、不変性・最終・DTD は合格。XML に入らなかった画像は 0。",
+     "fix": "float_targets を次のように直す。\n- 文字のない段落は「画像だけの段落」などと示す。\n- place_floats が何も差し込まない図形（entries が空）は、「アンカー段落「…」の中の画像」と示すか、知らせから外す。\n- docstring も、実際に出る位置に合わせる。"
+    },
+    {
+     "lens": "principle",
+     "severity": "nit",
+     "file": "tests/test_floats.py",
+     "line": 363,
+     "problem": "2 回目の修正で、list_or_quote の別行数式の条件を変えた（L831。b.has_display_math から self.formula_node(b) is not None へ）。この変更で、別行数式と文字が同じ段落の項目も箇条書きの項目として数えるようになったが、どのテストも守っていない。\n- list_math の変種は別行数式だけの項目なので、変更の前後で結果が同じになる。\n- FIX_PLAN の変異の数（47 個のうち 46 個が落ちる）にも、この変更は入っていない。",
+     "evidence": "【方法】mut/mut.py で、16 個の変異を 1 つずつ当て、テスト全体を流した。\n- 前の指摘で落ちなかった 9 個は、どれも落ちる。\n- loq_math_old（L831 を b.has_display_math に戻す）だけは、651 件すべてが通る。\n\n【出力の確かめ】P12 を、空の回答で変換した。P12 は架空の docx で、1 つ目の項目に図形、2 つ目の項目に別行数式と「のように表せる。」がある。\n- 2 回目の修正の前: list(1)・F1・list(2)（箇条書きが分かれる）。\n- 作業ツリー: list(3)・F1。\n- 3 版とも、不変性・DTD は合格。",
+     "fix": "make_b3_place に、別行数式と文字が同じ段落の項目の variant を足す。\n\ntest_unplaced_float_does_not_split_list_or_quote に、groups=1 の形として加える。\n\nFIX_PLAN の変異の数にも、この規則を足す。"
+    },
+    {
+     "lens": "principle",
+     "severity": "nit",
+     "file": "docs/DESIGN.md",
+     "line": 608,
+     "problem": "文書とコードが食い違っている（決まりにより、コードに合わせて直すもの）。\n- DESIGN 6.1 は「別々の段落に結び付いた図形は…組にしない」と書く。FIX_PLAN の残る限界（L378）は「別々の段落に結び付いた…図形も組にならない」と書く。\n- しかしコードでは、次の 2 つは同じ位置に置くので、組になる。\n  - 同じ箇条書き・引用の別々の項目に結び付いた図形\n  - AI が本文の外の段落の後ろを指定した図形\n- FIX_PLAN の L361 はこの例外を書いているが、DESIGN 6.1 と残る限界は書いていない。\n- FIX_PLAN は残る限界を「DESIGN 7 章と DEVELOPMENT にも書いた」とするが、この項目はどちらにもない。",
+     "evidence": "【P02】同じ箇条書きの 1 つ目の項目に画像だけの図形、3 つ目の項目にキャプションだけの図形がある。\n- 作業ツリー: list(3) の後ろに F1（画像あり）。2 つの行が、どちらも F1 を示す。\n- 2 回目の修正の前: キャプションだけの F1 と、キャプションのない図に分かれる。\n- 0.21.0: 本文の冒頭に F1（画像あり）。\n\n【P05】AI がどちらの図形にも、注の段落の後ろを指定した。\n- 作業ツリー: 本文の最後に F1（画像あり）。\n- 2 回目の修正の前: 分かれる。\n\n【文書】grep で調べた。DESIGN 7 章と DEVELOPMENT の残っている課題に、「別々の段落」の記述はない。",
+     "fix": "DESIGN 6.1 に、例外を書き足す: 「同じ箇条書き・引用の別々の段落に結び付いた図形と、AI が本文の外の段落の後ろを指定した図形は、同じ位置に置くので組にする（0.21.0 と同じ）」。\n\nFIX_PLAN の残る限界も、同じように直す。\n\nDESIGN 7 章・DEVELOPMENT にもこの項目を足す。足さない場合は、FIX_PLAN の「にも書いた」の記述を直す。"
+    },
+    {
+     "lens": "regression",
+     "severity": "nit",
+     "file": "docs/DESIGN.md",
+     "line": 608,
+     "problem": "DESIGN 6.1 の「別々の段落に結び付いた図形は、別の位置に仮に置くので組にしない」が、コードと食い違う。同じ文は次の 2 か所にもある。\n- tests/test_figure_body.py:595 の docstring\n- DEVELOPMENT.md:113 の「別々の段落に結び付いていれば組まないこと」\n\nコードでは、次の 2 つの形で、別々の段落の図形が同じ差し込み位置になり、1 つの図に組まれる。\n- 箇条書きの別々の項目に結び付いた図形: run_end で、どちらも箇条書きの終わりに置く。\n- AI がどちらも本文の外の段落の後ろと答えた図形: どちらも BODY_END になる。\n\nFIX_PLAN の B3（2 回目の修正の should の項）には、この 2 つの例外が正しく書いてある。DESIGN 6.1・7 章と DEVELOPMENT、テストの説明には書いていない。この 2 つの形はテストでも守られていない。組み方は 0.21.0 と同じで、文字は落ちない。",
+     "evidence": "架空の文字の反例を、cx/run.py で 3 版変換した（0.21.0・2 回目の修正の前・作業ツリー）。\n\n【c11】箇条書きの項目 1 に画像だけの図形、項目 2 に「図1」のキャプションだけの図形を結び付けた。空の回答で変換した。\n- 0.21.0: 冒頭に fig F1:g1\n- 修正の前: 項目 3 の後ろに F1:g0 とキャプションのない図\n- 作業ツリー: 項目 3 の後ろに F1:g1（1 つの図に組む）\n\n【c4】別々の本文の段落に、同じ 2 つの図形を結び付けた。\n- 空の回答: 作業ツリーは組まない（説明どおり）。\n- 両方の placements の after を引用文献の段落 d22 にした回答（c4end.json）: 作業ツリーは、本文の最後に F1:g1 を 1 つ置く。知らせは 2 行とも「XML の本文の最後にある F1」。修正の前は、F1:g0 とキャプションのない図に分かれていた。\n\nどれも不変性・最終・DTD・J-STAGE は合格。\n\n変異 prov_key_one（どの仮の図形も同じ置き場所にする）は、test_provisional_floats_at_same_place_are_paired[True] で落ちる。しかし、上の 2 つの「同じ位置になる別々の段落」の形を確かめるテストはない。",
+     "fix": "コードの書き方に合わせて文書を直す。DESIGN 6.1（608 行付近）と 7 章、DEVELOPMENT.md:113、test_provisional_floats_at_same_place_are_paired の docstring の 3 か所で、「別々の段落に結び付いた図形は組にしない」に例外を添える。\n- 例外 1: 同じ箇条書き・引用の別々の項目に結び付いた図形（どちらも箇条書きの終わりに置く）\n- 例外 2: AI がどちらも本文の外の後ろと答えた図形（どちらも本文の最後に置く）\n- どちらも同じ位置なので組にする（0.21.0 と同じ）。\n\nあわせて、c11 の形を test_provisional_floats_at_same_place_are_paired の変種として足すとよい。"
+    },
+    {
+     "lens": "regression",
+     "severity": "nit",
+     "file": "docs/DESIGN.md",
+     "line": 569,
+     "problem": "DESIGN 6.1 の run_end の説明「…見出しと推定する段落、図形の中の段落の前で止める。間の空白だけの段落は飛ばす」は、コードと食い違う。\n\nコードの動き:\n- run_end の skip() は、浮動配置の図形の中身（b.float_id）を飛ばす。docstring にも「間の図形の中身と空白だけの段落は飛ばす」とある。\n- 止まるのは、list_or_quote が None を返す、浮動配置でないテキストボックスの段落（in_textbox）だけ。\n\nDESIGN の書き方では、浮動配置の図形の中身の前でも止まるように読める。DEVELOPMENT.md:94 の「浮動配置でないテキストボックスの段落の前で止め」と、FIX_PLAN の残る限界は、コードと合っている。",
+     "evidence": "structure.py の run_end（841 行〜）を読んで確かめた。\n- skip(b) は bool(b.float_id) or (Para and is_blank)。\n- list_or_quote は in_shape(b) なら None を返す。in_shape は in_textbox または float_id。ただし float_id の段落は、skip で先に飛ばされる。\n\n前回の点検の変異の結果:\n- run_end_skip_off（浮動配置の中身も止める）は、r2 でテストが落ちた。\n- 今回の inshape_off（in_shape の条件を外す）も落ちる（list_textbox）。\n\nつまり、コードは「浮動配置の中身は飛ばし、浮動配置でないテキストボックスの段落で止める」で固まっている。",
+     "fix": "コードに合わせて、DESIGN 6.1 の該当の文を直す。「見出しと推定する段落、浮動配置でないテキストボックスの段落の前で止める。間の浮動配置の図形の中身と空白だけの段落は飛ばす」とする。"
+    },
+    {
+     "lens": "regression",
+     "severity": "nit",
+     "file": "src/jasme_jats/structure.py",
+     "line": 348,
+     "problem": "2 回目の修正で足した float_targets の 2 つの枝を、どのテストも守っていない。\n\n(a) ID のある図表がなく、図形の中身から出した段落だけがあるとき（if ids or paras の paras の側）\n- 例: キャプションのない図形で、画像と文字が同じ段落にある形。\n- 知らせに「段落「…」」を出す。この枝を「図表の中身」に戻しても、テストは通る。\n\n(b) キャプションのない図が 2 つ以上のときの「キャプションのない図 N つ」の数\n- 数を出さないようにしても、テストは通る。\n\nどちらも 2 回目の修正の前にはなかった動き。",
+     "evidence": "mut/mut.py で、wt_src の写しに変異を 1 つずつ当て、テスト全体（651 件）を流した。\n- ft_cond_ids（if ids or paras: → if ids:）: 落ちたのは test_template_emf_conversion だけ。これは並行の負荷によるもので、ほかの変異でも落ちる。\n- ft_nocap_count（「 N つ」を付けない）: 651 passed。\n\n反例 c9（架空の文字。キャプションのない図形 1 つで、画像と「説明文：画像の右の文字」が同じ段落。3 cm 下にずらした）を、空の回答で変換した。\n- 作業ツリーの CLI の表示:「キャプションなし: XML の段落「図を示す。」の後ろにある段落「説明文：画像の右の文字」」\n- 修正の前の表示:「…にある図表の中身」\n- 変異 ft_cond_ids の動きは、修正の前に戻る。\n\nどれも不変性・最終・DTD は合格。",
+     "fix": "tests/test_figure_body.py の test_unplaced_float_notice_lists_its_paragraphs（238 行）に、次の 2 つの変種を足す。\n- c9 の形（キャプションのない図形で、画像と文字が同じ段落。make_float_text の 2 つ目の図形を、アンカー段落から離した形など）。知らせに「段落「…」」が出て、「図表の中身」が出ないことを確かめる。\n- 1 つの図形に、キャプション 1 つと画像だけの段落が 3 つある形（中身をそのまま出す図形で、キャプションのない図が 2 つになる）。知らせに「キャプションのない図 2 つ」が出ることを確かめる。"
+    }
+   ],
+   "failedLens": []
+  }
+ ],
+ "remaining": [
+  {
+   "lens": "principle",
+   "severity": "nit",
+   "file": "src/jasme_jats/structure.py",
+   "line": 1329,
+   "problem": "位置を決められない図形の中身にある、引用スタイルや自動番号（箇条書き）の段落（画像のある段落）が、隣の本文の disp-quote・list とまとめられる。\n- 原因: assemble_floats の引用・箇条書きのまとめ（L1329・L1344）は out[-1] だけを見て、置き場所（self.provisional）を見ない。1 回目の修正の same_place は、このまとめには効かない。\n- アンカー段落が引用・箇条書きの途中のとき: run_end でその終わりに置くので、図形の中身の先頭の段落が、本文の disp-quote・list の最後に入る。\n- アンカー段落のすぐ後ろに本文の引用・箇条書きが続くとき: 図形の中身の最後の段落から始まる disp-quote・list に、本文の段落・項目が入る。\n- 2 回目の修正の知らせはこの段落を「段落「…」」と示すが、本文の disp-quote・list の中にあることは書かない。\n- DESIGN 6.1 の「その外の要素と組にしない」に反する形で、DESIGN 7 章にも FIX_PLAN の残る限界にも書いていない。\n- 文字は落ちない。B3 の仮の位置（N17）から起きる形で、2 回目の修正で悪くなったものではない。",
+   "evidence": "【方法】架空の文字の docx（gen_r3.py の P03・P04、gen_r3b.py の P14〜P17）を、placements が空の回答で 3 版変換した。\n- P03: 引用の 1 つ目の段落に結び付いた図形（3 cm 下）。中身は、引用スタイルの画像と文字の段落、図キャプション 2 つ、画像。\n- P14: 図形の中身の最後が、同じ番号の定義の画像と文字の項目。アンカー段落の直後に、本文の 2 項目の箇条書き。\n\n【結果】\n- P03:\n  - 0.21.0: 冒頭に disp-quote(1)・F1・F2。本文の引用は disp-quote(2) のまま。\n  - 2 回目の修正の前と作業ツリー: disp-quote(3)。本文の 2 段落の後ろに、図形の段落と inline-graphic が入る。\n- P14:\n  - 0.21.0: list(1) と list(2) が別。\n  - 作業ツリー: list(3)。図形の項目が 1 つ目で、本文の 2 項目が続く。\n- P15 は disp-quote(3)、P16（単純な図形）は list(3)、P17 は disp-quote(3)。\n- 本文の list・disp-quote に図形の中身と本文の段落がまじる数（mixed_groups.py。乱数の反例 160 件＋上の反例の 181 件）:\n  - 0.21.0: 0 件\n  - 2 回目の修正の前・作業ツリー: 15 件\n  - td1〜3: 0 件\n- 不変性・最終・DTD・J-STAGE はどれも合格。\n\n【試作】proto_list_quote_place.diff（2 つのまとめに、同じ置き場所の条件を足す）で確かめた。\n- 混在は 0 件になった。\n- pytest 651 件が通った。\n- golden 23 件の manifest は、作業ツリーと同じだった。\n- td の 9 件の XML は、作業ツリーとバイト単位で同じだった。",
+   "fix": "assemble_floats の 2 つのまとめに条件を足す: where[id(out[-1])] == self.provisional.get(id(b), \"\") のときだけまとめる（試作のとおり）。\n\nあわせて、P03・P14 の形を test_provisional_float_is_not_paired_with_outside_captions の変種としてテストに足す。\n\n直さない場合は、次のようにする。\n- DESIGN 6.1・7 章と FIX_PLAN の残る限界に書く。\n- 3 章の対処に「本文の箇条書き・引用の中から出す」と添える。"
+  },
+  {
+   "lens": "principle",
+   "severity": "nit",
+   "file": "src/jasme_jats/structure.py",
+   "line": 352,
+   "problem": "手作業で移す知らせ（float_targets）の示し方が、実際の XML と合わない形が 2 つある。\n- 文字のない段落を「段落「」」と示す（2 回目の修正で新しく出る）。例: 引用スタイルの画像だけの段落。冒頭・3 章・Colab・CLI のどれも同じ。\n- 画像だけのグループ図形（キャプションなし）は、仮の位置に何も置かれず、画像はアンカー段落の中に残る。それでも知らせは「…の後ろにある図表の中身を移すこと」と書く。\n  - 0.21.0 も「本文の冒頭（…付近）」と書いていて、実際と合わなかった。\n- docstring の「図の直後に出す」も、中身をそのまま出す図形には当てはまらない。段落が図の前や、本文の disp-quote の中に出る。\n- 文字・画像は落ちない。",
+   "evidence": "【方法】架空の docx を、空の回答で 3 版変換した。\n\n【P17】先頭が引用スタイルの画像だけの段落。\n- 作業ツリー: CLI・3 章・冒頭は「…の後ろにある F1・F2 と段落「」」、Colab の枠は「XML の F1・F2 と段落「」」。\n- 2 回目の修正の前: 「F1・F2」。\n\n【P09】1 つの段落に、画像だけのグループ図形（3 cm 下）と、キャプションだけのテキストボックスが結び付いている。\n- 3 版とも、画像はアンカー段落の p の中の inline-graphic になる。\n- s1 の知らせは「XML の段落「…」の後ろにある図表の中身」（0.21.0 は「本文の冒頭（…付近）」）。\n\nどちらも、不変性・最終・DTD は合格。XML に入らなかった画像は 0。",
+   "fix": "float_targets を次のように直す。\n- 文字のない段落は「画像だけの段落」などと示す。\n- place_floats が何も差し込まない図形（entries が空）は、「アンカー段落「…」の中の画像」と示すか、知らせから外す。\n- docstring も、実際に出る位置に合わせる。"
+  },
+  {
+   "lens": "principle",
+   "severity": "nit",
+   "file": "tests/test_floats.py",
+   "line": 363,
+   "problem": "2 回目の修正で、list_or_quote の別行数式の条件を変えた（L831。b.has_display_math から self.formula_node(b) is not None へ）。この変更で、別行数式と文字が同じ段落の項目も箇条書きの項目として数えるようになったが、どのテストも守っていない。\n- list_math の変種は別行数式だけの項目なので、変更の前後で結果が同じになる。\n- FIX_PLAN の変異の数（47 個のうち 46 個が落ちる）にも、この変更は入っていない。",
+   "evidence": "【方法】mut/mut.py で、16 個の変異を 1 つずつ当て、テスト全体を流した。\n- 前の指摘で落ちなかった 9 個は、どれも落ちる。\n- loq_math_old（L831 を b.has_display_math に戻す）だけは、651 件すべてが通る。\n\n【出力の確かめ】P12 を、空の回答で変換した。P12 は架空の docx で、1 つ目の項目に図形、2 つ目の項目に別行数式と「のように表せる。」がある。\n- 2 回目の修正の前: list(1)・F1・list(2)（箇条書きが分かれる）。\n- 作業ツリー: list(3)・F1。\n- 3 版とも、不変性・DTD は合格。",
+   "fix": "make_b3_place に、別行数式と文字が同じ段落の項目の variant を足す。\n\ntest_unplaced_float_does_not_split_list_or_quote に、groups=1 の形として加える。\n\nFIX_PLAN の変異の数にも、この規則を足す。"
+  },
+  {
+   "lens": "principle",
+   "severity": "nit",
+   "file": "docs/DESIGN.md",
+   "line": 608,
+   "problem": "文書とコードが食い違っている（決まりにより、コードに合わせて直すもの）。\n- DESIGN 6.1 は「別々の段落に結び付いた図形は…組にしない」と書く。FIX_PLAN の残る限界（L378）は「別々の段落に結び付いた…図形も組にならない」と書く。\n- しかしコードでは、次の 2 つは同じ位置に置くので、組になる。\n  - 同じ箇条書き・引用の別々の項目に結び付いた図形\n  - AI が本文の外の段落の後ろを指定した図形\n- FIX_PLAN の L361 はこの例外を書いているが、DESIGN 6.1 と残る限界は書いていない。\n- FIX_PLAN は残る限界を「DESIGN 7 章と DEVELOPMENT にも書いた」とするが、この項目はどちらにもない。",
+   "evidence": "【P02】同じ箇条書きの 1 つ目の項目に画像だけの図形、3 つ目の項目にキャプションだけの図形がある。\n- 作業ツリー: list(3) の後ろに F1（画像あり）。2 つの行が、どちらも F1 を示す。\n- 2 回目の修正の前: キャプションだけの F1 と、キャプションのない図に分かれる。\n- 0.21.0: 本文の冒頭に F1（画像あり）。\n\n【P05】AI がどちらの図形にも、注の段落の後ろを指定した。\n- 作業ツリー: 本文の最後に F1（画像あり）。\n- 2 回目の修正の前: 分かれる。\n\n【文書】grep で調べた。DESIGN 7 章と DEVELOPMENT の残っている課題に、「別々の段落」の記述はない。",
+   "fix": "DESIGN 6.1 に、例外を書き足す: 「同じ箇条書き・引用の別々の段落に結び付いた図形と、AI が本文の外の段落の後ろを指定した図形は、同じ位置に置くので組にする（0.21.0 と同じ）」。\n\nFIX_PLAN の残る限界も、同じように直す。\n\nDESIGN 7 章・DEVELOPMENT にもこの項目を足す。足さない場合は、FIX_PLAN の「にも書いた」の記述を直す。"
+  },
+  {
+   "lens": "regression",
+   "severity": "nit",
+   "file": "docs/DESIGN.md",
+   "line": 608,
+   "problem": "DESIGN 6.1 の「別々の段落に結び付いた図形は、別の位置に仮に置くので組にしない」が、コードと食い違う。同じ文は次の 2 か所にもある。\n- tests/test_figure_body.py:595 の docstring\n- DEVELOPMENT.md:113 の「別々の段落に結び付いていれば組まないこと」\n\nコードでは、次の 2 つの形で、別々の段落の図形が同じ差し込み位置になり、1 つの図に組まれる。\n- 箇条書きの別々の項目に結び付いた図形: run_end で、どちらも箇条書きの終わりに置く。\n- AI がどちらも本文の外の段落の後ろと答えた図形: どちらも BODY_END になる。\n\nFIX_PLAN の B3（2 回目の修正の should の項）には、この 2 つの例外が正しく書いてある。DESIGN 6.1・7 章と DEVELOPMENT、テストの説明には書いていない。この 2 つの形はテストでも守られていない。組み方は 0.21.0 と同じで、文字は落ちない。",
+   "evidence": "架空の文字の反例を、cx/run.py で 3 版変換した（0.21.0・2 回目の修正の前・作業ツリー）。\n\n【c11】箇条書きの項目 1 に画像だけの図形、項目 2 に「図1」のキャプションだけの図形を結び付けた。空の回答で変換した。\n- 0.21.0: 冒頭に fig F1:g1\n- 修正の前: 項目 3 の後ろに F1:g0 とキャプションのない図\n- 作業ツリー: 項目 3 の後ろに F1:g1（1 つの図に組む）\n\n【c4】別々の本文の段落に、同じ 2 つの図形を結び付けた。\n- 空の回答: 作業ツリーは組まない（説明どおり）。\n- 両方の placements の after を引用文献の段落 d22 にした回答（c4end.json）: 作業ツリーは、本文の最後に F1:g1 を 1 つ置く。知らせは 2 行とも「XML の本文の最後にある F1」。修正の前は、F1:g0 とキャプションのない図に分かれていた。\n\nどれも不変性・最終・DTD・J-STAGE は合格。\n\n変異 prov_key_one（どの仮の図形も同じ置き場所にする）は、test_provisional_floats_at_same_place_are_paired[True] で落ちる。しかし、上の 2 つの「同じ位置になる別々の段落」の形を確かめるテストはない。",
+   "fix": "コードの書き方に合わせて文書を直す。DESIGN 6.1（608 行付近）と 7 章、DEVELOPMENT.md:113、test_provisional_floats_at_same_place_are_paired の docstring の 3 か所で、「別々の段落に結び付いた図形は組にしない」に例外を添える。\n- 例外 1: 同じ箇条書き・引用の別々の項目に結び付いた図形（どちらも箇条書きの終わりに置く）\n- 例外 2: AI がどちらも本文の外の後ろと答えた図形（どちらも本文の最後に置く）\n- どちらも同じ位置なので組にする（0.21.0 と同じ）。\n\nあわせて、c11 の形を test_provisional_floats_at_same_place_are_paired の変種として足すとよい。"
+  },
+  {
+   "lens": "regression",
+   "severity": "nit",
+   "file": "docs/DESIGN.md",
+   "line": 569,
+   "problem": "DESIGN 6.1 の run_end の説明「…見出しと推定する段落、図形の中の段落の前で止める。間の空白だけの段落は飛ばす」は、コードと食い違う。\n\nコードの動き:\n- run_end の skip() は、浮動配置の図形の中身（b.float_id）を飛ばす。docstring にも「間の図形の中身と空白だけの段落は飛ばす」とある。\n- 止まるのは、list_or_quote が None を返す、浮動配置でないテキストボックスの段落（in_textbox）だけ。\n\nDESIGN の書き方では、浮動配置の図形の中身の前でも止まるように読める。DEVELOPMENT.md:94 の「浮動配置でないテキストボックスの段落の前で止め」と、FIX_PLAN の残る限界は、コードと合っている。",
+   "evidence": "structure.py の run_end（841 行〜）を読んで確かめた。\n- skip(b) は bool(b.float_id) or (Para and is_blank)。\n- list_or_quote は in_shape(b) なら None を返す。in_shape は in_textbox または float_id。ただし float_id の段落は、skip で先に飛ばされる。\n\n前回の点検の変異の結果:\n- run_end_skip_off（浮動配置の中身も止める）は、r2 でテストが落ちた。\n- 今回の inshape_off（in_shape の条件を外す）も落ちる（list_textbox）。\n\nつまり、コードは「浮動配置の中身は飛ばし、浮動配置でないテキストボックスの段落で止める」で固まっている。",
+   "fix": "コードに合わせて、DESIGN 6.1 の該当の文を直す。「見出しと推定する段落、浮動配置でないテキストボックスの段落の前で止める。間の浮動配置の図形の中身と空白だけの段落は飛ばす」とする。"
+  },
+  {
+   "lens": "regression",
+   "severity": "nit",
+   "file": "src/jasme_jats/structure.py",
+   "line": 348,
+   "problem": "2 回目の修正で足した float_targets の 2 つの枝を、どのテストも守っていない。\n\n(a) ID のある図表がなく、図形の中身から出した段落だけがあるとき（if ids or paras の paras の側）\n- 例: キャプションのない図形で、画像と文字が同じ段落にある形。\n- 知らせに「段落「…」」を出す。この枝を「図表の中身」に戻しても、テストは通る。\n\n(b) キャプションのない図が 2 つ以上のときの「キャプションのない図 N つ」の数\n- 数を出さないようにしても、テストは通る。\n\nどちらも 2 回目の修正の前にはなかった動き。",
+   "evidence": "mut/mut.py で、wt_src の写しに変異を 1 つずつ当て、テスト全体（651 件）を流した。\n- ft_cond_ids（if ids or paras: → if ids:）: 落ちたのは test_template_emf_conversion だけ。これは並行の負荷によるもので、ほかの変異でも落ちる。\n- ft_nocap_count（「 N つ」を付けない）: 651 passed。\n\n反例 c9（架空の文字。キャプションのない図形 1 つで、画像と「説明文：画像の右の文字」が同じ段落。3 cm 下にずらした）を、空の回答で変換した。\n- 作業ツリーの CLI の表示:「キャプションなし: XML の段落「図を示す。」の後ろにある段落「説明文：画像の右の文字」」\n- 修正の前の表示:「…にある図表の中身」\n- 変異 ft_cond_ids の動きは、修正の前に戻る。\n\nどれも不変性・最終・DTD は合格。",
+   "fix": "tests/test_figure_body.py の test_unplaced_float_notice_lists_its_paragraphs（238 行）に、次の 2 つの変種を足す。\n- c9 の形（キャプションのない図形で、画像と文字が同じ段落。make_float_text の 2 つ目の図形を、アンカー段落から離した形など）。知らせに「段落「…」」が出て、「図表の中身」が出ないことを確かめる。\n- 1 つの図形に、キャプション 1 つと画像だけの段落が 3 つある形（中身をそのまま出す図形で、キャプションのない図が 2 つになる）。知らせに「キャプションのない図 2 つ」が出ることを確かめる。"
+  }
+ ],
+ "incomplete": null
+}
