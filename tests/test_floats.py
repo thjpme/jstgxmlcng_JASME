@@ -139,7 +139,7 @@ def test_link_targets_follow_figures_after_rebuild(journal, meta, tmp_path):
     assert "".join(root.find(".//fig[@id='F2']/caption").itertext()).startswith("図2")
 
 
-def test_missing_placement_is_reported_after_ai(journal, meta, tmp_path):
+def test_missing_placement_is_reported_after_ai(journal, meta, tmp_path, capsys):
     data = json.loads(RESPONSE)
     data["placements"] = [p for p in data["placements"] if p["float"] != "s2"]
     res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=json.dumps(data),
@@ -159,13 +159,18 @@ def test_missing_placement_is_reported_after_ai(journal, meta, tmp_path):
     report = res.report_path.read_text(encoding="utf-8")
     assert "本文の冒頭" not in report
     assert "要対応: 位置を決められなかった図表が 1 件" in report and "手作業で正しい位置" in report
-    assert "アンカー段落）のすぐ後ろか、本文の最後に仮に置いています" in report
+    assert "アンカー段落）のすぐ後ろ（箇条書き・引用の途中なら、その終わり）か、本文の最後に仮に置いています" in report
     assert "1 件（アンカー段落の後ろに仮に配置）" in report
     assert f"AI による補完でも位置を決められなかったため、{place}に仮に置いた" in report.split("## 3.")[1]
     assert "仮の位置（アンカー段落の後ろ・本文の最後）に置いた図表" in report.split("## 14.")[1]
     path = tmp_path / "resp.json"
     path.write_text(json.dumps(data), encoding="utf-8")
+    capsys.readouterr()
     assert cli_main([str(FLOAT), "--out", str(tmp_path / "cli"), "--ai", "manual", "--ai-response", str(path)]) == 1
+    # コマンドラインでも、図表ごとに、キャプションと XML の中の位置・ID を 1 行ずつ示す（レポートの冒頭と同じ）
+    err = capsys.readouterr().err
+    assert "要対応: 位置を決められなかった図表 1 件を、仮の位置（アンカー段落の後ろ、または本文の最後）に置きました" in err
+    assert f"\n  「図3\u3000面積図」「図4\u3000樹形図」: XML の{place}にある F2・F3" in err
 
 
 def test_unplaced_simple_float_is_paired_after_anchor(journal, meta, tmp_path):
@@ -340,6 +345,58 @@ def test_unplaced_floats_go_after_anchor_in_number_order(journal, meta, tmp_path
     assert res.forced_floats == []
     report = res.report_path.read_text(encoding="utf-8")
     assert "本文の冒頭" not in report and "4 件（アンカー段落の後ろに仮に配置）" in report
+
+
+@pytest.mark.parametrize("variant, items, last", [
+    ("list", ["箇条書きの一つ目の項目である。", "この項目に図1のテキストボックスが結び付いている。", "箇条書きの三つ目の項目である。"],
+     "箇条書きの三つ目の項目である。"),
+    ("quote", ["引用の一つ目の段落である。", "この引用の段落に図1のテキストボックスが結び付いている。", "引用の三つ目の段落である。"],
+     "引用の三つ目の段落である。"),
+    ("blank_list", ["箇条書きの一つ目の項目である。", "箇条書きの二つ目の項目である。"], "箇条書きの二つ目の項目である。")])
+def test_unplaced_float_does_not_split_list_or_quote(journal, meta, tmp_path, variant, items, last):
+    """アンカー段落が、続いた箇条書きの項目・引用の段落の途中にあるときは、その箇条書き・引用の最後の段落の後ろに仮に置く
+    （箇条書き・引用を 2 つに分けない。分けると、図表を手作業で移しても分かれたまま残る）。空のアンカー段落が箇条書きの
+    項目の間にあるときも同じ。AI が指定した位置はずらさない。"""
+    path = tmp_path / f"place_{variant}.docx"
+    mf.make_b3_place(path, variant=variant)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.lost_images == []
+    assert res.plan.unplaced_floats == ["s1", "s2", "s3", "s4"] and res.plan.floats["s1"].where == "anchor"
+    body = load(res).find("body")
+    tag = "disp-quote" if variant == "quote" else "list"
+    [group] = list(body.iter(tag))
+    assert ["".join(p.itertext()) for p in group.iter("p")] == items           # 1 つの箇条書き・引用のまま
+    nxt = group.getnext()
+    assert nxt.tag == "fig" and "".join(nxt.find("caption").itertext()).startswith("図1")
+    assert res.plan.float_place("s1") == f"段落「{last[:20]}」の後ろ"
+    detail = next(u[3] for u in res.unresolved_after if u[0] == "float" and "図1" in u[2])
+    assert f"今は段落「{last[:20]}」の後ろに仮に置いている" in detail
+    # AI が箇条書き・引用の途中の段落の後ろを指定したときは、指定どおり（ずらさない）
+    _, first, _ = _mechanical(path, journal)
+    anchor = first.floats["s1"].float.anchor_src
+    cap = next(q.src for q in first.floats["s1"].paras if q.plain().startswith("図1"))
+    imgs = [q.src for q in first.floats["s1"].paras if q.images]
+    resp = json.dumps({"placements": [{"float": "s1", "after": anchor, "items": [{"kind": "fig", "caption": [cap], "body": imgs}],
+                                       "reason": "試験の回答", "confidence": "低"}], "operations": [], "notes": []})
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "ai", ai_mode="manual", ai_response=resp,
+                                               convert_metafiles=False))
+    assert res.plan.floats["s1"].mode == "ai" and res.fidelity.ok and res.dtd_valid
+    if variant != "blank_list":
+        assert len(list(load(res).find("body").iter(tag))) == 2      # 指定された段落の直後に置くので、2 つに分かれる（今までどおり）
+
+
+def test_float_row_location_for_empty_anchor(journal, meta, tmp_path):
+    """3 章の「図表の位置」の場所の欄: アンカー段落が空の段落（出力しないので場所がない）なら、その前の段落の場所を示す
+    （段落の ID をそのまま出さない）。"""
+    res = convert(PLACE, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", convert_metafiles=False))
+    plan = res.plan
+    anchor = plan.floats["s4"].float.anchor_src
+    assert not plan.locations.get(anchor)
+    [row] = [u for u in res.unresolved_after if u[0] == "float" and "図4" in u[2]]
+    assert row[1] != anchor and plan.locations.get(row[1])
+    assert plan.paras[row[1]].plain().startswith("この段落に図3と図2のテキストボックスが")
+    chapter3 = res.report_path.read_text(encoding="utf-8").split("## 3.")[1].split("## 4.")[0]
+    assert f"| {anchor} |" not in chapter3 and f"| {plan.locations[row[1]]} |" in chapter3
 
 
 def test_provisional_target_and_place():

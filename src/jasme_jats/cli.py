@@ -117,9 +117,11 @@ def main(argv=None):
     # AI の回答を反映した後（API、または手動モードで回答あり）も位置を決められない図表が残っている
     ai_applied = res.ai.mode == "api" or (res.ai.mode == "manual" and a.ai_response)
     if ai_applied and res.plan.unplaced_floats:
-        print("位置を決められなかった図表を、仮の位置（アンカー段落の後ろ、または本文の最後）に置きました。XML の中で手作業で"
-              "正しい位置に移してください（レポート 3 章）: "
-              + "、".join(f"{fid}（{res.plan.float_place(fid)}）" for fid in res.plan.unplaced_floats), file=sys.stderr)
+        # 図表ごとに、キャプションと、XML の中の位置・ID（レポートの冒頭と同じ。pipeline の forced_floats）
+        rows = res.forced_floats or [f"{fid}: {res.plan.float_place(fid)}" for fid in res.plan.unplaced_floats]
+        print(f"要対応: 位置を決められなかった図表 {len(res.plan.unplaced_floats)} 件を、仮の位置（アンカー段落の後ろ、または"
+              "本文の最後）に置きました。XML の中で手作業で正しい位置（Word で表示したときに、図の左上の直上にある本文の段落の後）"
+              "に移してください（レポートの冒頭と 3 章）。\n" + "\n".join(f"  {x}" for x in rows), file=sys.stderr)
         return 1
     return 0 if res.ok and not lost else 1
 
