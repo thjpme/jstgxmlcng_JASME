@@ -593,7 +593,8 @@ def test_provisional_floats_at_same_place_are_paired(journal, meta, tmp_path, ap
     """同じ段落に結び付いた、画像だけの図形とキャプションだけの図形（どちらも位置を決められない）は、同じ位置に仮に置くので、
     1 つの図に組む（0.21.0 と同じ。Word の原稿で、画像とキャプションを別々の図形にして浮かせる形）。手作業で移す図表の
     知らせには、どちらの図形にも、組んだ図の ID が出る。別々の段落に結び付いた図形は、別の位置に仮に置くので組にしない
-    （組むと、片方の中身がもう片方の位置に動く）。"""
+    （組むと、片方の中身がもう片方の位置に動く。同じ箇条書き・引用の別々の項目に結び付いた図形と、AI がどちらも本文の外の
+    段落の後ろと答えた図形は、同じ位置に仮に置くので組む）。"""
     path = tmp_path / "split.docx"
     mf.make_article(path, "仮に置いた図形の検証用文書", lambda b: split_parts(b, apart))
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False,
