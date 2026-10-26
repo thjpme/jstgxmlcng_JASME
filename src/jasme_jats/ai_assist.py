@@ -1177,8 +1177,13 @@ def apply_ops(ops, plan: ArticlePlan, doc, outcome: AIOutcome):
         if kind == "set_role":
             if any(r[0] is op for r in outcome.rejected):
                 continue
-            d = plan.decide("ai", "style", op["src"], f"段落の役割を「{ROLES[op['role']]}」とした。{op['reason']}",
-                            op["confidence"])
+            what = f"段落の役割を「{ROLES[op['role']]}」とした。"
+            para = plan.paras.get(op["src"])
+            if op["role"] == "p" and any(q is para for q in plan.abstract):
+                # abstract で英文要旨に戻した後ろの、資料の見出しでない段落への p（structure.Classifier.build_front_en）。
+                # 採用しても役割は変わらないので、そのとおりに記録する
+                what = "段落を資料の中の段落（p）にする指定だが、AI の abstract で英文要旨に戻した後ろの段落なので、英文要旨の段落のままにした。"
+            d = plan.decide("ai", "style", op["src"], f"{what}{op['reason']}", op["confidence"])
             outcome.accepted.append((op, d))
             continue
         if kind in TARGET_PREFIX:

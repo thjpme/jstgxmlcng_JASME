@@ -528,6 +528,28 @@ def test_note_overlap_is_not_reported_without_both_kinds(structure, journal):
     assert plan.fns and not any(fn.word_note for fn in plan.fns) and plan.note_overlap == []
 
 
+def test_note_overlap_is_reported_only_for_same_numbers(journal, meta, tmp_path):
+    # 手で書いた注と Word の注が両方あっても、番号が実際に重ならなければ知らせない（手で書いた注は「3)」、Word の脚注・文末脚注は
+    # 「1)」「2)」）。番号が重なるときだけ、重なる番号を知らせる（手で書いた注の「2)」と Word の注の「2)」）
+    def make(name, manual):
+        def parts(b):
+            return [mf.para(S["sec1"], "１．はじめに"),
+                    mf.para(S["body"], "Word の注", mf.footnote_ref(3), "と", mf.endnote_ref(4), "、手で書いた注", mf.run(manual, sup=True),
+                            "の文。"),
+                    mf.para(S["fn_head"], "注"), mf.para(S["body"], f"{manual} 手で書いた架空の注。")]
+        path = tmp_path / f"{name}.docx"
+        mf.make_article(path, "手で書いた注と Word の注の検証用文書", parts,
+                        footnotes=[mf.footnote(3, " Word の脚注の架空の文。")], endnotes=[mf.endnote(4, " Word の文末脚注の架空の文。")])
+        return convert(path, meta, journal, Options(out_dir=tmp_path / name, convert_metafiles=False))
+    res = make("apart", "3)")
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    assert sorted((fn.word_note, fn.number) for fn in res.plan.fns) == [(False, 3), (True, 1), (True, 2)]
+    assert res.plan.note_overlap == [] and "note_overlap" not in {a.key for a in actions(res)}
+    assert not any("注の番号" in w and "重なっています" in w for w in res.warnings)
+    res = make("same", "2)")
+    assert res.plan.note_overlap == [2] and "note_overlap" in {a.key for a in actions(res)}
+
+
 def test_ai_cannot_set_role_on_word_notes(journal, meta, tmp_path):
     # Word の脚注・文末脚注の段落（参照のない注も）への set_role は、どの役割も採用しない（修正計画の N6。0.23.1 は p・exclude を
     # 「採用」と記録しながら何も変えていなかった）
