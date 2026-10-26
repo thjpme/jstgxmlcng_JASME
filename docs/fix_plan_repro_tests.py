@@ -10,6 +10,7 @@ test_blank_paragraphs_in_textbox_and_endnote_are_excluded）。単位 B（0.20.0
 もともとない（U7・N9 のテストは tests/test_pdfmatch.py に足した）。単位 B2（0.21.0。N10〜N14）も同じで、
 再現と直した後の振る舞いのテスト（架空の文字）は、直すときに tests/test_pdfmatch.py に足した。単位 B3（0.22.0。N15〜N19）も同じで、
 再現と直した後の振る舞いのテスト（架空の文字）は、直すときに tests/test_floats.py・tests/test_ai.py・tests/test_figure_body.py に足した。
+単位 C（0.23.0。M1・M2・N4・U1）は tests/test_pipeline.py・tests/test_notebook.py に取り込んだ。
 
 実行のしかた（tests/conftest.py のフィクスチャ journal・meta を使うため、tests/ に一時的に写して実行し、終わったら消す）:
 
@@ -22,13 +23,10 @@ import sys
 import zipfile
 from pathlib import Path
 
-import pytest
 from lxml import etree
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))   # tests/ に写して実行する
 import make_fixtures as mf  # noqa: E402
-from conftest import FULL, TEMPLATE  # noqa: E402
-from jasme_jats.config import ArticleMeta  # noqa: E402
 from jasme_jats.pipeline import Options, _mechanical, convert  # noqa: E402
 
 S = mf.S
@@ -52,28 +50,6 @@ def make_doc(path, body_parts, abstract=("Abstract text."), appendix=None, extra
     body += mf.tail(b, appendix=appendix)
     b.save(path, body)
     return path
-
-
-# --------------------------------------------------------------------------- 1. アップロード用 ZIP の中身
-def test_PROBLEM_zip_contains_youhenkan_folder(journal, meta, tmp_path):
-    """EMF を変換できなかったとき、元の EMF を入れた「要変換/」フォルダが記事フォルダの中に作られ、
-    J-STAGE にアップロードする ZIP にそのまま入る（日本語のフォルダ名・EMF ファイル）。"""
-    res = convert(TEMPLATE, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
-    names = zipfile.ZipFile(res.zip_path).namelist()
-    assert any("要変換" in n and n.endswith(".emf") for n in names), names
-    # jstage_rules は画像の名前しか見ないので、このフォルダは検出されない
-    assert res.jstage_issues == []
-
-
-def test_PROBLEM_zip_accumulates_articles_in_shared_out_dir(journal, tmp_path):
-    """同じ出力フォルダで 2 本目を変換すると、2 本目の ZIP に 1 本目の記事フォルダも入る（コマンドラインの既定 --out output）。"""
-    m1 = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり"})
-    m2 = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "13", "peer_review": "あり"})
-    convert(FULL, m1, journal, Options(out_dir=tmp_path, convert_metafiles=False))
-    r2 = convert(FULL, m2, journal, Options(out_dir=tmp_path, convert_metafiles=False))
-    names = zipfile.ZipFile(r2.zip_path).namelist()
-    assert any(n.startswith("jasme/31/1/31_1/") for n in names), names
-    assert any(n.startswith("jasme/31/1/31_13/") for n in names)
 
 
 # --------------------------------------------------------------------------- 2. 文字だけのテキストボックスが XML から消える
@@ -179,15 +155,6 @@ def test_PROBLEM_figure_reference_inside_word(journal):
     assert RE_FIGREF.search("地図1に示す").group(0) == "図1"
     assert RE_TABREF.search("図表1に示す").group(0) == "表1"
     assert RE_TABREF.search("発表1回目の").group(0) == "表1"
-
-
-# --------------------------------------------------------------------------- 10. 日付の入力
-def test_PROBLEM_date_with_slash_not_zero_padded():
-    """「2026/3/31」「2026.3.31」は、区切りを置き換える処理があるのに読めない（ゼロ埋めが必要）。"""
-    from jasme_jats.config import _date
-    with pytest.raises(ValueError):
-        _date("2026/3/31")
-    assert _date("2026/03/31") is not None
 
 
 # --------------------------------------------------------------------------- 11. 自動番号の番号付けが本文と脚注・テキストボックスで共有される

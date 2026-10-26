@@ -11,6 +11,8 @@
 - 出力しない段落は理由付きで記録し（`plan.exclude()` / `BuildInfo.exclusions`。空白だけの段落は `plan.exclude_blank()`）、
   落とせるのは空白だけ（`Emitter.drop()`）。出力した段落を除外にも記録すると、不変性チェックは不合格になる。
 - 不変性チェックは文字しか見ない。XML に入らなかった画像は `pipeline.lost_images()` が検出し、要対応として知らせる。
+- アップロード用 ZIP に入れるものは `package.upload_entries()` だけで決め（この記事の XML・今回の PDF・使える画像）、`package.zip_problems()` で読み直して確かめる。
+  入れなかったファイルはレポートの 10 章で知らせる（`Result.not_zipped`）。
 - 作り方は 2 通り（`Options.route`。最初に利用者が選ぶ。Colab の初期値とコマンドラインの `--pdf` があるときの既定はルート2）。
   どちらも docx → XML の処理は同じで、上の原則はそのまま守る。
   - ルート1「docx から作る」: docx の文字のまま XML にする。記事の PDF があれば照合して、違いをレポートに載せるだけ（`pdfmatch.py`）。

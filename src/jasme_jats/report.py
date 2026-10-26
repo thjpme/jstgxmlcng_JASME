@@ -208,9 +208,49 @@ def image_summary(r) -> str:
             "要対応（9 章）")
 
 
+def article_folder(r) -> str:
+    """ZIP の中の記事フォルダ（例: jasme/25/1/25_77/）。"""
+    return article_dir(Path(""), r.journal, r.meta).as_posix() + "/"
+
+
 def graphics_dir(r) -> str:
     """ZIP の中の Graphics フォルダ（例: jasme/25/1/25_77/Graphics/）。"""
-    return (article_dir(Path(""), r.journal, r.meta) / "Graphics").as_posix() + "/"
+    return article_folder(r) + "Graphics/"
+
+
+def upload_issues(r) -> list:
+    """J-STAGE のアップロード時チェックの結果: XML で判定したもの（jstage_issues）と、ZIP を読み直して見つけたもの（zip_issues）。
+
+    レポートの 1 章・12 章、コマンドライン・Colab の表示で使う（Result では 2 つを分けて持つ）。
+    """
+    return list(r.jstage_issues) + list(r.zip_issues)
+
+
+def not_zipped_note(r) -> str:
+    """10 章の、記事フォルダにあるのにアップロード用の ZIP に入れなかったファイル（Result.not_zipped）の説明と対処。"""
+    aid = r.meta.article_id(r.journal)
+    names = r.not_zipped
+    L = [f"記事フォルダ（`{article_folder(r)}`）にあるが、アップロード用の ZIP に入れなかったファイルが {len(names)} 件"
+         "あります: " + "、".join(f"`{esc(n)}`" for n in names) + "。前の変換の残りか、手で置いたファイルです。ZIP には、今回の"
+         "変換で作った XML と画像、今回指定した PDF だけを入れます。"]
+    if f"{aid}.pdf" in names:
+        L.append("PDF を ZIP に入れるときは、Colab では手順 2 で記事の PDF を選び、コマンドラインでは --pdf で PDF を指定して、"
+                 "変換し直してください。")
+    if any(n.startswith("Graphics/") for n in names):
+        L.append("画像は、用意が必要な画像（9 章で要対応）なら、Colab では手順 7、コマンドラインでは --images で入れ直してください"
+                 "（それ以外の画像は、前の変換の残りなので、対応は要りません）。")
+    if any(n != f"{aid}.pdf" and not n.startswith("Graphics/") for n in names):
+        L.append("ほかのファイルは J-STAGE にアップロードしないので、対応は要りません。")
+    return "".join(L)
+
+
+def pdf_checklist_line(r) -> str:
+    """14 章のチェックリストの PDF の行。PDF は J-STAGE で必須で、ZIP に入れるのは変換のときに指定した PDF だけ。"""
+    pdf = f"{r.meta.article_id(r.journal)}.pdf"
+    if r.has_pdf:
+        return f"- [x] PDF（{pdf}）がアップロード用の ZIP に入っている（J-STAGE では PDF が必須）"
+    return (f"- [ ] **PDF（{pdf}）がアップロード用の ZIP に入っていない**（J-STAGE では PDF が必須）: Colab では手順 2 で記事の PDF を"
+            "選び、コマンドラインでは --pdf で PDF を指定して、変換し直す")
 
 
 ROUTE_JA = {"docx": "docx から作る（ルート1。docx の文字は 1 文字も変えない）",
@@ -474,13 +514,14 @@ def render(r) -> str:
         ("本文の文字の不変性チェック（AI 補完の後に実施）", fid_line),
         ("最終出力（目印を取り除いた XML）の再チェック", final_line),
         ("J-STAGE 指定 DTD（JATS 1.1）による検証", "合格" if r.dtd_valid else f"不合格（{len(r.dtd_errors)} 件、12 章）"),
-        ("J-STAGE のアップロード時チェック（XML で判定できるもの）",
-         "問題なし" if not r.jstage_issues else f"要対応 {len(r.jstage_issues)} 件（12 章）"),
+        ("J-STAGE のアップロード時チェック（XML と ZIP で判定できるもの）",
+         "問題なし" if not upload_issues(r) else f"要対応 {len(upload_issues(r))} 件（12 章）"),
         ("機械的に付けたリンク", links),
         ("AI が付けたリンク・判断（2 章）", f"採用 {len(ai_acc)} 件 / 不採用 {len(ai.rejected)} 件" if ai.mode != "none" else "AI 補完なし"),
         ("機械処理で解決できなかった箇所（3 章）", f"{len(r.unresolved_after)} 件"),
         ("画像", image_summary(r)),
-        ("警告", f"{len(r.warnings)} 件（10 章）"),
+        ("警告", f"{len(r.warnings)} 件（10 章）"
+                 + (f"。ほかに、ZIP に入れなかったファイル {len(r.not_zipped)} 件（10 章）" if r.not_zipped else "")),
         ("出版版 PDF との照合", pdf_summary(r)),
     ]
     if plan.unplaced_floats:
@@ -747,7 +788,9 @@ def render(r) -> str:
     if r.warnings:
         for w in r.warnings:
             L.append(f"- {esc(w)}")
-    else:
+    if r.not_zipped:
+        L.append(f"- {not_zipped_note(r)}")
+    if not r.warnings and not r.not_zipped:
         L.append("ありません。")
     L.append("")
 
@@ -771,6 +814,10 @@ def render(r) -> str:
              f"{j.abstract_specific_use}（英文の論文で英文要旨を <abstract> に入れるときだけ使う。学会の方針を確認すること）")]
     L.append(table(["項目", "値"], rows))
     L.append("")
+    for note in m.input_notes:
+        L.append(f"- {esc(note)}")
+    if m.input_notes:
+        L.append("")
 
     # ------------------------------------------------------------------ 12. DTD・J-STAGE のチェック
     L.append("## 12. DTD 検証と J-STAGE のアップロード時チェックの詳細")
@@ -786,10 +833,11 @@ def render(r) -> str:
     L.append("### J-STAGE のアップロード時チェック")
     L.append("")
     L.append("DTD に合っていても J-STAGE のアップロードで弾かれる条件（題目と抄録の言語の対応、日付の前後、所属番号など）のうち、"
-             "XML だけで判定できるものを『記事アップロードメッセージ一覧』に沿って確かめた結果です。")
+             "XML だけで判定できるものと、アップロード用の ZIP を読み直して分かるもの（ファイル名・フォルダ名の文字、記事フォルダの"
+             "外の項目や想定外のファイル、0 バイトのファイル、記事の XML が入っているか）を『記事アップロードメッセージ一覧』に沿って確かめた結果です。")
     L.append("")
-    if r.jstage_issues:
-        L.append(table(["メッセージ ID", "内容"], r.jstage_issues))
+    if upload_issues(r):
+        L.append(table(["メッセージ ID", "内容"], upload_issues(r)))
     else:
         L.append("該当するエラーはありませんでした（J-STAGE 側でしか判定できない項目は、アップロード時に確認してください）。")
     L.append("")
@@ -810,7 +858,7 @@ def render(r) -> str:
     # ------------------------------------------------------------------ 14. チェックリスト
     L.append("## 14. J-STAGE に登載する前に")
     L.append("")
-    L.append(f"- [{'x' if r.has_pdf else ' '}] PDF（{m.article_id(j)}.pdf）を記事フォルダに入れる（J-STAGE では PDF が必須）")
+    L.append(pdf_checklist_line(r))
     L.append("- [ ] 2 章（AI による補完）と 3 章（未解決）を PDF と照らして確認する")
     if fx is not None:
         L.append(f"- [ ] **PDF に合わせて直した docx（{esc(fx.path.name)}）を Word で開き、変更履歴を確認する**"

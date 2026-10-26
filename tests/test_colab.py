@@ -32,6 +32,9 @@ def test_detects_values_left_from_previous_article():
     nxt = dict(prev, fpage="13", lpage="24", keywords_ja="証明", received="2026-05-01")
     assert not same_first_page(prev, nxt) and carried_over(prev, nxt) == []
     assert not same_first_page({"volume": "31", "fpage": ""}, {"volume": "31", "fpage": ""})
+    # 全角で入れ直しても、フォルダ名・ファイル名は同じ（31_1）になるので、同じとみなす（修正計画 C の N4）
+    assert same_first_page({"volume": "31", "fpage": "1"}, {"volume": "３１", "fpage": "１ "})
+    assert not same_first_page({"volume": "31", "fpage": "1"}, {"volume": "31", "fpage": "　"})
 
 
 def test_next_article_box_is_red_warning():
