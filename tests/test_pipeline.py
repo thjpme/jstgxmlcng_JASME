@@ -350,8 +350,9 @@ def test_wrapped_rows_cells_and_textbox_paragraphs(journal, meta, tmp_path):
 
 
 def test_blank_paragraphs_in_textbox_and_endnote_are_excluded(journal, meta, tmp_path):
-    # 文字だけのテキストボックスと Word の文末脚注の中の、空白だけの段落（全角空白・半角空白）も、除外として記録する
-    # （記録しないと、出力にも除外にもならず、不変性チェックが「出力漏れ」で不合格になる）
+    # 文字だけのテキストボックスと、本文から参照されていない Word の文末脚注の中の、空白だけの段落（全角空白・半角空白）も、
+    # 除外として記録する（記録しないと、出力にも除外にもならず、不変性チェックが「出力漏れ」で不合格になる）。
+    # 本文から参照された文末脚注の空白だけの段落は、脚注と同じく注の中に出力する（0.24.0）
     S = mf.S
 
     def parts(b):
@@ -366,11 +367,12 @@ def test_blank_paragraphs_in_textbox_and_endnote_are_excluded(journal, meta, tmp
                 mf.para(S["fig_cap"], "図1\u3000画像の後ろに空白がある図")]
     path = tmp_path / "blank.docx"
     mf.make_article(path, "空白だけの段落の検証用文書", parts,
-                    endnotes=[mf.endnote(4, " 文末脚注の本文。", mf.para(None, "\u3000"), mf.para(None, " "))])
+                    endnotes=[mf.endnote(4, " 文末脚注の本文。", mf.para(None, "\u3000"), mf.para(None, " ")),
+                              mf.endnote(5, " 参照されていない文末脚注の本文。", mf.para(None, "\u3000"), mf.para(None, " "))])
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
     fid = res.fidelity
     assert fid.ok and fid.final_ok and res.dtd_valid, (fid.missing, fid.bad_excluded)
-    # 本文（テキストボックス）の段落 d… と文末脚注の段落 e… の、全角空白・半角空白だけの段落
+    # 本文（テキストボックス）の段落 d… と、参照されていない文末脚注の段落 e… の、全角空白・半角空白だけの段落
     blank = sorted((s[0], t) for s, reason, t in fid.excluded if reason == "空白のみの段落")
     assert blank == [("d", " "), ("d", "\u3000"), ("e", " "), ("e", "\u3000")]
     assert all(e.blank for e in res.plan.exclusions if e.reason == "空白のみの段落") and fid.bad_excluded == []
@@ -379,7 +381,11 @@ def test_blank_paragraphs_in_textbox_and_endnote_are_excluded(journal, meta, tmp
         ("図の画像だけの段落にある空白", "\u3000", True)]
     reasons = {t: reason for _, reason, t in fid.excluded}
     assert reasons["問1\u3000枠の中の問題文である。"].startswith("テキストボックス内の文字")
-    assert reasons[" 文末脚注の本文。"].startswith("Word の文末脚注")
+    assert reasons[" 参照されていない文末脚注の本文。"] == "Word の文末脚注 5（本文から参照されていない注）"
+    # 参照された文末脚注は注 fn1 になり、空白だけの段落も注の中に出力する（除外にしない）
+    fn = etree.fromstring(res.xml_path.read_bytes().split(b"\n", 2)[2]).find(".//fn-group/fn")
+    assert ["".join(p.itertext()) for p in fn.findall("p")] == ["1) 文末脚注の本文。", "\u3000", " "]
+    assert " 文末脚注の本文。" not in reasons
 
 
 def test_blank_paragraphs_in_front_and_back_tables_are_excluded(journal, meta, tmp_path):

@@ -17,7 +17,9 @@ tests/fixtures/sample_reader.docx : 読み取りの境界ケースのうち samp
 tests/fixtures/sample_float_text.docx : テキストボックスの中で、画像と文字が同じ段落にある図形（キャプションのある図と、
                                    キャプションのない図形）。位置は機械的に決まる
 tests/fixtures/sample_structure.docx : 論文の構造（領域の分け方など）の境界ケース（本文中のテキストボックスにある
-                                   「英文要旨」スタイルの段落や「注」だけの段落）
+                                   「英文要旨」スタイルの段落や「注」だけの段落、Word の脚注と文末脚注〈ID の重なり・削除された
+                                   参照・記号を自分で付けた文末脚注・脚注の中からの参照・参照のない脚注〉、英文要旨の後ろの
+                                   「資料（授業プリント）」）
 tests/fixtures/sample_b3_cells.docx : 表のセルに画像とキャプションが並ぶ図形（AI なしで図に組める形）。位置は機械的に決まる
 tests/fixtures/sample_b3_tablefig.docx : 画像のない図キャプションと、その隣のキャプションのない表（表で組んだ図）
 tests/fixtures/sample_b3_place.docx : 位置を決められない図表の仮の置き場所（同じ段落に結び付いた 2 つの図形、空の段落に
@@ -34,6 +36,7 @@ import io
 import re
 import sys
 import zipfile
+import zlib
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -750,26 +753,64 @@ def make_reader(path):
 
 
 # ----------------------------------------------------------------------------- 小さな論文
-def endnote_ref(nid):
-    """本文の中の、Word の文末脚注の参照。"""
-    return f'<w:r><w:rPr><w:rStyle w:val="a9"/></w:rPr><w:endnoteReference w:id="{nid}"/></w:r>'
+def _note_ref(tag, nid, mark):
+    """本文の中の、Word の脚注・文末脚注の参照。mark があれば、記号を自分で付けた参照（customMarkFollows。記号は参照の直後の
+    w:t に本文の文字として入る。Word と同じ形）。"""
+    if mark:
+        return (f'<w:r><w:rPr><w:rStyle w:val="a9"/></w:rPr><w:{tag} w:customMarkFollows="1" w:id="{nid}"/>'
+                f'<w:t>{escape(mark)}</w:t></w:r>')
+    return f'<w:r><w:rPr><w:rStyle w:val="a9"/></w:rPr><w:{tag} w:id="{nid}"/></w:r>'
 
 
-def endnote(nid, text, *more):
-    """Word の文末脚注（Builder.endnotes_extra に足す）。1 段落目は文末脚注の番号と text、more は 2 段落目以降の段落の XML。"""
-    first = f'<w:p><w:r><w:rPr><w:rStyle w:val="a9"/></w:rPr><w:endnoteRef/></w:r>{run(text)}</w:p>'
+def _note_first(ref_tag, text, mark):
+    """脚注・文末脚注の 1 段落目の、番号（Word が付ける。mark があれば記号の文字）と text（XML の部品でもよい）。"""
+    inner = f"<w:t>{escape(mark)}</w:t>" if mark else f"<w:{ref_tag}/>"
+    return f'<w:r><w:rPr><w:rStyle w:val="a9"/></w:rPr>{inner}</w:r>' + (text if text.startswith("<") else run(text))
+
+
+def footnote_ref(nid, mark=""):
+    """本文の中の、Word の脚注の参照（mark は記号を自分で付けた参照の記号）。"""
+    return _note_ref("footnoteReference", nid, mark)
+
+
+def footnote(nid, text, *more, mark=""):
+    """Word の脚注（Builder.footnotes_extra に足す）。sample_edge と同じ書き方（スタイル「脚注文字列」）。1 段落目は脚注の番号と
+    text（XML の部品でもよい）、more は 2 段落目以降の段落の XML。mark があれば、番号の代わりに記号の文字で始める。"""
+    first = f'<w:p><w:pPr><w:pStyle w:val="a8"/></w:pPr>{_note_first("footnoteRef", text, mark)}</w:p>'
+    return f'<w:footnote w:id="{nid}">{first}{"".join(more)}</w:footnote>'
+
+
+def endnote_ref(nid, mark=""):
+    """本文の中の、Word の文末脚注の参照（mark は記号を自分で付けた参照の記号）。"""
+    return _note_ref("endnoteReference", nid, mark)
+
+
+def endnote(nid, text, *more, mark=""):
+    """Word の文末脚注（Builder.endnotes_extra に足す）。1 段落目は文末脚注の番号と text（XML の部品でもよい）、more は 2 段落目
+    以降の段落の XML。mark があれば、番号の代わりに記号の文字で始める（記号を自分で付けた文末脚注の、Word の形）。"""
+    first = f'<w:p>{_note_first("endnoteRef", text, mark)}</w:p>'
     return f'<w:endnote w:id="{nid}">{first}{"".join(more)}</w:endnote>'
 
 
-def make_article(path, title, body_parts, endnotes=(), refs=None):
+def deleted(xml):
+    """ラン（の XML）を、削除の変更履歴（w:del）で包む。w:t は w:delText にする（Word と同じ形）。
+    w:id は中身から決める（何度作っても同じ docx になるように）。"""
+    xml = xml.replace("<w:t>", "<w:delText>").replace("<w:t ", "<w:delText ").replace("</w:t>", "</w:delText>")
+    return f'<w:del w:id="{zlib.crc32(xml.encode("utf-8")) % 90000 + 10000}" w:author="試験" w:date="2026-01-01T00:00:00Z">{xml}</w:del>'
+
+
+def make_article(path, title, body_parts, endnotes=(), refs=None, footnotes=(), abstract=("Small article abstract.",),
+                 appendix=None):
     """題目・著者・本文・引用文献 1 件・英文要旨だけの小さな論文。
 
     body_parts(b) は本文の段落（章見出しから）の XML の一覧を返す。本文で「試験（2024）」を引用すると、引用文献にリンクされる。
-    endnotes は Word の文末脚注の XML（endnote()）の一覧。
+    endnotes・footnotes は Word の文末脚注・脚注の XML（endnote()・footnote()）の一覧。
     refs(b) は、引用文献 1 件の後ろに足す段落（引用文献の段落など）の XML の一覧を返す（省略すると足さない）。
+    abstract は英文要旨の段落の文字の一覧、appendix は英文要旨の後ろ（資料）の段落の XML の一覧（省略すると足さない）。
     """
     b = Builder()
     b.endnotes_extra.extend(endnotes)
+    b.footnotes_extra.extend(footnotes)
     body = []
     body += front_ja(b, title, "―検証用の小さな論文―", [("架空大学", "試験\u3000六郎")])
     body += body_parts(b)
@@ -777,9 +818,8 @@ def make_article(path, title, body_parts, endnotes=(), refs=None):
     body.append(para(S["ref"], "試験六郎（2024）．「小さな論文」．『架空誌』，第5巻，pp.9-10．"))
     if refs is not None:
         body += refs(b)
-    body += front_en(b, "A Small Article", "For Checking", [("Rokuro SHIKEN", "Fictional University")],
-                     ["Small article abstract."])
-    body += tail(b)
+    body += front_en(b, "A Small Article", "For Checking", [("Rokuro SHIKEN", "Fictional University")], list(abstract))
+    body += tail(b, appendix=appendix)
     b.save(path, body)
 
 
@@ -834,11 +874,42 @@ def structure_textbox_regions(b: Builder, textboxes=True):
     ]
 
 
+def structure_word_notes(b: Builder):
+    """Word の脚注と文末脚注（tests/test_notes.py）。
+
+    脚注 5 と文末脚注 5（ID が重なる。文末脚注 5 は 2 段落）、削除の変更履歴の中の脚注 6 の参照、記号を自分で付けた
+    文末脚注 7（本文の記号「*」）、脚注 8 の中から文末脚注 8 を参照、参照のない脚注 9（2 段落目は全角空白だけ）。
+    期待: 本文で最初に参照される順の通し番号で、脚注 5 が fn1「1)」、文末脚注 5 が fn2「2)」、文末脚注 7 が fn3（本文の記号は
+    docx の文字のまま、注の一覧は「3)」）、脚注 8 が fn4、文末脚注 8 が fn5（脚注 8 の中からリンク）。脚注 6・9 は理由付きで除外。
+    """
+    b.footnotes_extra += [
+        footnote(5, " 脚注５の架空の説明。"),
+        footnote(6, " 参照が削除された脚注６の架空の説明。"),
+        footnote(8, run(" 脚注８の中から文末脚注を参照する") + endnote_ref(8) + run("架空の説明。")),
+        footnote(9, " 参照されていない脚注９の架空の説明。", para("a8", "\u3000")),
+    ]
+    b.endnotes_extra += [
+        endnote(5, " 文末脚注５の一段落目の架空の説明。", para(None, "文末脚注５の二段落目の架空の補足。")),
+        endnote(7, " 記号を自分で付けた文末脚注７の架空の説明。", mark="*"),
+        endnote(8, " 脚注の中から参照される文末脚注８の架空の説明。"),
+    ]
+    return [
+        para(S["body"], "脚注を付けた文", footnote_ref(5), "と文末脚注を付けた文", endnote_ref(5), "。"),
+        para(S["body"], "削除した参照", deleted(footnote_ref(6)), "のある文。"),
+        para(S["body"], "記号を自分で付けた文末脚注", endnote_ref(7, mark="*"), "の文と，注の中から文末脚注を参照する脚注",
+             footnote_ref(8), "の文。"),
+    ]
+
+
 # sample_structure の節（見出し, 部品を作る関数）。ケースを足すときは、部品を作る関数を足してここに加える。
 # 節の見出しの番号は make_structure が付ける。テストは段落の文字で対象を選ぶ（件数や段落の ID に頼らない）
 STRUCTURE_SECTIONS = [
     ("テキストボックスの中の別の領域のスタイル", structure_textbox_regions),
+    ("Word の脚注と文末脚注", structure_word_notes),
 ]
+# sample_structure の英文要旨の後ろの資料（「資料」の直後がかっこの見出し。tests/test_structure.py）
+STRUCTURE_APPENDIX = [("abs", "資料（授業プリント）"), ("abs", "問1\u3000架空の問題文である。"),
+                      ("abs", "問2\u3000もう一つの架空の問題文である。")]
 
 
 def make_structure(path, sections=None):
@@ -860,7 +931,7 @@ def make_structure(path, sections=None):
     body.append(para(S["ref"], "試験七郎（2025）．「構造の検証」．『架空誌』，第6巻，pp.11-12．"))
     body += front_en(b, "Checking the Structure", "Regions and Shapes", [("Shichiro SHIKEN", "Fictional University")],
                      ["Structure abstract."])
-    body += tail(b)
+    body += tail(b, appendix=[para(S[style], text) for style, text in STRUCTURE_APPENDIX])
     b.save(path, body)
 
 

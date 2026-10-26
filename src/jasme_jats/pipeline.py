@@ -457,7 +457,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     # 画像のない図キャプションで、近くの表を図の本体にできなかったもの（structure.Classifier.table_for_figure）
     for src, why in plan.figure_issues:
         unresolved_after.append(("figbody", src, _head(plan, src), figure_body_detail(why)))
-    warnings = list(dict.fromkeys(doc.warnings + info.warnings))
+    warnings = list(dict.fromkeys(doc.warnings + plan.warnings + info.warnings))
     build_notes = [Decision(did=f"M-B{i}", stage="mechanical", category=c, src=s, message=m,
                             location=plan.locations.get(s, "")) for i, (c, s, m) in enumerate(info.notes, 1)]
     res = Result(

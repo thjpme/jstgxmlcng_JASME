@@ -1,4 +1,4 @@
-"""論文の構造: 領域（和文の冒頭・本文・後付け・英文の部分）の分け方。"""
+"""論文の構造: 領域（和文の冒頭・本文・後付け・英文の部分）の分け方と、英文要旨の後ろの資料（付録）の見出し（修正計画の D3）。"""
 import functools
 from types import SimpleNamespace
 
@@ -10,7 +10,8 @@ from conftest import STRUCTURE
 from jasme_jats.docx_reader import read_docx
 from jasme_jats.model import Atom, Cell, Para, Row, Table
 from jasme_jats.pipeline import Options, convert
-from jasme_jats.structure import Classifier
+from jasme_jats.report import TO_CHECK, actions
+from jasme_jats.structure import RE_APPENDIX, Classifier
 
 S = mf.S
 
@@ -44,7 +45,9 @@ def test_textbox_paragraphs_do_not_switch_regions(journal, meta, tmp_path):
     ref = convert(plain, meta, journal, Options(out_dir=tmp_path / "plain", convert_metafiles=False))
     got = outline(res)
     assert got == outline(ref)
-    assert "２．おわりに" in got["sec"] and got["ref"] == 1 and got["trans-abstract"] == ["Structure abstract."]
+    last = f"{str(len(mf.STRUCTURE_SECTIONS) + 1).translate(mf.ZEN_DIGITS)}．おわりに"      # 最後の章（節を足すと番号が変わる）
+    assert last == "３．おわりに" and last in got["sec"] and got["ref"] == 1
+    assert got["trans-abstract"] == ["Structure abstract."]
     # テキストボックスの段落は、結び付いている段落と同じ本文の領域に入る
     srcs = {p.plain(): p.src for p in res.plan.paras.values() if p.in_textbox}
     assert {res.plan.region[srcs[t]] for t in ("注", "Area model")} == {"body"}
@@ -187,3 +190,151 @@ def test_textbox_table_without_float_stays_in_front(journal, meta, tmp_path):
     assert root.find(".//body//table-wrap") is None
     reasons = {t: reason for _, reason, t in res.fidelity.excluded}
     assert reasons["特集　図形の中の表"] == "冒頭部の表（著者表以外）の文字"
+
+
+# ----------------------------------------------------------------------------- 資料（付録）の見出し（修正計画の D3）
+APPENDIX_YES = ["資料（授業プリント）", "資料Ⅰ\u3000授業プリント", "資料Ⅱ（ワークシート）", "付録①\u3000調査票", "資料1-2", "Appendix A",
+                "資料\u3000授業プリント", "資料", "資料1", "資料１：調査票", "資料2. 授業記録", "資料1．授業記録", "【資料1】授業プリント",
+                "［資料２］", "（資料3）ワークシート", "〈付録〉", "<資料1>", "資料－1", "資料‐2", "資料１－２", "資料 3", "\u3000資料3\u3000問題",
+                "資料A", "資料Ａ\u3000調査票", "資料A-1", "資料1-2-3\u3000表", "Appendix", "Appendix B: Questionnaire",
+                "Appendix Questionnaire", "附録1", "資料ⅰ\u3000授業記録", "資料⑳", "資料1、2", "資料1―授業", "資料―授業プリント―"]
+APPENDIX_NO = ["資料を配布した。", "資料-1", "資料-1 を見よ", "資料1-", "資料1-授業", "資料12の結果", "資料1を配布した", "資料1は",
+               "資料編", "資料提供", "資料の分析", "資料、図表", "資料.", "資料Aと資料B", "資料一", "資料Ⅰの", "付録として示す", "付録は",
+               "Appendices", "Appendix-based", "Appendix shows the data", "Appendix abstract."]
+
+
+@pytest.mark.parametrize("s", APPENDIX_YES)
+def test_appendix_heading_forms_are_recognized(s):
+    # 先頭の括弧、語の後ろの全角のハイフン・枝番、ローマ数字・丸数字、番号の直後の括弧・ピリオド・読点・ダッシュ
+    assert RE_APPENDIX.match(s)
+
+
+@pytest.mark.parametrize("s", APPENDIX_NO)
+def test_appendix_heading_forms_are_not_recognized(s):
+    # 本文の文（「資料を配布した。」「資料12の結果」）、語の直後の ASCII のハイフン（「資料-1」）、語の後ろが空白と英小文字
+    # （「Appendix shows …」。英文要旨の文）は、資料の見出しとみなさない
+    assert not RE_APPENDIX.match(s)
+
+
+def apps(root):
+    """資料（app-group/app）: [(見出し, [中の段落の文字])]。"""
+    return [(text(a.find("title")), [text(p) for p in a.findall("p")]) for a in root.iter("app")]
+
+
+def abstract_paras(root):
+    return [text(p) for p in root.findall(".//trans-abstract/p")]
+
+
+def test_appendix_with_paren_is_not_in_abstract(journal, meta, tmp_path):
+    # 「資料」の直後がかっこの見出しも資料の見出しにし、続く段落を英文要旨（trans-abstract）に入れない
+    # （docs/fix_plan_repro_tests.py の test_PROBLEM_appendix_with_paren_goes_into_abstract の逆）
+    res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
+    root = load(res)
+    assert apps(root) == [("資料（授業プリント）", ["問1\u3000架空の問題文である。", "問2\u3000もう一つの架空の問題文である。"])]
+    assert abstract_paras(root) == ["Structure abstract."]
+    assert res.plan.abstract_ja == [] and res.plan.app_after_refs == []        # 英文だけの英文要旨では知らせない
+    assert not {"abstract_ja", "app_after_refs"} & {a.key for a in actions(res)}
+    # 小さな論文（英文要旨の段落と、英文要旨のスタイルの資料）でも同じ
+    path = tmp_path / "app.docx"
+    mf.make_article(path, "資料の見出しの検証用文書", lambda b: [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "本文。")],
+                    abstract=["This is the abstract."],
+                    appendix=[mf.para(S["abs"], "資料（授業プリント）"), mf.para(S["abs"], "問1\u3000次の式を計算せよ。")])
+    root = load(convert(path, meta, journal, Options(out_dir=tmp_path / "small", convert_metafiles=False)))
+    assert apps(root) == [("資料（授業プリント）", ["問1\u3000次の式を計算せよ。"])]
+    assert abstract_paras(root) == ["This is the abstract."]
+
+
+def test_appendix_heading_variants_become_app_titles(journal, meta, tmp_path):
+    # ローマ数字・丸数字の番号、番号の直後のかっこ。本文のスタイルの「付録①　…」も資料の見出しにする
+    appendix = [mf.para(S["abs"], "資料Ⅰ\u3000授業プリント"), mf.para(S["abs"], "架空の授業プリントの本文である。"),
+                mf.para(S["abs"], "資料Ⅱ（ワークシート）"), mf.para(S["abs"], "架空のワークシートの本文である。"),
+                mf.para(S["body"], "付録①\u3000調査票"), mf.para(S["body"], "架空の調査票の本文である。")]
+    path = tmp_path / "apps.docx"
+    mf.make_article(path, "資料の見出しの検証用文書", lambda b: [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "本文。")],
+                    appendix=appendix)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.dtd_valid and res.jstage_issues == []
+    root = load(res)
+    assert apps(root) == [("資料Ⅰ\u3000授業プリント", ["架空の授業プリントの本文である。"]),
+                          ("資料Ⅱ（ワークシート）", ["架空のワークシートの本文である。"]),
+                          ("付録①\u3000調査票", ["架空の調査票の本文である。"])]
+    assert abstract_paras(root) == ["Small article abstract."]
+
+
+def test_heading_style_after_abstract_starts_appendix(journal, meta, tmp_path):
+    # 英文要旨の後ろの、章・節・項見出しのスタイルの段落から資料にする（英文要旨の中に見出しは来ないため。決定事項 8(a)）。
+    # 文字が「資料」などで始まらなくてもよい。判断の一覧に記録する。資料の中の見出しのスタイルの段落は、資料の中の段落
+    appendix = [mf.para(S["sec1"], "授業の記録"), mf.para(S["body"], "架空の授業の記録である。"),
+                mf.para(S["sec2"], "記録の続き"), mf.para(S["body"], "続きの架空の記録である。")]
+    path = tmp_path / "style.docx"
+    mf.make_article(path, "見出しのスタイルの資料の検証用文書",
+                    lambda b: [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "本文。")], appendix=appendix)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.dtd_valid and res.jstage_issues == []
+    root = load(res)
+    assert apps(root) == [("授業の記録", ["架空の授業の記録である。", "記録の続き", "続きの架空の記録である。"])]
+    assert abstract_paras(root) == ["Small article abstract."]
+    src = next(s for s, p in res.plan.paras.items() if p.plain() == "授業の記録")
+    [d] = [d for d in res.plan.decisions if d.src == src]
+    assert d.message == "英文要旨の後ろの、見出しのスタイル「章見出し」の段落「授業の記録」から資料とした（英文要旨の中に見出しは来ないため）"
+    assert d.applied and d.location == "資料1（見出し）"
+
+
+def test_japanese_paragraph_in_abstract_is_reported(journal, meta, tmp_path):
+    # 和文の論文で、英文要旨の中に、かな・漢字が 3 割以上の段落があれば知らせる（資料などの和文が英文要旨に入っているかも
+    # しれない）。自動では移さない。判断の一覧（applied=False）、10 章の警告、レポートの冒頭と 14 章の要確認
+    path = tmp_path / "ja.docx"
+    mf.make_article(path, "英文要旨の中の和文の検証用文書",
+                    lambda b: [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "本文。")],
+                    abstract=["Small article abstract.", "問2\u3000架空の和文の問題文である。", "A few 漢字 in English."])
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.dtd_valid and res.jstage_issues == []
+    assert abstract_paras(load(res)) == ["Small article abstract.", "問2\u3000架空の和文の問題文である。", "A few 漢字 in English."]
+    src = next(s for s, p in res.plan.paras.items() if p.plain().startswith("問2"))
+    assert res.plan.abstract_ja == [src]                 # 漢字が 3 割未満の段落は知らせない
+    [d] = [d for d in res.plan.decisions if d.src == src]
+    assert not d.applied and d.message.startswith("英文要旨の段落「問2\u3000架空の和文の問題文である。」は、かな・漢字が 3 割以上ある")
+    assert [w for w in res.warnings if w.startswith(f"{src}:")] == [
+        (f"{src}: 英文要旨の段落「問2\u3000架空の和文の問題文である。」に、かな・漢字が 3 割以上あります。資料などの和文なら、Word で"
+         "その前に資料の見出し（「資料1」など）を付けて変換し直してください")]
+    assert {a.level for a in actions(res) if a.key == "abstract_ja"} == {TO_CHECK} and not res.needs_action
+    report = res.report_path.read_text(encoding="utf-8")
+    top, ch14 = report.split("## 2.")[0], report.split("## 14.")[1]
+    assert "> **要確認: 英文要旨に、和文と思われる段落が 1 件あります（10 章）。**" in top
+    assert f"対象の段落: {src}「問2\u3000架空の和文の問題文である…」" in top        # 段落の例は 15 文字まで
+    assert "- [ ] **英文要旨の中の和文の段落**（1 件。10 章）" in ch14
+    # 境目: かな・漢字がちょうど 3 割の段落は知らせ、2 割の段落は知らせない（空白は数えない）
+    path = tmp_path / "ratio.docx"
+    mf.make_article(path, "英文要旨の中の和文の境目の検証用文書",
+                    lambda b: [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "本文。")],
+                    abstract=["Small article abstract.", "ABC DEFG 漢字三", "ABCDEFGH 漢字"])
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "ratio", convert_metafiles=False))
+    assert [res.plan.paras[s].plain() for s in res.plan.abstract_ja] == ["ABC DEFG 漢字三"]
+
+
+def test_appendix_after_references_is_warned(journal, meta, tmp_path):
+    # 引用文献の後ろの、章見出しのスタイルの「資料　…」。暫定の判断で資料（app-group）にはせず、引用文献の段落のまま
+    # 出力して（文字は落とさない）、10 章の警告とレポートの冒頭・14 章の要確認で知らせる（決定事項 8(b) は利用者に未確認）。
+    # 参考文献のスタイルの段落は、「資料」で始まっても引用文献の 1 件として知らせない。空白だけの見出しのスタイルの段落も知らせない
+    refs = [mf.para(S["ref"], "資料\u3000架空統計（2023）．『架空の統計』．架空出版．"), mf.para(S["sec1"], "\u3000"),
+            mf.para(S["sec1"], "資料\u3000架空の授業プリント"), mf.para(S["body"], "架空の授業プリントの本文である。")]
+    path = tmp_path / "after.docx"
+    mf.make_article(path, "引用文献の後ろの資料の検証用文書", lambda b: [mf.para(S["sec1"], "１．はじめに"),
+                                                                     mf.para(S["body"], "試験（2024）にならう。")],
+                    refs=lambda b: refs)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.dtd_valid
+    root = load(res)
+    assert root.find(".//app-group") is None and abstract_paras(root) == ["Small article abstract."]
+    xml = text(root)
+    assert "資料\u3000架空の授業プリント" in xml and "架空の授業プリントの本文である。" in xml
+    src = next(s for s, p in res.plan.paras.items() if p.plain() == "資料\u3000架空の授業プリント")
+    assert res.plan.app_after_refs == [src] and res.plan.region[src] == "refs"
+    entry = next(s for s, p in res.plan.paras.items() if p.plain().startswith("資料\u3000架空統計"))
+    assert entry in [r.para.src for r in res.plan.refs]          # 参考文献のスタイルの段落は引用文献の 1 件のまま（知らせない）
+    assert f"{src}: 引用文献の中に、資料の見出しと思われる段落「資料\u3000架空の授業プリント」があります。今の版では、" in "".join(res.warnings)
+    assert {a.level for a in actions(res) if a.key == "app_after_refs"} == {TO_CHECK}
+    report = res.report_path.read_text(encoding="utf-8")
+    assert "> **要確認: 引用文献などの後ろに、資料の見出しと思われる段落があります（10 章）。**" in report.split("## 2.")[0]
+    assert "- [ ] **引用文献などの後ろの資料の見出し**（1 件。10 章）" in report.split("## 14.")[1]
