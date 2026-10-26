@@ -214,11 +214,12 @@ def pdf_diff_box(res) -> str:
 def unplaced_box(plan, partial="") -> str:
     """AI の回答を反映した後も、位置を決められない図表が残っているときの表示。なければ空文字。
 
-    図表ごとに、キャプション、XML の中の図表の ID（structure.float_ids）、仮に置いた位置（structure.ArticlePlan.float_place。
-    アンカー段落の後ろか本文の最後）を示す。partial（AIOutcome.partial。AI の回答が途中で切れていた）があれば、出し直しの
-    頼み方は、途中で切れた回答の枠（PARTIAL_MSG）と同じものを示す（別の頼み方を並べない）。
+    図表ごとに、キャプション、XML の中の図表の ID（と、図形の中身から出した本文の段落など。structure.float_targets）、
+    仮に置いた位置（structure.ArticlePlan.float_place。アンカー段落の後ろか本文の最後）を示す。partial（AIOutcome.partial。
+    AI の回答が途中で切れていた）があれば、出し直しの頼み方は、途中で切れた回答の枠（PARTIAL_MSG）と同じものを示す
+    （別の頼み方を並べない）。
     """
-    from .structure import float_caption, float_ids
+    from .structure import float_caption, float_targets
     if not plan.unplaced_floats:
         return ""
     why = {"ai": "（AI が注などの本文の外の段落の後ろを指定したため）",
@@ -226,8 +227,9 @@ def unplaced_box(plan, partial="") -> str:
     rows = []
     for fid in plan.unplaced_floats:
         info = plan.floats[fid]
-        ids = float_ids(plan, info)
-        rows.append(f"・{fid}（{float_caption(info)}{f'、XML の {ids}' if ids else ''}）: {plan.float_place(fid)}"
+        ids = float_targets(plan, info)
+        xml = f"、XML の{' ' if ids[:1].isascii() else ''}{ids}" if ids else ""
+        rows.append(f"・{fid}（{float_caption(info)}{xml}）: {plan.float_place(fid)}"
                     f"{why.get(info.end_why, '')}")
     if partial:
         intro = ("AI の回答が途中で切れていて、次の図表の位置（placements）の指定を読み取れなかったか、指定が検証で採用されません"

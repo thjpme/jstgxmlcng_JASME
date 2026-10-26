@@ -464,19 +464,25 @@ def test_cut_response_does_not_guess(name):
 
 def test_complete_answers_are_not_read_as_cut():
     """最後まで書かれた回答の書き損じは、途中で切れた回答として読まない（読めない回答として、書き損じの案内を出す）:
-    最後の文字列の閉じだけが飾りの引用符の回答（Unterminated string になる）、閉じの ``` まで書かれたコードブロックの中で
-    JSON が途中で終わっている回答。"""
+    最後の文字列の閉じだけが飾りの引用符の回答（飾りの引用符のすぐ後ろが同じ行の ] } なら、途中で切れた回答と同じ
+    「Unterminated string」になるので、飾りの引用符で見分ける。後ろが改行なら「Invalid control character」）、閉じの ``` まで
+    書かれたコードブロックの中で JSON が途中で終わっている回答。"""
     from jasme_jats.ai_assist import parse_cut_response
-    full = head_first()
+    full, one_line = head_first(), head_first(indent=None)
     smart = full[:full.rindex('"気づき"')] + '"気づき”\n ]\n}'
+    smart_one = one_line[:one_line.rindex('"気づき"')] + '"気づき”]}'
+    with pytest.raises(json.JSONDecodeError) as e:
+        json.loads(smart_one)
+    assert e.value.msg.startswith("Unterminated string")
     in_ops = cut_cases()["a"]
-    for text in (smart, "```json\n" + in_ops + "\n```"):
+    for text in (smart, smart_one, "```json\n" + in_ops + "\n```"):
         assert parse_cut_response(text) is None
         with pytest.raises(ValueError):
             parse_response(text)
-    with pytest.raises(ValueError) as e:
-        parse_response(smart)
-    assert "飾りの引用符" in str(e.value) and "途中で切れている" not in str(e.value)
+    for text in (smart, smart_one):
+        with pytest.raises(ValueError) as e:
+            parse_response(text)
+        assert "飾りの引用符" in str(e.value) and "途中で切れている" not in str(e.value)
     # 閉じのないコードブロックで切れた回答は、今までどおり読む（対照）
     assert parse_cut_response("```json\n" + in_ops) is not None
 
