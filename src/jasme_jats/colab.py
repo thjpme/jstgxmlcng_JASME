@@ -212,13 +212,33 @@ def pdf_diff_box(res) -> str:
 
 
 def unplaced_box(plan) -> str:
-    """AI の回答を反映した後も、位置を決められない図表が残っているときの表示。なければ空文字。"""
+    """AI の回答を反映した後も、位置を決められない図表が残っているときの表示。なければ空文字。
+
+    図表ごとに、仮に置いた位置（structure.ArticlePlan.float_place。アンカー段落の後ろか本文の最後）を示す。
+    """
+    from .structure import float_caption
     if not plan.unplaced_floats:
         return ""
+    why = {"ai": "（AI が注などの本文の外の段落の後ろを指定したため）",
+           "anchor": "（図が結び付いている段落が本文の段落でないため）"}
+    items = "\n".join(f"・{fid}（{float_caption(plan.floats[fid])}）: {plan.float_place(fid)}"
+                      f"{why.get(plan.floats[fid].end_why, '')}" for fid in plan.unplaced_floats)
     return error_box(
-        "位置を決められなかった図表があります（本文の冒頭に仮に置いています。手作業で直してください）",
-        f"AI の回答に、次の図表の位置（placements）の指定がないか、指定が検証で採用されませんでした: "
-        f"{', '.join(plan.unplaced_floats)}（レポートの 2 章・3 章）。これらは本文の冒頭に仮に置いているので、登載の前に、"
-        "XML の中で手作業で正しい位置（Word で表示したときに、図の左上の直上にある本文の段落の後）に移してください。"
+        "位置を決められなかった図表があります（仮の位置に置いています。手作業で直してください）",
+        "AI の回答に、次の図表の位置（placements）の指定がないか、指定が検証で採用されませんでした（レポートの 2 章・3 章）。"
+        "これらは仮の位置に置いているので、登載の前に、XML の中で手作業で正しい位置（Word で表示したときに、図の左上の"
+        "直上にある本文の段落の後）に移してください。\n"
+        f"{items}\n"
         "AI に出し直してもらう場合は、手動モードではチャットで「位置を決められなかった図表をすべて placements に書いて、"
         "回答の書き方に従って出し直してください」と頼んで手順 6 で貼り付け直し、API モードでは手順 5 をもう一度実行してください。")
+
+
+def figure_body_box(res) -> str:
+    """図の本体（画像・表）が見つからない図があるときの表示（赤い枠）。なければ空文字。"""
+    from .report import FIGURE_BODY_ACTION, figure_issue_labels
+    labels = figure_issue_labels(res.plan)
+    if not labels:
+        return ""
+    return error_box(
+        f"図の本体（画像・表）が見つからない図が {len(labels)} 件あります（要対応）",
+        f"{FIGURE_BODY_ACTION}（レポートの冒頭と 3 章）\n" + "\n".join(f"・{x}" for x in labels))
