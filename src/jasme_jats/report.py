@@ -19,7 +19,7 @@ from .model import note_key, note_label
 from .package import article_dir
 from .pdfmatch import (DISPLACED_WHY, EDGE_WHY, FORMULA_MARK, HEAD_WHY, LINE_MARK, LONG_WHY, MATH_WHY, RE_PAGE_NO, UNSURE_WHY,
                        WHOLE_WHY)
-from .structure import TEXTBOX_TEXT_EXCLUDED
+from .structure import NO_LINK_KINDS, TEXTBOX_TEXT_EXCLUDED
 
 
 def esc(s, n=None) -> str:
@@ -440,13 +440,14 @@ def number_rows(r) -> list:
 
 
 def word_note_refs(plan) -> int:
-    """本文中の Word の脚注・文末脚注の参照（注へのリンクとして出力されるもの）の数。
+    """Word の脚注・文末脚注の参照のうち、注へのリンクとして出力されるものの数（1 章のリンクの数）。
 
-    XML に出力しなかった段落（plan.exclusions）の中の参照は、リンクにならないので数えない。
+    XML に出力しなかった段落（plan.exclusions）と、注の番号をリンクにしない段落（題目・副題・著者名・所属・引用文献。
+    ArticlePlan.no_link_paras）の中の参照は、リンクにならないので数えない（FnNode.linked と同じ条件）。
     """
     ids = {fn.word_id for fn in plan.fns if fn.word_note}
-    excluded = {e.src for e in plan.exclusions}
-    return sum(1 for p in plan.paras.values() if p.src not in excluded for a in p.atoms
+    unlinked = {e.src for e in plan.exclusions} | set(plan.no_link_paras())
+    return sum(1 for p in plan.paras.values() if p.src not in unlinked for a in p.atoms
                if a.kind == "fnref" and note_key(a.fn_kind, a.fn_id) in ids)
 
 
@@ -457,21 +458,33 @@ def has_endnotes(plan) -> bool:
 
 def word_note_rows(r) -> list:
     """Word の脚注・文末脚注と XML の注の対応（8 章の表）。文末脚注・本文からリンクのない注・記号を自分で付けた注のどれかが
-    あるときだけ作る（脚注だけで、どれもなければ空。0.23.1 までと同じ表示）。"""
+    あるときだけ作る（脚注だけで、どれもなければ空。0.23.1 までと同じ表示）。本文からリンクのない注には、参照のある段落
+    （XML に出力しなかった段落と、題目・引用文献など注の番号をリンクにしない段落。ArticlePlan.unlinked_places）を添える。
+    「Word の注」の欄の番号は docx の中の注の ID で、Word の表示（文末脚注は「i」など）と違うことがあるので、Word で注を
+    探せるよう、注の書き出し（文字のある最初の段落の docx の文字。15 文字まで）も載せる。"""
     plan = r.plan
     word = [fn for fn in plan.fns if fn.word_note]
     if not any(fn.word_kind == "endnote" or not fn.linked or fn.custom_mark for fn in word):
         return []
     rows = []
+    nolink = plan.no_link_paras()
     for k, fn in enumerate(word, 1):
         mark = plan.pdf_numbers.get(("fnlist", fn.word_id)) or r.journal.fn_mark.format(n=fn.number or k)
         if not fn.linked:
-            link = f"なし（参照は XML に出力しなかった段落 {'、'.join(fn.word_refs)} の中だけ）"
+            out, shown = plan.unlinked_places(fn.word_refs)
+            if not shown:
+                link = f"なし（参照は XML に出力しなかった段落 {'、'.join(out)} の中だけ）"
+            else:
+                before = f" XML に出力しなかった段落 {'、'.join(out)} と、" if out else ""
+                names = "。著者名の中では番号も出力しない" if any(nolink.get(s) == "著者名" for s in fn.word_refs) else ""
+                link = f"なし（参照は{before}{'、'.join(shown)} の中だけ。{NO_LINK_KINDS}の中の注の番号はリンクにしない{names}）"
         elif fn.custom_mark:
-            link = "あり（本文の記号は docx の文字のまま）"
+            # 本文の参照は中身のない <xref>（emit.Emitter.write_object）。記号はその後ろに docx の文字のまま出るので、リンクにならない
+            link = "あり（中身のない参照。本文の記号はリンクの外で docx の文字のまま。J-STAGE のプレビューで確かめる）"
         else:
             link = "あり"
-        rows.append((fn.fid, note_label(fn.word_id), mark, link))
+        head = next((t for t in (p.text_only().strip() for p in fn.paras) if t), "")
+        rows.append((fn.fid, note_label(fn.word_id), mark, esc(head, 15) if head else "（文字なし）", link))
     return rows
 
 
@@ -818,6 +831,30 @@ def _app_after_refs_action(r):
              "後ろに移して変換し直すこと"))
 
 
+def _note_overlap_action(r):
+    """手で書いた注と Word の脚注・文末脚注の番号が重なる（structure.Classifier.attach_word_notes の plan.note_overlap）。なければ None。
+
+    Word の注の番号は 1 から付けるので、「注」の節に手で書いた「1)」と同じ番号の別の注が注の一覧に並ぶ。番号を手で書いた注の
+    後ろから続けるかは利用者に確かめていないので、番号は変えずに知らせるだけにしている。
+    """
+    plan = r.plan
+    if not plan.note_overlap:
+        return None
+    marks = "、".join(r.journal.fn_mark.format(n=k) for k in plan.note_overlap)
+    return Action(
+        TO_CHECK, "note_overlap",
+        top=(f"> **要確認: 手で書いた注と Word の脚注・文末脚注が両方あり、注の番号 {marks} が重なっています（10 章）。** 注の一覧に、"
+             "同じ番号の別の注が並びます（本文からのリンクは、それぞれ正しい注を指します）。Word で、どちらかの書き方（本文に上付きの"
+             "「1)」を書いて「注」の節にまとめる、または Word の脚注・文末脚注の機能）にそろえてから、変換し直してください。"),
+        checklist=(f"- [ ] **注の番号の重なり**（{marks}。10 章）: 手で書いた注と Word の脚注・文末脚注のどちらかの書き方に"
+                   "そろえて変換し直す"),
+        box_title="注の番号が重なっています（要確認）",
+        box_detail=(f"手で書いた注と Word の脚注・文末脚注が両方あり、注の一覧に同じ番号（{marks}）の別の注が並びます。Word で"
+                    "どちらかの書き方にそろえてから、変換し直してください（レポートの冒頭と 10 章）。"),
+        cli=(f"要確認: 手で書いた注と Word の脚注・文末脚注が両方あり、注の番号 {marks} が重なっています（レポートの冒頭と 10 章）。"
+             "docx でどちらかの書き方にそろえて変換し直すこと"))
+
+
 def pdf_fallback(r) -> bool:
     """ルート2 で出版版 PDF の文字を読めず、docx を直さずに変換した（pipeline.Result.pdf_fallback と同じ。M4）。"""
     return r.route == "pdf" and r.docx_fix is None and r.pdf_check is not None
@@ -1018,7 +1055,7 @@ def actions(r) -> list:
     """
     head = [f(r) for f in (_fidelity_action, _dtd_action, _upload_action, _ai_error_action, _ai_pending_action,
                            _partial_action, _forced_action, figure_body_action, images_action, lost_action,
-                           _abstract_ja_action, _app_after_refs_action)]
+                           _abstract_ja_action, _app_after_refs_action, _note_overlap_action)]
     return [a for a in head if a is not None] + pdf_actions(r) + _provisional_actions(r)
 
 
@@ -1260,9 +1297,11 @@ def render(r) -> str:
     L.append("")
     note_rows = word_note_rows(r)
     if note_rows:
-        L.append("Word の脚注・文末脚注と、XML の注の対応:")
+        L.append(f"{'Word の脚注・文末脚注' if has_endnotes(plan) else 'Word の脚注'}と、XML の注の対応（「Word の注」の番号は docx の"
+                 "中の番号で、Word の画面に出る番号〈文末脚注の「i」など〉と違うことがあります。Word で注を探すときは、注の書き出しを"
+                 "手がかりにしてください）:")
         L.append("")
-        L.append(table(["XML の注", "Word の注", "番号", "本文からのリンク"], note_rows))
+        L.append(table(["XML の注", "Word の注", "番号", "注の書き出し", "本文からのリンク"], note_rows))
         L.append("")
 
     if fid.ai_additions:
@@ -1447,7 +1486,7 @@ def _unmatched_table(L, srcs, text_of, loc_of):
 def render_route1(L, r, pc):
     plan = r.plan
     L.append("docx の段落の文字を、記事の PDF（著者校正を経た最終版）の文字と段落ごとに照合しました"
-             f"（照合した段落 {pc.checked} 件。表のセル・別行の数式・資料と、4 文字未満の段落は除く）。"
+             f"（照合した段落 {pc.checked} 件。表のセル・別行の数式・資料の見出しと、4 文字未満の段落は除く）。"
              "**XML は docx の文字のままで、照合の結果を載せているだけです。** PDF に合わせるときは、"
              "「出版版 PDF に合わせてから作る」で変換し直すか、docx を直して変換し直してください。")
     L.append("")
@@ -1495,7 +1534,7 @@ def render_route2(L, r, pc, fx):
     L.append(f"「出版版 PDF に合わせてから作る」で変換しました。元の docx（{esc(r.docx_name)}）の段落の文字を、記事の PDF"
              "（著者校正を経た最終版）と段落ごとに照合し、違う文字を PDF に合わせて直した docx"
              f"（{esc(fx.path.name)}。Word の変更履歴つき）を作り、それを変換しています。XML は直した docx の文字と"
-             " 1 文字も違いません（文字の不変性チェック）。表のセル・別行の数式・図の中の文字・資料と、4 文字未満の段落は照合せず、"
+             " 1 文字も違いません（文字の不変性チェック）。表のセル・別行の数式・図の中の文字・資料の見出しと、4 文字未満の段落は照合せず、"
              "docx のままです。")
     L.append("")
     L.append("### 13.1 PDF に合わせて直した箇所（変更履歴）")

@@ -241,7 +241,10 @@ class Emitter:
                 if not a.fn_kind.endswith("-custom"):
                     sup = etree.SubElement(x, "sup")
                     self.gen(sup, mark, "footnote-mark")
-            elif not a.fn_kind.endswith("-custom") and mark is not None:
+            elif not a.fn_kind.endswith("-custom") and mark is not None and "sup" in ctx.fmt:
+                # リンクにしない文脈（題目・所属・引用文献など）では、上付きの番号だけを出す。上付きを置けない文脈（著者名の
+                # surname・given-names。NAME）では番号も出さない（DTD に合わないため。番号は docx の文字ではないので、文字の
+                # 不変性には関係しない。structure.Classifier.attach_word_notes が判断の一覧で知らせる）
                 sup = etree.SubElement(parent, "sup")
                 self.gen(sup, mark, "footnote-mark")
 

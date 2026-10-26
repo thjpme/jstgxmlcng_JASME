@@ -718,22 +718,42 @@ def test_set_role_abstract_returns_heading_style_appendix(journal, meta, tmp_pat
 
 
 def test_set_role_overrides_appendix_heading_text(journal, meta, tmp_path):
-    # 「資料」「Appendix」などで始まる段落でも、AI が abstract・p を指定すれば資料の見出しにしない（AI の指定を文字の規則より
-    # 優先する。D3）。英文要旨の「Appendix A shows …」は英文要旨に戻り、資料の中の「資料2：…」は前の資料の段落になる
+    # 「資料」「Appendix」などで始まる見出しの形の段落でも、AI が abstract・p を指定すれば資料の見出しにしない（AI の指定を文字の
+    # 規則より優先する。D3）。英文要旨の「Appendix A: …」は英文要旨に戻り、資料の中の「資料2：…」は前の資料の段落になる
     path = tmp_path / "text.docx"
     mf.make_article(path, "資料の見出しの文字の検証用文書", _body,
-                    abstract=["Small article abstract.", "Appendix A shows the questionnaire in detail."],
+                    abstract=["Small article abstract.", "Appendix A: questionnaire items"],
                     appendix=[mf.para(S["abs"], "資料1\u3000架空の授業プリント"), mf.para(S["abs"], "架空のプリントの本文。"),
                               mf.para(S["abs"], "資料2：架空の回答の例"), mf.para(S["abs"], "架空の回答の本文。")])
     _, plan, _ = _mechanical(path, journal)
     by_text = {p.plain(): s for s, p in plan.paras.items()}
-    appendix_a, answer = by_text["Appendix A shows the questionnaire in detail."], by_text["資料2：架空の回答の例"]
+    appendix_a, answer = by_text["Appendix A: questionnaire items"], by_text["資料2：架空の回答の例"]
     assert [a.title.src for a in plan.apps] == [appendix_a, by_text["資料1\u3000架空の授業プリント"], answer]   # 機械的には 3 つの資料
     res = _manual(path, [_set_role(appendix_a, "abstract"), _set_role(answer, "p")], meta, journal, tmp_path / "out")
     assert res.ai.rejected == [] and res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     root = load(res)
-    assert _abstract(root) == ["Small article abstract.", "Appendix A shows the questionnaire in detail."]
+    assert _abstract(root) == ["Small article abstract.", "Appendix A: questionnaire items"]
     assert _apps(root) == [("資料1\u3000架空の授業プリント", ["架空のプリントの本文。", "資料2：架空の回答の例", "架空の回答の本文。"])]
+
+
+def test_set_role_p_on_first_appendix_heading(journal, meta, tmp_path):
+    # 前に資料のない資料の見出し（最初の資料の見出し）に p を指定すると、見出しのない資料の最初の段落になる（資料の中の段落。
+    # 後ろの段落も資料のまま）。資料の文字を英文要旨に入れない（英文要旨に戻すのは abstract だけ。修正前は、見出しと後ろの段落が
+    # 英文要旨に入っていた）
+    path = tmp_path / "first.docx"
+    mf.make_article(path, "資料の最初の見出しの検証用文書", _body,
+                    appendix=[mf.para(S["abs"], "資料1\u3000架空の授業プリント"), mf.para(S["abs"], "問1\u3000架空の問い。"),
+                              mf.para(S["abs"], "問2\u3000もう一つの架空の問い。")])
+    _, plan, _ = _mechanical(path, journal)
+    src = next(s for s, p in plan.paras.items() if p.plain() == "資料1\u3000架空の授業プリント")
+    assert [a.title.src for a in plan.apps] == [src]
+    res = _manual(path, [_set_role(src, "p")], meta, journal, tmp_path / "out")
+    assert res.ai.rejected == [] and [op["role"] for op, _ in res.ai.accepted] == ["p"]
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
+    root = load(res)
+    assert _abstract(root) == ["Small article abstract."]
+    assert _apps(root) == [("", ["資料1\u3000架空の授業プリント", "問1\u3000架空の問い。", "問2\u3000もう一つの架空の問い。"])]
+    assert res.plan.region[src] == "app" and res.plan.apps[0].title is None
 
 
 def test_set_role_problem_rules(journal):
@@ -800,3 +820,4 @@ def test_request_hints_follow_set_role_problem(journal, tmp_path):
     # 依頼文の役割の一覧と説明に、資料の見出し（app_heading）がある
     assert "app_heading（資料の見出し（英文要旨の後ろの、資料・付録の始まり））" in system_prompt()
     assert "資料の見出しの段落を app_heading にしてください" in system_prompt() and "app_heading" in ROLES
+    assert "見出しではなく資料の中の文のときは p にしてください（前の資料の続きになります。前に資料がなければ" in system_prompt()
