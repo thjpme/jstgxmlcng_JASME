@@ -70,7 +70,7 @@
 | B2 | 0.21.0 | ルート2 で、PDF の中で分断された段落の本文を消す・置き換える・図の中の文字を足すのを止める（照合をまとめての照合に作り直し、決められない違いは直さずに 13 章に出す）（実装済み） | N10、N11、N12、N13、N14 |
 | B2.1 | 0.21.1 | B2 で残った、分断された段落の端のまれな配置の誤りを、個別の規則ではなく一般的な守り（決められない端の違いは直さずに 13 章に出す）で止める（実装したが保留。5 回の点検で収束せず、反映していない。決定事項 25。ブランチ claude/jstage-xml-converter-review-dw2f0u の控え 67a854b） | N20 |
 | B3 | 0.22.0 | 位置を決められない図表の置き場所と、表で組んだ図の組み方（実装済み） | N15、N16、N17、N18、N19 |
-| C | 0.23.0 | アップロード用 ZIP の中身と、書誌情報の入力値 | M1+M2、N4、U1 |
+| C | 0.23.0 | アップロード用 ZIP の中身と、書誌情報の入力値（実装済み） | M1+M2、N4、U1 |
 | D | 0.23.1 | 要対応の知らせ方を 1 か所にまとめる（レポート・Colab・コマンドライン） | U2、M4、N5 |
 | E | 0.24.0 | 注（Word の文末脚注）と資料の見出し | N6、D4、D3 |
 | F | 0.25.0 | 文字だけのテキストボックス（囲み）と、本文の外に結び付いた図形 | D1、N7 |
@@ -394,6 +394,30 @@ A（黙って文字・画像が落ちる不具合と、それを捕まえる検�
 - N4（巻・号・ページの入力の正規化。M1 の反証で見つけた）: ArticleMeta.from_dict（config.py:149〜153）で、volume・issue・fpage・lpage を NFKC で正規化する。volume・issue・fpage が [A-Za-z0-9]+ でなければ、欄の名前を入れた ValueError にする。今は巻・開始ページを全角で入れると、ZIP 名が jasme_３１_１.zip、フォルダ名が jasme/３１/1/３１_１/ になり、J-STAGE で EMSGM034E になるおそれがある。しかも誰も知らせない（rv_pkgnotify_check.py の 4）。docx の外の入力値なので、原則には触れない。
 - U1（反証で ok、補足あり）: config._date(v, label='日付') を書き直す。fromisoformat は使わない。datetime は .date() にする（isinstance は datetime を先に判定する）。値を NFKC にして空白を除き、[0-9]{4}[0-9]{2}[0-9]{2} か、[0-9]{4}[-/.年][0-9]{1,2}[-/.月][0-9]{1,2}日? に fullmatch すれば日付にする。それ以外は ValueError（文面に 'YYYY-MM-DD' を残す）。from_dict の日付の繰り返しで、欄の名前（発行日・受付日など）を渡す。2 桁の年と和暦は読まない。make_notebook.py の手順 3 の説明は『2026-03-31 の形で（2026/3/31 でもかまいません）』にする。
 
+**実装で決めたこと**（実装済み。0.23.0）:
+
+- M1+M2: 設計のとおり。`images.export_images` の `keep_dir` は、実装の後の点検で必須のキーワード引数にした（既定の「記事フォルダの中の 要変換/」で呼ぶと、また ZIP に入るため）。`package.zip_problems` の (c) は、記事フォルダの外の項目を 1 件ずつではなく、記事フォルダ（雑誌・巻・号・記事の 4 階層）ごとに 1 件の '-' にまとめる（画像の数だけ同じ知らせが並ぶのを避ける）。記事フォルダへ続くフォルダ自体の項目は無視する。読めない ZIP は EMSGM034E。
+- `Result.zip_issues`・`Result.not_zipped` は convert と add_images の両方で計算し直す。`res.warnings` には入れない（M2 の付録の「warnings に 31_1.pdf」は、反証の方針どおり `not_zipped == ['31_1.pdf']` で確かめる）。
+- 表示: レポート 1 章の「J-STAGE のアップロード時チェック」の行は `jstage_issues` と `zip_issues` を合わせて数え（`report.upload_issues`。表示だけで、Result では分けたまま）、行の名前を「XML と ZIP で判定できるもの」にした。「警告」の行に「ZIP に入れなかったファイル n 件」を足す。10 章に not_zipped の項目（PDF は手順 2 / `--pdf`、画像は手順 7 / `--images`、それ以外は対応不要）、12 章の表と説明に ZIP の確認、14 章の PDF の行は「ZIP に入っている / 入っていない」と手順 2・`--pdf` の案内にした。CLI は `--images` の後に not_zipped を表示し、Colab の手順 5・6 は 2 種類の要対応を両方出す。
+- N4: `ArticleMeta.from_dict` が volume・issue・fpage・lpage を NFKC にし、変わったときは `ArticleMeta.input_notes`（新しい欄。入力の同名のキーは無視）に知らせを残す。volume・issue・fpage が [A-Za-z0-9]+ でなければ、欄の名前（巻・号・最初のページ）と使えない文字を示す ValueError（空白は「空白」、ゼロ幅などは「見えない文字」と書く）。知らせの出し先は、Colab の手順 3（「※ …」）、CLI（stdout の「※ 書誌情報: …」。エラーは stderr に出して終了コード 2）、レポート 11 章の表の下。lpage は正規化だけで、検査しない（ZIP 名に使わないため。DESIGN 7 章）。
+- 点検の後の修正（1 回目）: 画像ファイルがない図（Word の図形など）の 9 章の備考を「この名前で Graphics/ に置くこと」から、Colab の手順 7・`--images` で入れる案内にした（記事フォルダに手で置いた画像は ZIP に入らないため。先頭の理由の文は変えない）。`package.zip_problems` に (e) 記事の XML がない（'-'）を足した（make_zip は必ず入れるので、手で作り直した ZIP の確かめ）。`package.write_package` は、記事フォルダに残っている PDF をそのまま `--pdf` に指定されたとき（写し元と写し先が同じファイル）、写さずに使う（0.22.0 から `shutil.SameFileError` で落ちていた。10 章の案内でこの指定が増えるため）。`colab.same_first_page` は NFKC にしてから比べる（「３１」と「31」は同じ記事識別子になる）。DOI の欄は今のまま（NFKC にも検査にもしない。0.22.0 と同じで、N4 の範囲の外）。
+- U1: `config._date(v, label='日付')` を計画のとおりに書き直し、`DATE_FIELDS`（発行日・J-STAGE 公開日・受付日・再受付日・受理日・最終査読日）の名前を渡す。`[0-9]` を使い、Python 3.10・3.13 で結果が同じ。手順 3 の説明は make_notebook.py で直した。
+
+**テスト**: tests/test_pipeline.py に 16 件（ZIP の中身、手で作った ZIP の zip_problems、ユーザー画像の再実行、手で置いたファイル、空の PDF、同じ出力フォルダの 2 本目、前回の PDF、CLI の not_zipped 表示、巻・号・ページの正規化と拒否、全角の巻で ASCII の ZIP、CLI の書誌情報の入力エラー、日付の書き方。点検の後に、ZIP に入れる画像の状態〈`zip_image_names`〉、画像ファイルがない図の 9 章の備考、画像を入れた後も PDF が ZIP に残ること〈add_images が zip_issues を計算し直すことも〉、記事フォルダに残った PDF の再指定の 4 件）と tests/test_notebook.py に 1 件（手順 3）。点検の後に、既存のテストにも足した: EMF を変換できたとき〈soffice があるとき〉に画像が ZIP に入ること、XML のない ZIP・空の ZIP の zip_problems、日付の中の空白〈2026 / 3 / 31〉とアラビア・インド数字〈[0-9] でない〉、tests/test_colab.py の全角の巻・最初のページ。0.22.0 の src では、新しいテストはすべて失敗する。既存のテストも、点検の後に確かめを足した test_template_emf_conversion・test_colab の test_detects_values_left_from_previous_article と、ノートブックの test_notebook_is_up_to_date は 0.22.0 で失敗し、それ以外は通る。docs/fix_plan_repro_tests.py からは M1・M2・U1 の 3 件を取り除いた。新しい fixture は要らなかった（TEMPLATE に EMF がある）。
+
+**確かめた数**: pytest 668 件（Python 3.13・3.10 とも。点検の後の修正の前は 664 件）。ruff は 194 件 → 197 件（増えた 3 件は、手順 3 のテストの exec〈S102。既存の 13 件と同じ形〉と、日付のテストの時刻なしの datetime〈DTZ001。TOML が返す型をわざと使う〉）。golden 23 件は、XML・AI 依頼文が 0.22.0 と同じ。レポートの違いは、1 章の行の名前、12 章の説明、14 章の PDF の行だけ（10・11 章は golden の例に not_zipped・正規化がないので変わらない）。td1〜3（ルート2・`--ai manual`）は、XML が 0.22.0 とバイトまで同じで、ZIP の中身は記事フォルダの中だけ・ASCII だけ、不変性・DTD・J-STAGE のチェックは合格。同じ出力フォルダで 2 本変換しても、2 本目の ZIP に 1 本目は入らない。
+
+**残る限界**:
+
+- J-STAGE が新しい ZIP（要変換/ なし、前回の残りなし）を受け付けるかは、試験運用で確かめる。
+- Colab の「変換結果」の ZIP（出力フォルダ全体）には、手順 6 の変換し直しで前回の画像が残りうる。手順 6 の最初で Graphics/ と 要変換/ を空にすることは、していない。
+- CLI の「J-STAGE のアップロード時チェック」の行は `--images` の前に出るので、add_images の後に出る ZIP の問題は画面に出ない（レポートには出る）。D の actions() でそろえる。
+- `zip_issues` は終了コードに影響しない（`jstage_issues` と同じ。D の U2）。
+- 記事フォルダに手で置いた PDF は ZIP に入らなくなった（決定事項 2）。更新履歴（docs/CHANGES.md など）を作るときに書く。
+- lpage は検査しない（「12頁」はそのまま XML に入る）。レポート 11 章は「開始ページ・終了ページ」、メッセージと Colab は「最初のページ・最後のページ」で、呼び方が違う（D 以降でそろえる）。
+
+**文書とコードの食い違い**（コードの書き方に文書を合わせた）: DESIGN 3 章に jstage_rules の段階がなかった、PDF の確認の位置が「4 と 5 の間」と書かれていたがコードは AI 補完と組み立ての後・忠実度の確認の前だった、DEVELOPMENT の構成表に config.py の行がなかった、README の 要変換/ の行が「PNG にして Graphics/ に入れる」だった（手で置いた画像は ZIP に入らない）、手順 3 の説明が日付を YYYY-MM-DD だけとしていた、14 章の PDF の行が「記事フォルダに入れる」だった、`export_images` の docstring の既定の置き場所が記事フォルダの中だった。点検の後に、DESIGN 3 章と pipeline.py の docstring で J-STAGE のアップロード時チェック（10）が画像の書き出し（11）の前と読めた（コードは画像の書き出しの後、出力した画像の名前で行う）、画像ファイルがない図の 9 章の備考が「Graphics/ に置く」だった、手順 2 の UPLOAD_PDF の説明が「後で jasme_巻_開始ページ.zip に入れることもできます」だった（14 章は手順 2 で変換し直す案内）。いずれも直した。FIX_PLAN の config.py の行番号（149〜153）は 0.18.1 のもので、今のコードと合わない（直さない）。CLAUDE.md の ZIP の 1 行（「計画全体で足した作業」）は、利用者の指示ファイルなので入れていない。DEVELOPMENT の「守るべき原則」の 7 に同じ内容を入れた。
+
 ### D. 要対応の知らせ方を 1 か所にまとめる（レポート・Colab・コマンドライン）（0.23.1）
 
 **理由**: 今は、何を要対応とするかが、レポートの冒頭（report.render L283〜315）、14 章（L548〜570）、Colab の枠（make_notebook.py の手順 5・6・8）、CLI（cli.py L95〜106）の 4 か所にばらばらに書かれている。DTD 不合格・J-STAGE のアップロード時チェック・PDF を読めなかった場合は、Colab に赤い枠が出ず、CLI も 0 を返す。A・B・C で増えた知らせ（画像の出力漏れ、柱とみなした行、ZIP の検査）をここで 1 か所に集める。こうしておけば、後の E・F・G で増える知らせ（文字だけのテキストボックスの未決定、改行のある題目など）は Action を 1 つ足すだけになり、make_notebook.py を毎回直さずに済む。出力（XML・ZIP）の形は変えないので 3 桁目。ただし CLI の終了コードの意味が変わる（--meta なし・画像不足でも 1）ので、README と変更点の知らせに明記する。
@@ -457,6 +481,7 @@ A（黙って文字・画像が落ちる不具合と、それを捕まえる検�
 ## 同じファイルを触る順と、既存テストの書き換え
 
 - B3（0.22.0）で触ったファイル: src の structure.py・ai_assist.py・pipeline.py・report.py・colab.py・cli.py・linker.py（点検の指摘の修正で、照合の文脈だけ）、tools/make_notebook.py（ノートブックは作り直し）、tests の make_fixtures.py・conftest.py・test_floats.py・test_ai.py・test_colab.py・test_reader.py・test_figure_body.py（新規）と fixture 3 件（sample_b3_cells・sample_b3_tablefig・sample_b3_place）、docs の DESIGN.md・DEVELOPMENT.md・fix_plan_repro_tests.py、README.md。pdfmatch.py・pdfdocx.py には触っていない。既存テストは、仮の位置を本文の冒頭とみなしていた 5 件（test_floats.py の test_mechanical_placement_and_request など）を書き直した。
+- C（0.23.0）で触ったファイル: src の package.py・images.py・pipeline.py・config.py・report.py・cli.py・colab.py、tools/make_notebook.py（ノートブックは作り直し）、tests の test_pipeline.py・test_notebook.py・test_colab.py、docs の DESIGN.md・DEVELOPMENT.md・JSTAGE_NOTES.md・fix_plan_repro_tests.py、README.md。pdfmatch.py・pdfdocx.py・structure.py には触っていない。既存テストの書き換えはない。
 - 各まとまりの設計は、どれも自分の変更を『0.19.0 にまとめる』と書いていて食い違う。この計画では単位ごとに版を分けた: A 0.19.0 → B 0.20.0 → B2 0.21.0 → B2.1 0.21.1 → B3 0.22.0 → C 0.23.0 → D 0.23.1 → E 0.24.0 → F 0.25.0 → G 0.26.0 → H 0.27.0 → I 0.27.1（B2・B2.1・B3 は計画を作った後に加え、C〜I を 2 つずつ繰り下げた。B2.1 は 3 桁目なので、後の版は変えていない）。main への反映はそのまま利用者に届くので、単位ごとに版を上げる。
 - structure.py: 触る順は次のとおり。A（exclude_blank と L390・409・484・676・1022・1079・1101 の置き換え、L472〜474 と L1202〜1205 の空白段落、split_regions L325〜350、float_mechanical L678〜707）→ B3（float_mechanical で表のセルの画像とキャプション・キャプションのない表を図に組む、位置を決められない図表の置き場所〈今は本文の冒頭〉）→ E（attach_word_notes L1179〜1205 を書き直す。A で直した文末脚注の空白段落の処理は、ここで消える。plain() に基づく空白の扱いは新しいコードに引き継ぐ）→ F（build_body L455〜541 の除外分岐 L470〜475、place_boxes、assign_ids L1207〜1259、compute_locations、node_paras、body_seq L557、split_regions の本文の外の図形）→ G（D5 の任意の Decision）→ I（分割）。分割（U6）を A〜G（B3 を含む）のどれかより先にすると、すべての差分が衝突する。
 - docx_reader._textboxes / _read_nested_paragraph: A（M3 の _children）→ F（D1 の TextBox・textbox_id の記録）→ G（D5 で戻り値が None になる段落の扱いと、つないだ段落。U8 で段落の隠し文字の状態を退避して戻す）。F と G の順を入れ替えるときは、F の TextBox.paras を『つないだ後に残った段落』から作る。

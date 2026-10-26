@@ -160,3 +160,26 @@ def test_step8_shows_lost_images_box():
     src = cell_source("#@title 8.")
     assert "from jasme_jats.colab import lost_images_box, missing_images_box" in src
     assert src.index("files.download(archive)") < src.index("display(HTML(lost_images_box(res)))")
+
+
+def test_step3_reads_full_width_numbers_and_common_dates(capsys):
+    """手順 3: 全角の数字は半角にして、その旨を表示する。英数字以外の巻・読めない日付は、欄の名前を示して止める。"""
+    from jasme_jats.config import JournalConfig
+    src = cell_source("#@title 3.")
+    assert "2026-03-31 の形で（2026/3/31 でもかまいません）" in src
+
+    def run(**values):
+        s = src.replace('peer_review = "（選んでください）"  #@param', 'peer_review = "査読あり"  #@param')
+        for name, v in values.items():
+            s = s.replace(f'{name} = ""  #@param', f'{name} = "{v}"  #@param', 1)
+        ns = {"DONE": {1, 2}, "docx_path": Path("a.docx")}
+        exec(s, ns)
+        return ns
+    ns = run(volume="３１", first_page="１", pub_date="2026/3/31")
+    out = capsys.readouterr().out
+    assert "※ 巻「３１」を「31」として読みました（全角の文字を半角にしました）" in out
+    assert ns["_meta"].article_id(JournalConfig.load()) == "31_1" and str(ns["_meta"].pub_date) == "2026-03-31"
+    with pytest.raises(SystemExit, match="入力を確認してください: 巻「31巻」に、使えない文字「巻」"):
+        run(volume="31巻")
+    with pytest.raises(SystemExit, match="入力を確認してください: 受付日「2026/13/1」を読めません"):
+        run(received="2026/13/1")

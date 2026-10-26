@@ -213,7 +213,7 @@ if globals().get("LO_PROC") is not None and LO_PROC.poll() is None:
 #@markdown - **出版版 PDF に合わせてから作る**（初期値）: 受け取った docx が著者校正の前の原稿で、出版社が組版で直した文字（全角・半角、「資料」→「付録」など）が出版版 PDF にしかないことがあるため、docx の文字を PDF に合わせて直した docx（**Word の変更履歴つき**。スタイル・書式・数式・図・注はそのまま）を作り、それを変換します。表の中・数式・図の中の文字・リンクの文字は直しません。PDF のページ番号・投稿受付日など組版で入る文字や、表・図の中の文字は docx に足しません（足さなかった文字はレポートの 13 章の最後に一覧が出ます。本文が混じっていないか確かめてください）。**PDF のアップロードが必要です。**
 #@markdown - **docx から作る**: docx の本文の文字を 1 文字も変えずに XML にします。PDF をアップロードすると、変換の後に docx の文字と PDF の文字を照合し、違う箇所（全角・半角の違い、「資料」と「付録」など）をレポートの 13 章に出します（XML は docx の文字のままです）。PDF がまだないときや、docx が最終版だと分かっているときに選びます。
 ROUTE = "出版版 PDF に合わせてから作る"  #@param ["出版版 PDF に合わせてから作る", "docx から作る"]
-#@markdown **PDF もアップロードする（UPLOAD_PDF）**: J-STAGE に登載する PDF がまだなければ、チェックを外し、作り方を「docx から作る」にしてから実行してください（PDF 用のボタンは出ません。後で jasme_巻_開始ページ.zip に入れることもできます）。
+#@markdown **PDF もアップロードする（UPLOAD_PDF）**: J-STAGE に登載する PDF がまだなければ、チェックを外し、作り方を「docx から作る」にしてから実行してください（PDF 用のボタンは出ません。PDF が用意できたら、この手順 2 から PDF を選んで変換し直します）。
 UPLOAD_PDF = True  #@param {type:"boolean"}
 """ + guard(1) + """
 from pathlib import Path
@@ -262,7 +262,7 @@ print("PDF :", pdf_path.name if pdf_path else "（なし。J-STAGE への登載�
 """ + mark(2)),
     code("""
 #@title 3. 書誌情報を入力
-#@markdown 各欄の上の説明（日本語）に対応する欄に入力します。日付は YYYY-MM-DD の形で、分からなければ空欄にします。
+#@markdown 各欄の上の説明（日本語）に対応する欄に入力します。巻・号・ページは半角の英数字で入力します（全角の数字は半角にして読みます）。日付は 2026-03-31 の形で（2026/3/31 でもかまいません）、分からなければ空欄にします。
 #@markdown ***
 #@markdown **巻（volume）**（J-STAGE のフォルダ名・ファイル名と DOI に使います）
 volume = ""  #@param {type:"string"}
@@ -327,6 +327,8 @@ except ValueError as e:
 if keyword_problem(_meta):
     raise SystemExit(keyword_problem(_meta) + "。")
 print("入力しました（原稿種別: " + subject_ja + " / " + subject_en + "、" + peer_review + "）。未入力の項目はレポートに表示されます。")
+for _note in _meta.input_notes:   # 全角の数字を半角にしたなど
+    print("※", _note)
 print("キーワード（日本語）:", "；".join(_meta.keywords_ja) or "（なし）")
 print("キーワード（英語）  :", "; ".join(_meta.keywords_en) or "（なし）")
 if keyword_language_mismatch(_meta):
@@ -387,7 +389,7 @@ if AI == "none":
 from IPython.display import HTML, Markdown, display
 from jasme_jats.colab import (ai_required_box, error_box, figure_body_box, lost_images_box, missing_images_box, no_ai_box,
                                pdf_diff_box, prompt_box, unplaced_box)
-from jasme_jats.report import pdf_summary
+from jasme_jats.report import pdf_summary, upload_issues
 from jasme_jats.config import ArticleMeta, JournalConfig
 from jasme_jats.pipeline import AIRequiredError, Options, add_images, convert
 
@@ -427,8 +429,8 @@ fid = res.fidelity
 print("文字の不変性チェック:", fid.summary(), f"（段落 {fid.units} 件中 {fid.mapped} 件を出力、{len(fid.excluded)} 件は除外）")
 print("最終出力の再チェック:", "合格" if fid.final_ok else "不合格")
 print("DTD 検証:", "合格" if res.dtd_valid else "不合格")
-print("J-STAGE のアップロード時チェック:", "問題なし" if not res.jstage_issues else f"要対応 {len(res.jstage_issues)} 件")
-for mid, msg in res.jstage_issues:
+print("J-STAGE のアップロード時チェック:", "問題なし" if not upload_issues(res) else f"要対応 {len(upload_issues(res))} 件")
+for mid, msg in upload_issues(res):
     print("  ", mid, msg)
 print("出版版 PDF との照合:", pdf_summary(res))
 if res.docx_fix is not None:
@@ -497,7 +499,7 @@ if globals().get("USER_IMAGES"):
 fid = res.fidelity
 print("文字の不変性チェック:", fid.summary(), "/ 最終出力の再チェック:", "合格" if fid.final_ok else "不合格",
       "/ DTD 検証:", "合格" if res.dtd_valid else "不合格",
-      "/ J-STAGE のアップロード時チェック:", "問題なし" if not res.jstage_issues else f"要対応 {len(res.jstage_issues)} 件",
+      "/ J-STAGE のアップロード時チェック:", "問題なし" if not upload_issues(res) else f"要対応 {len(upload_issues(res))} 件",
       "/ 出版版 PDF との照合:", pdf_summary(res))
 if res.ai.error:
     display(HTML(error_box("貼り付けた回答を読み込めませんでした（AI による補完は反映されていません）", res.ai.error)))

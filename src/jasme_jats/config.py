@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as _dt
 import re
 import sys
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -59,20 +60,74 @@ class JournalConfig:
         return ja, en
 
 
-def _date(v) -> Optional[_dt.date]:
-    if v in (None, ""):
+# 日付の書き方（NFKC にして空白を除いた後）: 20260331、2026-03-31・2026/3/31・2026.3.31・2026年3月31日。2 桁の年と和暦は読まない
+RE_DATE8 = re.compile(r"([0-9]{4})([0-9]{2})([0-9]{2})")
+RE_DATE = re.compile(r"([0-9]{4})[-/.年]([0-9]{1,2})[-/.月]([0-9]{1,2})日?")
+
+
+def _date(v, label="日付") -> Optional[_dt.date]:
+    """入力された日付を date にする。空なら None。読めなければ、欄の名前（label）を入れた ValueError。
+
+    date.fromisoformat は使わない（Python の版で読める形が違う。3.11 以降は 2026-W13-2 なども読む）。
+    """
+    if v is None:
         return None
+    if isinstance(v, _dt.datetime):          # datetime は date の派生なので先に判定する（TOML の引用符なしの日時）
+        return v.date()
     if isinstance(v, _dt.date):
         return v
-    s = str(v).strip().replace("/", "-").replace(".", "-")
+    s = re.sub(r"\s", "", unicodedata.normalize("NFKC", str(v)))
     if not s:
         return None
-    if len(s) == 8 and s.isdigit():
-        s = f"{s[:4]}-{s[4:6]}-{s[6:]}"
-    try:
-        return _dt.date.fromisoformat(s)
-    except ValueError:
-        raise ValueError(f"日付「{v}」を読めません（YYYY-MM-DD の形で入力してください）") from None
+    m = RE_DATE8.fullmatch(s) or RE_DATE.fullmatch(s)
+    if m:
+        try:
+            return _dt.date(int(m[1]), int(m[2]), int(m[3]))
+        except ValueError:
+            pass
+    raise ValueError(f"{label}「{v}」を読めません（YYYY-MM-DD の形で入力してください。2026/3/31 のようにも書けます）")
+
+
+# 書誌情報の日付の欄（ArticleMeta の項目 -> 欄の名前。Colab の手順 3 とレポートの 11 章の名前）
+DATE_FIELDS = {"pub_date": "発行日", "epub_date": "J-STAGE 公開日", "received": "受付日", "revised": "再受付日",
+               "accepted": "受理日", "approved": "最終査読日"}
+# 巻・号・ページの欄。巻・号・開始ページは J-STAGE のフォルダ名・ファイル名（記事識別子）と DOI に使うので、半角の英数字だけにする
+PAGE_FIELDS = {"volume": "巻", "issue": "号", "fpage": "最初のページ", "lpage": "最後のページ"}
+ID_FIELDS = ("volume", "issue", "fpage")
+RE_ALNUM = re.compile(r"[A-Za-z0-9]+")
+
+
+def _shown_char(c: str) -> str:
+    """知らせに出す使えない文字。空白は「空白」、幅のない文字・制御文字などの見えない文字は「見えない文字」と書く。"""
+    if c.isspace():
+        return "空白"
+    if unicodedata.category(c) in ("Cf", "Cc", "Co", "Cn", "Zs", "Zl", "Zp"):
+        return "見えない文字"
+    return c
+
+
+def _id_value(key: str, v, notes: list) -> str:
+    """巻・号・ページの入力を NFKC で正規化する（全角の数字は半角にし、notes に知らせを足す）。
+
+    巻・号・開始ページに半角の英数字以外が残れば、欄の名前と、その文字を入れた ValueError（決定事項 3）。
+    """
+    raw = str(v).strip()
+    s = unicodedata.normalize("NFKC", raw).strip()
+    label = PAGE_FIELDS[key]
+    if key in ID_FIELDS and s and not RE_ALNUM.fullmatch(s):
+        bad = list(dict.fromkeys(_shown_char(c) for c in s if not RE_ALNUM.fullmatch(c)))
+        shown = "」「".join(bad)
+        if any(len(c) == 1 and not c.isascii() for c in bad):
+            why = "全角の文字（漢字・かな・記号など）は使えません"
+        elif "見えない文字" in bad:
+            why = "見えない文字は使えません。貼り付けたときに入ることがあるので、欄を空にして打ち直してください"
+        else:
+            why = "記号・空白は使えません"
+        raise ValueError(f"{label}「{raw}」に、使えない文字「{shown}」があります。{label}は半角の英数字だけで入力してください"
+                         f"（例: {'31' if key == 'volume' else '1'}。{why}。J-STAGE のフォルダ名・ファイル名に使うためです）")
+    if s != raw:
+        notes.append(f"{label}「{raw}」を「{s}」として読みました（全角の文字を半角にしました）")
+    return s
 
 
 RE_JA_CHARS = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\uff65々]")
@@ -142,16 +197,21 @@ class ArticleMeta:
     keywords_en: list = field(default_factory=list)
     keywords_ja: list = field(default_factory=list)
     corresp: list = field(default_factory=list)  # 責任著者の番号（1 始まり）
+    input_notes: list = field(default_factory=list)  # 入力値を直した知らせ（全角の数字を半角にしたなど。XML には出さない）
 
     @classmethod
     def from_dict(cls, d: dict) -> "ArticleMeta":
         d = dict(d or {})
-        for k in ("pub_date", "epub_date", "received", "revised", "accepted", "approved"):
-            d[k] = _date(d.get(k))
+        for k, label in DATE_FIELDS.items():
+            d[k] = _date(d.get(k), label)
         d["peer_review"] = _peer_review(d.get("peer_review"))
-        for k in ("volume", "issue", "fpage", "lpage", "doi"):
+        notes = []
+        for k in PAGE_FIELDS:
             if k in d and d[k] is not None:
-                d[k] = str(d[k]).strip()
+                d[k] = _id_value(k, d[k], notes)
+        if d.get("doi") is not None:
+            d["doi"] = str(d["doi"]).strip()
+        d["input_notes"] = notes
         for k in ("keywords_en", "keywords_ja"):
             v = d.get(k)
             if isinstance(v, str):

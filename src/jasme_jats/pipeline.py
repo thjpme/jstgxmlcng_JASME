@@ -10,8 +10,10 @@
   7. 目印を取り除いた最終出力を作り、もう一度文字列を照合する（fidelity.final_check）
   8. J-STAGE 指定 DTD で検証する（validate）
   9. docx の画像のうち XML に出力しなかったもの（画像を置けない場所・出力しなかった段落の中の画像）を調べる（lost_images）
- 10. J-STAGE のアップロード時のチェックのうち XML だけで判定できるものを再現する（jstage_rules）
- 11. 画像の書き出し、J-STAGE のフォルダ構成と ZIP、レポート（images, package, report）
+ 10. J-STAGE のアップロード時のチェックのうち XML だけで判定できるものを再現する（jstage_rules。画像の名前を使うので、
+     11 の画像の書き出しの後、ZIP を作る前に、出力した画像の名前で行う）
+ 11. 画像の書き出し、J-STAGE のフォルダ構成と ZIP（今回の XML・PDF・出力できた画像だけを入れ、読み直して確かめる）、
+     レポート（images, package, report）
 
 作り方は 2 通り（Options.route）:
   ルート1（docx）: docx から作る。docx の文字は 1 文字も変えない。記事の PDF があれば照合して、違いをレポートに載せるだけ（pdfmatch）
@@ -38,7 +40,7 @@ from .images import ImageResult, export_images, user_image
 from .jstage_rules import check as jstage_check
 from .linker import cited_refs, link
 from .model import Decision, LostImage
-from .package import article_dir, make_zip, write_package
+from .package import article_dir, make_zip, unzipped_files, write_package, zip_image_names, zip_problems
 from .pdfdocx import DocxFix, make_fixed_docx
 from .pdfmatch import PdfCheck, check_pdf
 from .report import figure_body_detail, images_to_prepare, render, render_ai_only
@@ -148,6 +150,8 @@ class Result:
     forced_floats: list = field(default_factory=list)   # AI による補完でも位置が決まらず、仮の位置（アンカー段落の後ろ・本文の最後）に置いた図表の説明
     pdf_check: Optional[PdfCheck] = None                # 出版版 PDF との照合（PDF がなければ None）。ルート2 では直した docx との照合
     lost_images: list = field(default_factory=list)     # docx にあるのに XML に出力しなかった画像（LostImage。要対応）
+    zip_issues: list = field(default_factory=list)      # アップロード用の ZIP を読み直して見つけた問題（package.zip_problems。jstage_issues とは別）
+    not_zipped: list = field(default_factory=list)      # 記事フォルダにあるのに ZIP に入れなかったファイル（package.unzipped_files。10 章）
     hidden_images: list = field(default_factory=list)   # 隠し文字の中の画像の ID（Word で表示されないので出力しない）
     route: str = "docx"
     docx_fix: Optional[DocxFix] = None                  # ルート2: PDF に合わせて直した docx と、直した箇所
@@ -386,10 +390,12 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
 
     # ---------------------------------------------------------------- 出力
     adir = article_dir(out_dir, journal, meta)
-    images = export_images(doc, info.images, adir / "Graphics", convert_metafiles=opts.convert_metafiles)
+    images = export_images(doc, info.images, adir / "Graphics", convert_metafiles=opts.convert_metafiles,
+                           keep_dir=out_dir / "要変換")
     aid = meta.article_id(journal)
     jstage_issues = jstage_check(final_root, aid, [i.name for i in images if i.name])
-    zip_path, adir, has_pdf = write_package(out_dir, journal, meta, xml_bytes, opts.pdf_path)
+    # ZIP に入れるのは、今回の XML・今回指定した PDF・出力できた画像だけ（記事フォルダに残っている前回の変換の残りなどは入れない）
+    zip_path, adir, has_pdf = write_package(out_dir, journal, meta, xml_bytes, opts.pdf_path, zip_image_names(images))
     flat_xml = out_dir / f"{aid}.xml"
     flat_xml.write_bytes(xml_bytes)
 
@@ -449,7 +455,8 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         build_notes=build_notes, hidden_text=doc.hidden_text, tracked_changes=doc.tracked_changes,
         comments=doc.comments, has_pdf=has_pdf, output_note=output_note, xml_path=flat_xml, zip_path=zip_path,
         prompt_path=prompt_path, forced_floats=forced_floats, pdf_check=pdf_check, route=opts.route, docx_fix=docx_fix,
-        lost_images=lost, hidden_images=hidden_images)
+        lost_images=lost, hidden_images=hidden_images, zip_issues=zip_problems(zip_path, journal, meta),
+        not_zipped=unzipped_files(out_dir, journal, meta, zip_path))
     report_path = out_dir / f"{aid}_変換レポート.md"
     report_path.write_text(render(res), encoding="utf-8")
     res.report_path = report_path
@@ -498,6 +505,10 @@ def add_images(res: Result, supplied: dict, skip_unneeded: bool = False) -> list
                                     f"利用者が用意した画像{f'（{label}）' if label else ''}を入れた。変換のときの状態: {need[name]}")
         res.warnings = [w for w in res.warnings if not w.startswith(f"{old.image_id}:")]
     if prepared:
-        make_zip(res.zip_path.parent, res.journal, res.meta)
+        out_dir = res.zip_path.parent
+        make_zip(out_dir, res.journal, res.meta, zip_image_names(res.images), res.has_pdf)
+        # ZIP の中身が変わったので、ZIP の確かめと、入れなかったファイルを計算し直す（変換のときの値を残さない）
+        res.zip_issues = zip_problems(res.zip_path, res.journal, res.meta)
+        res.not_zipped = unzipped_files(out_dir, res.journal, res.meta, res.zip_path)
         res.report_path.write_text(render(res), encoding="utf-8")
     return list(prepared)
