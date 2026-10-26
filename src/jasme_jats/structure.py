@@ -188,6 +188,9 @@ class FloatInfo:
     where: str = ""                                # 未配置のときに仮に置いた位置: anchor（アンカー段落の後ろ）/ end（本文の最後）
     end_why: str = ""                              # 本文の最後に置いた理由: ai（AI が本文の外の段落の後ろを指定）/ anchor（アンカー段落が本文でない）
     end_after: str = ""                            # AI が指定した本文の外の段落の ID（end_why が ai のとき）
+    # 未配置で where が anchor のとき、その後ろに仮に置いた本文の段落の ID（アンカー段落。アンカー段落が箇条書き・引用の途中なら、
+    # その箇条書き・引用の最後の段落。Classifier.run_end）
+    after_src: str = ""
 
 
 @dataclass
@@ -234,24 +237,36 @@ class ArticlePlan:
     def unplaced_floats(self) -> list:
         return [fid for fid, info in self.floats.items() if info.mode == "unplaced"]
 
-    def float_place(self, fid) -> str:
-        """位置を決められない図表を仮に置いた位置の説明（レポート・Colab・コマンドライン・判断の記録で使う）。
+    def float_text_src(self, fid):
+        """位置を決められない図表を仮に置いた位置を示す、文字のある本文の段落の ID（本文の最後に置いたもの・見つからないものは
+        None）。
 
-        例: 段落「図1は表で組んだ問題である。この」の後ろ / 本文の最後。アンカー段落に文字がなければ（空の段落など）、その前に
-        ある、文字のある本文の段落で示す（XML の中で図表を探す手がかり）。
+        仮に置いた位置のすぐ前の段落（アンカー段落。箇条書き・引用の途中なら、その最後の段落。FloatInfo.after_src）に文字が
+        なければ（空の段落など）、その前にある、文字のある本文の段落（XML の中で図表を探す手がかり。レポートの 3 章の場所にも使う）。
         """
         info = self.floats[fid]
         if info.where == "end":
-            return "本文の最後"
+            return None
         seq = self.body_seq
-        k = seq.index(info.float.anchor_src) if info.float.anchor_src in seq else -1
+        start = info.after_src or info.float.anchor_src
+        k = seq.index(start) if start in seq else -1
         while k >= 0:
             p = self.paras.get(seq[k])
-            t = _para_text(p).strip() if p is not None else ""
-            if t:
-                return f"段落「{t[:20]}」の後ろ"
+            if p is not None and _para_text(p).strip():
+                return seq[k]
             k -= 1
-        return "本文の最初"
+        return None
+
+    def float_place(self, fid) -> str:
+        """位置を決められない図表を仮に置いた位置の説明（レポート・Colab・コマンドライン・判断の記録で使う）。
+
+        例: 段落「図1は表で組んだ問題である。この」の後ろ / 本文の最後。段落は float_text_src（アンカー段落、またはアンカー段落を
+        含む箇条書き・引用の最後の段落。文字がなければ、その前にある、文字のある本文の段落）。
+        """
+        if self.floats[fid].where == "end":
+            return "本文の最後"
+        src = self.float_text_src(fid)
+        return f"段落「{_para_text(self.paras[src]).strip()[:20]}」の後ろ" if src else "本文の最初"
 
     def decide(self, stage, category, src, message, confidence="", applied=True) -> Decision:
         n = sum(1 for x in self.decisions if x.stage == stage) + 1
@@ -294,12 +309,28 @@ def float_caption(info) -> str:
     return "".join(caps) or "キャプションなし"
 
 
+def float_ids(plan, info) -> str:
+    """浮動配置の図形の中身を出力した図・表の ID（F1、T2 など。「・」でつなぐ）。表のセルの画像とキャプションで組んだ図、
+    表のない表キャプションも（キャプションのない図には ID がないので出ない）。レポート・Colab・コマンドラインで、XML の中の
+    図表を示すのに使う。"""
+    paras = {id(q) for q in info.paras} | {id(q) for t in info.tables for q in t.paragraphs()}
+    tables = {id(t) for t in info.tables}
+    ids = [f.fid for f in plan.figures if f.fid and (
+        any(id(q) in paras for q in f.image_paras + ([f.caption] if f.caption is not None else []))
+        or any(id(t) in tables for t in f.tables))]
+    ids += [t.tid for t in plan.tables if (t.table is not None and id(t.table) in tables)
+            or (t.caption is not None and id(t.caption) in paras)]
+    return "・".join(ids)
+
+
 def same_place(flat, provisional) -> tuple:
     """本文の要素の列 flat の要素ごとに、同じ置き場所の、すぐ前・すぐ後ろの要素の位置（なければ None）。戻り値: (前, 後ろ)。
 
-    置き場所は、位置を決められない図表（仮の位置に置いた図形）の中身ならその図形の ID（provisional: 要素の id -> 図形の ID）、
-    それ以外（図形の外の要素と、位置の決まった図形の中身）は ""。仮に置いた図形の中身は本当はそこにないので、図表の組み立てで
-    前後を見るときは、同じ置き場所の要素だけを見る（Classifier.assemble_floats・build_body）。
+    置き場所は、位置を決められない図表（仮の位置に置いた図形）の中身なら仮に置いた位置（provisional: 要素の id -> 置き場所。
+    同じ位置に仮に置いた図形の中身は同じ値）、それ以外（図形の外の要素と、位置の決まった図形の中身）は ""。仮に置いた図形の
+    中身は本当はそこにないので、図表の組み立てで前後を見るときは、同じ置き場所の要素だけを見る（Classifier.assemble_floats・
+    build_body）。同じ位置に仮に置いた図形の中身どうし（同じ段落に結び付いた、画像だけの図形とキャプションだけの図形など）は
+    隣り合う要素として見る。
     """
     n = len(flat)
     here = [provisional.get(id(b), "") for _, b in flat]
@@ -322,7 +353,9 @@ class Classifier:
         self.mapping = journal.styles
         self.overrides = overrides or {}      # src -> role（AI 補完）
         self.placements = placements or {}    # 浮動配置の図形の ID -> 配置の指定（AI 補完。ai_assist.float_placements）
-        self.provisional = {}                 # 仮の位置に置いた図形の中身: 本文の要素（flat）の id -> 図形の ID（build_body）
+        # 仮の位置に置いた図形の中身: 本文の要素（flat）の id -> 置き場所（仮に置いた位置。同じ位置に仮に置いた図形の中身は同じ値。
+        # build_body）
+        self.provisional = {}
         self.plan = ArticlePlan(lang=journal.lang)
 
     def style_role(self, para: Para) -> Optional[str]:
@@ -614,8 +647,9 @@ class Classifier:
             merged.extend(entries)
         flat = merged
         # 位置を決められない図表（仮の位置に置いた図形）の中身。本当はそこにないので、図表を組み立てるときに、その外の要素と
-        # 組にしない（assemble_floats・table_for_figure）
-        self.provisional = {id(obj): fid for fid, entries in prov for _, obj in entries}
+        # 組にしない（assemble_floats・table_for_figure）。置き場所は仮に置いた位置で、同じ位置に仮に置いた図形の中身どうし
+        # （同じ段落に結び付いた、画像だけの図形とキャプションだけの図形など）は組にする
+        self.provisional = {id(obj): f"@{target}" for target, entries in prov for _, obj in entries}
 
         # 本文スタイルのまま書かれた図表キャプションの推定（隣は同じ置き場所の要素。仮に置いた図形の中身とその外は隣にしない）
         before, ahead = same_place(flat, self.provisional)
@@ -654,7 +688,7 @@ class Classifier:
           中身が単純なら図の本体とキャプションを組にし、そうでなければ中身をそのまま（これまでの扱いで。役割は build_body で
           決める）出す。
         戻り値: (並べ直した items, [(items での位置, 同じ位置での順番, [(役割, 要素)])], 中身をそのまま出す図形の要素の id →
-        その図形の差し込みの一覧, [(仮の位置に置いた図形の ID, その差し込みの一覧)])。items での位置は「その位置の要素の前」で、
+        その図形の差し込みの一覧, [(仮の位置に置いた図形の items での位置, その差し込みの一覧)])。items での位置は「その位置の要素の前」で、
         アンカー段落の後ろは アンカー段落の位置 + 1、本文の最後は BODY_END。同じ位置に置くものはキャプションの番号順（番号が
         なければ後ろ）、同じ番号なら docx の順
         """
@@ -700,6 +734,10 @@ class Classifier:
                                    else "中身の組み合わせ（図表の本体とキャプション）を機械的に決められない")
                     info.where, info.end_why, info.end_after, target = self.provisional_target(
                         fl, spec if end else None, src_index, body)
+                    if info.where == "anchor":
+                        # アンカー段落が箇条書き・引用の途中なら、その最後の段落の後ろにずらす（箇条書き・引用を 2 つに分けない）
+                        last = self.run_end(items, target - 1)
+                        info.after_src, target = items[last][0].src, last + 1
                     place = ("AI が本文の外の段落の後ろを指定したので、本文の最後に仮に置く" if info.end_why == "ai"
                              else f"指定がなければ{plan.float_place(fl.fid)}に仮に置く")
                     plan.decide("mechanical", "figure", fl.anchor_src,
@@ -716,7 +754,7 @@ class Classifier:
                     else:
                         placed.update(id(b) for b in blocks)
                     inserts.append((target, (self.float_number(info), len(inserts)), entries))
-                    prov.append((fl.fid, entries))
+                    prov.append((target, entries))
                     continue
                 target = src_index[fl.anchor_src]
                 info.mode = "mechanical"
@@ -735,13 +773,61 @@ class Classifier:
         - AI が本文の外（注・引用文献など）の段落の後ろを指定した（end_spec。ai_assist.float_placements の印）: 本文の最後
         - アンカー段落が本文の段落（body。plan.body_seq）でない: 本文の最後。今の place_floats は本文にアンカーのある図形だけを
           扱うので起きないが、本文の外に結び付いた図形を扱うとき（修正計画の F の N7）にそのまま使えるように分けておく
-        - それ以外: アンカー段落のすぐ後ろ（AI の指定の after と同じ形）
+        - それ以外: アンカー段落のすぐ後ろ（AI の指定の after と同じ形）。アンカー段落が箇条書き・引用の途中なら、place_floats が
+          その箇条書き・引用の最後の段落の後ろにずらす（run_end）
         """
         if end_spec:
             return "end", "ai", end_spec.get("after", ""), BODY_END
         if fl.anchor_src not in body:
             return "end", "anchor", "", BODY_END
         return "anchor", "", "", src_index[fl.anchor_src] + 1
+
+    def list_or_quote(self, b, role):
+        """本文の要素 b（items の役割 role）が、assemble_floats で前後の段落と 1 つにまとめる箇条書きの項目か引用の段落なら、
+        その種類（引用は "quote"、箇条書きは ("list", 番号の定義の ID)）。そうでなければ None。
+
+        役割は build_body と同じ考えで見る（役割の決まっていない段落・本文の段落のうち、見出しと推定するものは箇条書きにしない）。
+        画像・別行数式のある段落、図形の中の段落は、箇条書きにしない（迷うものは None。仮の位置をずらさないだけ）。
+        """
+        if not isinstance(b, Para) or in_shape(b):
+            return None
+        if role == "quote":
+            return "quote"
+        if not (b.numbering and b.autonum) or b.images or b.has_display_math:
+            return None
+        if role in ("normal", None, "") or role not in BODY_ROLES | {"table"}:
+            heading = self.guess_heading(b, strict=False)
+        elif role == "p":
+            heading = self.guess_heading(b, strict=True)
+        else:
+            return None
+        return None if heading else ("list", b.numbering[0])
+
+    def run_end(self, items, k) -> int:
+        """仮に置く位置のすぐ前の要素 items[k]（アンカー段落）が、続いた箇条書きの項目（同じ番号の定義）か引用の段落の途中に
+        あれば、その並びの最後の段落の位置。そうでなければ k。
+
+        位置を決められない図表をアンカー段落のすぐ後ろに仮に置くと、箇条書き・引用が 2 つに分かれ、図表を手作業で移しても
+        分かれたまま残るため（assemble_floats は、続いた箇条書きの項目と引用の段落を 1 つの list・disp-quote にまとめる）。
+        AI が指定した位置はずらさない。間の図形の中身と空白だけの段落は飛ばす（その位置には出力しない）。アンカー段落が空の
+        段落なら、その前の要素で見る。
+        """
+        def skip(b):
+            return bool(b.float_id) or (isinstance(b, Para) and b.is_blank)
+
+        prev = next((j for j in range(k, -1, -1) if not skip(items[j][0])), None)
+        want = self.list_or_quote(*items[prev]) if prev is not None else None
+        if want is None:
+            return k
+        last = k
+        for j in range(k + 1, len(items)):
+            b, role = items[j]
+            if skip(b):
+                continue
+            if self.list_or_quote(b, role) != want:
+                break
+            last = j
+        return last
 
     @staticmethod
     def float_number(info) -> float:
@@ -1098,8 +1184,9 @@ class Classifier:
 
         位置を決められない図表（仮の位置に置いた図形。self.provisional）の中身は、本当はそこにないので、その外の要素とは組に
         しない（図キャプションと画像、表キャプションと表、キャプションの続き、図の本体の表〈table_for_figure〉）。前後の要素は、
-        同じ置き場所の要素（図形の外の要素なら図形の外の要素、仮に置いた図形の中身ならその図形の中身）だけで数える（間に図形の
-        中身を仮に置いていても、docx で隣り合う画像と図キャプションは組にする）。
+        同じ置き場所の要素（図形の外の要素なら図形の外の要素、仮に置いた図形の中身なら同じ位置に仮に置いた図形の中身）だけで
+        数える（間に図形の中身を仮に置いていても、docx で隣り合う画像と図キャプションは組にする。同じ段落に結び付いた、画像だけの
+        図形とキャプションだけの図形は、同じ位置に仮に置くので組にする）。
         """
         plan = self.plan
         out = []
@@ -1249,10 +1336,10 @@ class Classifier:
         図キャプションを図の下に置く原稿（captions_below。画像の図がなければ下とみなす）では直前、上に置く原稿では直後の、
         キャプションのない表を本体にする。間にほかの段落があれば組まない（空白だけの段落は flat にない）。直後の表の次が
         表キャプションなら、その表は表キャプションのもの（表の下に表キャプションを置く書き方）かもしれないので組まない。
-        位置を決められない図表（仮の位置に置いた図形。provisional: flat の要素の id → その図形の ID）の中身は、本当はそこに
-        ないので、その外の要素とは組にしない。図キャプションの前後は、同じ置き場所の要素（図形の外の図キャプションなら図形の
-        外の要素、仮に置いた図形の中の図キャプションならその図形の中身）だけで数える（間にほかの図形の中身を仮に置いていても、
-        docx で隣り合う表と図キャプションは組にする）。
+        位置を決められない図表（仮の位置に置いた図形。provisional: flat の要素の id → 置き場所〈仮に置いた位置〉）の中身は、
+        本当はそこにないので、その外の要素とは組にしない。図キャプションの前後は、同じ置き場所の要素（図形の外の図キャプション
+        なら図形の外の要素、仮に置いた図形の中の図キャプションなら同じ位置に仮に置いた図形の中身）だけで数える（間にほかの図形の
+        中身を仮に置いていても、docx で隣り合う表と図キャプションは組にする）。
         直前の表は out（組み立て済み）から取り出す（後ろの表の ID が詰まる）。直後の表は used に入れる。
         戻り値: (表, "") / (None, 組めなかった理由。近くに表の候補があるとき) / (None, "")（近くにキャプションのない表がない）
         """

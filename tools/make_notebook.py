@@ -453,7 +453,7 @@ if res.ai.error:
 if res.ai.partial:
     display(HTML(error_box("AI の回答が途中で切れていました（図表の位置の一部だけを反映しました）", res.ai.partial)))
 if AI == "api":
-    display(HTML(unplaced_box(res.plan)))
+    display(HTML(unplaced_box(res.plan, res.ai.partial)))
 display(HTML(missing_images_box(res)))
 display(HTML(lost_images_box(res)))
 display(HTML(figure_body_box(res)))
@@ -471,6 +471,9 @@ if manual_prompt:
 - 回答がコードブロックになっていない、またはアーティファクト（別の画面）として返ってきたときは、チャットで
   「回答の書き方に従って、```json のコードブロック 1 つで出し直してください」と頼んでください。
 - 読めなかったときは、何行目のどこが読めないかが表示されます。
+- 回答が長すぎて途中で切れていたときは、最後まで書かれていた図表の位置だけを反映し、赤い枠で知らせます。チャットで
+  「回答が途中で切れました。同じ形式で最初から出し直してください」と頼み、新しい回答を最初から最後まで貼り付け直してください
+  （続きだけを貼り付けても読めません）。
 """),
     code("""
 AI_RESPONSE = r'''
@@ -500,7 +503,7 @@ if res.ai.error:
     display(HTML(error_box("貼り付けた回答を読み込めませんでした（AI による補完は反映されていません）", res.ai.error)))
 if res.ai.partial:
     display(HTML(error_box("AI の回答が途中で切れていました（図表の位置の一部だけを反映しました）", res.ai.partial)))
-display(HTML(unplaced_box(res.plan)))
+display(HTML(unplaced_box(res.plan, res.ai.partial)))
 display(HTML(missing_images_box(res)))
 display(HTML(lost_images_box(res)))
 display(HTML(figure_body_box(res)))

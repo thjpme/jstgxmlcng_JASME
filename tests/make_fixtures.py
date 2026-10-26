@@ -96,6 +96,13 @@ def para(style, *parts, jc=None):
     return f"<w:p>{ppr}{body}</w:p>"
 
 
+def list_item(style, *parts, num_id=6):
+    """自動番号の段落（箇条書きの項目）。テンプレートの numbering.xml の numId=6 は「•」の箇条書き、numId=7 は「1.」の番号。"""
+    ppr = (f'<w:pStyle w:val="{style}"/>' if style else "") + f'<w:numPr><w:ilvl w:val="0"/><w:numId w:val="{num_id}"/></w:numPr>'
+    body = "".join(p if p.startswith("<") else run(p) for p in parts if p)
+    return f"<w:p><w:pPr>{ppr}</w:pPr>{body}</w:p>"
+
+
 def mr(text, sty=None):
     rpr = f'<m:rPr><m:sty m:val="{sty}"/></m:rPr>' if sty else ""
     return f"<m:r>{rpr}<m:t>{escape(text)}</m:t></m:r>"
@@ -950,19 +957,34 @@ def make_b3_tablefig(path, variant=""):
     make_article(path, "表で組んだ図の検証用文書", lambda b: b3_tablefig_parts(b, variant))
 
 
-def b3_place_parts(b: Builder):
+def b3_place_parts(b: Builder, variant=""):
     """位置を決められない図表（どれも図の上端がアンカー段落から離れている）の仮の置き場所。
 
     s1: アンカー段落から 3 cm 下の図1。s2・s3: 同じアンカー段落に、docx の順で図3・図2。s4: 文字のない段落に結び付いた図4。
+    variant（テストの中で作る）: s1 のアンカー段落を、"list" は 3 項目の箇条書きの 2 つ目の項目、"quote" は 3 段落の引用の
+    2 つ目の段落にする。"blank_list" は、2 項目の箇条書きの項目の間の空の段落に s1 を結び付ける。
     """
     img = [b.add_image(f"b3_place_{k}.png", png_bytes(f"Place {k}", size=(300, 200))) for k in range(1, 5)]
 
     def tb(k, cap, pid, down):
         return textbox(para(S["body"], drawing(img[k], 1440000, 960000, pid + 1)) + para(S["fig_cap"], cap), pid,
                        cx=8 * B3_CM, cy=4 * B3_CM, v=("paragraph", int(down * B3_CM)), wrap="wrapTopAndBottom")
+    s1 = tb(0, "図1\u3000一つ目の図", 750, 3)
+    first = [para(S["body"], "この段落に図1のテキストボックスが結び付いている。", s1)]
+    if variant == "list":
+        first = [list_item(S["body"], "箇条書きの一つ目の項目である。"),
+                 list_item(S["body"], "この項目に図1のテキストボックスが結び付いている。", s1),
+                 list_item(S["body"], "箇条書きの三つ目の項目である。")]
+    elif variant == "quote":
+        first = [para(S["quote"], "引用の一つ目の段落である。"),
+                 para(S["quote"], "この引用の段落に図1のテキストボックスが結び付いている。", s1),
+                 para(S["quote"], "引用の三つ目の段落である。")]
+    elif variant == "blank_list":
+        first = [list_item(S["body"], "箇条書きの一つ目の項目である。"), para(S["body"], s1),
+                 list_item(S["body"], "箇条書きの二つ目の項目である。")]
     return [para(S["sec1"], "１．仮の置き場所"),
             para(S["body"], "試験（2024）にならい，図1を置く。"),
-            para(S["body"], "この段落に図1のテキストボックスが結び付いている。", tb(0, "図1\u3000一つ目の図", 750, 3)),
+            *first,
             para(S["body"], "図2と図3は同じ段落に結び付いている。"),
             para(S["body"], "この段落に図3と図2のテキストボックスが結び付いている。", tb(1, "図3\u3000三つ目の図", 760, 2),
                  tb(2, "図2\u3000二つ目の図", 770, 5)),
@@ -982,9 +1004,10 @@ def b3_place_refs(b: Builder, outside=False):
         cx=8 * B3_CM, cy=4 * B3_CM, v=("paragraph", 2 * B3_CM), wrap="wrapTopAndBottom"))]
 
 
-def make_b3_place(path, outside=False):
-    """位置を決められない図表の仮の置き場所の原稿（AI 補完が必要。ALL_DOCS には入れない）。"""
-    make_article(path, "仮の置き場所の検証用文書", b3_place_parts, refs=lambda b: b3_place_refs(b, outside))
+def make_b3_place(path, outside=False, variant=""):
+    """位置を決められない図表の仮の置き場所の原稿（AI 補完が必要。ALL_DOCS には入れない。variant は b3_place_parts）。"""
+    make_article(path, "仮の置き場所の検証用文書", lambda b: b3_place_parts(b, variant),
+                 refs=lambda b: b3_place_refs(b, outside))
 
 
 if __name__ == "__main__":

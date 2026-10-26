@@ -41,8 +41,8 @@ from .model import Decision, LostImage
 from .package import article_dir, make_zip, write_package
 from .pdfdocx import DocxFix, make_fixed_docx
 from .pdfmatch import PdfCheck, check_pdf
-from .report import images_to_prepare, render, render_ai_only
-from .structure import classify, float_caption
+from .report import figure_body_detail, images_to_prepare, render, render_ai_only
+from .structure import classify, float_caption, float_ids
 from .tracking import SPAN
 from .validate import validate
 
@@ -69,7 +69,8 @@ def _head(plan, src) -> str:
 PARTIAL_MSG = ("図表の位置の指定（placements）のうち、最後まで書かれていた {n} 件だけを読み取って反映しました（検証で"
                "採用しなかったものは 2 章）。リンクなどの操作（operations）と気づき（notes）は反映していません。AI に出し直して"
                "もらうと、すべてが反映されます。チャットでは「回答が途中で切れました。同じ形式で最初から出し直してください」と"
-               "頼み、新しい回答を貼り付けて変換し直します。API で自動実行するときは、もう一度変換します（また途中で切れるときは、"
+               "頼み、新しい回答を最初から最後まで貼り付けて変換し直します（続きだけを貼り付けても読めません）。API で自動実行"
+               "するときは、もう一度変換します（また途中で切れるときは、"
                "「手動（チャットに貼り付け）」に切り替えて変換し、依頼文をチャットに貼り付けて回答してもらいます）。")
 
 
@@ -86,17 +87,18 @@ def _read_cut(outcome, text):
     return data
 
 
-def _float_ids(plan, info) -> str:
-    """浮動配置の図形の中身を出力した図・表の ID（F1、T2 など）。表のセルの画像とキャプションで組んだ図、表のない表キャプション
-    も（キャプションのない図には ID がないので出ない）。"""
-    paras = {id(q) for q in info.paras} | {id(q) for t in info.tables for q in t.paragraphs()}
-    tables = {id(t) for t in info.tables}
-    ids = [f.fid for f in plan.figures if f.fid and (
-        any(id(q) in paras for q in f.image_paras + ([f.caption] if f.caption is not None else []))
-        or any(id(t) in tables for t in f.tables))]
-    ids += [t.tid for t in plan.tables if (t.table is not None and id(t.table) in tables)
-            or (t.caption is not None and id(t.caption) in paras)]
-    return "・".join(ids)
+def _located(plan, src) -> str:
+    """レポートの 3 章の場所に使う段落の ID: src に場所（plan.locations）があれば src、なければ（空の段落など、出力しない段落）
+    本文でその前にある、場所のある段落（見つからなければ src。場所の欄には段落の ID がそのまま出る）。"""
+    if plan.locations.get(src):
+        return src
+    seq = plan.body_seq
+    k = seq.index(src) if src in seq else -1
+    while k >= 0:
+        if plan.locations.get(seq[k]):
+            return seq[k]
+        k -= 1
+    return src
 
 
 @dataclass
@@ -323,7 +325,8 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
                                "ツールに貼り戻して再実行すると、AI による補完が反映されます。この出力は AI 補完の前の状態です。")
                 if plan.unplaced_floats:
                     output_note += ("位置を決められない図表（3 章）は、AI の回答を反映するまで、図が結び付いている段落"
-                                    "（アンカー段落）のすぐ後ろ（その段落が本文でなければ本文の最後）に仮に置いています。")
+                                    "（アンカー段落）のすぐ後ろ（箇条書き・引用の途中なら、その終わり。アンカー段落が本文で"
+                                    "なければ本文の最後）に仮に置いています。")
         if data is not None:
             ops = split_ops(data)
             outcome.notes = [str(n) for n in data.get("notes", []) if str(n).strip()]
@@ -401,7 +404,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     read = {op.get("src") for op, _ in outcome.rejected if op.get("op") == "place_float"}   # 指定を読めた（採用しなかった）図形
     for sid in plan.unplaced_floats:
         fi = plan.floats[sid]
-        ids = _float_ids(plan, fi)
+        ids = float_ids(plan, fi)
         place = plan.float_place(sid)
         where = f"XML の{place}にある {ids} " if ids else f"XML の{place}にある図表の中身"
         if pending_ai:
@@ -423,14 +426,11 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
             detail = (head + f"手作業で、{where}を正しい位置（Word で表示したときに図の左上の直上にある本文の段落の後）に"
                       f"移すこと。機械的に決められなかった理由: {fi.reason}")
             forced_floats.append(f"{float_caption(fi)}: {where.rstrip()}")
-        unresolved_after.append(("float", fi.float.anchor_src, float_caption(fi), detail))
+        # 場所の欄はアンカー段落の場所（空の段落なら、その前の段落の場所）
+        unresolved_after.append(("float", _located(plan, fi.float.anchor_src), float_caption(fi), detail))
     # 画像のない図キャプションで、近くの表を図の本体にできなかったもの（structure.Classifier.table_for_figure）
     for src, why in plan.figure_issues:
-        detail = (f"図キャプションに対応する画像が見つからず、近くの表も図の本体にできなかった（{why}）。"
-                  "XML ではキャプションだけの図になる。docx でこの図の本体（画像・表）を確かめ、表が図の本体なら、"
-                  "表を図キャプションのすぐ上（図キャプションを図の上に置く原稿では、すぐ下）に、間にほかの段落を"
-                  "挟まずに置いてから、変換し直すこと")
-        unresolved_after.append(("figbody", src, _head(plan, src), detail))
+        unresolved_after.append(("figbody", src, _head(plan, src), figure_body_detail(why)))
     warnings = list(dict.fromkeys(doc.warnings + info.warnings))
     build_notes = [Decision(did=f"M-B{i}", stage="mechanical", category=c, src=s, message=m,
                             location=plan.locations.get(s, "")) for i, (c, s, m) in enumerate(info.notes, 1)]

@@ -481,6 +481,21 @@ def test_complete_answers_are_not_read_as_cut():
     assert parse_cut_response("```json\n" + in_ops) is not None
 
 
+def test_cut_inside_string_with_smart_quotes_is_cut():
+    """切れた文字列の中に、JSON の文字としての飾りの引用符（「“主張”について」。文字列を閉じていない）があっても、途中で
+    切れた回答として、最後まで書かれた placements の要素を読む。読み取りの誤りの案内も「途中で切れている」にする。"""
+    from jasme_jats.ai_assist import parse_cut_response
+    full = head_first()
+    ops = full.index('"reason"', full.index('"operations"'))
+    for tail in ("第1章の“主張”についての途中", "第1章の“主張”"):
+        text = full[:ops] + '"reason": "' + tail
+        data = parse_cut_response(text)
+        assert data is not None and data["placements"] == FLOAT_RESPONSE["placements"]
+        with pytest.raises(ValueError) as e:
+            parse_response(text)
+        assert "途中で切れている" in str(e.value) and "飾りの引用符（“ ” など）で囲まれています" not in str(e.value)
+
+
 def test_code_fence_marks_inside_strings_are_not_blocks():
     """JSON の文字列の中の ``` は、コードブロックの始まり・閉じとみなさない（コードブロックなしの回答・コードブロックの中の
     回答・前置きの説明のある回答）。前置きの説明と同じ行から始まるコードブロックも読む。"""
@@ -490,6 +505,10 @@ def test_code_fence_marks_inside_strings_are_not_blocks():
                  "```text\n補足\n```\n```json\n" + body + "\n```"):
         data = parse_response(text)
         assert data["placements"] == FLOAT_RESPONSE["placements"] and data["notes"] == ["```の記号の説明"]
+    # { で始まる回答（コードブロックの中身だけをコピーしたもの）は、文字列の中に「```{」があってもコードブロックを探さない
+    body = json.dumps({"placements": FLOAT_RESPONSE["placements"], "operations": [], "notes": ["```{ で始まる記号"]},
+                      ensure_ascii=False)
+    assert parse_response(body)["notes"] == ["```{ で始まる記号"]
 
 
 def _cut_text():
@@ -534,4 +553,5 @@ def test_api_mode_applies_finished_placements_of_cut_answer(journal, meta, tmp_p
     _fake_anthropic(monkeypatch, [], text=cut_cases()["e"], stop="max_tokens")
     res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "none", ai_mode="api", ai_api_key="t",
                                                 convert_metafiles=False))
-    assert "途中で切れました" in res.ai.error and res.ai.partial == "" and res.plan.unplaced_floats == ["s1", "s2", "s3"]
+    assert res.ai.error == "AI の回答が長すぎて途中で切れました"            # API の誤り（JSON の読み取りの誤りにしない）
+    assert res.ai.partial == "" and res.plan.unplaced_floats == ["s1", "s2", "s3"]

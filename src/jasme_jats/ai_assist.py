@@ -784,12 +784,12 @@ def parse_response(text: str) -> dict:
         if data is None:
             line = t.splitlines()[e.lineno - 1] if 0 < e.lineno <= len(t.splitlines()) else ""
             hint = ""
-            if any(q in line for q in SMART_QUOTES):
+            if cut_at_end(e, t):
+                hint = CUT_HINT         # 途中で切れた回答（切れた文字列の中に、JSON の文字としての飾りの引用符があっても）
+            elif any(q in line for q in SMART_QUOTES):
                 hint = ("回答の中で、文字列が半角の \" ではなく飾りの引用符（“ ” など）で囲まれています。"
                         "AI に「文字列は半角の二重引用符で、```json のコードブロックで出し直してください」と頼み、"
                         "コードブロック右上のコピーボタンでコピーしてください。")
-            elif cut_at_end(e, t):
-                hint = CUT_HINT
             raise ValueError(f"{e.lineno} 行目 {e.colno} 文字目で JSON として読めません（{e.msg}）。"
                              f"該当行: {line[:80]!r}。{hint}") from None
     if not isinstance(data, dict) or not isinstance(data.get("operations", []), list):
@@ -818,7 +818,7 @@ def _before_trailing_text(t: str, e: json.JSONDecodeError):
 # 回答のコードブロック。始まりの ```（json）のすぐ後ろは {、閉じの ``` は行の頭にあるものだけ（JSON の文字列の中の ``` を
 # コードブロックの始まり・閉じとみなさない。文字列は改行を含められないので、中の ``` は行の頭に来ない）。閉じの ``` がなければ
 # 最後まで（回答が途中で切れると閉じがない）
-RE_FENCE = re.compile(r"```[ \t]*(?:json|JSON)?[ \t]*\n?(?=\s*\{)(.*?)(^[ \t]*```|\Z)", re.S | re.M)
+RE_FENCE = re.compile(r"```[ \t]*(?:json|JSON)?[ \t]*\n?(?=\s*\{)(.*?)(^[ \t]*```|\Z)", re.DOTALL | re.MULTILINE)
 # 途中で切れた回答の案内（parse_response の読み取りの誤り）
 CUT_HINT = ("回答が途中で切れている可能性があります。チャットで「回答が途中で切れました。同じ形式で最初から出し直して"
             "ください」と頼み、新しい回答を最初から最後まで貼り付けてください（続きだけを貼り付けても読めません）。")
@@ -840,6 +840,8 @@ def _json_text(text: str) -> tuple:
 
 # 値の書きかけ（数・true・false・null の途中）
 RE_PARTIAL_LITERAL = re.compile(r"^(?:-?[0-9.eE+-]*|t(?:r(?:ue?)?)?|f(?:a(?:l(?:se?)?)?)?|n(?:u(?:ll?)?)?)$")
+# 文字列を閉じているように見える飾りの引用符（すぐ後ろが , ] } :。最後まで書かれた回答の書き損じ。cut_at_end）
+RE_SMART_CLOSE = re.compile("[" + re.escape(SMART_QUOTES) + r"](?=\s*[,\]}:])")
 
 
 def cut_at_end(e: json.JSONDecodeError, t: str) -> bool:
@@ -848,10 +850,12 @@ def cut_at_end(e: json.JSONDecodeError, t: str) -> bool:
     文字列の途中で入力が終わった（Unterminated string。閉じの " が見つからないまま終わったときだけ出る）か、
     「Expecting …」の誤りで、その位置から後ろが空か、値の書きかけ（数・true・false・null の途中）だけのとき。
     途中の書き損じ（飾りの引用符など）は、切れた回答ではない。最後まで書かれた回答で、最後の文字列の閉じだけが飾りの引用符
-    のときも「Unterminated string」になるので、その文字列（e.pos から後ろ）に飾りの引用符があれば、切れた形とみなさない。
+    のときも「Unterminated string」になるので、その文字列（e.pos から後ろ）に、文字列を閉じているように見える飾りの引用符
+    （すぐ後ろが , ] } :。RE_SMART_CLOSE）があれば、切れた形とみなさない（文字列の中の「“主張”について」のような
+    飾りの引用符は、JSON の文字として正しいので、切れた形とみなす）。
     """
     if e.msg.startswith("Unterminated string"):
-        return not any(q in t[e.pos:] for q in SMART_QUOTES)
+        return not RE_SMART_CLOSE.search(t[e.pos:])
     return e.msg.startswith("Expecting") and bool(RE_PARTIAL_LITERAL.match(t[e.pos:].strip()))
 
 

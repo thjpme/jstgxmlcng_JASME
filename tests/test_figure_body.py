@@ -254,8 +254,13 @@ def test_caption_less_table_becomes_figure_body(journal, meta, tmp_path, capsys)
                    "図3": "直前の表に表キャプション「表1\u3000表キャプションの付いた表」が付いている"}
     assert any("画像のない図キャプション「図1\u3000表で組んだ問題」の直前にある、キャプションのない表" in d.message
                for d in plan.decisions)
-    rows = [u for u in res.unresolved_after if u[0] == "figbody"]
-    assert [u[2][:2] for u in rows] == ["図2", "図3"] and all("表を図キャプションのすぐ上" in u[3] for u in rows)
+    # 3 章の対処は理由ごと: 間に段落があるときは表を置き直す。表に表キャプションが付いているときは、どちらのキャプションが
+    # 正しいか・図の本体の画像があるかを確かめる（表を動かすようには書かない）
+    rows = {u[2][:2]: u[3] for u in res.unresolved_after if u[0] == "figbody"}
+    assert list(rows) == ["図2", "図3"]
+    assert "表を図キャプションのすぐ上" in rows["図2"] and "画像が図キャプションのすぐ隣にあるか" in rows["図2"]
+    assert "表キャプションと図キャプションのどちらが正しいかを著者に確かめて" in rows["図3"]
+    assert "画像が図キャプションのすぐ隣にあるか" in rows["図3"] and "表を図キャプションのすぐ上" not in rows["図3"]
     report = res.report_path.read_text(encoding="utf-8")
     head = report.split("## 2.")[0]
     assert "要対応: 図の本体（画像・表）が見つからない図が 2 件あります（3 章）" in head
@@ -389,6 +394,17 @@ def place_parts(b, shape):
         inner = mf.para(mf.S["body"], mf.drawing(img, 1440000, 960000, 881)) + mf.para(mf.S["body"], "\u3000")
         return head + [mf.para(mf.S["body"], mf.drawing(body_img, 1440000, 960000, 882), shape_box(inner, 880)),
                        mf.para(mf.S["fig_cap"], "図1\u3000本文の画像の図"), mf.para(mf.S["body"], "以上で終わる。")]
+    if shape == "prov_above_image":
+        body_img = b.add_image("place_above_body.png", mf.png_bytes("Above body", size=(300, 200)))
+        img = b.add_image("place_above_float.png", mf.png_bytes("Above float", size=(300, 200)))
+        inner = mf.para(mf.S["body"], mf.drawing(img, 1440000, 960000, 891)) + mf.para(mf.S["body"], "\u3000")
+        return head + above_marker(b) + [mf.para(mf.S["fig_cap"], "図1\u3000本文の画像の図", shape_box(inner, 890)),
+                                         mf.para(mf.S["body"], mf.drawing(body_img, 1440000, 960000, 892)),
+                                         mf.para(mf.S["body"], "以上で終わる。")]
+    if shape == "prov_bodycap_table":
+        return head + [mf.para(mf.S["body"], "表2\u3000本文のスタイルの短い段落",
+                               shape_box(bare_table("図形の中のキャプションのない表"), 895)),
+                       mf.para(mf.S["body"], "以上で終わる。")]
     inner = mf.para(mf.S["fig_cap"], "図2\u3000キャプションだけの図形")
     return head + above_marker(b) + [mf.para(mf.S["body"], "この段落にキャプションだけの図形が結び付いている。",
                                              shape_box(inner, 840)),
@@ -436,11 +452,12 @@ def floats_in_body(root):
     return out
 
 
-@pytest.mark.parametrize("shape", ["prov_tabcap", "prov_tables", "prov_image"])
+@pytest.mark.parametrize("shape", ["prov_tabcap", "prov_tables", "prov_image", "prov_above_image", "prov_bodycap_table"])
 def test_provisional_float_is_not_paired_with_outside_captions(journal, meta, tmp_path, shape):
     """位置を決められない図形（アンカー段落の後ろに仮に置いたもの）の中身は、その外の表・表キャプション・画像・図キャプション
     とも組にしない（図形の表キャプションに本文の表を入れない。本文の表キャプションを図形の表に付けない。本文の図キャプションを
-    図形の画像と組にしない）。本文の画像と図キャプションは、間に図形の中身を仮に置いていても、docx で隣り合っていれば組にする。
+    図形の画像と組にしない〈キャプションが図の下・上の原稿とも〉。図形の表を隣にして、本文のスタイルの「表2…」の段落を表
+    キャプションと推定しない）。本文の画像と図キャプションは、間に図形の中身を仮に置いていても、docx で隣り合っていれば組にする。
     手作業で移す図表の知らせには、図形の中身だけを出す。"""
     path = tmp_path / f"{shape}.docx"
     mf.make_article(path, "仮に置いた図形の検証用文書", lambda b: place_parts(b, shape))
@@ -456,11 +473,67 @@ def test_provisional_float_is_not_paired_with_outside_captions(journal, meta, tm
     elif shape == "prov_tables":
         assert got == ["None:-:g", "T1:-:t", "T2:-:t", "T3:表1:"]  # 本文の表キャプションは図形の表に付けない
         assert "にある T1・T2 を正しい位置" in detail
-    else:
+    elif shape == "prov_image":
         assert got == ["None:-:g", "F1:図1:g"]                  # 図形の画像・本文の画像と本文の図キャプション
         f1 = next(f for f in res.plan.figures if f.fid == "F1")
         assert [q.float_id for q in f1.image_paras] == [""]
         assert "にある図表の中身を正しい位置" in detail and "F1" not in detail
+    elif shape == "prov_above_image":
+        # キャプションを図の上に置く原稿: 本文の図キャプションは、間に仮に置いた図形の画像を飛ばして、本文の画像と組にする
+        assert got == ["F1:図9:g", "F2:図1:g", "None:-:g"]
+        f2 = next(f for f in res.plan.figures if f.fid == "F2")
+        assert [q.float_id for q in f2.image_paras] == [""]
+        assert "にある図表の中身を正しい位置" in detail and "F2" not in detail
+    else:
+        # 本文のスタイルの「表2…」の段落は、仮に置いた図形の表と隣でも、表キャプションにしない（本文の段落のまま）
+        assert got == ["T1:-:t"] and res.plan.tables[0].caption is None
+        assert any("".join(p.itertext()).startswith("表2\u3000本文のスタイル") for p in load(res).find("body").iter("p")
+                   if p.getparent().tag in ("sec", "body"))
+        assert "にある T1 を正しい位置" in detail
+
+
+def split_parts(b, apart):
+    """画像だけの図形（アンカー段落から 3 cm 下）と、図キャプションだけの図形（7 cm 下）。どちらも位置を決められない。
+    apart でなければ同じ段落に結び付け、apart なら別々の段落に結び付ける。"""
+    img = b.add_image("split.png", mf.png_bytes("Split", size=(300, 200)))
+    s_img = mf.textbox(mf.para(mf.S["body"], mf.drawing(img, 1440000, 960000, 911)), 910, cx=8 * mf.B3_CM,
+                       cy=4 * mf.B3_CM, v=("paragraph", 3 * mf.B3_CM), wrap="wrapTopAndBottom")
+    s_cap = mf.textbox(mf.para(mf.S["fig_cap"], "図1\u3000二つの図形に分けた図"), 920, cx=8 * mf.B3_CM, cy=1 * mf.B3_CM,
+                       v=("paragraph", 7 * mf.B3_CM), wrap="wrapTopAndBottom")
+    head = [mf.para(mf.S["sec1"], "１．仮に置いた図形"), mf.para(mf.S["body"], "試験（2024）にならう。")]
+    if apart:
+        return head + [mf.para(mf.S["body"], "この段落に画像だけの図形が結び付いている。", s_img),
+                       mf.para(mf.S["body"], "この段落にキャプションだけの図形が結び付いている。", s_cap),
+                       mf.para(mf.S["body"], "以上で終わる。")]
+    return head + [mf.para(mf.S["body"], "この段落に二つの図形が結び付いている。", s_img, s_cap),
+                   mf.para(mf.S["body"], "以上で終わる。")]
+
+
+@pytest.mark.parametrize("apart", [False, True])
+def test_provisional_floats_at_same_place_are_paired(journal, meta, tmp_path, apart):
+    """同じ段落に結び付いた、画像だけの図形とキャプションだけの図形（どちらも位置を決められない）は、同じ位置に仮に置くので、
+    1 つの図に組む（0.21.0 と同じ。Word の原稿で、画像とキャプションを別々の図形にして浮かせる形）。手作業で移す図表の
+    知らせには、どちらの図形にも、組んだ図の ID が出る。別々の段落に結び付いた図形は、別の位置に仮に置くので組にしない
+    （組むと、片方の中身がもう片方の位置に動く）。"""
+    path = tmp_path / "split.docx"
+    mf.make_article(path, "仮に置いた図形の検証用文書", lambda b: split_parts(b, apart))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False,
+                                               ai_response='{"placements": [], "operations": [], "notes": []}'))
+    checks_pass(res)
+    assert res.plan.unplaced_floats == ["s1", "s2"]
+    root = load(res)
+    seq = sequence(root)
+    rows = {u[2]: u[3] for u in res.unresolved_after if u[0] == "float"}
+    assert set(rows) == {"キャプションなし", "「図1\u3000二つの図形に分けた図」"}
+    if not apart:
+        assert floats_in_body(root) == ["F1:図1:g"]                  # 画像とキャプションを 1 つの図に組む
+        assert after(seq, "この段落に二つの図", 2) == ["図1", "以上で終わる。"]
+        assert all("の後ろにある F1 を正しい位置" in d for d in rows.values())
+    else:
+        assert floats_in_body(root) == ["None:-:g", "F1:図1:"]       # キャプションのない図と、キャプションだけの図
+        assert after(seq, "この段落に画像だけ", 2) == ["図?", "この段落にキャプショ"]
+        assert after(seq, "この段落にキャプショ", 2) == ["図1", "以上で終わる。"]
+        assert "の後ろにある図表の中身を正しい位置" in rows["キャプションなし"]
 
 
 def test_figure_without_image_or_table_nearby_is_unchanged(journal, meta, tmp_path):
