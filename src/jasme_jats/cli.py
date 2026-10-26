@@ -16,7 +16,7 @@ from .ai_assist import API_KEY_NAMES, DEFAULT_MODEL
 from .config import ArticleMeta, JournalConfig
 from .pipeline import AIRequiredError, Options, add_images, convert
 from .report import (FIGURE_BODY_ACTION, LOST_IMAGES_ACTION, PROVISIONAL, figure_issue_labels, graphics_dir,
-                     images_to_prepare, lost_image_label, pdf_summary, provisional_exclusions)
+                     images_to_prepare, lost_image_label, pdf_summary, provisional_exclusions, upload_issues)
 
 
 def main(argv=None):
@@ -35,7 +35,8 @@ def main(argv=None):
                     help=f"API モードで使うモデル。claude の既定は {DEFAULT_MODEL}（auto で使える最新の Opus。指定したモデルが"
                          "使えなければ最新の Opus に切り替える）。claude 以外では必ず指定する（Claude Opus と同等以上のモデルを推奨）")
     ap.add_argument("--ai-response", type=Path, help="手動モード: AI の回答（JSON）を保存したファイル")
-    ap.add_argument("--pdf", type=Path, help="記事の PDF（J-STAGE への登載に必須。指定すると ZIP に入れる）")
+    ap.add_argument("--pdf", type=Path, help="記事の PDF（J-STAGE への登載に必須。指定すると ZIP に入れる。"
+                                          "指定しなければ、記事フォルダに前の変換の PDF が残っていても ZIP に入れない）")
     ap.add_argument("--route", choices=["docx", "pdf"],
                     help="作り方。既定は --pdf があれば pdf、なければ docx。pdf: --pdf の出版版 PDF に合わせて直した docx"
                          "（Word の変更履歴つき）を出力フォルダに作り、それを変換する。docx: docx から作る（docx の文字は 1 文字も"
@@ -55,7 +56,13 @@ def main(argv=None):
     api_key = next((os.environ[k] for k in API_KEY_NAMES[a.ai_provider] if os.environ.get(k)), None)
 
     journal = JournalConfig.load(a.config)
-    meta = ArticleMeta.load(a.meta) if a.meta else ArticleMeta()
+    try:
+        meta = ArticleMeta.load(a.meta) if a.meta else ArticleMeta()
+    except ValueError as e:         # 巻・号・ページに英数字以外がある、日付を読めない、TOML の書き方の誤りなど
+        print(f"書誌情報（{a.meta}）を確認してください: {e}", file=sys.stderr)
+        return 2
+    for note in meta.input_notes:   # 全角の数字を半角にしたなど
+        print(f"※ 書誌情報: {note}")
     opts = Options(out_dir=a.out, split_labels=None if a.split_labels is None else a.split_labels == "yes",
                    ai_mode=a.ai, ai_provider=a.ai_provider, ai_model=a.ai_model or DEFAULT_MODEL, ai_api_key=api_key,
                    ai_response=a.ai_response.read_text(encoding="utf-8") if a.ai_response else None,
@@ -69,8 +76,9 @@ def main(argv=None):
     print(f"文字の不変性チェック: {fid.summary()}（段落 {fid.units} 件中 {fid.mapped} 件を出力、{len(fid.excluded)} 件は除外）")
     print(f"最終出力の再チェック: {'合格' if fid.final_ok else '不合格'}")
     print(f"DTD 検証: {'合格' if res.dtd_valid else '不合格'}")
-    print(f"J-STAGE のアップロード時チェック: {'問題なし' if not res.jstage_issues else f'要対応 {len(res.jstage_issues)} 件'}")
-    for mid, msg in res.jstage_issues:
+    issues = upload_issues(res)     # XML で判定したものと、ZIP を読み直して見つけたもの
+    print(f"J-STAGE のアップロード時チェック: {'問題なし' if not issues else f'要対応 {len(issues)} 件'}")
+    for mid, msg in issues:
         print(f"  {mid}: {msg}")
     if res.pdf_check is not None:
         print(f"出版版 PDF との照合: {pdf_summary(res)}")
@@ -95,6 +103,9 @@ def main(argv=None):
             return 1
         if added:
             print(f"画像を入れて ZIP とレポートを作り直した: {', '.join(added)}")
+    if res.not_zipped:        # add_images の後の値（ZIP を作り直すと計算し直す）
+        print(f"※ 記事フォルダにあるが ZIP に入れなかったファイル {len(res.not_zipped)} 件（前の変換の残りか、手で置いたもの。"
+              "PDF は --pdf、画像は --images で指定し直すと入る。レポートの 10 章）: " + ", ".join(res.not_zipped))
     need = images_to_prepare(res)
     if need:
         print(f"要対応: 画像ファイルを用意できなかった図 {len(need)} 件。画像を作り、同じ名前でフォルダに入れて --images で"

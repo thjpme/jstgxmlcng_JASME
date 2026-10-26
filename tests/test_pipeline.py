@@ -102,6 +102,9 @@ def test_template_emf_conversion(journal, meta, tmp_path):
     if soffice_path():
         assert img.status == "converted"
         assert (tmp_path / "jasme/31/1/31_1/Graphics" / img.name).exists()
+        # 変換した画像もアップロード用の ZIP に入る（修正計画 C）
+        assert f"jasme/31/1/31_1/Graphics/{img.name}" in _names(res.zip_path)
+        assert res.not_zipped == [] and res.zip_issues == []
     else:
         assert img.status == "failed"
 
@@ -464,3 +467,285 @@ def test_report_lists_paragraphs_with_unknown_style():
     assert len(rows) == 1
     assert rows[0][2] == "１．はじめに / 第1要素ほか"
     assert "スタイル「Normal」）7 件を本文の段落として扱った" in rows[0][3] and rows[0][3].endswith("ほか")
+
+
+# ---------------------------------------------------------------------------- アップロード用 ZIP の中身（修正計画 C: M1・M2）
+def _names(zpath):
+    with zipfile.ZipFile(zpath) as z:
+        return z.namelist()
+
+
+def _handmade_zip(path, entries):
+    """zipfile で ZIP を手作りする。entries: ZIP の中のパス -> 中身（bytes）。"""
+    with zipfile.ZipFile(path, "w") as z:
+        for name, data in entries.items():
+            z.writestr(name, data)
+    return path
+
+
+def test_upload_zip_has_only_this_article(journal, meta, tmp_path):
+    from jasme_jats.pipeline import add_images
+    # EMF を変換できなかったとき: 元の画像は出力フォルダの直下の 要変換/ に置き、ZIP には入れない（EMSGM034E・074E）
+    res = convert(TEMPLATE, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    names = _names(res.zip_path)
+    assert names == ["jasme/31/1/31_1/31_1.xml"]
+    assert all(n.isascii() for n in names)
+    assert (tmp_path / "要変換" / "31_1_01.emf").exists()
+    assert not (tmp_path / "jasme/31/1/31_1/要変換").exists()
+    assert "要変換/31_1_01.emf" in res.images[0].message
+    assert res.images[0].message.startswith("EMF/WMF の変換を行わない設定")      # メッセージの先頭の理由は変えない
+    assert res.jstage_issues == [] and res.zip_issues == [] and res.not_zipped == []
+    # 利用者が用意した画像を入れると、その画像だけが ZIP に加わる
+    add_images(res, {"31_1_01.png": _image_bytes()})
+    assert _names(res.zip_path) == ["jasme/31/1/31_1/31_1.xml", "jasme/31/1/31_1/Graphics/31_1_01.png"]
+    assert res.zip_issues == [] and res.not_zipped == []
+    # 手作りした ZIP: 記事フォルダの中の 要変換/ は、日本語のフォルダ名（EMSGM034E）と想定外の項目（EMSGM074E）
+    from jasme_jats.package import zip_problems
+    bad = _handmade_zip(tmp_path / "bad.zip", {"jasme/31/1/31_1/31_1.xml": b"<article/>",
+                                              "jasme/31/1/31_1/要変換/x.emf": b"emf"})
+    ids = [mid for mid, _ in zip_problems(bad, journal, meta)]
+    assert "EMSGM034E" in ids and "EMSGM074E" in ids
+
+
+def test_zip_problems_on_handmade_zips(journal, meta, tmp_path):
+    from jasme_jats.package import zip_problems
+    xml = {"jasme/31/1/31_1/31_1.xml": b"<article/>"}
+    # ZIP の名前が日本語（全角の巻）: EMSGM034E が 1 件
+    got = zip_problems(_handmade_zip(tmp_path / "jasme_３１_１.zip", xml), journal, meta)
+    assert [mid for mid, _ in got] == ["EMSGM034E"] and "jasme_３１_１.zip" in got[0][1]
+    # 0 バイトのファイル: XML は EMSGM053E、PDF は EMSGM059E、画像は EMSGM073E
+    got = zip_problems(_handmade_zip(tmp_path / "a.zip", {"jasme/31/1/31_1/31_1.xml": b"",
+                                                          "jasme/31/1/31_1/31_1.pdf": b"",
+                                                          "jasme/31/1/31_1/Graphics/31_1_01.png": b""}), journal, meta)
+    assert [mid for mid, _ in got] == ["EMSGM053E", "EMSGM059E", "EMSGM073E"]
+    # 記事フォルダの外（同じ出力フォルダで変換したほかの記事）: 記事フォルダごとに 1 件（'-'。EMSGM219E のおそれ）
+    got = zip_problems(_handmade_zip(tmp_path / "b.zip", {**xml, "jasme/31/1/31_13/31_13.xml": b"<article/>",
+                                                          "jasme/31/1/31_13/Graphics/31_13_01.png": b"png"}), journal, meta)
+    assert [mid for mid, _ in got] == ["-"] and "jasme/31/1/31_13/" in got[0][1]
+    # 想定どおりの ZIP（フォルダの項目があってもよい）は問題なし
+    ok = _handmade_zip(tmp_path / "c.zip", {"jasme/": b"", "jasme/31/": b"", "jasme/31/1/": b"", "jasme/31/1/31_1/": b"",
+                                            **xml, "jasme/31/1/31_1/31_1.pdf": b"%PDF", "jasme/31/1/31_1/Graphics/": b"",
+                                            "jasme/31/1/31_1/Graphics/31_1_01.png": b"png"})
+    assert zip_problems(ok, journal, meta) == []
+    # 記事の XML がない ZIP（make_zip は必ず入れる。手で作り直したときなど）: '-' が 1 件
+    got = zip_problems(_handmade_zip(tmp_path / "d.zip", {"jasme/31/1/31_1/31_1.pdf": b"%PDF"}), journal, meta)
+    assert [mid for mid, _ in got] == ["-"] and "jasme/31/1/31_1/31_1.xml" in got[0][1]
+    assert [mid for mid, _ in zip_problems(_handmade_zip(tmp_path / "e.zip", {}), journal, meta)] == ["-"]
+
+
+def test_zip_image_names_by_status():
+    from jasme_jats.images import ImageResult
+    from jasme_jats.package import zip_image_names
+    # ZIP に入れるのは、そのまま出力（ok）・変換して出力（converted）・利用者が用意（user）の画像だけ
+    images = [ImageResult(f"rId{k}", f"31_1_0{k}.png", "", st) for k, st in
+              enumerate(["ok", "converted", "user", "failed", "missing"], 1)]
+    assert zip_image_names(images) == ["31_1_01.png", "31_1_02.png", "31_1_03.png"]
+    assert zip_image_names([ImageResult("rId9", "", "", "ok")]) == []         # 名前のない画像は入れない
+
+
+def test_missing_image_note_points_to_step7_and_images_option(tmp_path):
+    from types import SimpleNamespace
+
+    from jasme_jats.images import export_images
+    # Word の図形（画像ファイルがない）: 9 章の備考は、記事フォルダに手で置く案内ではなく、手順 7・--images を案内する
+    img = SimpleNamespace(image_id="rId1", export_name="31_1_01.png", shape_only=True, target="")
+    got = export_images(SimpleNamespace(media={}), [img], tmp_path / "Graphics", keep_dir=tmp_path / "要変換")
+    assert [(i.status, i.name) for i in got] == [("missing", "31_1_01.png")]
+    assert got[0].message.startswith("Word の図形・グラフなどで画像ファイルがない。")      # 先頭の理由は変えない
+    assert "手順 7" in got[0].message and "--images" in got[0].message and "ZIP には入らない" in got[0].message
+
+
+def test_pdf_stays_in_zip_after_add_images(journal, meta, tmp_path):
+    from jasme_jats.pipeline import add_images
+    pdf = tmp_path / "dummy.pdf"
+    pdf.write_bytes(b"%PDF-1.4 dummy\n")                    # 写すだけ（ルート1。照合では読めず、変換は続ける）
+    res = convert(TEMPLATE, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False, pdf_path=pdf))
+    assert res.has_pdf and "jasme/31/1/31_1/31_1.pdf" in _names(res.zip_path)
+    res.zip_issues = [("-", "変換のときの値")]               # add_images が計算し直すことを確かめる
+    add_images(res, {"31_1_01.png": _image_bytes()})
+    assert _names(res.zip_path) == ["jasme/31/1/31_1/31_1.xml", "jasme/31/1/31_1/31_1.pdf",
+                                    "jasme/31/1/31_1/Graphics/31_1_01.png"]
+    assert res.not_zipped == [] and res.zip_issues == []
+    assert "- [x] PDF（31_1.pdf）がアップロード用の ZIP に入っている" in res.report_path.read_text(encoding="utf-8")
+
+
+def test_pdf_left_in_article_folder_can_be_given_again(journal, meta, tmp_path):
+    from conftest import PDFCHECK
+    pdf = tmp_path / "dummy.pdf"
+    pdf.write_bytes(b"%PDF-1.4 dummy\n")
+    out = tmp_path / "out"
+    convert(PDFCHECK, meta, journal, Options(out_dir=out, convert_metafiles=False, pdf_path=pdf))
+    # 記事フォルダに残っている PDF をそのまま指定しても（--pdf out/jasme/31/1/31_1/31_1.pdf）、同じファイルなので写さずに使う
+    left = out / "jasme/31/1/31_1/31_1.pdf"
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=out, convert_metafiles=False, pdf_path=left))
+    assert res.has_pdf and left.read_bytes() == pdf.read_bytes()
+    assert "jasme/31/1/31_1/31_1.pdf" in _names(res.zip_path) and res.not_zipped == [] and res.zip_issues == []
+
+
+def test_rerun_with_user_images_keeps_report_consistent(journal, meta, tmp_path):
+    from jasme_jats.pipeline import add_images
+    opts = Options(out_dir=tmp_path, convert_metafiles=False)
+    png = _image_bytes()
+    res = convert(TEMPLATE, meta, journal, opts)
+    add_images(res, {"31_1_01.png": png})
+    res = convert(TEMPLATE, meta, journal, opts)            # 同じ出力フォルダで変換し直す（Colab の手順 5・6）
+    assert res.not_zipped == ["Graphics/31_1_01.png"]       # 前に入れた画像は、入れ直すまで ZIP に入れない
+    add_images(res, {"31_1_01.png": png}, skip_unneeded=True)
+    assert res.not_zipped == []                              # 入れ直した後は計算し直す
+    tenth = res.report_path.read_text(encoding="utf-8").split("## 10.")[1].split("## 11.")[0]
+    assert "ZIP に入れなかった" not in tenth
+    assert "jasme/31/1/31_1/Graphics/31_1_01.png" in _names(res.zip_path)
+
+
+def test_files_put_by_hand_are_not_zipped(journal, meta, tmp_path):
+    opts = Options(out_dir=tmp_path, convert_metafiles=False)
+    convert(FULL, meta, journal, opts)
+    (tmp_path / "jasme/31/1/31_1/memo.txt").write_text("手で置いたメモ", encoding="utf-8")
+    res = convert(FULL, meta, journal, opts)
+    assert res.not_zipped == ["memo.txt"]
+    assert "jasme/31/1/31_1/memo.txt" not in _names(res.zip_path)
+    report = res.report_path.read_text(encoding="utf-8")
+    tenth = report.split("## 10.")[1].split("## 11.")[0]
+    assert "ZIP に入れなかった" in tenth and "`memo.txt`" in tenth and "対応は要りません" in tenth
+    assert "ZIP に入れなかったファイル 1 件（10 章）" in report.split("## 2.")[0]
+
+
+def test_empty_pdf_is_reported_by_zip_check(journal, meta, tmp_path):
+    from conftest import PDFCHECK
+    empty = tmp_path / "empty.pdf"
+    empty.write_bytes(b"")
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False, pdf_path=empty))
+    assert res.has_pdf and "EMSGM059E" in [mid for mid, _ in res.zip_issues]
+    assert res.jstage_issues == []                          # XML のチェックとは分けて持つ
+    report = res.report_path.read_text(encoding="utf-8")
+    assert "要対応 1 件（12 章）" in report.split("## 2.")[0]
+    assert "| EMSGM059E |" in report.split("## 12.")[1].split("## 13.")[0]
+
+
+def test_zip_of_second_article_in_same_out_dir(journal, tmp_path):
+    from jasme_jats.config import ArticleMeta
+
+    def meta_of(fpage):
+        return ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": fpage, "peer_review": "あり"})
+    opts = Options(out_dir=tmp_path, convert_metafiles=False)
+    r1 = convert(FULL, meta_of("1"), journal, opts)
+    before = r1.zip_path.read_bytes()
+    r2 = convert(FULL, meta_of("13"), journal, opts)        # 同じ出力フォルダで 2 本目
+    assert r2.zip_path != r1.zip_path
+    names = _names(r2.zip_path)
+    assert names and all(n.startswith("jasme/31/1/31_13/") for n in names)
+    assert r1.zip_path.read_bytes() == before                # 1 本目の ZIP は変わらない
+    assert r2.zip_issues == [] and r2.not_zipped == []
+    # 開始ページを打ち間違えて変換し直した（1 → 15）: 前の記事フォルダは ZIP に入らない
+    r3 = convert(FULL, meta_of("15"), journal, opts)
+    assert all(n.startswith("jasme/31/1/31_15/") for n in _names(r3.zip_path)) and r3.zip_issues == []
+
+
+def test_pdf_of_previous_run_is_not_zipped(journal, meta, tmp_path):
+    from conftest import PDFCHECK
+    pdf = tmp_path / "dummy.pdf"
+    pdf.write_bytes(b"%PDF-1.4 dummy\n")                    # 写すだけ（照合では読めず、変換は続ける）
+    out = tmp_path / "out"
+    r1 = convert(PDFCHECK, meta, journal, Options(out_dir=out, convert_metafiles=False, pdf_path=pdf))
+    assert r1.has_pdf and "jasme/31/1/31_1/31_1.pdf" in _names(r1.zip_path)
+    assert "- [x] PDF（31_1.pdf）がアップロード用の ZIP に入っている" in r1.report_path.read_text(encoding="utf-8")
+    r2 = convert(PDFCHECK, meta, journal, Options(out_dir=out, convert_metafiles=False))     # 同じ記事を PDF なしで
+    assert not r2.has_pdf and r2.not_zipped == ["31_1.pdf"]
+    assert "jasme/31/1/31_1/31_1.pdf" not in _names(r2.zip_path)
+    assert not any("31_1.pdf" in w for w in r2.warnings)     # 警告（10 章の箇条）ではなく not_zipped に持つ
+    report = r2.report_path.read_text(encoding="utf-8")
+    pdf_line = next(line for line in report.split("## 14.")[1].splitlines() if "PDF（31_1.pdf）" in line)
+    assert pdf_line.startswith("- [ ]") and "--pdf" in pdf_line and "手順 2" in pdf_line
+    tenth = report.split("## 10.")[1].split("## 11.")[0]
+    assert "`31_1.pdf`" in tenth and "--pdf" in tenth and "手順 2" in tenth
+
+
+def test_cli_prints_files_not_zipped(journal, tmp_path, capsys):
+    from jasme_jats.cli import main
+    meta = tmp_path / "meta.toml"
+    meta.write_text('[article]\nvolume = "31"\nissue = "1"\nfpage = "1"\npeer_review = "あり"\n', encoding="utf-8")
+    args = [str(FULL), "--meta", str(meta), "--no-metafile-conversion", "--out", str(tmp_path / "o")]
+    assert main(args) == 0
+    (tmp_path / "o/jasme/31/1/31_1/31_1.pdf").write_bytes(b"%PDF-1.4 dummy\n")     # 記事フォルダに手で置いた PDF
+    capsys.readouterr()
+    assert main(args) == 0
+    out = capsys.readouterr().out
+    assert "ZIP に入れなかったファイル 1 件" in out and "31_1.pdf" in out and "--pdf" in out
+
+
+# ---------------------------------------------------------------------------- 書誌情報の入力値（修正計画 C: N4・U1）
+def test_volume_issue_pages_are_normalized(journal):
+    from jasme_jats.config import ArticleMeta
+    m = ArticleMeta.from_dict({"volume": "３１", "issue": "1", "fpage": "１", "lpage": "１２"})
+    assert m.article_id(journal) == "31_1" and (m.volume, m.fpage, m.lpage) == ("31", "1", "12")
+    assert m.input_notes == ["巻「３１」を「31」として読みました（全角の文字を半角にしました）",
+                             "最初のページ「１」を「1」として読みました（全角の文字を半角にしました）",
+                             "最後のページ「１２」を「12」として読みました（全角の文字を半角にしました）"]
+    assert ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1"}).input_notes == []
+    assert ArticleMeta.from_dict({"input_notes": ["x"]}).input_notes == []      # 入力の同名の鍵は使わない
+    with pytest.raises(ValueError, match="巻「31巻」に、使えない文字「巻」があります.*全角の文字"):
+        ArticleMeta.from_dict({"volume": "31巻"})
+    with pytest.raises(ValueError, match="号「1-2」に、使えない文字「-」"):
+        ArticleMeta.from_dict({"issue": "1-2"})
+    with pytest.raises(ValueError, match="最初のページ「p.１」に、使えない文字「.」"):
+        ArticleMeta.from_dict({"fpage": "p.１"})
+    with pytest.raises(ValueError, match="使えない文字「空白」"):
+        ArticleMeta.from_dict({"volume": "3 1"})
+    # 幅のない空白（U+200B）などの見えない文字は「見えない文字」と書き、全角の文字とは言わない
+    with pytest.raises(ValueError, match="号「１\u200b」に、使えない文字「見えない文字」があります") as ei:
+        ArticleMeta.from_dict({"volume": "31", "issue": "１\u200b"})
+    assert "全角の文字" not in str(ei.value) and "打ち直してください" in str(ei.value)
+    with pytest.raises(ValueError, match="使えない文字「巻」「見えない文字」.*全角の文字"):
+        ArticleMeta.from_dict({"volume": "31巻\u2060"})
+    # 終了ページはフォルダ名に使わないので、正規化だけ
+    assert ArticleMeta.from_dict({"lpage": "12頁"}).lpage == "12頁"
+    assert ArticleMeta.from_dict({"volume": 31, "fpage": 1}).article_id(journal) == "31_1"    # TOML の数
+
+
+def test_full_width_volume_gives_ascii_zip(journal, tmp_path):
+    from jasme_jats.config import ArticleMeta
+    meta = ArticleMeta.from_dict({"volume": "３１", "issue": "１", "fpage": "１", "peer_review": "あり"})
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    assert res.zip_path.name == "jasme_31_1.zip" and res.zip_issues == []
+    assert all(n.startswith("jasme/31/1/31_1/") for n in _names(res.zip_path))
+    eleventh = res.report_path.read_text(encoding="utf-8").split("## 11.")[1].split("## 12.")[0]
+    assert "- 巻「３１」を「31」として読みました（全角の文字を半角にしました）" in eleventh
+
+
+def test_cli_meta_input_errors_and_notes(tmp_path, capsys):
+    from jasme_jats.cli import main
+    meta = tmp_path / "meta.toml"
+    meta.write_text('[article]\nvolume = "31巻"\nissue = "1"\nfpage = "1"\n', encoding="utf-8")
+    args = [str(FULL), "--meta", str(meta), "--no-metafile-conversion", "--out", str(tmp_path / "o")]
+    assert main(args) == 2                                     # 変換しない（トレースバックで落ちない）
+    err = capsys.readouterr().err
+    assert "書誌情報" in err and "巻「31巻」" in err and not (tmp_path / "o").exists()
+    meta.write_text('[article]\nvolume = "３１"\nissue = "1"\nfpage = "1"\npeer_review = "あり"\n', encoding="utf-8")
+    assert main(args) == 0
+    assert "※ 書誌情報: 巻「３１」を「31」として読みました" in capsys.readouterr().out
+    meta.write_text('[article]\nreceived = "2026/13/1"\n', encoding="utf-8")
+    assert main(args) == 2 and "受付日「2026/13/1」を読めません" in capsys.readouterr().err
+
+
+def test_dates_accept_common_forms():
+    import datetime as dt
+
+    from jasme_jats.config import ArticleMeta, _date
+    for v in ["2026-03-31", "2026/3/31", "2026.3.31", "2026-3-31", "2026年3月31日", "２０２６／３／３１", "20260331",
+              " 2026/3/31 ", "2026 / 3 / 31", "２０２６年 ３月 ３１日"]:
+        assert _date(v) == dt.date(2026, 3, 31), v
+    # アラビア・インド数字（NFKC でも半角にならない）は [0-9] でないので読まない
+    for v in ["2026/13/1", "2026-02-30", "26/3/31", "2026-W13-2", "2026-03", "2026-03-31 10:00", "令和8年3月31日",
+              "\u0662\u0660\u0662\u0666/\u0663/\u0663\u0661"]:
+        with pytest.raises(ValueError, match="YYYY-MM-DD"):
+            _date(v)
+    with pytest.raises(ValueError, match="^日付「2026-03」"):     # 欄の名前の既定は「日付」
+        _date("2026-03")
+    assert _date(dt.datetime(2026, 3, 31, 10, 0)) == dt.date(2026, 3, 31)     # TOML の引用符なしの日時
+    assert type(_date(dt.datetime(2026, 3, 31, 10, 0))) is dt.date
+    assert _date(dt.date(2026, 3, 31)) == dt.date(2026, 3, 31)
+    assert _date("　") is None and _date("") is None and _date(None) is None
+    with pytest.raises(ValueError, match="受付日「2026/13/1」"):
+        ArticleMeta.from_dict({"received": "2026/13/1"})
+    m = ArticleMeta.from_dict({"pub_date": "2026/3/31", "received": "2025年6月1日", "approved": "２０２５．１１．１０"})
+    assert (m.pub_date, m.received, m.approved) == (dt.date(2026, 3, 31), dt.date(2025, 6, 1), dt.date(2025, 11, 10))
