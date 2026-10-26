@@ -565,3 +565,53 @@ def test_api_mode_applies_finished_placements_of_cut_answer(journal, meta, tmp_p
                                                 convert_metafiles=False))
     assert res.ai.error == "AI の回答が長すぎて途中で切れました"            # API の誤り（JSON の読み取りの誤りにしない）
     assert res.ai.partial == "" and res.plan.unplaced_floats == ["s1", "s2", "s3"]
+
+
+def test_cli_stops_without_api_key(monkeypatch, capsys):
+    """コマンドラインで --ai api を指定し API キーがなければ、トレースバックではなく引数の誤りとして止める（N5）。"""
+    import pytest
+
+    from jasme_jats.cli import main
+    for name in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(SystemExit) as e:
+        main([str(FULL), "--ai", "api"])
+    assert e.value.code == 2 and "ANTHROPIC_API_KEY" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        main([str(FULL), "--ai", "api", "--ai-provider", "openai", "--ai-model", "gpt-test"])
+    assert "OPENAI_API_KEY" in capsys.readouterr().err
+
+
+def test_call_api_reports_missing_key(monkeypatch):
+    """anthropic のライブラリは API キーがないと、送るときに TypeError を投げる。止まらずにエラーとして記録する（N5）。"""
+    import anthropic
+
+    def no_key(**kw):
+        raise TypeError('"Could not resolve authentication method. Expected one of api_key, auth_token, or credentials"')
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            self.beta = types.SimpleNamespace(messages=types.SimpleNamespace(stream=no_key))
+            self.messages = self.beta.messages
+    monkeypatch.setattr(anthropic, "Anthropic", FakeClient)
+    out = ai_assist.call_api("x", [], model="claude-test")
+    assert "API キーが見つかりません" in out.error and "ANTHROPIC_API_KEY" in out.error and not out.raw
+
+
+def test_call_api_other_type_error_is_not_api_key(monkeypatch):
+    """API キーがあるのに出た TypeError（古いライブラリが引数を受け付けないなど）は、「API キーが見つかりません」にしない。"""
+    import anthropic
+
+    def old_sdk(**kw):
+        raise TypeError("stream() got an unexpected keyword argument 'fallbacks'")
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            self.beta = types.SimpleNamespace(messages=types.SimpleNamespace(stream=old_sdk))
+            self.messages = self.beta.messages
+    monkeypatch.setattr(anthropic, "Anthropic", FakeClient)
+    out = ai_assist.call_api("x", [], model="claude-test", api_key="sk-test")
+    assert out.error == "AI の呼び出しに失敗しました: stream() got an unexpected keyword argument 'fallbacks'"
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    out = ai_assist.call_api("x", [], model="claude-test")       # API キーがどこにもなければ、API キーの知らせ
+    assert "API キーが見つかりません" in out.error

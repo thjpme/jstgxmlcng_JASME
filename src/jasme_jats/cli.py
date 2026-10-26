@@ -4,6 +4,11 @@
                        [--ai-provider claude|openai|gemini|sakana] [--ai-model モデル名] [--pdf 記事.pdf [--route docx|pdf]]
 
 書誌情報ファイル（TOML）の例は examples/meta_example.toml を参照。
+
+終了コード: 0 は要対応なし、1 は要対応あり（report.actions の「要対応」。一覧は標準エラーに出す。--meta がない・
+画像が足りない・手動モードで AI の回答をまだ指定していない、なども 1）、2 は変換を中止した（書誌情報の誤り、AI による補完が
+必要な原稿を --ai none で変換したとき、--images の画像を読めないとき。引数の誤り〈指定したファイル・フォルダがないなど〉も
+argparse が 2 で止める）。
 """
 from __future__ import annotations
 
@@ -15,8 +20,7 @@ from pathlib import Path
 from .ai_assist import API_KEY_NAMES, DEFAULT_MODEL
 from .config import ArticleMeta, JournalConfig
 from .pipeline import AIRequiredError, Options, add_images, convert
-from .report import (FIGURE_BODY_ACTION, LOST_IMAGES_ACTION, PROVISIONAL, figure_issue_labels, graphics_dir,
-                     images_to_prepare, lost_image_label, pdf_summary, provisional_exclusions, upload_issues)
+from .report import actions, images_to_prepare, pdf_summary, upload_issues
 
 
 def main(argv=None):
@@ -49,11 +53,20 @@ def main(argv=None):
     if a.ai == "api" and a.ai_provider != "claude" and not a.ai_model:
         ap.error(f"--ai-provider {a.ai_provider} では --ai-model でモデル名を指定してください"
                  "（Claude Opus と同等以上のモデルを推奨）")
+    for opt, path in (("変換する docx", a.docx), ("--meta", a.meta), ("--pdf", a.pdf), ("--ai-response", a.ai_response)):
+        # 通常のファイルでなくても読めるもの（/dev/stdin・プロセス置換の /dev/fd/NN など）は通す。フォルダは誤り
+        if path is not None and (not path.exists() or path.is_dir()):
+            ap.error(f"{opt} のファイルが見つかりません: {path}")
+    if a.images is not None and not a.images.is_dir():
+        ap.error(f"--images のフォルダが見つかりません: {a.images}")
     if a.route is None:
         a.route = "pdf" if a.pdf else "docx"
     if a.route == "pdf" and not a.pdf:
         ap.error("--route pdf（出版版 PDF に合わせてから作る）では、--pdf で記事の PDF を指定してください")
     api_key = next((os.environ[k] for k in API_KEY_NAMES[a.ai_provider] if os.environ.get(k)), None)
+    if a.ai == "api" and not api_key:
+        ap.error(f"--ai api では API キーが必要です。環境変数 {' または '.join(API_KEY_NAMES[a.ai_provider])} に API キーを"
+                 "設定してから実行してください（API キーがなければ --ai manual で依頼文を作れます）")
 
     journal = JournalConfig.load(a.config)
     try:
@@ -91,50 +104,23 @@ def main(argv=None):
         print(f"AI 判断一覧: {res.ai_report_path}")
     if res.prompt_path:
         print(f"AI 依頼文: {res.prompt_path}")
-    if res.ai.error:
-        print(f"AI: {res.ai.error}", file=sys.stderr)
-    if res.ai.partial:
-        print(f"要対応: AI の回答が途中で切れていました。{res.ai.partial}", file=sys.stderr)
     if a.images:
         try:
             added = add_images(res, user_images_in(a.images, images_to_prepare(res)))
         except ValueError as e:
             print(f"画像: {e}", file=sys.stderr)
-            return 1
+            return 2        # 画像を 1 枚も入れずに止める（ZIP とレポートは変換のときのまま）
         if added:
             print(f"画像を入れて ZIP とレポートを作り直した: {', '.join(added)}")
     if res.not_zipped:        # add_images の後の値（ZIP を作り直すと計算し直す）
         print(f"※ 記事フォルダにあるが ZIP に入れなかったファイル {len(res.not_zipped)} 件（前の変換の残りか、手で置いたもの。"
               "PDF は --pdf、画像は --images で指定し直すと入る。レポートの 10 章）: " + ", ".join(res.not_zipped))
-    need = images_to_prepare(res)
-    if need:
-        print(f"要対応: 画像ファイルを用意できなかった図 {len(need)} 件。画像を作り、同じ名前でフォルダに入れて --images で"
-              f"指定するか、ZIP の中の {graphics_dir(res)} に入れること（レポートの冒頭と 9 章）: " + ", ".join(f"{name}（{(cap[:20] + '…' if len(cap) > 20 else cap) or 'キャプションなし'}）" for name, cap, _ in need),
-              file=sys.stderr)
-    lost = res.lost_images
-    if lost:
-        print(f"要対応: XML に入らなかった画像 {len(lost)} 件（画像を出力できない引用文献・題目・著者名・所属の段落や、"
-              f"出力しなかった段落の中にある。レポートの冒頭と 9 章）。{LOST_IMAGES_ACTION}\n"
-              + "\n".join(f"  {lost_image_label(li)}: {li.reason}" for li in lost), file=sys.stderr)
-    # 図の本体（画像・表）が見つからない図（表の文字は XML に入っているので、終了コードは変えない）
-    labels = figure_issue_labels(res.plan)
-    if labels:
-        print(f"要対応: 図の本体（画像・表）が見つからない図 {len(labels)} 件（レポートの冒頭と 3 章）。{FIGURE_BODY_ACTION}\n"
-              + "\n".join(f"  {x}" for x in labels), file=sys.stderr)
-    # 文字だけのテキストボックスの段落・Word の文末脚注を XML に出力しなかったこと（暫定の知らせ。終了コードは変えない）
-    for kind, rows in provisional_exclusions(res):
-        what, detail, _ = PROVISIONAL[kind]
-        print(f"要確認: {what.format(n=len(rows))}を、XML に出力していません（レポートの冒頭と 6 章）。{detail}", file=sys.stderr)
-    # AI の回答を反映した後（API、または手動モードで回答あり）も位置を決められない図表が残っている
-    ai_applied = res.ai.mode == "api" or (res.ai.mode == "manual" and a.ai_response)
-    if ai_applied and res.plan.unplaced_floats:
-        # 図表ごとに、キャプションと、XML の中の位置・ID（レポートの冒頭と同じ。pipeline の forced_floats）
-        rows = res.forced_floats or [f"{fid}: {res.plan.float_place(fid)}" for fid in res.plan.unplaced_floats]
-        print(f"要対応: 位置を決められなかった図表 {len(res.plan.unplaced_floats)} 件を、仮の位置（アンカー段落の後ろ、または"
-              "本文の最後）に置きました。XML の中で手作業で正しい位置（Word で表示したときに、図の左上の直上にある本文の段落の後）"
-              "に移してください（レポートの冒頭と 3 章）。\n" + "\n".join(f"  {x}" for x in rows), file=sys.stderr)
-        return 1
-    return 0 if res.ok and not lost else 1
+    # 要対応・要確認（report.actions。レポートの冒頭・14 章、Colab の赤い枠と同じもの）。画像を入れた後に調べる
+    for act in actions(res):
+        if act.cli:
+            print(act.cli, file=sys.stderr)
+    # 終了コード: 0 は要対応なし、1 は要対応あり（要確認だけなら 0）、2 は変換を中止した
+    return 1 if res.needs_action else 0
 
 
 def user_images_in(folder: Path, need) -> dict:
