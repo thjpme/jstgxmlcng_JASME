@@ -4148,6 +4148,143 @@ def test_first_line_before_caption_above_with_near_copy_is_not_replaced(between,
     fixed_or_reported(plan, compare(plan, pages), src[TRIAL_TALK], TRIAL_TALK, TALK_REWRITTEN)
 
 
+EA_SENTENCE = "赤い玉の割合を調べた。"        # 文の終わりで終わる、どの段落にもない図の中の行（段落の最後の行らしい行）
+EA_BEYOND = {      # 名前: (docx の段落の並び〈TRIAL の後ろ〉, 段落の最後の行より後ろの PDF の行〈ページの区切りは None〉)
+    "short": ([("fig_cap", SHEET_CAP), ("image", "fig")], [SHEET_CAP, "説明。"]),
+    "english": ([("fig_cap", SHEET_CAP), ("image", "fig")], [SHEET_CAP, "See the table below."]),
+    "next-para": ([("fig_cap", SHEET_CAP), ("image", "fig")], [SHEET_CAP, *body_lines(TRIAL_TALK)]),
+    "page-top": ([("fig_cap", SHEET_CAP), ("image", "fig")], [SHEET_CAP, None, "架空の論文の柱の文字列です。"]),
+    "not-adjacent": ([("image", "fig0"), ("fig_cap", SHEET_CAP), ("image", "fig")], [SHEET_LINES[1], SHEET_CAP, EA_SENTENCE]),
+}
+
+
+@pytest.mark.parametrize("beyond", list(EA_BEYOND))
+def test_edited_last_line_before_caption_above_is_fixed_when_no_last_line_like_line_beyond(beyond, journal, tmp_path):
+    """本体の端の行を外す守り（_edge_alternative）が 13.2 に回す本当の直しを狭く保つ条件: 段落 TRIAL の最後の行の校正の直し（「取った」
+    →「設けた」）のすぐ後ろに図の上のキャプションがあっても、その向こうに段落の最後の行らしい行（どの段落にも当たらない、文の終わりで
+    終わる和文の行）がなければ、最後の行を本体から外さずに直す。向こうの行が MIN_CHARS 文字未満の行（short）、英文の行（english）、
+    次の段落の行（next-para。その後ろの図の中の文で終わる行までは見ない）、次のページの最初の端の行（柱の位置。page-top）のとき
+    と、最後の行のすぐ後ろがキャプションでない（図の中の行。not-adjacent）とき。向こうに文で終わる図の中の行がキャプションのすぐ
+    後ろにあるときは 13.2 に回る（DESIGN.md 4.4 の守りの代償 (c)。テストにはしない）。"""
+    blocks, after = EA_BEYOND[beyond]
+    plan, src = n10_article(tmp_path, journal, [("body", TRIAL), *blocks, ("body", TRIAL_TALK), ("image", "fig2"),
+                                                ("body", TRIAL_NEXT)])
+    rest = [*([] if beyond == "next-para" else body_lines(TRIAL_TALK)), *([EA_SENTENCE] if beyond == "next-para" else []),
+            *body_lines(TRIAL_NEXT), *N10_TAIL]
+    lines = [*SMALL_FRONT, *body_lines(TRIAL_EDIT), *after, *rest]
+    cut = lines.index(None) if None in lines else len(lines)
+    pages = n10_pages(lines[:cut], lines[cut + 1:]) if None in lines else n10_pages(lines)
+    pc = compare(plan, pages)
+    assert fixed_texts(plan, pc)[src[TRIAL]] == TRIAL_EDIT
+    assert changed_paragraphs(plan, pc, {src[TRIAL]: TRIAL_EDIT}) == {}
+
+
+# 消された最後の文（docx の 1 行目）の写しにごく近い、行の幅いっぱいの図の中の行と段落の本体の間に、飛ばす行でない図の中のふつうの
+# 行（どの段落にも当たらない 4 文字以上の行で、行の幅いっぱいでない）がある形（B2.1 の 5 回目の点検の指摘）。キャプションの隣で切る
+# 守り（_flow_breaks の 2）を、間の行が図の中の文字のときと、段落の終わりの行などで本文の行の流れが切れるときにも当てる。0.21.0 は
+# figure_edge_lines で 13 章に出していた。B2.1 の 4 回目の点検の後の版までは、間の行で流れを切っても、写しの行が行の幅いっぱいなので
+# _solid で本体に戻し、13 章にも出さずに図の中の文字で docx の文字を置き換えていた。
+DELETED_LONG = "その時間は短かったので，次の時間に全員で続けた。"          # 校正で消された最後の文（行の幅いっぱいの長さ）
+NEAR_LONG = {"c1": DELETED_LONG.replace("その", "この"), "rep1": DELETED_LONG.replace("続けた", "続ける"),
+             "near": DELETED_LONG.replace("全員で", "皆で")}             # その写しにごく近い、行の幅いっぱいの図の中の行
+FIG_LINE_GAPS = {"fig8": [SHEET_LINES[1]], "fig14": [SHEET_LINES[0]], "fig2l": SHEET_LINES, "fig8-short": [SHEET_LINES[1], "↓"]}
+
+
+@pytest.mark.parametrize("gap", list(FIG_LINE_GAPS))
+@pytest.mark.parametrize("copy", list(NEAR_LONG))
+def test_full_width_near_copy_after_figure_line_before_caption(copy, gap, journal, tmp_path):
+    """校正で消された段落の最後の文（行の幅いっぱいの長さ）の写しにごく近い、行の幅いっぱいの図の中の行のすぐ後ろが図の下の
+    キャプションで、段落の最後の行（行の幅いっぱいで「。」で終わる）とその行の間に、図の中のふつうの行がある。図の中の文字で docx の
+    文字を置き換えない（「そ」→「こ」など）: 間の行が図の中の文字で、着く側の行のすぐ隣がキャプションなら、その向こうの部分は行の
+    幅いっぱいの行があっても本体に入れない（図の中の文字とキャプションの間に本当の段落の行は出ない）。消すか、docx のまま 13 章に
+    出す。"""
+    docx = TRIAL_FULL + DELETED_LONG
+    plan, src = n10_article(tmp_path, journal, [("body", docx), ("image", "fig"), ("fig_cap", SHEET_CAP), ("body", TRIAL_TALK),
+                                                ("body", TRIAL_NEXT)])
+    pages = n10_pages([*SMALL_FRONT, *body_lines(TRIAL_FULL), *FIG_LINE_GAPS[gap], NEAR_LONG[copy], SHEET_CAP, *TRIAL_REST])
+    fixed_or_reported(plan, compare(plan, pages), src[docx], docx, TRIAL_FULL)
+
+
+@pytest.mark.parametrize("copy", list(NEAR_LONG))
+def test_full_width_near_copy_after_page_bottom_figure_line(copy, journal, tmp_path):
+    """上の形で、図の中のふつうの行と写しの行がページの最後の端にあり、キャプションが次のページの最初にある。ページの最後の端の行は
+    柱の位置でないので、図の中の文字かもしれない行に数える（_flow_breaks。ページの最初の端の行と同じく数えないと、写しの行が段落の
+    最後の行から本文の行の流れで続き、図の中の文字で docx の文字を置き換える）。消すか、docx のまま 13 章に出す。"""
+    docx = TRIAL_FULL + DELETED_LONG
+    plan, src = n10_article(tmp_path, journal, [("body", docx), ("image", "fig"), ("fig_cap", SHEET_CAP), ("body", TRIAL_TALK),
+                                                ("body", TRIAL_NEXT)])
+    pages = n10_pages([*SMALL_FRONT, *body_lines(TRIAL_FULL), SHEET_LINES[1], NEAR_LONG[copy]], [SHEET_CAP, *TRIAL_REST])
+    fixed_or_reported(plan, compare(plan, pages), src[docx], docx, TRIAL_FULL)
+
+
+WATER_BODY = ("雨の降る朝に，五年生の子どもたちは理科室の窓辺に置いた三つの容器の水の量を毎日はかり，その変わり方を折れ線の"
+              "グラフに表していった。担任は増え方に目を向けさせた。")       # 4 行（24・24・24・9）の段落。最後の行は段落の終わりの行
+WATER_DELETED = "最後に班ごとの記録を全員で見比べて話し合った。"          # 校正で消された最後の文（23 文字）
+WATER_NEAR = {"ins1": WATER_DELETED[:-1] + "か。", "c1mid": WATER_DELETED.replace("全員", "全体"),
+              "c1head": "最初" + WATER_DELETED[2:], "del1": WATER_DELETED.replace("見比べて", "比べて")}   # 写しにごく近い図の中の行
+WATER_CAP = "図１　架空の容器の水の量の記録"
+WATER_FIG_LINE = "グラフの横の軸は日付を表す"                            # 図の中のふつうの幅の行（どの段落にもない）
+
+
+@pytest.mark.parametrize("layout", ["caption", "caption-fig2", "date"])
+@pytest.mark.parametrize("copy", list(WATER_NEAR))
+def test_full_width_near_copy_after_short_last_line_and_figure_line_before_caption(copy, layout, journal, tmp_path):
+    """test_full_width_near_copy_after_figure_line_before_caption の形で、段落の最後の行が段落の終わりの行（短く「。」で終わる行。
+    そこで本文の行の流れが切れる）。段落の最後の文（23 文字）が校正で消され、PDF では段落の後ろに、図の中のふつうの幅の行、消された文の写しにごく近い行の幅いっぱいの図の中の行、図の下の
+    キャプションが続く（caption-fig2 はキャプションの後ろに別の画像だけの図、date は段落と図の間に受付日の行）。段落の終わりの行で
+    流れが切れるときも、間の行が図の中の文字で、着く側の行のすぐ隣がキャプションなら、その向こうの部分を本体に入れない。消すか、
+    docx のまま 13 章に出す。"""
+    docx = WATER_BODY + WATER_DELETED
+    blocks = [("body", LESSON), ("body", SURVEY), ("body", docx), ("image", "fig"), ("fig_cap", WATER_CAP),
+              *([("image", "fig2")] if layout == "caption-fig2" else []), ("body", TRIAL_TALK), ("body", TRIAL_NEXT)]
+    plan, src = n10_article(tmp_path, journal, blocks)
+    fig = [WATER_FIG_LINE, WATER_NEAR[copy], WATER_CAP, *(["導入", "まとめ"] if layout == "caption-fig2" else [])]
+    pages = n10_pages([*SMALL_FRONT, *body_lines(LESSON), *body_lines(SURVEY), *body_lines(WATER_BODY),
+                       *([R1] if layout == "date" else []), *fig, *TRIAL_REST])
+    fixed_or_reported(plan, compare(plan, pages), src[docx], docx, WATER_BODY)
+
+
+WATER_LINE1 = "雨の降る朝に，五年生の子どもたちは理科室の窓辺"           # 2 行の段落の 1 行目（字下げを含めて 24。いちばん長い行）
+WATER_LINE2 = "に置いた三つの容器の水の量を毎日はかり，そ。"             # 2 行目（22）
+WATER_DELETED2 = "そのあと班ごとに記録を見せ合って気づきを話。"           # 校正で消された最後の文（22 文字）
+WATER_FIG_TEXT = "容器ＡとＢとＣの水の量の比べ方を示す図の説明の文字"
+
+
+@pytest.mark.parametrize("wf", [21, 21.5])
+def test_near_copy_after_figure_line_of_two_line_paragraph_before_caption(wf, journal, tmp_path):
+    """字下げの 1 行目がいちばん長い 2 行の段落（24・22）の最後の文が校正で消され、PDF では段落の後ろに、図の中の行（幅 wf）、消された
+    文の写しにごく近い行（「か」を足す。幅 23）、図の下のキャプションが続く。段落の行の幅を字下げも数えて測る（24）と、図の中の行は
+    段落の行の幅いっぱいの行（飛ばす行）でなく、図の中のふつうの行になるが、どちらでもキャプションの隣で切り、写しの文字で docx の
+    文字を置き換えない（B2.1 の 4 回目の点検の直しの前の版は、図の中の行を幅いっぱいの行として飛ばして切り、13 章に出していた。
+    直しの後の版は「か」を足していた）。消すか、docx のまま 13 章に出す。"""
+    pub = WATER_LINE1 + WATER_LINE2
+    docx = pub + WATER_DELETED2
+    fig_line = WATER_FIG_TEXT[:int(wf)] + ("x" if wf % 1 else "")
+    plan, src = n10_article(tmp_path, journal, [("body", LESSON), ("body", SURVEY), ("body", docx), ("image", "fig"),
+                                                ("fig_cap", WATER_CAP), ("body", TRIAL_TALK), ("body", TRIAL_NEXT)])
+    pages = n10_pages([*SMALL_FRONT, *body_lines(LESSON), *body_lines(SURVEY), "　" + WATER_LINE1, WATER_LINE2, fig_line,
+                       WATER_DELETED2[:-1] + "か。", WATER_CAP, *TRIAL_REST])
+    fixed_or_reported(plan, compare(plan, pages), src[docx], docx, pub)
+
+
+HEAD_FIG_LINES = {"w8": ["予想と結果の表の例"], "w13": ["予想　結果　理由を書く欄の例"], **FIG_LINE_GAPS}   # 図の中のふつうの行
+
+
+@pytest.mark.parametrize("between", ["same", "date"])
+@pytest.mark.parametrize("gap", list(HEAD_FIG_LINES))
+def test_full_width_copy_after_caption_above_with_figure_line_is_not_used_as_first_line(gap, between, journal, tmp_path):
+    """test_full_width_copy_after_caption_above_is_not_used_as_first_line の書き出しの側の形で、docx の 1 行目の写しにごく近い図の中の
+    行と、書き換えられた本当の 1 行目の間に、短い行だけでなく図の中のふつうの行がある（その後ろに受付日の行があっても同じ）。間の行が
+    図の中の文字で、戻る側の行（写しの行）のすぐ隣がキャプションなら、写しの行を本体に入れず、「や」を消さない。直すか、docx のまま
+    13 章に出す。"""
+    plan, src = n10_article(tmp_path, journal, [("body", TRIAL), ("fig_cap", SHEET_CAP), ("image", "fig"), ("body", TRIAL_TALK),
+                                                ("body", TRIAL_NEXT)])
+    pages = n10_pages([*SMALL_FRONT, *body_lines(TRIAL), SHEET_CAP, TALK_LINE1_COPY, *HEAD_FIG_LINES[gap],
+                       *([R1] if between == "date" else []), "　" + TALK_NEW_LINE1, *body_lines(TRIAL_TALK)[1:],
+                       *body_lines(TRIAL_NEXT), *N10_TAIL])
+    fixed_or_reported(plan, compare(plan, pages), src[TRIAL_TALK], TRIAL_TALK, TALK_REWRITTEN)
+
+
 # 図も表もないふつうの段落で、1 行だけ約物の詰め（「，」「（」「）」などが半角ほどに詰められ、1 行に 24 文字より多く入る）で幅が
 # 大きく出る形（PDF の行をそのまま書く。3 行目は 28）。2 行目は「。」で終わる行の幅いっぱいの行
 WIDE_LINES = ["　授業の初めに，教師は前の時間に作った表を黒板に", "掲げ，水の深さの変化を全員で丁寧に振り返らせた。",
