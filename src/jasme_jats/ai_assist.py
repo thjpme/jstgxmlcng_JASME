@@ -25,7 +25,7 @@ from lxml import etree
 from .floats import describe, estimate_top_left
 from .model import OBJ, LinkSpec, Para
 from .omml import MML_NS, OmmlConverter, math_display_text
-from .structure import AFTER_BODY_REGIONS, ArticlePlan, _para_text
+from .structure import AFTER_BODY_REGIONS, ArticlePlan, _para_text, float_caption
 
 DEFAULT_MODEL = "claude-opus-5-5"
 
@@ -352,7 +352,13 @@ def float_section(plan: ArticlePlan, images: list) -> list:
         for info in fixed:
             fl = info.float
             caps = [q for q in info.paras if q.role in ("fig_caption", "table_caption")]
-            what = "「" + _para_text(caps[0])[:30] + "」" if caps else "（キャプションなし）"
+            in_cells = any(c.role in ("fig_caption", "table_caption") for t in info.tables for c in t.paragraphs())
+            if caps:
+                what = "「" + _para_text(caps[0])[:30] + "」"
+            elif in_cells:
+                what = float_caption(info)      # 表のセルの画像とキャプションで組んだ図（structure.Classifier.cell_figures）
+            else:
+                what = "（キャプションなし）"
             how = (f"段落 [{fl.anchor_src}] の前に配置済み" if info.mode == "mechanical" else "AI の指定で配置済み")
             lines.append(f"[{fl.fid}] {what}: {how}")
     return lines
@@ -764,7 +770,7 @@ def parse_response(text: str) -> dict:
     閉じの ``` のないコードブロックの後ろの説明など）は使わず、最初の { から最後の } までを読む（_before_trailing_text）。
     途中で切れた回答は読めない（ValueError）。最後まで書かれた図表の位置の指定だけは parse_cut_response で読める。
     """
-    t = _json_text(text)
+    t, _ = _json_text(text)
     if not t.startswith("{"):
         i, j = t.find("{"), t.rfind("}")
         if i < 0 or j <= i:
@@ -783,7 +789,7 @@ def parse_response(text: str) -> dict:
                         "AI に「文字列は半角の二重引用符で、```json のコードブロックで出し直してください」と頼み、"
                         "コードブロック右上のコピーボタンでコピーしてください。")
             elif cut_at_end(e, t):
-                hint = "回答が途中で切れている可能性があります。AI に続きを出力してもらうか、出し直してもらってください。"
+                hint = CUT_HINT
             raise ValueError(f"{e.lineno} 行目 {e.colno} 文字目で JSON として読めません（{e.msg}）。"
                              f"該当行: {line[:80]!r}。{hint}") from None
     if not isinstance(data, dict) or not isinstance(data.get("operations", []), list):
@@ -809,12 +815,27 @@ def _before_trailing_text(t: str, e: json.JSONDecodeError):
         return None
 
 
-def _json_text(text: str) -> str:
-    """回答から JSON の部分を取り出す。```json のコードブロックがあればその中身（閉じの ``` がなければ最後まで。回答が
-    途中で切れると閉じがない）。なければ回答全体。"""
+# 回答のコードブロック。始まりの ```（json）のすぐ後ろは {、閉じの ``` は行の頭にあるものだけ（JSON の文字列の中の ``` を
+# コードブロックの始まり・閉じとみなさない。文字列は改行を含められないので、中の ``` は行の頭に来ない）。閉じの ``` がなければ
+# 最後まで（回答が途中で切れると閉じがない）
+RE_FENCE = re.compile(r"```[ \t]*(?:json|JSON)?[ \t]*\n?(?=\s*\{)(.*?)(^[ \t]*```|\Z)", re.S | re.M)
+# 途中で切れた回答の案内（parse_response の読み取りの誤り）
+CUT_HINT = ("回答が途中で切れている可能性があります。チャットで「回答が途中で切れました。同じ形式で最初から出し直して"
+            "ください」と頼み、新しい回答を最初から最後まで貼り付けてください（続きだけを貼り付けても読めません）。")
+
+
+def _json_text(text: str) -> tuple:
+    """回答から JSON の部分を取り出す。戻り値: (JSON の部分, コードブロックが閉じの ``` で閉じているか)。
+
+    回答が { で始まるとき（コードブロックの中身だけをコピーした回答など）は、回答全体（文字列の中の ``` をコードブロックと
+    みなさない）。そうでなければ、```json から始まるコードブロック（RE_FENCE）の中身（閉じの ``` がなければ最後まで）。
+    コードブロックがなければ回答全体。
+    """
     t = text.strip()
-    m = re.search(r"```(?:json)?[ \t]*\n?(.*?)(?:```|\Z)", t, re.S)
-    return m.group(1).strip() if m else t
+    if t.startswith("{"):
+        return t, False
+    m = RE_FENCE.search(t)
+    return (m.group(1).strip(), bool(m.group(2))) if m else (t, False)
 
 
 # 値の書きかけ（数・true・false・null の途中）
@@ -826,25 +847,27 @@ def cut_at_end(e: json.JSONDecodeError, t: str) -> bool:
 
     文字列の途中で入力が終わった（Unterminated string。閉じの " が見つからないまま終わったときだけ出る）か、
     「Expecting …」の誤りで、その位置から後ろが空か、値の書きかけ（数・true・false・null の途中）だけのとき。
-    途中の書き損じ（飾りの引用符など）は、切れた回答ではない。
+    途中の書き損じ（飾りの引用符など）は、切れた回答ではない。最後まで書かれた回答で、最後の文字列の閉じだけが飾りの引用符
+    のときも「Unterminated string」になるので、その文字列（e.pos から後ろ）に飾りの引用符があれば、切れた形とみなさない。
     """
     if e.msg.startswith("Unterminated string"):
-        return True
+        return not any(q in t[e.pos:] for q in SMART_QUOTES)
     return e.msg.startswith("Expecting") and bool(RE_PARTIAL_LITERAL.match(t[e.pos:].strip()))
 
 
 def parse_cut_response(text: str):
     """途中で切れた回答から、最後まで書かれている図表の位置の指定（placements の要素）だけを読む。読めなければ None。
 
-    JSON の読み取りの誤りが、回答の最後で切れた形（cut_at_end）のときだけ読む（途中の書き損じは読まない）。最上位の
-    オブジェクトのキーと値を 1 組ずつ JSON として読み、placements の値は要素を 1 つずつ読む。途中で切れている要素と、
-    それより後ろは読まない（推測で補わない。閉じ括弧も補わない）。operations と notes は、最後まで書かれた要素があっても
-    使わない（リンクは件数が多く、途中までのリンクだけが付くと確かめにくい）。読めた要素も、ふつうの回答と同じく
-    float_placements で検証する。戻り値: {"placements": [...], "operations": [], "notes": []}
+    JSON の読み取りの誤りが、回答の最後で切れた形（cut_at_end）のときだけ読む（途中の書き損じは読まない。閉じの ``` まで
+    書かれたコードブロックの回答は、最後まで書かれているので読まない）。最上位のオブジェクトのキーと値を 1 組ずつ JSON として
+    読み、placements の値は要素を 1 つずつ読む。途中で切れている要素と、それより後ろは読まない（推測で補わない。閉じ括弧も
+    補わない）。operations と notes は、最後まで書かれた要素があっても使わない（リンクは件数が多く、途中までのリンクだけが
+    付くと確かめにくい）。読めた要素も、ふつうの回答と同じく float_placements で検証する。
+    戻り値: {"placements": [...], "operations": [], "notes": []}
     """
-    t = _json_text(text)
+    t, closed = _json_text(text)
     i = t.find("{")
-    if i < 0:
+    if i < 0 or closed:
         return None
     t = t[i:]
     try:
