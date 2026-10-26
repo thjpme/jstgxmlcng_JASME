@@ -25,7 +25,7 @@ from lxml import etree
 from .floats import describe, estimate_top_left
 from .model import OBJ, LinkSpec, Para
 from .omml import MML_NS, OmmlConverter, math_display_text
-from .structure import ArticlePlan, _para_text
+from .structure import AFTER_BODY_REGIONS, ArticlePlan, _para_text
 
 DEFAULT_MODEL = "claude-opus-5-5"
 
@@ -101,16 +101,19 @@ PLACEMENT_SCHEMA = {
     "required": ["float", "after", "items", "reason", "confidence"],
     "additionalProperties": False,
 }
+# placements を最初に書かせる（回答が長すぎて途中で切れても、図表の位置の指定が残るように。parse_cut_response）。
+# JSON スキーマはキーの順を決めないが、構造化出力はスキーマの順に書くことが多いので、properties と required もこの順にする
 RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
-        "operations": {"type": "array", "items": OP_SCHEMA},
         "placements": {"type": "array", "items": PLACEMENT_SCHEMA,
-                       "description": "位置を決められなかった図表（テキストボックス・グループ図形）の位置と組み合わせ"},
+                       "description": "位置を決められなかった図表（テキストボックス・グループ図形）の位置と組み合わせ。"
+                                      "回答の最初に書く"},
+        "operations": {"type": "array", "items": OP_SCHEMA},
         "notes": {"type": "array", "items": {"type": "string"},
                   "description": "操作にはできないが、人が確認すべきと考えたこと（日本語）"},
     },
-    "required": ["operations", "placements", "notes"],
+    "required": ["placements", "operations", "notes"],
     "additionalProperties": False,
 }
 
@@ -147,6 +150,9 @@ Python のプログラムがすでに機械的な変換を済ませています�
    - 「# 位置を機械的に決めた図表（変更不可）」に挙げた図形は、位置も組み合わせも確定しています。placements に書かないでください（書いても採用されません）。
    - テキストボックス・グループ図形の中の段落の役割は、set_role ではなく placements で指定してください。
 
+回答の JSON は、placements、operations、notes の順に書いてください（placements を最初に。回答が長すぎて途中で切れても、
+図表の位置の指定が残るようにするためです）。
+
 reason には、人が後で確認できるように、判断の根拠を日本語で具体的に書いてください（例: 「第3章第2段落の『その後の論考（2001）』は、直前の主語『国宗は』から国宗（2001）と判断」）。
 confidence は 高・中・低 のいずれか。自信がないものは提案しないか、「低」としてください。
 操作にできない気づき（文献リストに見当たらない文献の引用、図番号の欠番など）は notes に書いてください。
@@ -172,6 +178,8 @@ class AIOutcome:
     usage: dict = field(default_factory=dict)
     raw: str = ""
     model_note: str = ""              # 指定と違うモデルを使った場合の説明
+    cut: bool = False                 # API の回答が長すぎて途中で切れた（raw は切れたところまで）
+    partial: str = ""                 # 途中で切れた回答から、図表の位置の指定（placements）の一部だけを反映したときの説明（要対応）
 
 
 # ---------------------------------------------------------------------------- AI に渡す資料
@@ -456,14 +464,15 @@ def call_api(request_text, images, model=DEFAULT_MODEL, api_key=None, effort="hi
     if msg.stop_reason == "refusal":
         out.error = "AI が回答を断りました（安全上の判定）。手動モードで再試行してください"
         return out
-    if msg.stop_reason == "max_tokens":
-        out.error = "AI の回答が長すぎて途中で切れました"
-        return out
     text = next((b.text for b in msg.content if b.type == "text"), "")
     out.raw = text
     u = getattr(msg, "usage", None)
     if u is not None:
         out.usage = {"input_tokens": getattr(u, "input_tokens", None), "output_tokens": getattr(u, "output_tokens", None)}
+    if msg.stop_reason == "max_tokens":
+        # 切れたところまでの回答（raw）は残す。最後まで書かれた図表の位置の指定だけを読む（pipeline・parse_cut_response）
+        out.error = "AI の回答が長すぎて途中で切れました"
+        out.cut = True
     return out
 
 
@@ -554,6 +563,8 @@ def call_openai(request_text, images, out: AIOutcome, api_key=None) -> AIOutcome
         reason = getattr(getattr(resp, "incomplete_details", None), "reason", "")
         out.error = ("AI の回答が長すぎて途中で切れました" if reason == "max_output_tokens"
                      else f"AI の回答が途中で止まりました（{reason}）")
+        if reason == "max_output_tokens":
+            out.raw, out.cut = getattr(resp, "output_text", None) or "", True     # 切れたところまで（call_api と同じ）
         return out
     out.raw = resp.output_text or ""
     if not out.raw:
@@ -601,6 +612,7 @@ def call_sakana(request_text, images, out: AIOutcome, api_key=None) -> AIOutcome
         return out
     if getattr(choice, "finish_reason", "") == "length":
         out.error = "AI の回答が長すぎて途中で切れました"
+        out.raw, out.cut = getattr(msg, "content", None) or "", True             # 切れたところまで（call_api と同じ）
         return out
     out.raw = getattr(msg, "content", None) or ""
     if not out.raw:
@@ -656,6 +668,11 @@ def call_gemini(request_text, images, out: AIOutcome, api_key=None) -> AIOutcome
     reason = str(getattr(getattr(cand, "finish_reason", None), "value", getattr(cand, "finish_reason", "")) or "")
     if reason == "MAX_TOKENS":
         out.error = "AI の回答が長すぎて途中で切れました"
+        try:
+            out.raw = getattr(resp, "text", None) or ""                           # 切れたところまで（call_api と同じ）
+        except Exception:  # noqa: BLE001  文字以外の部分しかないときなど
+            out.raw = ""
+        out.cut = True
         return out
     if reason and reason not in ("STOP", "FINISH_REASON_UNSPECIFIED"):
         out.error = f"AI の回答が途中で止まりました（{reason}）。手動モードで再試行してください"
@@ -672,21 +689,29 @@ def call_gemini(request_text, images, out: AIOutcome, api_key=None) -> AIOutcome
 
 MANUAL_EXAMPLE = """```json
 {
+  "placements": [
+    {"float": "s1", "after": "d47", "items": [{"kind": "fig", "caption": ["d52", "d53"], "body": ["t3"]}],
+     "reason": "図の上端はアンカー段落 d48 の上端から約 1.8 行下で、推定では直上の本文は d47。図1 の初出（d46）より後", "confidence": "中"}
+  ],
   "operations": [
     {"op": "link_citation", "src": "d18", "text": "2001", "occurrence": 1, "target": "B2", "role": "", "image": "",
      "mathml": "", "surname": "", "given": "", "reason": "第1章第3段落の「その後の論考（2001）」は、主語「国宗は」から国宗（2001）と判断", "confidence": "高"},
     {"op": "set_role", "src": "d46", "text": "", "occurrence": 1, "target": "", "role": "sec1", "image": "",
      "mathml": "", "surname": "", "given": "", "reason": "「２．考察」は章番号の形式で、前後の章見出しと同じ書き方", "confidence": "中"}
   ],
-  "placements": [
-    {"float": "s1", "after": "d47", "items": [{"kind": "fig", "caption": ["d52", "d53"], "body": ["t3"]}],
-     "reason": "図の上端はアンカー段落 d48 の上端から約 1.8 行下で、推定では直上の本文は d47。図1 の初出（d46）より後", "confidence": "中"}
-  ],
   "notes": ["本文の「Lakatos（1977）」は文献リストでは 1976 年になっている"]
 }
 ```"""
 
-FIELD_GUIDE = """各項目の意味（すべての操作に 12 項目すべてを書き、使わない項目は空文字 "" にする。occurrence は数値）:
+FIELD_GUIDE = """回答は placements、operations、notes の順に書く（placements を最初に）。
+
+placements（位置を決められなかった図表ごとに 1 件。依頼文に「# 位置を決められなかった図表」がなければ []）の各項目:
+- float: 図形の ID（s1 など）
+- after: 図表を置く位置（Word で表示したときに図の左上の直上にある本文の文章を含む段落の ID。その段落の直後に置く）
+- items: 図・表ごとの組。kind（fig / table）、caption（キャプションの段落 ID の一覧）、body（表 ID・画像 ID・画像だけの段落 ID の一覧）
+- reason, confidence: 下の operations と同じ
+
+operations の各項目の意味（すべての操作に 12 項目すべてを書き、使わない項目は空文字 "" にする。occurrence は数値）:
 - op: 操作の種類（link_citation / link_figure / link_table / link_note / link_formula / set_role / formula_image / split_name）
 - src: 対象の段落 ID（d18 など。formula_image では ""）
 - text: リンクにする文字列（段落中のとおりに完全一致。引用文献なら年の部分だけ）
@@ -697,13 +722,7 @@ FIELD_GUIDE = """各項目の意味（すべての操作に 12 項目すべて�
 - mathml: formula_image で読み取った数式（<math xmlns="http://www.w3.org/1998/Math/MathML"> から </math> まで）
 - surname, given: split_name の姓と名
 - reason: 判断の根拠（日本語で具体的に）
-- confidence: 高 / 中 / 低
-
-placements（位置を決められなかった図表ごとに 1 件。依頼文に「# 位置を決められなかった図表」がなければ []）の各項目:
-- float: 図形の ID（s1 など）
-- after: 図表を置く位置（Word で表示したときに図の左上の直上にある本文の文章を含む段落の ID。その段落の直後に置く）
-- items: 図・表ごとの組。kind（fig / table）、caption（キャプションの段落 ID の一覧）、body（表 ID・画像 ID・画像だけの段落 ID の一覧）
-- reason, confidence: 上と同じ"""
+- confidence: 高 / 中 / 低"""
 
 
 def manual_prompt(request_text, images) -> str:
@@ -723,9 +742,11 @@ def manual_prompt(request_text, images) -> str:
             "- 回答は、```json で始まり ``` で終わるコードブロック 1 つだけにしてください。コードブロックの前後には何も書かないでください。\n"
             "- アーティファクトやファイルにはせず、この会話の中にコードブロックとして書いてください。\n"
             "- 文字列はすべて半角の二重引用符（\"）で囲んでください。飾りの引用符（“ ” ‘ ’）は使わないでください。\n"
-            "- 提案する操作がなければ \"operations\": [] とし、気づいたことだけを notes に書いてください。\n"
+            "- JSON は placements、operations、notes の順に書いてください（placements を最初に。回答が途中で切れても、"
+            "図表の位置の指定が残るようにするためです）。\n"
             "- 「# 位置を決められなかった図表」に挙げた図形は、すべて placements に書いてください（省略できません）。"
-            "なければ \"placements\": [] としてください。\n\n"
+            "なければ \"placements\": [] としてください。\n"
+            "- 提案する操作がなければ \"operations\": [] とし、気づいたことだけを notes に書いてください。\n\n"
             "回答の見本（形式の見本です。内容はこの論文とは関係ありません）:\n"
             f"{MANUAL_EXAMPLE}\n\n"
             f"{FIELD_GUIDE}\n\n"
@@ -739,13 +760,12 @@ SMART_QUOTES = "“”„‟‘’‚‛＂"
 def parse_response(text: str) -> dict:
     """AI の回答（JSON）を読む。```json のコードブロックがあればその中身を使う。
 
-    書式の崩れた回答を推測で直すことはしない。読めないときは、どこが・なぜ読めないかを示す。
+    書式の崩れた回答を推測で直すことはしない。読めないときは、どこが・なぜ読めないかを示す。JSON の前後の文字（前置きの説明や、
+    閉じの ``` のないコードブロックの後ろの説明など）は使わず、最初の { から最後の } までを読む（_before_trailing_text）。
+    途中で切れた回答は読めない（ValueError）。最後まで書かれた図表の位置の指定だけは parse_cut_response で読める。
     """
-    t = text.strip()
-    m = re.search(r"```(?:json)?[ \t]*\n?(.*?)```", t, re.S)
-    if m:
-        t = m.group(1).strip()
-    elif not t.startswith("{"):
+    t = _json_text(text)
+    if not t.startswith("{"):
         i, j = t.find("{"), t.rfind("}")
         if i < 0 or j <= i:
             raise ValueError("回答の中に JSON（{ で始まり } で終わる部分）が見つかりません。"
@@ -754,21 +774,123 @@ def parse_response(text: str) -> dict:
     try:
         data = json.loads(t)
     except json.JSONDecodeError as e:
-        line = t.splitlines()[e.lineno - 1] if 0 < e.lineno <= len(t.splitlines()) else ""
-        hint = ""
-        if any(q in line for q in SMART_QUOTES):
-            hint = ("回答の中で、文字列が半角の \" ではなく飾りの引用符（“ ” など）で囲まれています。"
-                    "AI に「文字列は半角の二重引用符で、```json のコードブロックで出し直してください」と頼み、"
-                    "コードブロック右上のコピーボタンでコピーしてください。")
-        elif e.msg.startswith("Expecting") and e.pos >= len(t) - 2:
-            hint = "回答が途中で切れている可能性があります。AI に続きを出力してもらうか、出し直してもらってください。"
-        raise ValueError(f"{e.lineno} 行目 {e.colno} 文字目で JSON として読めません（{e.msg}）。"
-                         f"該当行: {line[:80]!r}。{hint}") from None
+        data = _before_trailing_text(t, e)
+        if data is None:
+            line = t.splitlines()[e.lineno - 1] if 0 < e.lineno <= len(t.splitlines()) else ""
+            hint = ""
+            if any(q in line for q in SMART_QUOTES):
+                hint = ("回答の中で、文字列が半角の \" ではなく飾りの引用符（“ ” など）で囲まれています。"
+                        "AI に「文字列は半角の二重引用符で、```json のコードブロックで出し直してください」と頼み、"
+                        "コードブロック右上のコピーボタンでコピーしてください。")
+            elif cut_at_end(e, t):
+                hint = "回答が途中で切れている可能性があります。AI に続きを出力してもらうか、出し直してもらってください。"
+            raise ValueError(f"{e.lineno} 行目 {e.colno} 文字目で JSON として読めません（{e.msg}）。"
+                             f"該当行: {line[:80]!r}。{hint}") from None
     if not isinstance(data, dict) or not isinstance(data.get("operations", []), list):
         raise ValueError("JSON に operations の一覧がありません")
     if not isinstance(data.get("placements", []), list):
         raise ValueError("JSON の placements が一覧（[ ]）になっていません")
     return data
+
+
+def _before_trailing_text(t: str, e: json.JSONDecodeError):
+    """JSON の後ろに文字が続く回答（e が「Extra data」）を、最後の } までで読み直す。読めなければ None。
+
+    閉じの ``` のないコードブロックの後ろに説明が続く回答など。0.21.0 は、コードブロックの閉じがないと回答全体の最初の {
+    から最後の } までを読んでいたので、その読み方に合わせる（後ろの文字は使わない。前置きの文字を読み飛ばすのと同じ）。
+    後ろの文字に } があるとき（JSON が 2 つ続くときなど）は読めない。途中で切れた回答（parse_cut_response）には使わない。
+    """
+    j = t.rfind("}")
+    if e.msg != "Extra data" or not 0 < j < len(t) - 1:
+        return None
+    try:
+        return json.loads(t[:j + 1])
+    except json.JSONDecodeError:
+        return None
+
+
+def _json_text(text: str) -> str:
+    """回答から JSON の部分を取り出す。```json のコードブロックがあればその中身（閉じの ``` がなければ最後まで。回答が
+    途中で切れると閉じがない）。なければ回答全体。"""
+    t = text.strip()
+    m = re.search(r"```(?:json)?[ \t]*\n?(.*?)(?:```|\Z)", t, re.S)
+    return m.group(1).strip() if m else t
+
+
+# 値の書きかけ（数・true・false・null の途中）
+RE_PARTIAL_LITERAL = re.compile(r"^(?:-?[0-9.eE+-]*|t(?:r(?:ue?)?)?|f(?:a(?:l(?:se?)?)?)?|n(?:u(?:ll?)?)?)$")
+
+
+def cut_at_end(e: json.JSONDecodeError, t: str) -> bool:
+    """JSON の読み取りの誤り e が、回答が途中で切れたときの形か（それより前は JSON として正しい）。
+
+    文字列の途中で入力が終わった（Unterminated string。閉じの " が見つからないまま終わったときだけ出る）か、
+    「Expecting …」の誤りで、その位置から後ろが空か、値の書きかけ（数・true・false・null の途中）だけのとき。
+    途中の書き損じ（飾りの引用符など）は、切れた回答ではない。
+    """
+    if e.msg.startswith("Unterminated string"):
+        return True
+    return e.msg.startswith("Expecting") and bool(RE_PARTIAL_LITERAL.match(t[e.pos:].strip()))
+
+
+def parse_cut_response(text: str):
+    """途中で切れた回答から、最後まで書かれている図表の位置の指定（placements の要素）だけを読む。読めなければ None。
+
+    JSON の読み取りの誤りが、回答の最後で切れた形（cut_at_end）のときだけ読む（途中の書き損じは読まない）。最上位の
+    オブジェクトのキーと値を 1 組ずつ JSON として読み、placements の値は要素を 1 つずつ読む。途中で切れている要素と、
+    それより後ろは読まない（推測で補わない。閉じ括弧も補わない）。operations と notes は、最後まで書かれた要素があっても
+    使わない（リンクは件数が多く、途中までのリンクだけが付くと確かめにくい）。読めた要素も、ふつうの回答と同じく
+    float_placements で検証する。戻り値: {"placements": [...], "operations": [], "notes": []}
+    """
+    t = _json_text(text)
+    i = t.find("{")
+    if i < 0:
+        return None
+    t = t[i:]
+    try:
+        json.loads(t)
+        return None                    # 切れていない（読める回答は parse_response で読む）
+    except json.JSONDecodeError as e:
+        if not cut_at_end(e, t):
+            return None
+    dec, n = json.JSONDecoder(), len(t)
+
+    def ws(k):
+        while k < n and t[k] in " \t\r\n":
+            k += 1
+        return k
+
+    found, k = [], ws(1)
+    try:
+        while k < n and t[k] != "}":
+            if t[k] == ",":
+                k = ws(k + 1)
+            if k >= n or t[k] != '"':
+                break
+            key, k = dec.raw_decode(t, k)
+            k = ws(k)
+            if k >= n or t[k] != ":":
+                break
+            k = ws(k + 1)
+            if key != "placements":
+                _, k = dec.raw_decode(t, k)       # 値の途中で切れていれば、ここで読めずに終わる
+                k = ws(k)
+                continue
+            if k >= n or t[k] != "[":
+                break
+            found, k = [], ws(k + 1)
+            while k < n and t[k] != "]":
+                if t[k] == ",":
+                    k = ws(k + 1)
+                el, k = dec.raw_decode(t, k)      # 最後まで書かれた要素だけ（途中で切れた要素は読めずに終わる）
+                found.append(el)
+                k = ws(k)
+            k = ws(k + 1)
+    except json.JSONDecodeError:
+        pass
+    if not found:
+        return None
+    return {"placements": found, "operations": [], "notes": []}
 
 
 # ---------------------------------------------------------------------------- 検証と適用
@@ -827,17 +949,32 @@ def float_placements(data, plan: ArticlePlan, outcome: AIOutcome) -> dict:
     """placements（図表の位置と組み合わせ）を検証し、図形の ID → 指定 の表にする（構造の組み立てをやり直すため）。
 
     採用するのは、位置を決められなかった図形について、中身をすべて正しく指定したものだけ。機械的に配置した図形は変更させない。
+    本文の外（注・引用文献など。structure.AFTER_BODY_REGIONS）の段落の後ろを指定したものは、本文の外には図表を置けないので
+    今までどおり採用しないが、その図形には「本文の最後に仮に置く」印（{"where": "end"}）を付ける（決定事項 21。
+    structure.Classifier.place_floats）。印を付けた後に、同じ図形の正しい指定があれば、そちらを採用する。
     """
-    out = {}
+    out, ends = {}, {}
     body = set(plan.body_seq)
     for pl in data.get("placements", []) or []:
         op = placement_op(pl)
         why = _placement_problem(pl, plan, body, out)
         if why:
+            fid = pl.get("float") if isinstance(pl, dict) else None
+            after = pl.get("after") if isinstance(pl, dict) else None
+            info = plan.floats.get(fid) if isinstance(fid, str) else None
+            if (info is not None and info.mode == "unplaced" and fid not in out and fid not in ends
+                    and isinstance(after, str) and after not in body and plan.region.get(after) in AFTER_BODY_REGIONS):
+                ends[fid] = ({"where": "end", "after": after, "op": op}, len(outcome.rejected))
             outcome.rejected.append((op, why))
             continue
         out[pl["float"]] = {"after": pl["after"], "items": pl["items"], "reason": op["reason"],
                             "confidence": op["confidence"] if op["confidence"] in ("高", "中", "低") else "低", "op": op}
+    for fid, (spec, k) in ends.items():
+        if fid in out:
+            continue                    # 同じ図形の、後ろの正しい指定を採用した
+        out[fid] = spec
+        op, why = outcome.rejected[k]
+        outcome.rejected[k] = (op, why + "。図表は本文の最後に仮に置いた（手作業で正しい位置に移すこと）")
     return out
 
 

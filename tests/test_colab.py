@@ -74,10 +74,39 @@ def test_pdf_diff_box_shows_formula_and_insert_marks():
     assert "docx の側の「［］」は、docx に文字がなく PDF にだけ文字がある位置です" in html
 
 
-def test_ai_required_and_unplaced_boxes():
+def test_ai_required_and_unplaced_boxes(journal):
+    """位置を決められなかった図表の枠は、図表ごとに仮に置いた位置（アンカー段落の後ろ・本文の最後）を示す。"""
     from types import SimpleNamespace
+
+    from conftest import FLOAT, PLACE
+
     from jasme_jats.colab import ai_required_box, unplaced_box
+    from jasme_jats.pipeline import _mechanical
     assert "変換を中止しました" in ai_required_box("s1: …") and "#dc2626" in ai_required_box("x")
     assert unplaced_box(SimpleNamespace(unplaced_floats=[])) == ""
-    html = unplaced_box(SimpleNamespace(unplaced_floats=["s1", "s3"]))
-    assert "s1, s3" in html and "本文の冒頭" in html and "手作業" in html
+    _, plan, _ = _mechanical(FLOAT, journal)
+    html = unplaced_box(plan)
+    assert "#dc2626" in html and "仮の位置に置いています" in html and "手作業" in html and "本文の冒頭" not in html
+    assert "・s1（「図1\u3000表で組んだ問題」）: 段落「この段落に図1のテキストボックスが結び付」の後ろ\n" in html
+    assert "・s3（「図2\u3000グループ図形の図」）: 段落「図2は教科書の見開きページであり，グルー」の後ろ\n" in html
+    # AI が注の段落の後ろを指定した図表は、本文の最後（理由を添える）
+    _, first, _ = _mechanical(PLACE, journal)
+    note = next(src for src, p in first.paras.items() if p.plain().startswith("1) 架空の注"))
+    _, plan, _ = _mechanical(PLACE, journal, placements={"s1": {"where": "end", "after": note}})
+    html = unplaced_box(plan)
+    assert "・s1（「図1\u3000一つ目の図」）: 本文の最後（AI が注などの本文の外の段落の後ろを指定したため）\n" in html
+    assert "・s2（「図3\u3000三つ目の図」）: 段落「この段落に図3と図2のテキストボックスが」の後ろ\n" in html
+
+
+def test_figure_body_box(journal, meta, tmp_path):
+    """図の本体（画像・表）が見つからない図（近くの表を図の本体にできなかったもの）の赤い枠。"""
+    from conftest import FULL, TABLEFIG
+
+    from jasme_jats.colab import figure_body_box
+    from jasme_jats.pipeline import Options, convert
+    html = figure_body_box(convert(TABLEFIG, meta, journal, Options(out_dir=tmp_path / "t", convert_metafiles=False)))
+    assert "#dc2626" in html and "図の本体（画像・表）が見つからない図が 2 件あります（要対応）" in html
+    assert "・「図2\u3000間に段落がある問題」（図キャプションの前にキャプションのない表があるが、間にほかの段落がある）" in html
+    assert "・「図3\u3000表の直後の図キャプション」（直前の表に表キャプション「表1\u3000表キャプションの付いた表」が付いている）" in html
+    assert "表を図キャプションのすぐ上" in html and "変換し直してください" in html
+    assert figure_body_box(convert(FULL, meta, journal, Options(out_dir=tmp_path / "f", convert_metafiles=False))) == ""

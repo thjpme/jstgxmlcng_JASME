@@ -15,8 +15,8 @@ from pathlib import Path
 from .ai_assist import API_KEY_NAMES, DEFAULT_MODEL
 from .config import ArticleMeta, JournalConfig
 from .pipeline import AIRequiredError, Options, add_images, convert
-from .report import (LOST_IMAGES_ACTION, PROVISIONAL, graphics_dir, images_to_prepare, lost_image_label, pdf_summary,
-                     provisional_exclusions)
+from .report import (FIGURE_BODY_ACTION, LOST_IMAGES_ACTION, PROVISIONAL, figure_issue_labels, graphics_dir,
+                     images_to_prepare, lost_image_label, pdf_summary, provisional_exclusions)
 
 
 def main(argv=None):
@@ -85,6 +85,8 @@ def main(argv=None):
         print(f"AI 依頼文: {res.prompt_path}")
     if res.ai.error:
         print(f"AI: {res.ai.error}", file=sys.stderr)
+    if res.ai.partial:
+        print(f"要対応: AI の回答が途中で切れていました。{res.ai.partial}", file=sys.stderr)
     if a.images:
         try:
             added = add_images(res, user_images_in(a.images, images_to_prepare(res)))
@@ -103,6 +105,11 @@ def main(argv=None):
         print(f"要対応: XML に入らなかった画像 {len(lost)} 件（画像を出力できない引用文献・題目・著者名・所属の段落や、"
               f"出力しなかった段落の中にある。レポートの冒頭と 9 章）。{LOST_IMAGES_ACTION}\n"
               + "\n".join(f"  {lost_image_label(li)}: {li.reason}" for li in lost), file=sys.stderr)
+    # 図の本体（画像・表）が見つからない図（表の文字は XML に入っているので、終了コードは変えない）
+    labels = figure_issue_labels(res.plan)
+    if labels:
+        print(f"要対応: 図の本体（画像・表）が見つからない図 {len(labels)} 件（レポートの冒頭と 3 章）。{FIGURE_BODY_ACTION}\n"
+              + "\n".join(f"  {x}" for x in labels), file=sys.stderr)
     # 文字だけのテキストボックスの段落・Word の文末脚注を XML に出力しなかったこと（暫定の知らせ。終了コードは変えない）
     for kind, rows in provisional_exclusions(res):
         what, detail, _ = PROVISIONAL[kind]
@@ -110,8 +117,9 @@ def main(argv=None):
     # AI の回答を反映した後（API、または手動モードで回答あり）も位置を決められない図表が残っている
     ai_applied = res.ai.mode == "api" or (res.ai.mode == "manual" and a.ai_response)
     if ai_applied and res.plan.unplaced_floats:
-        print("位置を決められなかった図表を本文の冒頭に仮に置きました。XML の中で手作業で正しい位置に移してください（レポート 3 章）: "
-              + ", ".join(res.plan.unplaced_floats), file=sys.stderr)
+        print("位置を決められなかった図表を、仮の位置（アンカー段落の後ろ、または本文の最後）に置きました。XML の中で手作業で"
+              "正しい位置に移してください（レポート 3 章）: "
+              + "、".join(f"{fid}（{res.plan.float_place(fid)}）" for fid in res.plan.unplaced_floats), file=sys.stderr)
         return 1
     return 0 if res.ok and not lost else 1
 

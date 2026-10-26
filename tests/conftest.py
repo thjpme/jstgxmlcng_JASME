@@ -16,7 +16,10 @@ PDFCHECK_PDF = FIXTURES / "sample_pdfcheck.pdf"   # 出版社が組版で直し�
 READER = FIXTURES / "sample_reader.docx"   # 読み取りの境界ケース（sample_edge に入れていないもの）
 FLOAT_TEXT = FIXTURES / "sample_float_text.docx"   # 図形の中で画像と文字が同じ段落にある（ALL_DOCS には入れない）
 STRUCTURE = FIXTURES / "sample_structure.docx"   # 論文の構造（領域の分け方など）の境界ケース
-ALL_DOCS = [FULL, EDGE, TEMPLATE, NOTES, PDFCHECK, READER, STRUCTURE]
+CELLS = FIXTURES / "sample_b3_cells.docx"   # 表のセルに画像とキャプションが並ぶ図形（AI なしで図に組める）
+TABLEFIG = FIXTURES / "sample_b3_tablefig.docx"   # 画像のない図キャプションと、隣のキャプションのない表
+PLACE = FIXTURES / "sample_b3_place.docx"   # 位置を決められない図表の仮の置き場所（AI 補完が必要。ALL_DOCS には入れない）
+ALL_DOCS = [FULL, EDGE, TEMPLATE, NOTES, PDFCHECK, READER, STRUCTURE, CELLS, TABLEFIG]
 
 
 @pytest.fixture(scope="session")

@@ -35,7 +35,8 @@ def table(headers, rows) -> str:
 
 CAT_JA = {"style": "段落の役割（スタイル）", "citation": "引用文献へのリンク", "xref": "図表・注・数式へのリンク",
           "formula": "数式", "name": "著者名", "figure": "図", "table": "表", "url": "URL", "note": "注"}
-UNRES_JA = {"bibr": "引用文献", "fig": "図の参照", "table": "表の参照", "fn": "注の参照", "float": "図表の位置"}
+UNRES_JA = {"bibr": "引用文献", "fig": "図の参照", "table": "表の参照", "fn": "注の参照", "float": "図表の位置",
+            "figbody": "図の本体"}
 
 
 def style_unknown_rows(plan):
@@ -72,6 +73,31 @@ def float_notes(plan):
             nc.append(f"{t.tid or '-'}（最初のセル「{esc(first[:15])}」）")
     if nc:
         out.append("キャプションのない表（表番号がないため本文からリンクできない。表として出力した）: " + "、".join(nc))
+    return out
+
+
+def float_places(plan) -> str:
+    """位置を決められなかった図表を仮に置いた位置の要約（1 章）。例: アンカー段落の後ろ / アンカー段落の後ろ 2 件・本文の最後 1 件。"""
+    n = {"anchor": 0, "end": 0}
+    for fid in plan.unplaced_floats:
+        n["end" if plan.floats[fid].where == "end" else "anchor"] += 1
+    if n["anchor"] and n["end"]:
+        return f"アンカー段落の後ろ {n['anchor']} 件・本文の最後 {n['end']} 件"
+    return "本文の最後" if n["end"] else "アンカー段落の後ろ"
+
+
+# 図の本体（画像・表）が見つからない図（structure.Classifier.table_for_figure）の対処。レポートの冒頭、Colab の枠で使う
+FIGURE_BODY_ACTION = ("XML では、キャプションだけの図になっています。docx でこの図の本体（画像・表）を確かめ、近くの表が図の本体なら、"
+                      "表を図キャプションのすぐ上（図キャプションを図の上に置く原稿では、すぐ下）に、間にほかの段落を挟まずに"
+                      "置いてから、変換し直してください。")
+
+
+def figure_issue_labels(plan) -> list:
+    """図の本体が見つからない図の一覧（例: 「図2　間に段落がある問題」（理由））。レポートの冒頭、Colab の枠、CLI で使う。"""
+    out = []
+    for src, why in plan.figure_issues:
+        p = plan.paras.get(src)
+        out.append(f"「{esc(p.plain().strip(), 20) if p is not None else src}」（{esc(why)}）")
     return out
 
 
@@ -436,17 +462,25 @@ def render(r) -> str:
         ("出版版 PDF との照合", pdf_summary(r)),
     ]
     if plan.unplaced_floats:
-        rows.insert(7, ("位置を決められなかった図表（3 章）", f"{len(plan.unplaced_floats)} 件（本文の冒頭に仮に配置）"))
+        rows.insert(7, ("位置を決められなかった図表（3 章）", f"{len(plan.unplaced_floats)} 件（{float_places(plan)}に仮に配置）"))
     L.append(table(["項目", "結果"], rows))
     L.append("")
     if not fid.ok or fid.final_ok is False:
         L.append("> **注意: 文字の不変性チェックが不合格です。** 出力された XML の本文が docx と一致していません。"
                  "下の 5 章の差分を確認し、この XML は登載に使わないでください（変換ツールの不具合の可能性があります）。")
         L.append("")
+    if ai.partial:
+        L.append(f"> **要対応: AI の回答が途中で切れていました（2 章）。** {esc(ai.partial)}")
+        L.append("")
     if r.forced_floats:
         L.append(f"> **要対応: 位置を決められなかった図表が {len(r.forced_floats)} 件あります（AI による補完でも決まりませんでした）。** "
-                 "本文の冒頭に仮に置いています。登載の前に、XML の中でこれらの図表を手作業で正しい位置（Word で表示したときに、図の左上の"
-                 "直上にある本文の段落の後）に移してください（3 章）: " + "、".join(esc(x) for x in r.forced_floats))
+                 "図が結び付いている段落（アンカー段落）のすぐ後ろか、本文の最後に仮に置いています。登載の前に、XML の中でこれらの"
+                 "図表を手作業で正しい位置（Word で表示したときに、図の左上の直上にある本文の段落の後）に移してください（3 章）: "
+                 + "、".join(esc(x) for x in r.forced_floats))
+        L.append("")
+    if plan.figure_issues:
+        L.append(f"> **要対応: 図の本体（画像・表）が見つからない図が {len(plan.figure_issues)} 件あります（3 章）。** "
+                 f"{FIGURE_BODY_ACTION}対象の図: " + "、".join(figure_issue_labels(plan)))
         L.append("")
     need = images_to_prepare(r)
     if need:
@@ -499,6 +533,9 @@ def render(r) -> str:
                  "AI が変更できるのはリンク・段落の役割・姓名の区切り・数式画像への MathML の併記と、テキストボックス・"
                  "グループ図形に入った図表の位置と組み合わせだけで、本文の文字は変更していません。")
         L.append("")
+        if ai.partial:
+            L.append(f"**AI の回答が途中で切れていました。** {esc(ai.partial)}")
+            L.append("")
         if ai_acc:
             order = {"低": 0, "中": 1, "高": 2}
             rows = []
@@ -764,8 +801,14 @@ def render(r) -> str:
         L.append(f"- [ ] 13 章の最後の「照合に使わなかった PDF の文字」（{len(ignored_lines(r))} 件）に、docx にない本文"
                  "（校正で足された一文など）が混じっていないか確かめる（表・図の中の文字や、docx のほかの段落にすでにある文字なら"
                  "対応は要らない。本文が足りなければ docx を手で直して変換し直す）")
+    if ai.partial:
+        L.append("- [ ] **AI の回答が途中で切れていた**（2 章）: AI に出し直してもらい、もう一度変換する")
     if r.forced_floats:
-        L.append("- [ ] 本文の冒頭に仮に置いた図表（3 章の「図表の位置」）を、XML の中で手作業で正しい位置に移す")
+        L.append("- [ ] 仮の位置（アンカー段落の後ろ・本文の最後）に置いた図表（3 章の「図表の位置」）を、XML の中で手作業で"
+                 "正しい位置に移す")
+    if plan.figure_issues:
+        L.append(f"- [ ] 図の本体が見つからない図 {len(plan.figure_issues)} 件（3 章の「図の本体」）を docx で確かめ、表が図の本体なら "
+                 "docx を直して変換し直す")
     if need:
         L.append(f"- [ ] **画像ファイルを用意できなかった図 {len(need)} 件**の画像を作り、ZIP の中の `{graphics_dir(r)}` に入れる: "
                  + "、".join(f"`{name}`（{esc(cap, 20) or 'キャプションなし'}）" for name, cap, _ in need))
@@ -947,6 +990,8 @@ def render_ai_only(r) -> str:
          "数式画像への MathML の併記、テキストボックス・グループ図形に入った図表の位置と組み合わせのみ）。"
          "確度の低いものから順に並べています。PDF と照らして確認してください。", ""]
     acc = [d for _, d in ai.accepted]
+    if ai.partial:
+        L += [f"**AI の回答が途中で切れていました。** {esc(ai.partial)}", ""]
     if ai.error:
         L.append(f"AI による補完は行えませんでした: {ai.error}")
     elif not acc and not ai.rejected:
