@@ -8,8 +8,8 @@
 N1（tests/test_lost_images.py）、N2（tests/test_structure.py）、N3（tests/test_pipeline.py の
 test_blank_paragraphs_in_textbox_and_endnote_are_excluded）。単位 B（0.20.0。U7・N9）に当たるテストは、このファイルには
 もともとない（U7・N9 のテストは tests/test_pdfmatch.py に足した）。単位 B2（0.21.0。N10〜N14）も同じで、
-再現と直した後の振る舞いのテスト（架空の文字）は、直すときに tests/test_pdfmatch.py に足した。単位 B3（N15〜N19）のテストは、
-直すときに足す。
+再現と直した後の振る舞いのテスト（架空の文字）は、直すときに tests/test_pdfmatch.py に足した。単位 B3（0.22.0。N15〜N19）も同じで、
+再現と直した後の振る舞いのテスト（架空の文字）は、直すときに tests/test_floats.py・tests/test_ai.py・tests/test_figure_body.py に足した。
 
 実行のしかた（tests/conftest.py のフィクスチャ journal・meta を使うため、tests/ に一時的に写して実行し、終わったら消す）:
 

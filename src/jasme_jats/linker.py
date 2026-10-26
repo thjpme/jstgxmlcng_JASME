@@ -100,7 +100,13 @@ def find_in_para(p: Para, text: str, occurrence: int = 1):
 
 # ---------------------------------------------------------------------------- 本文の段落を列挙
 def body_paragraphs(plan: ArticlePlan):
-    """リンク付けの対象となる段落を (para, 文脈) で列挙する。文脈: body / caption / cell / abstract / back / ref"""
+    """リンク付けの対象となる段落を (para, 文脈) で列挙する。文脈: body / caption / cell / abstract / back / ref
+
+    docx の表のセルの段落を表の外に出したもの（表のセルの画像とキャプションで組んだ図のキャプションと、画像と同じ段落の文字。
+    plan.cell_paras）は、今までどおり cell とする（出版版 PDF との照合で、表のセルとして照合しない・直さない。pdfmatch）。
+    """
+    cells = plan.cell_paras
+
     def walk(nodes, where="body"):
         for node in nodes:
             if isinstance(node, Sec):
@@ -108,16 +114,16 @@ def body_paragraphs(plan: ArticlePlan):
                     yield node.heading, "title"
                 yield from walk(node.children, where)
             elif isinstance(node, PNode):
-                yield node.para, where
+                yield node.para, "cell" if node.para.src in cells else where
             elif isinstance(node, (QuoteNode,)):
                 for p in node.paras:
-                    yield p, where
+                    yield p, "cell" if p.src in cells else where
             elif isinstance(node, ListNode):
                 for p in node.items:
-                    yield p, where
+                    yield p, "cell" if p.src in cells else where
             elif isinstance(node, FigNode):
                 if node.caption is not None:
-                    yield node.caption, "caption"
+                    yield node.caption, "cell" if node.caption.src in cells else "caption"
                 for t in node.tables:
                     for p in t.paragraphs():
                         yield p, "cell"
