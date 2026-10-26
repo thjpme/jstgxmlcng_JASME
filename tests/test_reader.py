@@ -1,7 +1,7 @@
 """docx の読み取り: 中間表現の文字列が、独立に取り出した docx の文字列と一致すること。"""
 import pytest
 
-from conftest import ALL_DOCS, EDGE, FLOAT, FLOAT_TEXT, FULL, READER
+from conftest import ALL_DOCS, EDGE, FLOAT, FLOAT_TEXT, FULL, PLACE, READER
 from jasme_jats.docx_reader import read_docx
 from jasme_jats.fidelity import source_texts
 from jasme_jats.model import Para, Table
@@ -26,7 +26,7 @@ def read_paragraphs(doc):
             yield from paras
 
 
-@pytest.mark.parametrize("path", ALL_DOCS + [FLOAT, FLOAT_TEXT], ids=lambda p: p.name)
+@pytest.mark.parametrize("path", ALL_DOCS + [FLOAT, FLOAT_TEXT, PLACE], ids=lambda p: p.name)
 def test_reader_matches_canonical(path):
     doc = read_docx(path)
     # 検証側（不変性チェック）と同じく、本文・脚注・文末脚注のすべての w:p を数える

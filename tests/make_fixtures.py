@@ -18,6 +18,10 @@ tests/fixtures/sample_float_text.docx : テキストボックスの中で、画�
                                    キャプションのない図形）。位置は機械的に決まる
 tests/fixtures/sample_structure.docx : 論文の構造（領域の分け方など）の境界ケース（本文中のテキストボックスにある
                                    「英文要旨」スタイルの段落や「注」だけの段落）
+tests/fixtures/sample_b3_cells.docx : 表のセルに画像とキャプションが並ぶ図形（AI なしで図に組める形）。位置は機械的に決まる
+tests/fixtures/sample_b3_tablefig.docx : 画像のない図キャプションと、その隣のキャプションのない表（表で組んだ図）
+tests/fixtures/sample_b3_place.docx : 位置を決められない図表の仮の置き場所（同じ段落に結び付いた 2 つの図形、空の段落に
+                                   結び付いた図形、引用文献の後ろの注）。AI 補完が必要（ALL_DOCS には入れない）
 
 make_article() は小さな論文を作る。テストの中で、境界ケースの docx をその場で作るのにも使う。
 
@@ -90,6 +94,13 @@ def para(style, *parts, jc=None):
     ppr = f"<w:pPr>{ppr}</w:pPr>" if ppr else ""
     body = "".join(p if p.startswith("<") else run(p) for p in parts if p)
     return f"<w:p>{ppr}{body}</w:p>"
+
+
+def list_item(style, *parts, num_id=6):
+    """自動番号の段落（箇条書きの項目）。テンプレートの numbering.xml の numId=6 は「•」の箇条書き、numId=7 は「1.」の番号。"""
+    ppr = (f'<w:pStyle w:val="{style}"/>' if style else "") + f'<w:numPr><w:ilvl w:val="0"/><w:numId w:val="{num_id}"/></w:numPr>'
+    body = "".join(p if p.startswith("<") else run(p) for p in parts if p)
+    return f"<w:p><w:pPr>{ppr}</w:pPr>{body}</w:p>"
 
 
 def mr(text, sty=None):
@@ -853,6 +864,191 @@ def make_structure(path, sections=None):
     b.save(path, body)
 
 
+# ----------------------------------------------------------------------------- sample_b3_*（位置を決められない図表・表で組んだ図）
+B3_CM = 360000
+
+
+def b3_cells_parts(b: Builder, variant=""):
+    """表のセルに画像とキャプションが並ぶ図形。どれも図の左上がアンカー段落の左上にある（位置は機械的に決まる）。
+
+    s1: 1 行 2 列。セルごとに画像とキャプション（図1・図2）。s2: 2 行 1 列。1 行目に画像 2 つ、2 行目にキャプション 1 つ（図3）。
+    s3: 2 行 2 列。1 行目に画像、2 行目にキャプション（図4・図5。同じ列の画像とキャプションが組になる）。
+    variant（テストの中で作る。「+」でつなぐと組み合わせる）: "text"（s1 の右のセルにキャプションでない文字「（a）」）、
+    "tabcap"（s1 の右のセルのキャプションを表キャプションに）、"cross"（s3 の画像とキャプションを互い違いに置く: 組を一つに
+    決められない）、"extra"（s3 の 1 行目に、キャプションのない 3 つ目の画像）、"down"・"down3"（s1・s3 をアンカー段落から
+    2 cm 下にずらす: 位置を決められない）、"mixed"（s1 の左のセルの画像の段落に、説明の文字も書く）
+    """
+    vs = set(variant.split("+"))
+    im = [b.add_image(f"b3_cell_{k}.png", png_bytes(f"Cell picture {k}", size=(300, 200))) for k in range(1, 8)]
+
+    def pic(k, pid, text=""):
+        return para(S["body"], drawing(im[k], 1440000, 960000, pid), text)
+
+    c1 = [pic(0, 711, "説明文：左のセルの画像と同じ段落にある文字。" if "mixed" in vs else ""),
+          para(S["fig_cap"], "図1\u3000左のセルの図")]
+    c2 = [pic(1, 712), para(S["fig_cap"], "図2\u3000右のセルの図")]
+    if "text" in vs:
+        c2.insert(1, para(S["body"], "（a）"))
+    if "tabcap" in vs:
+        c2[1] = para(S["tab_cap"], "表1\u3000セルの中の表キャプション")
+    v1 = ("paragraph", 2 * B3_CM) if "down" in vs else ("paragraph", 0)
+    v3 = ("paragraph", 2 * B3_CM) if "down3" in vs else ("paragraph", 0)
+    rows3 = [[cell(pic(4, 731)), cell(pic(5, 732))],
+             [cell(para(S["fig_cap"], "図4\u3000左の列の図")), cell(para(S["fig_cap"], "図5\u3000右の列の図"))]]
+    if "cross" in vs:
+        rows3 = [[cell(pic(4, 731)), cell(para(S["fig_cap"], "図4\u3000左の列の図"))],
+                 [cell(para(S["fig_cap"], "図5\u3000右の列の図")), cell(pic(5, 732))]]
+    if "extra" in vs:
+        rows3[0].append(cell(pic(6, 733)))
+        rows3[1].append(cell(""))
+    return [
+        para(S["sec1"], "１．表のセルに並べた図"),
+        para(S["body"], "試験（2024）にならい，図1と図2を表のセルに並べた。"),
+        para(S["body"], "この段落に図1と図2のテキストボックスが結び付いている。", textbox(
+            table([[cell(c1), cell(c2)]]), 710, cx=16 * B3_CM, cy=5 * B3_CM, v=v1, wrap="wrapTopAndBottom")),
+        para(S["body"], "図3は，二つの画像からなる図である。"),
+        para(S["body"], "この段落に図3のテキストボックスが結び付いている。", textbox(
+            table([[cell([pic(2, 721), pic(3, 722)])], [cell(para(S["fig_cap"], "図3\u3000二つの画像からなる図"))]]),
+            720, cx=8 * B3_CM, cy=6 * B3_CM, wrap="wrapTopAndBottom")),
+        para(S["body"], "図4と図5は，画像の行とキャプションの行に分けた表に並べた。"),
+        para(S["body"], "この段落に図4と図5のテキストボックスが結び付いている。", textbox(
+            table(rows3), 730, cx=16 * B3_CM, cy=6 * B3_CM, v=v3, wrap="wrapTopAndBottom")),
+        para(S["body"], "以上のように，表のセルに並べた図も図として出力する。"),
+    ]
+
+
+def make_b3_cells(path, variant=""):
+    """表のセルに画像とキャプションが並ぶ図形の原稿（AI なしで図に組める。variant は b3_cells_parts）。"""
+    make_article(path, "表のセルに並べた図の検証用文書", lambda b: b3_cells_parts(b, variant))
+
+
+def b3_tablefig_parts(b: Builder, variant=""):
+    """画像のない図キャプションと、その隣のキャプションのない表（図形ではない本文の表）。
+
+    図1: 表の直後に図キャプション（表を図の本体にする）。図2: 表と図キャプションの間に本文の段落（組まない・要対応）。
+    図3: 表キャプションの付いた表の直後に図キャプション（組まない・要対応）。
+    variant="above": 図キャプションを図の上に置く原稿（画像の図 1 つで判定させる）。図4 の直後の表を図の本体にする。
+    """
+    out = [para(S["sec1"], "１．表で組んだ図"),
+           para(S["body"], "試験（2024）にならい，図1は問題文を表で組んだ。")]
+    if variant == "above":
+        img = b.add_image("b3_above.png", png_bytes("Caption above", size=(300, 200)))
+        return out + [
+            para(S["fig_cap"], "図5\u3000キャプションを上に置いた図"), para(S["body"], drawing(img, 1440000, 960000, 741)),
+            para(S["body"], "図4は，図キャプションの下に表を置いた。"),
+            para(S["fig_cap"], "図4\u3000表の上のキャプション"),
+            table([[cell("問4\u3000キャプションの下の表で組んだ架空の問題である。")]]),
+            para(S["body"], "以上が図4である。")]
+    return out + [
+        table([[cell("問1\u3000表で組んだ架空の問題である。")]]),
+        para(S["fig_cap"], "図1\u3000表で組んだ問題"),
+        para(S["body"], "図2は，表と図キャプションの間に段落がある例である。"),
+        table([[cell("問2\u3000もう一つの架空の問題である。")]]),
+        para(S["body"], "この段落は表と図キャプションの間にある。"),
+        para(S["fig_cap"], "図2\u3000間に段落がある問題"),
+        para(S["tab_cap"], "表1\u3000表キャプションの付いた表"),
+        table([[cell("観点"), cell("内容")], [cell("論証"), cell("根拠を示す")]]),
+        para(S["fig_cap"], "図3\u3000表の直後の図キャプション"),
+        para(S["body"], "以上のように，表で組んだ図を確かめる。")]
+
+
+def make_b3_tablefig(path, variant=""):
+    """画像のない図キャプションと、その隣のキャプションのない表の原稿（図形はない。variant は b3_tablefig_parts）。"""
+    make_article(path, "表で組んだ図の検証用文書", lambda b: b3_tablefig_parts(b, variant))
+
+
+def b3_place_parts(b: Builder, variant=""):
+    """位置を決められない図表（どれも図の上端がアンカー段落から離れている）の仮の置き場所。
+
+    s1: アンカー段落から 3 cm 下の図1。s2・s3: 同じアンカー段落に、docx の順で図3・図2。s4: 文字のない段落に結び付いた図4。
+    variant（テストの中で作る）: s1 のアンカー段落を、"list" は 3 項目の箇条書きの 2 つ目の項目、"quote" は 3 段落の引用の
+    2 つ目の段落にする。"blank_list" は、2 項目の箇条書きの項目の間の空の段落に s1 を結び付ける。s1 を箇条書きの最初の項目に
+    結び付け、その後ろを次の形にするもの: "two_lists"（2 つ目の項目、本文の段落、同じ番号の定義の 2 項目の箇条書き）、
+    "list_heading"（2 つ目の項目、同じ番号の定義で、見出しと推定する太字の「２．…」の段落）、"list_image"（画像と文字が同じ
+    段落の項目、3 つ目の項目、画像だけの項目）、"list_math"（2 つ目の項目、別行数式だけの項目、4 つ目の項目）、"list_textbox"
+    （2 つ目の項目、同じ番号の定義の段落を入れた、浮動配置でないテキストボックス）。"other_list" は、2 項目の箇条書きの最後の
+    項目に s1 を結び付け、すぐ後ろに別の番号の定義の 2 項目の箇条書きを置く。"quote_blank" は、引用の 2 つ目の段落に s1 を
+    結び付け、3 つ目の段落との間に空の段落を置く。
+    """
+    img = [b.add_image(f"b3_place_{k}.png", png_bytes(f"Place {k}", size=(300, 200))) for k in range(1, 5)]
+
+    def tb(k, cap, pid, down):
+        return textbox(para(S["body"], drawing(img[k], 1440000, 960000, pid + 1)) + para(S["fig_cap"], cap), pid,
+                       cx=8 * B3_CM, cy=4 * B3_CM, v=("paragraph", int(down * B3_CM)), wrap="wrapTopAndBottom")
+    s1 = tb(0, "図1\u3000一つ目の図", 750, 3)
+    first = [para(S["body"], "この段落に図1のテキストボックスが結び付いている。", s1)]
+    if variant == "list":
+        first = [list_item(S["body"], "箇条書きの一つ目の項目である。"),
+                 list_item(S["body"], "この項目に図1のテキストボックスが結び付いている。", s1),
+                 list_item(S["body"], "箇条書きの三つ目の項目である。")]
+    elif variant == "quote":
+        first = [para(S["quote"], "引用の一つ目の段落である。"),
+                 para(S["quote"], "この引用の段落に図1のテキストボックスが結び付いている。", s1),
+                 para(S["quote"], "引用の三つ目の段落である。")]
+    elif variant == "blank_list":
+        first = [list_item(S["body"], "箇条書きの一つ目の項目である。"), para(S["body"], s1),
+                 list_item(S["body"], "箇条書きの二つ目の項目である。")]
+    elif variant == "other_list":
+        first = [list_item(S["body"], "箇条書きの一つ目の項目である。"),
+                 list_item(S["body"], "この項目に図1のテキストボックスが結び付いている。", s1),
+                 list_item(S["body"], "別の番号の箇条書きの一つ目である。", num_id=7),
+                 list_item(S["body"], "別の番号の箇条書きの二つ目である。", num_id=7)]
+    elif variant == "quote_blank":
+        first = [para(S["quote"], "引用の一つ目の段落である。"),
+                 para(S["quote"], "この引用の段落に図1のテキストボックスが結び付いている。", s1),
+                 para(S["body"], ""), para(S["quote"], "引用の三つ目の段落である。")]
+    elif variant in ("two_lists", "list_heading", "list_image", "list_math", "list_textbox"):
+        first = [list_item(S["body"], "この項目に図1のテキストボックスが結び付いている。", s1)]
+        if variant == "two_lists":
+            first += [list_item(S["body"], "一つ目の箇条書きの二つ目の項目である。"),
+                      para(S["body"], "二つの箇条書きの間にある本文の段落である。"),
+                      list_item(S["body"], "二つ目の箇条書きの項目である。"),
+                      list_item(S["body"], "二つ目の箇条書きの最後の項目である。")]
+        elif variant == "list_heading":
+            first += [list_item(S["body"], "箇条書きの二つ目の項目である。"),
+                      list_item(S["body"], run("２．見出しと推定する段落", b=True))]
+        elif variant == "list_image":
+            item = [b.add_image(f"b3_place_item_{k}.png", png_bytes(f"Item {k}", size=(300, 200))) for k in (1, 2)]
+            first += [list_item(S["body"], drawing(item[0], 720000, 480000, 756), "二つ目の項目には画像と文字がある。"),
+                      list_item(S["body"], "箇条書きの三つ目の項目である。"),
+                      list_item(S["body"], drawing(item[1], 1440000, 960000, 757))]
+        elif variant == "list_math":
+            first += [list_item(S["body"], "箇条書きの二つ目の項目である。"),
+                      list_item(S["body"], omathpara(mr("y=") + mfrac(mr("1"), mr("2")) + mr("x"))),
+                      list_item(S["body"], "数式の後ろの項目である。")]
+        else:
+            vml = ('<w:r><w:pict><v:shape><v:textbox><w:txbxContent>'
+                   + list_item(S["body"], "浮動配置でないテキストボックスの中の項目である。")
+                   + '</w:txbxContent></v:textbox></v:shape></w:pict></w:r>')
+            first += [list_item(S["body"], "箇条書きの二つ目の項目である。"), para(S["body"], vml)]
+    return [para(S["sec1"], "１．仮の置き場所"),
+            para(S["body"], "試験（2024）にならい，図1を置く。"),
+            *first,
+            para(S["body"], "図2と図3は同じ段落に結び付いている。"),
+            para(S["body"], "この段落に図3と図2のテキストボックスが結び付いている。", tb(1, "図3\u3000三つ目の図", 760, 2),
+                 tb(2, "図2\u3000二つ目の図", 770, 5)),
+            para(S["body"], tb(3, "図4\u3000空の段落に結び付いた図", 780, 2)),
+            para(S["sec1"], "２．おわりに"),
+            para(S["body"], "以上のように，図の位置は docx だけでは決められない。")]
+
+
+def b3_place_refs(b: Builder, outside=False):
+    """引用文献の後ろの注（AI が注の段落の後ろを答える例のため）。outside なら、注の段落に図形を結び付ける（本文の外の図形）。"""
+    note = "1) 架空の注である。"
+    if not outside:
+        return [para(S["fn_head"], "注"), para(S["body"], note)]
+    img = b.add_image("b3_outside.png", png_bytes("Outside", size=(300, 200)))
+    return [para(S["fn_head"], "注"), para(S["body"], note, textbox(
+        para(S["body"], drawing(img, 1440000, 960000, 791)) + para(S["fig_cap"], "図5\u3000注に結び付いた図"), 790,
+        cx=8 * B3_CM, cy=4 * B3_CM, v=("paragraph", 2 * B3_CM), wrap="wrapTopAndBottom"))]
+
+
+def make_b3_place(path, outside=False, variant=""):
+    """位置を決められない図表の仮の置き場所の原稿（AI 補完が必要。ALL_DOCS には入れない。variant は b3_place_parts）。"""
+    make_article(path, "仮の置き場所の検証用文書", lambda b: b3_place_parts(b, variant),
+                 refs=lambda b: b3_place_refs(b, outside))
+
+
 if __name__ == "__main__":
     out = HERE / "fixtures"
     make_full(out / "sample_full.docx")
@@ -863,9 +1059,13 @@ if __name__ == "__main__":
     make_reader(out / "sample_reader.docx")
     make_float_text(out / "sample_float_text.docx")
     make_structure(out / "sample_structure.docx")
+    make_b3_cells(out / "sample_b3_cells.docx")
+    make_b3_tablefig(out / "sample_b3_tablefig.docx")
+    make_b3_place(out / "sample_b3_place.docx")
     pdf_done = make_pdfcheck_pdf(out / "sample_pdfcheck.pdf")
     print("written:", out / "sample_full.docx", out / "sample_edge.docx", out / "sample_float.docx",
           out / "sample_notes.docx", out / "sample_pdfcheck.docx", out / "sample_reader.docx",
-          out / "sample_float_text.docx", out / "sample_structure.docx",
+          out / "sample_float_text.docx", out / "sample_structure.docx", out / "sample_b3_cells.docx",
+          out / "sample_b3_tablefig.docx", out / "sample_b3_place.docx",
           out / "sample_pdfcheck.pdf" if pdf_done else "（LibreOffice がないので sample_pdfcheck.pdf は作り直していない）")
     sys.exit(0)
