@@ -5,10 +5,13 @@ import types
 import pytest
 from lxml import etree
 
-from conftest import DATA, FLOAT, FULL
+import make_fixtures as mf
+from conftest import DATA, FLOAT, FULL, STRUCTURE
 from jasme_jats import ai_assist
 from jasme_jats.ai_assist import parse_response, parse_mathml
-from jasme_jats.pipeline import Options, convert
+from jasme_jats.model import Para
+from jasme_jats.pipeline import Options, _mechanical, convert
+from jasme_jats.report import actions
 
 RESPONSE = (DATA / "ai_response_sample_full.json").read_text(encoding="utf-8")
 FLOAT_RESPONSE = json.loads((DATA / "ai_response_sample_float.json").read_text(encoding="utf-8"))
@@ -615,3 +618,185 @@ def test_call_api_other_type_error_is_not_api_key(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     out = ai_assist.call_api("x", [], model="claude-test")       # API キーがどこにもなければ、API キーの知らせ
     assert "API キーが見つかりません" in out.error
+
+
+# ----------------------------------------------------------------------------- set_role の可否（修正計画の N6・D3）
+S = mf.S
+
+
+def _set_role(src, role):
+    return {"op": "set_role", "src": src, "text": "", "occurrence": 1, "target": "", "role": role, "image": "",
+            "confidence": "高", "reason": "試験"}
+
+
+def _manual(path, ops, meta, journal, out):
+    resp = json.dumps({"operations": ops, "placements": [], "notes": []}, ensure_ascii=False)
+    return convert(path, meta, journal, Options(out_dir=out, ai_mode="manual", ai_response=resp, convert_metafiles=False))
+
+
+def _text(el):
+    return "".join(el.itertext())
+
+
+def _apps(root):
+    return [(_text(a.find("title")), [_text(p) for p in a.findall("p")]) for a in root.iter("app")]
+
+
+def _abstract(root):
+    return [_text(p) for p in root.findall(".//trans-abstract/p")]
+
+
+def _body(b):
+    return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "本文。")]
+
+
+def test_set_role_app_heading_starts_appendix(journal, meta, tmp_path):
+    # 英文要旨に入った資料の和文の段落に app_heading を指定すると、その段落から資料になる（D3）
+    path = tmp_path / "app.docx"
+    mf.make_article(path, "資料の見出しの検証用文書", _body,
+                    abstract=["Small article abstract.", "架空の授業の記録", "架空の記録の本文である。"])
+    _, plan, _ = _mechanical(path, journal)
+    src = next(s for s, p in plan.paras.items() if p.plain() == "架空の授業の記録")
+    assert src in plan.abstract_ja                       # AI に渡す前は、英文要旨の中の和文として知らせている
+    res = _manual(path, [_set_role(src, "app_heading")], meta, journal, tmp_path / "out")
+    assert res.ai.rejected == [] and [op["role"] for op, _ in res.ai.accepted] == ["app_heading"]
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
+    root = load(res)
+    assert _apps(root) == [("架空の授業の記録", ["架空の記録の本文である。"])]
+    assert _abstract(root) == ["Small article abstract."]
+    assert res.plan.abstract_ja == [] and "abstract_ja" not in {a.key for a in actions(res)}
+
+
+def test_set_role_on_english_title_is_rejected(journal, meta, tmp_path):
+    # 英文の題目への set_role は、どの役割も採用しない（暫定の判断。0.23.1 は英文題目を exclude・abstract にすると、英文副題が
+    # XML から落ちていた）。英文題目・副題はそのまま
+    path = tmp_path / "title.docx"
+    mf.make_article(path, "英文題目の検証用文書", _body)
+    _, plan, _ = _mechanical(path, journal)
+    title = plan.title_en[0].src
+    res = _manual(path, [_set_role(title, "app_heading"), _set_role(title, "exclude"), _set_role(title, "abstract")],
+                  meta, journal, tmp_path / "out")
+    assert [why for _, why in res.ai.rejected] == ["英文の題目・副題の段落の役割は変えられない（変えると英文の題目・副題が XML から落ちる）"] * 3
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    root = load(res)
+    assert _text(root.find(".//article-meta/title-group/trans-title-group/trans-title")) == "A Small Article"
+    assert _text(root.find(".//article-meta/title-group/trans-title-group/trans-subtitle")) == "For Checking"
+    assert root.find(".//app-group") is None
+
+
+def test_set_role_abstract_returns_heading_style_appendix(journal, meta, tmp_path):
+    # 見出しのスタイルで始めた資料（英文要旨の後ろの章見出しのスタイル）の見出しに abstract を指定すると、その段落と、
+    # 次の資料の見出しまでの段落が英文要旨に戻る（D3。資料の領域に abstract を指定できる）
+    path = tmp_path / "back.docx"
+    mf.make_article(path, "英文要旨に戻す検証用文書", _body,
+                    appendix=[mf.para(S["sec1"], "Supplementary note"), mf.para(S["body"], "The rest of the abstract."),
+                              mf.para(S["abs"], "資料1\u3000架空の授業プリント"), mf.para(S["abs"], "架空のプリントの本文。")])
+    _, plan, _ = _mechanical(path, journal)
+    src = next(s for s, p in plan.paras.items() if p.plain() == "Supplementary note")
+    assert plan.region[src] == "app"
+    res = _manual(path, [_set_role(src, "abstract")], meta, journal, tmp_path / "out")
+    assert res.ai.rejected == [] and res.fidelity.ok and res.dtd_valid
+    root = load(res)
+    assert _abstract(root) == ["Small article abstract.", "Supplementary note", "The rest of the abstract."]
+    assert _apps(root) == [("資料1\u3000架空の授業プリント", ["架空のプリントの本文。"])]
+    assert not any(d.src == src and "から資料とした" in d.message for d in res.plan.decisions)
+    # 資料の途中の段落に abstract を指定すると、その段落から次の資料の見出しまでが英文要旨に戻る
+    path = tmp_path / "middle.docx"
+    mf.make_article(path, "英文要旨に戻す検証用文書", _body,
+                    appendix=[mf.para(S["abs"], "資料1\u3000架空の授業プリント"), mf.para(S["abs"], "架空のプリントの本文。"),
+                              mf.para(S["abs"], "The rest of the abstract."), mf.para(S["abs"], "And one more sentence."),
+                              mf.para(S["abs"], "資料2\u3000架空の調査票"), mf.para(S["abs"], "架空の調査票の本文。")])
+    _, plan, _ = _mechanical(path, journal)
+    src = next(s for s, p in plan.paras.items() if p.plain() == "The rest of the abstract.")
+    assert plan.region[src] == "app"
+    res = _manual(path, [_set_role(src, "abstract")], meta, journal, tmp_path / "out2")
+    assert res.ai.rejected == [] and res.fidelity.ok and res.dtd_valid
+    root = load(res)
+    assert _abstract(root) == ["Small article abstract.", "The rest of the abstract.", "And one more sentence."]
+    assert _apps(root) == [("資料1\u3000架空の授業プリント", ["架空のプリントの本文。"]),
+                           ("資料2\u3000架空の調査票", ["架空の調査票の本文。"])]
+
+
+def test_set_role_overrides_appendix_heading_text(journal, meta, tmp_path):
+    # 「資料」「Appendix」などで始まる段落でも、AI が abstract・p を指定すれば資料の見出しにしない（AI の指定を文字の規則より
+    # 優先する。D3）。英文要旨の「Appendix A shows …」は英文要旨に戻り、資料の中の「資料2：…」は前の資料の段落になる
+    path = tmp_path / "text.docx"
+    mf.make_article(path, "資料の見出しの文字の検証用文書", _body,
+                    abstract=["Small article abstract.", "Appendix A shows the questionnaire in detail."],
+                    appendix=[mf.para(S["abs"], "資料1\u3000架空の授業プリント"), mf.para(S["abs"], "架空のプリントの本文。"),
+                              mf.para(S["abs"], "資料2：架空の回答の例"), mf.para(S["abs"], "架空の回答の本文。")])
+    _, plan, _ = _mechanical(path, journal)
+    by_text = {p.plain(): s for s, p in plan.paras.items()}
+    appendix_a, answer = by_text["Appendix A shows the questionnaire in detail."], by_text["資料2：架空の回答の例"]
+    assert [a.title.src for a in plan.apps] == [appendix_a, by_text["資料1\u3000架空の授業プリント"], answer]   # 機械的には 3 つの資料
+    res = _manual(path, [_set_role(appendix_a, "abstract"), _set_role(answer, "p")], meta, journal, tmp_path / "out")
+    assert res.ai.rejected == [] and res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    root = load(res)
+    assert _abstract(root) == ["Small article abstract.", "Appendix A shows the questionnaire in detail."]
+    assert _apps(root) == [("資料1\u3000架空の授業プリント", ["架空のプリントの本文。", "資料2：架空の回答の例", "架空の回答の本文。"])]
+
+
+def test_set_role_problem_rules(journal):
+    # set_role の可否は set_role_problem の 1 か所で決める（回答の検証と、依頼文の除外の一覧の案内で使う。N6）
+    from jasme_jats.ai_assist import set_role_problem
+    _, plan, _ = _mechanical(STRUCTURE, journal)
+    by_text = {p.plain(): p for p in plan.paras.values()}
+    body = by_text["囲みの後の本文も，本文のまま続く。"]
+    endnote = next(fn.paras[0] for fn in plan.fns if fn.word_id == "endnote:5")
+    unref = next(plan.paras[s] for s, k in plan.note_of.items() if k == "footnote:9")
+    shape = by_text["Area model"]
+    abstract = by_text["Structure abstract."]
+    app_title = by_text["資料（授業プリント）"]
+    app_para = by_text["問1\u3000架空の問題文である。"]
+    front = next(p for p in plan.paras.values() if plan.region.get(p.src) == "front_ja")
+    assert set_role_problem(body, plan, "heading") == "役割「heading」は指定できない"                        # 1
+    assert "placements" in set_role_problem(shape, plan, "p")                                                  # 2
+    for p, role in ((endnote, "p"), (endnote, "exclude"), (unref, "p")):                                        # 3
+        assert set_role_problem(p, plan, role) == "Word の脚注・文末脚注の段落の役割は変えられない（注の区切りは Word のとおりにする）"
+    cell = Para(src="zz1")
+    plan.paras[cell.src] = cell                                                                                 # 4（領域のない段落）
+    assert set_role_problem(cell, plan, "p") == "表のセルなど、論文の中の位置が決まっていない段落の役割は変えられない"
+    assert set_role_problem(plan.title_en[0], plan, "abstract").startswith("英文の題目・副題の段落の役割は変えられない")   # 5
+    assert set_role_problem(body, plan, "app_heading") == "資料の見出し（app_heading）にできるのは、英文要旨と資料の段落だけ"  # 6
+    assert set_role_problem(plan.abstract_heading, plan, "app_heading") == (       # 英文要旨の見出しから資料にはしない
+        "資料の見出し（app_heading）にできるのは、英文要旨と資料の段落だけ")
+    assert set_role_problem(front, plan, "p") == "この位置（front_ja）では役割「p」を指定できない"                # 7
+    # 指定できるもの
+    assert set_role_problem(body, plan, "p") == "" and set_role_problem(abstract, plan, "app_heading") == ""
+    assert set_role_problem(app_title, plan, "abstract") == "" and set_role_problem(app_para, plan, "app_heading") == ""
+
+
+def test_request_hints_follow_set_role_problem(journal, tmp_path):
+    # 依頼文の除外の一覧の案内は、set_role_problem で指定できる役割だけを勧める（0.23.1 は、冒頭・著者表・Word の注の段落にも
+    # 「本文の一部なら set_role を提案」と書き、必ず捨てられる set_role を勧めていた。N6）
+    from jasme_jats.ai_assist import ROLES, build_request, system_prompt
+
+    def hints(path):
+        _, plan, linker = _mechanical(path, journal)
+        req, _ = build_request(plan, linker)
+        return {ln.split("]")[0][3:]: ln for ln in req.splitlines() if ln.startswith("- [") and "出力から除外" in ln}, plan
+    lines, plan = hints(STRUCTURE)
+    _, plan2, linker = _mechanical(STRUCTURE, journal)
+    req = build_request(plan2, linker)[0]
+    # 文末脚注の参照は「⟦Word の文末脚注参照⟧」、注の一覧の Word の注は「（Word の文末脚注 5）」と書く
+    assert "脚注を付けた文⟦Word の脚注参照⟧と文末脚注を付けた文⟦Word の文末脚注参照⟧。" in req
+    assert "[fn2]（Word の文末脚注 5）注" in req and "[fn1]（Word の脚注 5）注" in req
+    journal_line = next(e.src for e in plan.exclusions if e.reason.startswith("冒頭部のテンプレート装飾"))
+    assert lines[journal_line].endswith("（set_role で指定できる役割: title, subtitle）")
+    unref = next(s for s, k in plan.note_of.items() if k == "footnote:9")
+    assert lines[unref].endswith("（この段落の役割は set_role では変えられない）")
+    lines, plan = hints(FULL)
+    dup = next(e.src for e in plan.exclusions if e.reason.startswith("重複する所属"))
+    assert lines[dup].endswith("（この段落の役割は set_role では変えられない）")      # 著者表の中の段落
+    # 本文の段落（浮動配置でないテキストボックスの中の文字）は、今までどおり p を勧める
+    vml = ('<w:r><w:pict><v:shape style="width:200pt;height:40pt"><v:textbox><w:txbxContent>'
+           + mf.para(S["body"], "囲みの中の架空の問題文。") + "</w:txbxContent></v:textbox></v:shape></w:pict></w:r>")
+    path = tmp_path / "vml.docx"
+    mf.make_article(path, "依頼文の案内の検証用文書", lambda b: [mf.para(S["sec1"], "１．はじめに"),
+                                                               mf.para(S["body"], "囲みを付けた本文。", vml)])
+    lines, plan = hints(path)
+    box = next(s for s, p in plan.paras.items() if p.plain() == "囲みの中の架空の問題文。")
+    assert lines[box].endswith("（本文の一部なら set_role を提案）")
+    # 依頼文の役割の一覧と説明に、資料の見出し（app_heading）がある
+    assert "app_heading（資料の見出し（英文要旨の後ろの、資料・付録の始まり））" in system_prompt()
+    assert "資料の見出しの段落を app_heading にしてください" in system_prompt() and "app_heading" in ROLES

@@ -10,7 +10,7 @@ from typing import Optional
 
 from lxml import etree
 
-from .model import LinkSpec, Para
+from .model import LinkSpec, Para, note_key
 from .omml import OmmlConverter
 from .tracking import GEN, JX, SPAN
 
@@ -55,7 +55,7 @@ def xl(name):
 class Emitter:
     def __init__(self, image_namer, fn_numbers=None, skip_images=()):
         self.image_namer = image_namer          # ImageRef -> ファイル名
-        self.fn_numbers = fn_numbers or {}      # Word 脚注 id -> (fid, 表示する番号の文字列。本誌は「1)」)
+        self.fn_numbers = fn_numbers or {}      # Word の脚注・文末脚注の鍵（model.note_key）-> (fid, 表示する番号の文字列。本誌は「1)」)
         self.skip_images = set(skip_images)     # 図に移したため段落の中では出力しない画像の ID
         self.math_warnings = []
 
@@ -232,7 +232,8 @@ class Emitter:
                 g = etree.SubElement(parent, "inline-graphic")
                 g.set(xl("href"), self.image_namer(a.image))
         elif a.kind == "fnref":
-            fid, mark = self.fn_numbers.get(a.fn_id, (None, None))
+            # 脚注と文末脚注は ID が重なりうるので、種類と ID の組（注の鍵）で引く（記号を自分で付けた参照も同じ注を指す）
+            fid, mark = self.fn_numbers.get(note_key(a.fn_kind, a.fn_id), (None, None))
             if fid and ctx.xref:
                 x = etree.SubElement(parent, "xref")
                 x.set("ref-type", "fn")

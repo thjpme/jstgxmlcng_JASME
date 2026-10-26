@@ -1,4 +1,4 @@
-"""画像の出力漏れの検出（pipeline.lost_images）と、文字だけのテキストボックス・Word の文末脚注を除外したときの暫定の知らせ。
+"""画像の出力漏れの検出（pipeline.lost_images）と、文字だけのテキストボックスを除外したときの暫定の知らせ。
 
 不変性チェックは文字しか見ないので、画像を出力できない場所（引用文献・題目・著者名・所属の段落など）や、出力しなかった段落の
 中の画像は、調べないと XML からも Graphics/ からも黙って消える。docs/fix_plan_repro_tests.py の
@@ -135,13 +135,12 @@ def test_image_in_excluded_front_paragraph_is_reported(journal, meta, tmp_path):
     assert "**要対応: XML に入らなかった画像が 1 件あります（9 章）。**" in res.report_path.read_text(encoding="utf-8")
 
 
-def test_image_in_endnote_is_reported_with_location(journal, meta, tmp_path):
-    # Word の文末脚注（今の版では XML に出力しない）の中の、画像だけの段落。場所は「Word の文末脚注」と書き、
-    # 暫定の知らせの段落の例では、文字のない段落を「（文字なし）」と書く（空のかぎかっこにしない）
+def make_endnote_image(path, referenced):
+    """Word の文末脚注 4 の 2 段落目が画像だけの段落の、小さな論文。referenced が偽なら、本文から文末脚注を参照しない。"""
     def parts(b):
-        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "試験（2024）の文", mf.endnote_ref(4), "。")]
+        return [mf.para(S["sec1"], "１．はじめに"),
+                mf.para(S["body"], "試験（2024）の文", mf.endnote_ref(4) if referenced else "", "。")]
     note = mf.endnote(4, " 文末脚注の本文。", mf.para(None, mf.drawing("rId77", 1800000, 1000000, 961)))
-    path = tmp_path / "endnote.docx"
     mf.make_article(path, "文末脚注の画像の検証用文書", parts,
                     endnotes=[note.replace('<w:endnote w:id="4">', f'<w:endnote w:id="4" {mf.NSDECL}>')])
     with zipfile.ZipFile(path, "a") as z:        # 文末脚注の画像の関係（テンプレートには endnotes.xml.rels がない）
@@ -150,15 +149,33 @@ def test_image_in_endnote_is_reported_with_location(journal, meta, tmp_path):
                    'package/2006/relationships"><Relationship Id="rId77" Type="http://schemas.openxmlformats.org/officeDocument/'
                    '2006/relationships/image" Target="media/note.png"/></Relationships>')
         z.writestr("word/media/note.png", mf.png_bytes("note"))
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    return path
+
+
+def test_image_in_referenced_endnote_is_output(journal, meta, tmp_path):
+    # 本文から参照された Word の文末脚注は注（fn）として出力するので、その中の画像も XML と Graphics/ に出る（0.24.0）
+    res = convert(make_endnote_image(tmp_path / "endnote.docx", True), meta, journal,
+                  Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
+    assert res.lost_images == [] and [i.image_id for i in res.images] == ["img1"]
+    fn = load(res).find(".//fn-group/fn")
+    assert "".join(fn.find("p").itertext()) == "1) 文末脚注の本文。" and fn.find("p/inline-graphic") is not None
+    assert "XML に入らなかった画像" not in res.report_path.read_text(encoding="utf-8")
+
+
+def test_image_in_unreferenced_endnote_is_reported_with_location(journal, meta, tmp_path):
+    # 本文から参照されていない Word の文末脚注は出力しない（理由付きで除外）。その中の画像だけの段落は、XML に入らなかった
+    # 画像として要対応で知らせ、場所は「Word の文末脚注 4」と書く
+    res = convert(make_endnote_image(tmp_path / "endnote.docx", False), meta, journal,
+                  Options(out_dir=tmp_path / "out", convert_metafiles=False))
     assert res.fidelity.ok and res.dtd_valid
     [li] = res.lost_images
-    assert li.src.startswith("e") and li.location == "Word の文末脚注" and li.text == ""
-    assert li.reason.startswith("XML に出力しなかった段落（理由「Word の文末脚注")
+    assert li.src.startswith("e") and li.location == "Word の文末脚注 4" and li.text == ""
+    assert li.reason.startswith("XML に出力しなかった段落（理由「Word の文末脚注 4（本文から参照されていない注）」")
     top, ch9, _ = chapters(res.report_path.read_text(encoding="utf-8"))
-    assert f"| {li.image_id} | word/media/note.png | {li.src} | Word の文末脚注 |" in ch9
-    assert "**要確認: Word の文末脚注 2 段落を、XML に出力していません（6 章）。**" in top
-    assert f"「文末脚注の本文。」、{li.src}（文字なし）" in top and f"{li.src}「」" not in top
+    assert f"| {li.image_id} | word/media/note.png | {li.src} | Word の文末脚注 4 |" in ch9
+    assert "**要対応: XML に入らなかった画像が 1 件あります（9 章）。**" in top
+    assert "要確認: Word の文末脚注" not in top          # 文末脚注の暫定の知らせは出ない（0.24.0）
 
 
 def test_hidden_image_is_not_lost(journal, meta, tmp_path):
@@ -194,7 +211,10 @@ def test_no_lost_images_in_fixtures(case, journal, meta, tmp_path):
 
 
 def make_provisional(path):
-    """文字だけのテキストボックス（2 段落と全角空白の段落）と、Word の文末脚注 1 件（2 段落目は空白だけ）がある小さな論文。"""
+    """文字だけのテキストボックス（2 段落と全角空白の段落）と、Word の文末脚注 1 件（2 段落目は空白だけ）がある小さな論文。
+
+    文字だけのテキストボックスは暫定の知らせの対象（修正計画の F まで）。Word の文末脚注は 0.24.0 から注として出力するので、
+    暫定の知らせは出ない。"""
     def parts(b):
         return [mf.para(S["sec1"], "１．はじめに"),
                 mf.para(S["body"], "試験（2024）の問題を枠で囲んだ。", mf.textbox(
@@ -205,9 +225,9 @@ def make_provisional(path):
     return path
 
 
-def test_provisional_notices_for_textbox_and_endnote(journal, meta, tmp_path):
-    # 文字だけのテキストボックスの段落と Word の文末脚注は、今の版では XML に出力できない（6 章に載るだけ）。
-    # 件数と対処を、レポートの冒頭と 14 章に「要確認」として出す。空白だけの段落は数えない
+def test_provisional_notices_for_textbox(journal, meta, tmp_path):
+    # 文字だけのテキストボックスの段落は、今の版では XML に出力できない（6 章に載るだけ）。件数と対処を、レポートの冒頭と
+    # 14 章に「要確認」として出す。空白だけの段落は数えない。Word の文末脚注は注として出力するので、暫定の知らせは出ない
     path = make_provisional(tmp_path / "prov.docx")
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
     assert res.fidelity.ok and res.lost_images == []
@@ -216,16 +236,16 @@ def test_provisional_notices_for_textbox_and_endnote(journal, meta, tmp_path):
     assert "**要確認: テキストボックスの中の文字 2 段落を、XML に出力していません（6 章）。**" in top
     assert "Word でその文字をテキストボックスの外（本文の段落）に出してから、変換し直してください" in top
     assert "「問1\u3000枠の中の問題文である。」" in top and "「ヒント: 図をかく。」" in top
-    assert "**要確認: Word の文末脚注 1 段落を、XML に出力していません（6 章）。**" in top
-    assert "本文の注（テンプレートの書き方" in top and "「文末脚注の本文。」" in top
     assert "- [ ] **テキストボックスの中の文字 2 段落**（6 章。XML に出力していない）: 本文に必要か確かめ" in ch14
-    assert "- [ ] **Word の文末脚注 1 段落**（6 章。XML に出力していない）: 本文の注" in ch14
+    # 文末脚注は fn-group の注になる（暫定の知らせ・「未対応」の除外はない）
+    assert "".join(load(res).find(".//fn-group/fn/p").itertext()) == "1) 文末脚注の本文。"
+    assert "Word の文末脚注" not in top and "Word の文末脚注" not in ch14
+    assert not any("未対応" in reason for _, reason, _ in res.fidelity.excluded)
     # 暫定の知らせは冒頭の最後（要対応の後ろ。0.23.0 と同じ並び）
     from jasme_jats.report import render
     res.fidelity.ok = False
     top = render(res).split("## 2.")[0]
-    assert top.index("> **注意: 文字の不変性チェックが不合格です。**") < top.index("> **要確認: テキストボックスの中の文字") \
-        < top.index("> **要確認: Word の文末脚注")
+    assert top.index("> **注意: 文字の不変性チェックが不合格です。**") < top.index("> **要確認: テキストボックスの中の文字")
     res.fidelity.ok = True
     # 該当がなければ出さない
     full = convert(FULL, meta, journal, Options(out_dir=tmp_path / "full", convert_metafiles=False)).report_path
@@ -242,5 +262,5 @@ def test_cli_shows_provisional_notices(journal, tmp_path, capsys):
     assert main([str(path), "--meta", str(meta), "--out", str(tmp_path / "out"), "--no-metafile-conversion"]) == 0
     err = capsys.readouterr().err
     assert "要確認: テキストボックスの中の文字 2 段落を、XML に出力していません（レポートの冒頭と 6 章）。" in err
-    assert "要確認: Word の文末脚注 1 段落を、XML に出力していません（レポートの冒頭と 6 章）。" in err
-    assert "テキストボックスの外（本文の段落）に出してから" in err and "本文の注（テンプレートの書き方" in err
+    assert "テキストボックスの外（本文の段落）に出してから" in err
+    assert "Word の文末脚注" not in err          # 文末脚注は注として出力する（0.24.0。暫定の知らせは出ない）

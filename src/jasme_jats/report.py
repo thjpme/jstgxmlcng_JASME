@@ -15,10 +15,11 @@ from pathlib import Path
 
 from .ai_assist import PROVIDERS
 from .linker import body_paragraphs, linked_ids
+from .model import note_key, note_label
 from .package import article_dir
 from .pdfmatch import (DISPLACED_WHY, EDGE_WHY, FORMULA_MARK, HEAD_WHY, LINE_MARK, LONG_WHY, MATH_WHY, RE_PAGE_NO, UNSURE_WHY,
                        WHOLE_WHY)
-from .structure import ENDNOTE_EXCLUDED, TEXTBOX_TEXT_EXCLUDED
+from .structure import TEXTBOX_TEXT_EXCLUDED
 
 
 def esc(s, n=None) -> str:
@@ -168,14 +169,14 @@ def lost_image_label(li) -> str:
 
 
 def provisional_exclusions(r) -> list:
-    """XML に出力しなかった、文字だけのテキストボックスの段落と Word の文末脚注の段落（要確認）。
+    """XML に出力しなかった、文字だけのテキストボックスの段落（要確認）。
 
-    どちらも今の版では XML に出力できないので、レポートの 6 章に載るだけだと見落とされる。出力できるようになるまで、
-    レポートの冒頭と 14 章で件数と対処を知らせる（暫定の知らせ）。
-    戻り値: [(種類 "textbox" / "endnote", [(段落, 文字)])]。該当がなければ、その種類は入らない。
+    今の版では XML に出力できないので、レポートの 6 章に載るだけだと見落とされる。出力できるようになるまで（修正計画の F）、
+    レポートの冒頭と 14 章で件数と対処を知らせる（暫定の知らせ。Word の文末脚注は 0.24.0 で注として出力するようにした）。
+    戻り値: [(種類 "textbox", [(段落, 文字)])]。該当がなければ、その種類は入らない。
     """
     out = []
-    for kind, reason in (("textbox", TEXTBOX_TEXT_EXCLUDED), ("endnote", ENDNOTE_EXCLUDED)):
+    for kind, reason in (("textbox", TEXTBOX_TEXT_EXCLUDED),):
         rows = [(src, text) for src, why, text in r.fidelity.excluded if why == reason]
         if rows:
             out.append((kind, rows))
@@ -189,10 +190,6 @@ PROVISIONAL = {
                 "問題文などの囲みで本文に必要な文字なら、Word でその文字をテキストボックスの外（本文の段落）に出してから、"
                 "変換し直してください。",
                 "本文に必要か確かめ、問題文などの囲みなら Word でテキストボックスの外（本文の段落）に出して変換し直す"),
-    "endnote": ("Word の文末脚注 {n} 段落",
-                "今の版では、Word の文末脚注を XML に出力できません。注の内容を、本文の注（テンプレートの書き方: 本文に上付きの"
-                "「1)」を書き、注は「注」の節にまとめる）に移してから、変換し直してください。",
-                "本文の注（テンプレートの書き方: 本文に上付きの「1)」、注は「注」の節）に移して変換し直す"),
 }
 
 
@@ -437,16 +434,45 @@ def number_rows(r) -> list:
     for (kind, ident), chg in pc.numbers.items():
         old = pc.original[(kind, ident)]
         new = "".join(chg.get(i, c) for i, c in enumerate(old))
-        where = r.plan.locations.get(ident, ident) if kind == "auto" else f"Word の脚注 {ident}"
+        where = r.plan.locations.get(ident, ident) if kind == "auto" else note_label(ident)
         rows.append((NUMBER_KINDS[kind], where, f"「{esc(old.strip())}」→「{esc(new.strip())}」"))
     return rows
 
 
 def word_note_refs(plan) -> int:
-    """本文中の Word の脚注参照（注へのリンクとして出力されるもの）の数。"""
+    """本文中の Word の脚注・文末脚注の参照（注へのリンクとして出力されるもの）の数。
+
+    XML に出力しなかった段落（plan.exclusions）の中の参照は、リンクにならないので数えない。
+    """
     ids = {fn.word_id for fn in plan.fns if fn.word_note}
-    return sum(1 for p in plan.paras.values() for a in p.atoms
-               if a.kind == "fnref" and a.fn_kind.startswith("footnote") and a.fn_id in ids)
+    excluded = {e.src for e in plan.exclusions}
+    return sum(1 for p in plan.paras.values() if p.src not in excluded for a in p.atoms
+               if a.kind == "fnref" and note_key(a.fn_kind, a.fn_id) in ids)
+
+
+def has_endnotes(plan) -> bool:
+    """Word の文末脚注から作った注があるか（1 章・8 章の表記を変える）。"""
+    return any(fn.word_note and fn.word_kind == "endnote" for fn in plan.fns)
+
+
+def word_note_rows(r) -> list:
+    """Word の脚注・文末脚注と XML の注の対応（8 章の表）。文末脚注・本文からリンクのない注・記号を自分で付けた注のどれかが
+    あるときだけ作る（脚注だけで、どれもなければ空。0.23.1 までと同じ表示）。"""
+    plan = r.plan
+    word = [fn for fn in plan.fns if fn.word_note]
+    if not any(fn.word_kind == "endnote" or not fn.linked or fn.custom_mark for fn in word):
+        return []
+    rows = []
+    for k, fn in enumerate(word, 1):
+        mark = plan.pdf_numbers.get(("fnlist", fn.word_id)) or r.journal.fn_mark.format(n=fn.number or k)
+        if not fn.linked:
+            link = f"なし（参照は XML に出力しなかった段落 {'、'.join(fn.word_refs)} の中だけ）"
+        elif fn.custom_mark:
+            link = "あり（本文の記号は docx の文字のまま）"
+        else:
+            link = "あり"
+        rows.append((fn.fid, note_label(fn.word_id), mark, link))
+    return rows
 
 
 def note_notes(plan):
@@ -746,6 +772,52 @@ def lost_action(r):
              + "\n".join(f"  {lost_image_label(li)}: {li.reason}" for li in lost)))
 
 
+def _abstract_ja_action(r):
+    """英文要旨の中の、かな・漢字が 3 割以上の段落（structure.Classifier.check_abstract_ja。自動では移さない）。なければ None。"""
+    plan = r.plan
+    if not plan.abstract_ja:
+        return None
+    n = len(plan.abstract_ja)
+    samples = _para_samples([(s, plan.paras[s].text_only()) for s in plan.abstract_ja])
+    return Action(
+        TO_CHECK, "abstract_ja",
+        top=(f"> **要確認: 英文要旨に、和文と思われる段落が {n} 件あります（10 章）。** 資料・付録などの和文が英文要旨に入っている"
+             "かもしれません。資料なら、Word でその段落の前に資料の見出し（「資料1」「資料（授業プリント）」など）を付けて、変換し直して"
+             f"ください。対象の段落: {samples}"),
+        checklist=f"- [ ] **英文要旨の中の和文の段落**（{n} 件。10 章）: 資料などの和文なら、Word で資料の見出しを付けて変換し直す",
+        box_title="英文要旨に和文の段落があります（要確認）",
+        box_detail=(f"英文要旨に、かな・漢字が 3 割以上の段落が {n} 件あります。資料・付録などの和文が英文要旨に入っているかもしれません。"
+                    "資料なら、Word でその段落の前に資料の見出し（「資料1」など）を付けてから、変換し直してください（レポートの冒頭と"
+                    f" 10 章）。\n対象の段落: {samples}"),
+        cli=(f"要確認: 英文要旨に和文と思われる段落が {n} 件あります（レポートの冒頭と 10 章）。資料なら、docx に資料の見出しを付けて"
+             "変換し直すこと"))
+
+
+def _app_after_refs_action(r):
+    """引用文献・注・付記・謝辞の中の、資料の見出しと思われる段落（structure.Classifier.build_back）。なければ None。
+
+    暫定の判断で、引用文献などの後ろの資料は資料（app-group）にせず、知らせるだけにしている（決定事項 8(b) は利用者に未確認）。
+    """
+    plan = r.plan
+    if not plan.app_after_refs:
+        return None
+    n = len(plan.app_after_refs)
+    samples = _para_samples([(s, plan.paras[s].text_only()) for s in plan.app_after_refs])
+    return Action(
+        TO_CHECK, "app_after_refs",
+        top=("> **要確認: 引用文献などの後ろに、資料の見出しと思われる段落があります（10 章）。** 今の版では、引用文献などの後ろの"
+             "資料は資料（付録）として扱わず、引用文献などの段落のまま出力しています。資料なら、Word で英文要旨の後ろ（論文の最後）に"
+             f"移して、変換し直してください。対象の段落: {samples}"),
+        checklist=(f"- [ ] **引用文献などの後ろの資料の見出し**（{n} 件。10 章）: 資料なら、Word で英文要旨の後ろに移して"
+                   "変換し直す"),
+        box_title="引用文献などの後ろに資料があるかもしれません（要確認）",
+        box_detail=("引用文献・注・付記・謝辞の中に、資料の見出しと思われる段落があります。今の版では資料として扱わず、引用文献などの"
+                    "段落のまま出力しています。資料なら、Word でその見出しと中身を英文要旨の後ろ（論文の最後）に移してから、変換し直して"
+                    f"ください（レポートの冒頭と 10 章）。\n対象の段落: {samples}"),
+        cli=("要確認: 引用文献などの後ろに、資料の見出しと思われる段落があります（レポートの冒頭と 10 章）。資料なら、docx で英文要旨の"
+             "後ろに移して変換し直すこと"))
+
+
 def pdf_fallback(r) -> bool:
     """ルート2 で出版版 PDF の文字を読めず、docx を直さずに変換した（pipeline.Result.pdf_fallback と同じ。M4）。"""
     return r.route == "pdf" and r.docx_fix is None and r.pdf_check is not None
@@ -945,7 +1017,8 @@ def actions(r) -> list:
     記事フォルダにあるのに ZIP に入れなかったファイル（Result.not_zipped）は 10 章の警告のまま。
     """
     head = [f(r) for f in (_fidelity_action, _dtd_action, _upload_action, _ai_error_action, _ai_pending_action,
-                           _partial_action, _forced_action, figure_body_action, images_action, lost_action)]
+                           _partial_action, _forced_action, figure_body_action, images_action, lost_action,
+                           _abstract_ja_action, _app_after_refs_action)]
     return [a for a in head if a is not None] + pdf_actions(r) + _provisional_actions(r)
 
 
@@ -975,7 +1048,8 @@ def render(r) -> str:
     final_line = "合格" if fid.final_ok else ("不合格: " + fid.final_detail if fid.final_ok is False else "未実施")
     c = r.link_counts
     wn = word_note_refs(plan)
-    fn_links = f"{c.get('fn', 0) + wn}" + (f"（うち Word の脚注 {wn}）" if wn else "")
+    which = "Word の脚注・文末脚注" if has_endnotes(plan) else "Word の脚注"
+    fn_links = f"{c.get('fn', 0) + wn}" + (f"（うち {which} {wn}）" if wn else "")
     links = (f"引用文献 {c.get('bibr', 0)} / 図 {c.get('fig', 0)} / 表 {c.get('table', 0)} / 注 {fn_links} / "
              f"数式 {c.get('disp-formula', 0)} / URL {c.get('url', 0) + c.get('word', 0)} / DOI {c.get('doi', 0)}")
     ai_acc = [d for _, d in ai.accepted]
@@ -1166,8 +1240,13 @@ def render(r) -> str:
     # ------------------------------------------------------------------ 8. 生成文字
     L.append("## 8. Word が自動生成していた文字・補った文字")
     L.append("")
+    if has_endnotes(plan):
+        word_marks = ("（Word の脚注・文末脚注機能で書かれた注の番号だけは、Word の表示〈脚注は「1」、文末脚注は「i」など〉ではなく、"
+                      "本文で最初に参照される順の通し番号を本誌の形式〈設定 fn_mark〉で付けています。対応は下の表）")
+    else:
+        word_marks = "（Word の脚注機能で書かれた注の番号だけは、Word の表示「1」ではなく本誌の形式（設定 fn_mark）にしています）"
     L.append("Word の自動段落番号や脚注番号は docx の文字ではなく Word が表示時に作るものです。表示どおりの文字を XML に出力しました"
-             "（Word の脚注機能で書かれた注の番号だけは、Word の表示「1」ではなく本誌の形式（設定 fn_mark）にしています）。"
+             f"{word_marks}。"
              "出版版 PDF があれば、自動番号・脚注番号の全角・半角を PDF に合わせています（13 章）。"
              "docx に注の見出しがない場合（Word の脚注機能で書かれた注など）は、見出し（設定 fn_title）を補いました。")
     L.append("")
@@ -1179,6 +1258,12 @@ def render(r) -> str:
     else:
         L.append("ありません。")
     L.append("")
+    note_rows = word_note_rows(r)
+    if note_rows:
+        L.append("Word の脚注・文末脚注と、XML の注の対応:")
+        L.append("")
+        L.append(table(["XML の注", "Word の注", "番号", "本文からのリンク"], note_rows))
+        L.append("")
 
     if fid.ai_additions:
         L.append("### AI が画像から読み取って併記した数式（docx の文字ではない）")

@@ -34,7 +34,8 @@ from .ooxml import BR_TEXT_TYPES, MC_NS, M_NS, parse_xml, run_hidden, sym_char, 
 
 XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
 AUTHOR = "jasme-jats（出版版 PDF に合わせた変更）"
-PARTS = {"word/document.xml": "d", "word/footnotes.xml": "f"}
+# 直す段落のある XML の部品と、段落 ID の頭文字（docx_reader・fidelity と同じ。Word の脚注・文末脚注の段落も直す）
+PARTS = {"word/document.xml": "d", "word/footnotes.xml": "f", "word/endnotes.xml": "e"}
 # 直してよいラン（w:r）の親。既存の変更履歴（w:ins / w:del）の中やハイパーリンクの中は直さない
 RUN_PARENTS = {w("p"), w("smartTag"), w("customXml"), w("sdtContent")}
 
@@ -428,16 +429,18 @@ def _mechanical(path, journal):
 
 
 def _all_paragraphs(doc):
+    """本文（表のセル・テキストボックスを含む）と、Word の脚注・文末脚注のすべての段落（直した docx の読み直しの確かめに使う）。"""
     yield from doc.all_paragraphs()
-    for notes in doc.footnotes.values():
-        yield from notes
+    for notes in (doc.footnotes, doc.endnotes):
+        for paras in notes.values():
+            yield from paras
 
 
 def make_fixed_docx(docx_path, pdf_path, out_path, journal) -> DocxFix:
     """ルート2 の最初の段階: docx と PDF を照合し、PDF に合わせて直した docx（変更履歴つき）を out_path に作る。
 
-    書き込んだ後に読み直して、(1) 直した段落の文字列が直した結果と一致するか、(2) 段落の役割・リンク（注・引用文献・図表
-    など）・注の区切りが元の docx と同じに決まるかを確かめる。合わない箇所は直さずに作り直す。
+    書き込んだ後に読み直して、(1) 直した段落の文字列が直した結果と一致するか、(2) 段落の役割・領域（英文要旨・資料など）・
+    リンク（注・引用文献・図表など）・注の区切りが元の docx と同じに決まるかを確かめる。合わない箇所は直さずに作り直す。
     """
     from .builder import word_note_marks
     from .pdfmatch import check_pdf
@@ -514,7 +517,11 @@ def _kept(f, keep) -> str:
 
 
 def _structure(plan) -> tuple:
-    """段落ごとの役割とリンクの並び {src: (役割, [(リンク, 開始, 終了)])}、注 {fid: (番号, 段落)}、注の番号の範囲。"""
+    """段落ごとの（役割, 領域）とリンクの並び {src: ((役割, 領域), [(リンク, 開始, 終了)])}、注 {fid: (番号, 段落)}、注の番号の範囲。
+
+    領域（plan.region）も比べるのは、英文要旨・資料の段落は役割が空のままなので、役割だけでは、直すと英文要旨と資料の境が
+    動くこと（英文要旨の「資料-1 …」を PDF の「資料－1 …」に直すと、資料の見出しになるなど）を見つけられないため。
+    """
     paras = {}
     for src, p in plan.paras.items():
         links, pos = [], 0
@@ -523,7 +530,7 @@ def _structure(plan) -> tuple:
             if a.link is not None:
                 links.append(((a.link.kind, tuple(sorted(a.link.attrs.items()))), pos, pos + n))
             pos += n
-        paras[src] = (p.role, links)
+        paras[src] = ((p.role, plan.region.get(src, "")), links)
     fns = {fn.fid: (fn.number, tuple(q.src for q in fn.paras)) for fn in plan.fns}
     marks = [(fn.paras[0].src, tuple(fn.mark_range), fn.fid) for fn in plan.fns if fn.paras and fn.mark_range]
     return paras, fns, marks
