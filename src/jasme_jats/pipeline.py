@@ -42,7 +42,7 @@ from .package import article_dir, make_zip, write_package
 from .pdfdocx import DocxFix, make_fixed_docx
 from .pdfmatch import PdfCheck, check_pdf
 from .report import figure_body_detail, images_to_prepare, render, render_ai_only
-from .structure import classify, float_caption, float_ids
+from .structure import classify, float_caption, float_targets
 from .tracking import SPAN
 from .validate import validate
 
@@ -85,6 +85,12 @@ def _read_cut(outcome, text):
     outcome.error = ""
     outcome.partial = PARTIAL_MSG.format(n=len(data["placements"]))
     return data
+
+
+def _spaced(text: str) -> str:
+    """文の中に図表の ID（英数字）を挟むときの空白: 先頭・末尾が英数字なら、その側に半角の空白を足す（例:「 F1・F2 」
+    「 F1 と段落「…」」）。"""
+    return (" " if text[:1].isascii() else "") + text + (" " if text[-1:].isascii() else "")
 
 
 def _located(plan, src) -> str:
@@ -404,9 +410,10 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     read = {op.get("src") for op, _ in outcome.rejected if op.get("op") == "place_float"}   # 指定を読めた（採用しなかった）図形
     for sid in plan.unplaced_floats:
         fi = plan.floats[sid]
-        ids = float_ids(plan, fi)
+        # 手作業で移す XML の要素（図表の ID と、図形の中身から出した本文の段落など）
+        targets = float_targets(plan, fi)
         place = plan.float_place(sid)
-        where = f"XML の{place}にある {ids} " if ids else f"XML の{place}にある図表の中身"
+        where = f"XML の{place}にある{_spaced(targets)}" if targets else f"XML の{place}にある図表の中身"
         if pending_ai:
             detail = (f"テキストボックス・グループ図形 {sid} の位置を決められない（{fi.reason}）。AI の回答を反映すると配置される"
                       f"（今は{place}に仮に置いている）")

@@ -962,7 +962,12 @@ def b3_place_parts(b: Builder, variant=""):
 
     s1: アンカー段落から 3 cm 下の図1。s2・s3: 同じアンカー段落に、docx の順で図3・図2。s4: 文字のない段落に結び付いた図4。
     variant（テストの中で作る）: s1 のアンカー段落を、"list" は 3 項目の箇条書きの 2 つ目の項目、"quote" は 3 段落の引用の
-    2 つ目の段落にする。"blank_list" は、2 項目の箇条書きの項目の間の空の段落に s1 を結び付ける。
+    2 つ目の段落にする。"blank_list" は、2 項目の箇条書きの項目の間の空の段落に s1 を結び付ける。s1 を箇条書きの最初の項目に
+    結び付け、その後ろを次の形にするもの: "two_lists"（2 つ目の項目、本文の段落、同じ番号の定義の 2 項目の箇条書き）、
+    "list_heading"（2 つ目の項目、同じ番号の定義で、見出しと推定する太字の「２．…」の段落）、"list_image"（画像と文字が同じ
+    段落の項目、3 つ目の項目、画像だけの項目）、"list_math"（2 つ目の項目、別行数式だけの項目、4 つ目の項目）、"list_textbox"
+    （2 つ目の項目、同じ番号の定義の段落を入れた、浮動配置でないテキストボックス）。"quote_blank" は、引用の 2 つ目の段落に
+    s1 を結び付け、3 つ目の段落との間に空の段落を置く。
     """
     img = [b.add_image(f"b3_place_{k}.png", png_bytes(f"Place {k}", size=(300, 200))) for k in range(1, 5)]
 
@@ -982,6 +987,34 @@ def b3_place_parts(b: Builder, variant=""):
     elif variant == "blank_list":
         first = [list_item(S["body"], "箇条書きの一つ目の項目である。"), para(S["body"], s1),
                  list_item(S["body"], "箇条書きの二つ目の項目である。")]
+    elif variant == "quote_blank":
+        first = [para(S["quote"], "引用の一つ目の段落である。"),
+                 para(S["quote"], "この引用の段落に図1のテキストボックスが結び付いている。", s1),
+                 para(S["body"], ""), para(S["quote"], "引用の三つ目の段落である。")]
+    elif variant in ("two_lists", "list_heading", "list_image", "list_math", "list_textbox"):
+        first = [list_item(S["body"], "この項目に図1のテキストボックスが結び付いている。", s1)]
+        if variant == "two_lists":
+            first += [list_item(S["body"], "一つ目の箇条書きの二つ目の項目である。"),
+                      para(S["body"], "二つの箇条書きの間にある本文の段落である。"),
+                      list_item(S["body"], "二つ目の箇条書きの項目である。"),
+                      list_item(S["body"], "二つ目の箇条書きの最後の項目である。")]
+        elif variant == "list_heading":
+            first += [list_item(S["body"], "箇条書きの二つ目の項目である。"),
+                      list_item(S["body"], run("２．見出しと推定する段落", b=True))]
+        elif variant == "list_image":
+            item = [b.add_image(f"b3_place_item_{k}.png", png_bytes(f"Item {k}", size=(300, 200))) for k in (1, 2)]
+            first += [list_item(S["body"], drawing(item[0], 720000, 480000, 756), "二つ目の項目には画像と文字がある。"),
+                      list_item(S["body"], "箇条書きの三つ目の項目である。"),
+                      list_item(S["body"], drawing(item[1], 1440000, 960000, 757))]
+        elif variant == "list_math":
+            first += [list_item(S["body"], "箇条書きの二つ目の項目である。"),
+                      list_item(S["body"], omathpara(mr("y=") + mfrac(mr("1"), mr("2")) + mr("x"))),
+                      list_item(S["body"], "数式の後ろの項目である。")]
+        else:
+            vml = ('<w:r><w:pict><v:shape><v:textbox><w:txbxContent>'
+                   + list_item(S["body"], "浮動配置でないテキストボックスの中の項目である。")
+                   + '</w:txbxContent></v:textbox></v:shape></w:pict></w:r>')
+            first += [list_item(S["body"], "箇条書きの二つ目の項目である。"), para(S["body"], vml)]
     return [para(S["sec1"], "１．仮の置き場所"),
             para(S["body"], "試験（2024）にならい，図1を置く。"),
             *first,

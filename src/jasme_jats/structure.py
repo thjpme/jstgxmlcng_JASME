@@ -323,6 +323,43 @@ def float_ids(plan, info) -> str:
     return "・".join(ids)
 
 
+def float_targets(plan, info) -> str:
+    """浮動配置の図形の中身を出力した XML の要素の説明（手作業で移す図表の知らせ。レポート・Colab・コマンドラインで使う）。
+
+    図・表の ID（float_ids）と、図形の中身から本文の段落として出した段落（画像と文字が同じ段落の文字など。図の直後に出す）。
+    ID のある図表か段落があれば、キャプションのない図（ID がない）も数える（知らせどおりに移したときに、図形の中身が仮の位置に
+    残らないように）。例: 「F1・F2 と段落「説明文：左のセルの画像と同じ段」」「F1 とキャプションのない図」「段落「…」」。
+    どれもなければ（キャプションのない図だけのときなど）空文字で、呼び出し側は「図表の中身」と示す。
+    """
+    ids = float_ids(plan, info)
+    mine = {id(q) for q in info.paras} | {id(q) for t in info.tables for q in t.paragraphs()}
+    paras, nocap = [], [0]
+
+    def walk(nodes):
+        for node in nodes:
+            if isinstance(node, Sec):
+                walk(node.children)
+            elif isinstance(node, FigNode):
+                if not node.fid and any(id(q) in mine for q in node.image_paras):
+                    nocap[0] += 1
+            elif isinstance(node, (PNode, FormulaNode)):
+                paras.extend([node.para] if id(node.para) in mine else [])
+            elif isinstance(node, (ListNode, QuoteNode)):
+                paras.extend(q for q in (node.items if isinstance(node, ListNode) else node.paras) if id(q) in mine)
+
+    walk(plan.body)
+    items = [ids] if ids else []
+    if ids or paras:
+        if nocap[0]:
+            items.append("キャプションのない図" + (f" {nocap[0]} つ" if nocap[0] > 1 else ""))
+        if paras:
+            items.append("段落" + "".join(f"「{_para_text(q).strip()[:20]}」" for q in paras))
+    out = ""
+    for item in items:
+        out += (" と" if out[-1:].isascii() else "と") + item if out else item
+    return out
+
+
 def same_place(flat, provisional) -> tuple:
     """本文の要素の列 flat の要素ごとに、同じ置き場所の、すぐ前・すぐ後ろの要素の位置（なければ None）。戻り値: (前, 後ろ)。
 
@@ -787,13 +824,15 @@ class Classifier:
         その種類（引用は "quote"、箇条書きは ("list", 番号の定義の ID)）。そうでなければ None。
 
         役割は build_body と同じ考えで見る（役割の決まっていない段落・本文の段落のうち、見出しと推定するものは箇条書きにしない）。
-        画像・別行数式のある段落、図形の中の段落は、箇条書きにしない（迷うものは None。仮の位置をずらさないだけ）。
+        画像だけの段落（図になる）と別行数式の段落（数式になる）は、assemble_floats と同じく箇条書きの項目にしない（箇条書きは
+        その前で終わる）。画像と文字が同じ段落の項目は、箇条書きの項目のまま。図形の中の段落（XML に出さないものもある）は、
+        箇条書きにしない（迷うものは None。仮の位置をずらさないだけ）。
         """
         if not isinstance(b, Para) or in_shape(b):
             return None
         if role == "quote":
             return "quote"
-        if not (b.numbering and b.autonum) or b.images or b.has_display_math:
+        if not (b.numbering and b.autonum) or self.is_image_para(b) or self.formula_node(b) is not None:
             return None
         if role in ("normal", None, "") or role not in BODY_ROLES | {"table"}:
             heading = self.guess_heading(b, strict=False)

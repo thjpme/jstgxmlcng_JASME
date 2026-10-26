@@ -405,6 +405,34 @@ def place_parts(b, shape):
         return head + [mf.para(mf.S["body"], "表2\u3000本文のスタイルの短い段落",
                                shape_box(bare_table("図形の中のキャプションのない表"), 895)),
                        mf.para(mf.S["body"], "以上で終わる。")]
+    if shape == "prov_caption_cont":
+        body_img = b.add_image("place_cont_body.png", mf.png_bytes("Cont body", size=(300, 200)))
+        img = b.add_image("place_cont_float.png", mf.png_bytes("Cont float", size=(300, 200)))
+        inner = (mf.para(mf.S["body"], mf.drawing(img, 1440000, 960000, 941)) + mf.para(mf.S["fig_cap"], "図2\u3000図形の中の図")
+                 + mf.para(mf.S["fig_cap"], "（出典：図形の中の架空の資料）")
+                 + mf.para(mf.S["tab_cap"], "表1\u3000図形の中の表キャプション"))
+        return head + [mf.para(mf.S["body"], mf.drawing(body_img, 1440000, 960000, 942)),
+                       mf.para(mf.S["fig_cap"], "図1\u3000本文の図", shape_box(inner, 940)),
+                       mf.para(mf.S["fig_cap"], "（出典：本文の架空の資料）"), mf.para(mf.S["body"], "以上で終わる。")]
+    if shape == "prov_next_caption":
+        below = b.add_image("place_next_below.png", mf.png_bytes("Next below", size=(300, 200)))
+        body_img = b.add_image("place_next_body.png", mf.png_bytes("Next body", size=(300, 200)))
+        inner = (mf.para(mf.S["fig_cap"], "図3\u3000図形の中の一つ目") + bare_table("図形の中の表のセル")
+                 + mf.para(mf.S["fig_cap"], "図4\u3000図形の中の二つ目"))
+        return head + [mf.para(mf.S["body"], mf.drawing(below, 1440000, 960000, 951)),
+                       mf.para(mf.S["fig_cap"], "図1\u3000下にキャプションのある図"),
+                       mf.para(mf.S["fig_cap"], "図2\u3000画像の上のキャプション"),
+                       mf.para(mf.S["body"], mf.drawing(body_img, 1440000, 960000, 952), shape_box(inner, 950)),
+                       mf.para(mf.S["body"], "以上で終わる。")]
+    if shape == "prov_count_above":
+        above = b.add_image("place_count_above.png", mf.png_bytes("Count above", size=(300, 200)))
+        body_img = b.add_image("place_count_body.png", mf.png_bytes("Count body", size=(300, 200)))
+        inner = (mf.para(mf.S["fig_cap"], "図2\u3000図形の中の図") + bare_table("図形の中の表のセル")
+                 + mf.para(mf.S["tab_cap"], "表1\u3000図形の中の表"))
+        return head + [mf.para(mf.S["fig_cap"], "図1\u3000画像の上のキャプション"),
+                       mf.para(mf.S["body"], mf.drawing(above, 1440000, 960000, 961)),
+                       mf.para(mf.S["body"], mf.drawing(body_img, 1440000, 960000, 962), shape_box(inner, 960)),
+                       mf.para(mf.S["body"], "以上で終わる。")]
     inner = mf.para(mf.S["fig_cap"], "図2\u3000キャプションだけの図形")
     return head + above_marker(b) + [mf.para(mf.S["body"], "この段落にキャプションだけの図形が結び付いている。",
                                              shape_box(inner, 840)),
@@ -452,12 +480,16 @@ def floats_in_body(root):
     return out
 
 
-@pytest.mark.parametrize("shape", ["prov_tabcap", "prov_tables", "prov_image", "prov_above_image", "prov_bodycap_table"])
+@pytest.mark.parametrize("shape", ["prov_tabcap", "prov_tables", "prov_image", "prov_above_image", "prov_bodycap_table",
+                                   "prov_caption_cont", "prov_next_caption", "prov_count_above"])
 def test_provisional_float_is_not_paired_with_outside_captions(journal, meta, tmp_path, shape):
     """位置を決められない図形（アンカー段落の後ろに仮に置いたもの）の中身は、その外の表・表キャプション・画像・図キャプション
     とも組にしない（図形の表キャプションに本文の表を入れない。本文の表キャプションを図形の表に付けない。本文の図キャプションを
     図形の画像と組にしない〈キャプションが図の下・上の原稿とも〉。図形の表を隣にして、本文のスタイルの「表2…」の段落を表
-    キャプションと推定しない）。本文の画像と図キャプションは、間に図形の中身を仮に置いていても、docx で隣り合っていれば組にする。
+    キャプションと推定しない）。本文の画像と図キャプションは、間に図形の中身を仮に置いていても、docx で隣り合っていれば組にする
+    （本文の図キャプションの続き〈出典〉は、本文の図キャプションに含める。キャプションを図の下に置く原稿で、本文の図キャプションの
+    後ろの本文の画像は、その後ろに仮に置いた図形の図キャプションがあっても、本文の図キャプションと組にする）。図キャプションが
+    図の上か下かも、同じ置き場所の要素だけで数える（仮に置いた図形の図キャプションと、その前の本文の画像は数えない）。
     手作業で移す図表の知らせには、図形の中身だけを出す。"""
     path = tmp_path / f"{shape}.docx"
     mf.make_article(path, "仮に置いた図形の検証用文書", lambda b: place_parts(b, shape))
@@ -465,6 +497,7 @@ def test_provisional_float_is_not_paired_with_outside_captions(journal, meta, tm
                                                ai_response='{"placements": [], "operations": [], "notes": []}'))
     checks_pass(res)
     assert res.plan.unplaced_floats == ["s1"] and res.plan.floats["s1"].where == "anchor"
+    issues = [why for _, why in res.plan.figure_issues]
     detail = next(u[3] for u in res.unresolved_after if u[0] == "float")
     got = floats_in_body(load(res))
     if shape == "prov_tabcap":
@@ -484,6 +517,24 @@ def test_provisional_float_is_not_paired_with_outside_captions(journal, meta, tm
         f2 = next(f for f in res.plan.figures if f.fid == "F2")
         assert [q.float_id for q in f2.image_paras] == [""]
         assert "にある図表の中身を正しい位置" in detail and "F2" not in detail
+    elif shape == "prov_caption_cont":
+        # 本文の図キャプションの続き（出典）は、間に仮に置いた図形の中身があっても、本文の図 F1 のキャプションに含める
+        assert got == ["F1:図1:g", "F2:図2:g", "T1:表1:"]
+        caption_more = {f.fid: [q.plain() for q in f.caption_more] for f in res.plan.figures}
+        assert caption_more == {"F1": ["（出典：本文の架空の資料）"], "F2": ["（出典：図形の中の架空の資料）"]}
+        assert "にある F2・T1 を正しい位置" in detail
+    elif shape == "prov_next_caption":
+        # 本文の「図2」（画像の上のキャプション）は、すぐ後ろの本文の画像と組にする（その後ろの、仮に置いた図形の「図3」は
+        # 本文の画像の後ろの要素として数えない）
+        assert got == ["F1:図1:g", "F2:図2:g", "F3:図3:", "F4:図4:t"]
+        f2 = next(f for f in res.plan.figures if f.fid == "F2")
+        assert [q.float_id for q in f2.image_paras] == [""]
+        assert "にある F3・F4 を正しい位置" in detail
+    elif shape == "prov_count_above":
+        # 図キャプションは図の上（本文の図1）。仮に置いた図形の「図2」と、その前の本文の画像は、下のキャプションとして数えない
+        assert got == ["F1:図1:g", "None:-:g", "F2:図2:", "T1:表1:t"]
+        assert issues == ["直後の表の次に表キャプションがあり、どちらの表か決められない"]
+        assert "にある F2・T1 を正しい位置" in detail
     else:
         # 本文のスタイルの「表2…」の段落は、仮に置いた図形の表と隣でも、表キャプションにしない（本文の段落のまま）
         assert got == ["T1:-:t"] and res.plan.tables[0].caption is None

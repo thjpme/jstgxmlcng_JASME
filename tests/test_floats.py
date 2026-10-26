@@ -347,24 +347,38 @@ def test_unplaced_floats_go_after_anchor_in_number_order(journal, meta, tmp_path
     assert "本文の冒頭" not in report and "4 件（アンカー段落の後ろに仮に配置）" in report
 
 
-@pytest.mark.parametrize("variant, items, last", [
-    ("list", ["箇条書きの一つ目の項目である。", "この項目に図1のテキストボックスが結び付いている。", "箇条書きの三つ目の項目である。"],
-     "箇条書きの三つ目の項目である。"),
+FIRST = "この項目に図1のテキストボックスが結び付いている。"
+
+
+@pytest.mark.parametrize("variant, items, last, groups", [
+    ("list", ["箇条書きの一つ目の項目である。", FIRST, "箇条書きの三つ目の項目である。"], "箇条書きの三つ目の項目である。", 1),
     ("quote", ["引用の一つ目の段落である。", "この引用の段落に図1のテキストボックスが結び付いている。", "引用の三つ目の段落である。"],
-     "引用の三つ目の段落である。"),
-    ("blank_list", ["箇条書きの一つ目の項目である。", "箇条書きの二つ目の項目である。"], "箇条書きの二つ目の項目である。")])
-def test_unplaced_float_does_not_split_list_or_quote(journal, meta, tmp_path, variant, items, last):
+     "引用の三つ目の段落である。", 1),
+    ("blank_list", ["箇条書きの一つ目の項目である。", "箇条書きの二つ目の項目である。"], "箇条書きの二つ目の項目である。", 1),
+    ("quote_blank", ["引用の一つ目の段落である。", "この引用の段落に図1のテキストボックスが結び付いている。",
+                     "引用の三つ目の段落である。"], "引用の三つ目の段落である。", 1),
+    ("two_lists", [FIRST, "一つ目の箇条書きの二つ目の項目である。"], "一つ目の箇条書きの二つ目の項目である。", 2),
+    ("list_heading", [FIRST, "箇条書きの二つ目の項目である。"], "箇条書きの二つ目の項目である。", 1),
+    ("list_image", [FIRST, "二つ目の項目には画像と文字がある。", "箇条書きの三つ目の項目である。"], "箇条書きの三つ目の項目である。", 1),
+    ("list_math", [FIRST, "箇条書きの二つ目の項目である。"], "箇条書きの二つ目の項目である。", 2),
+    ("list_textbox", [FIRST, "箇条書きの二つ目の項目である。"], "箇条書きの二つ目の項目である。", 1)])
+def test_unplaced_float_does_not_split_list_or_quote(journal, meta, tmp_path, variant, items, last, groups):
     """アンカー段落が、続いた箇条書きの項目・引用の段落の途中にあるときは、その箇条書き・引用の最後の段落の後ろに仮に置く
     （箇条書き・引用を 2 つに分けない。分けると、図表を手作業で移しても分かれたまま残る）。空のアンカー段落が箇条書きの
-    項目の間にあるときも同じ。AI が指定した位置はずらさない。"""
+    項目の間にあるときも同じ。間の空の段落は飛ばし（quote_blank）、箇条書き・引用でない段落（two_lists の本文の段落）、
+    見出しと推定する段落（list_heading）、画像だけの項目（list_image。図になる）、別行数式だけの項目（list_math。数式になる）、
+    浮動配置でないテキストボックスの中の段落（list_textbox。XML に出さない）の前で止める。画像と文字が同じ段落の項目は、
+    箇条書きの項目として数える。AI が指定した位置はずらさない。"""
     path = tmp_path / f"place_{variant}.docx"
     mf.make_b3_place(path, variant=variant)
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.lost_images == []
     assert res.plan.unplaced_floats == ["s1", "s2", "s3", "s4"] and res.plan.floats["s1"].where == "anchor"
     body = load(res).find("body")
-    tag = "disp-quote" if variant == "quote" else "list"
-    [group] = list(body.iter(tag))
+    tag = "disp-quote" if variant.startswith("quote") else "list"
+    found = list(body.iter(tag))
+    assert len(found) == groups
+    group = found[0]
     assert ["".join(p.itertext()) for p in group.iter("p")] == items           # 1 つの箇条書き・引用のまま
     nxt = group.getnext()
     assert nxt.tag == "fig" and "".join(nxt.find("caption").itertext()).startswith("図1")
@@ -382,7 +396,8 @@ def test_unplaced_float_does_not_split_list_or_quote(journal, meta, tmp_path, va
                                                convert_metafiles=False))
     assert res.plan.floats["s1"].mode == "ai" and res.fidelity.ok and res.dtd_valid
     if variant != "blank_list":
-        assert len(list(load(res).find("body").iter(tag))) == 2      # 指定された段落の直後に置くので、2 つに分かれる（今までどおり）
+        # 指定された段落の直後に置くので、2 つに分かれる（今までどおり）
+        assert len(list(load(res).find("body").iter(tag))) == groups + 1
 
 
 def test_float_row_location_for_empty_anchor(journal, meta, tmp_path):
