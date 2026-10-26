@@ -2,7 +2,7 @@
 キャプションのない表（図の中の表として組む。修正計画の決定事項 22）。"""
 import make_fixtures as mf
 import pytest
-from conftest import CELLS, EDGE, TABLEFIG
+from conftest import CELLS, EDGE, META_EXAMPLE, TABLEFIG
 from lxml import etree
 
 from jasme_jats.cli import main as cli_main
@@ -258,7 +258,11 @@ def test_unplaced_float_notice_lists_its_paragraphs(journal, meta, tmp_path, cap
     assert [x.split(": ", 1)[1].endswith(f"にある {want}") for x in res.forced_floats] == [True]   # 冒頭・CLI
     assert f"にある {want}" in res.report_path.read_text(encoding="utf-8").split("## 2.")[0]      # 冒頭の要対応
     assert f"、XML の {want}）" in unplaced_box(res.plan)                     # Colab の枠
-    assert cli_main([str(path), "--out", str(tmp_path / "cli"), "--ai", "manual", "--ai-response", str(resp)]) == 1
+    from jasme_jats.report import NEEDS_ACTION, actions
+    assert [a.key for a in actions(res) if a.level == NEEDS_ACTION] == ["forced"]
+    # 仮に置いた図表の要対応で 1（--meta を付けて、書誌情報がないことによる要対応〈EMSGM230E〉と分ける）
+    assert cli_main([str(path), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli"), "--ai", "manual",
+                     "--ai-response", str(resp)]) == 1
     assert f"にある {want}" in capsys.readouterr().err
 
 
@@ -296,8 +300,8 @@ def test_caption_less_table_becomes_figure_body(journal, meta, tmp_path, capsys)
     assert "図の本体が見つからない図 2 件（3 章の「図の本体」）" in report.split("## 14.")[1]
     warned = [w.split(":")[0] for w in res.warnings if "画像が見つからないため <graphic> なしで出力" in w]
     assert warned == ["F2", "F3"]                         # 表を本体にした F1 は、画像のない図の警告を出さない
-    # コマンドラインでも知らせる（表の文字は XML に入っているので、終了コードは変えない）
-    assert cli_main([str(TABLEFIG), "--out", str(tmp_path / "cli")]) == 0
+    # コマンドラインでも知らせる（要対応なので、終了コードは 1。修正計画 D: 要対応の知らせは report.actions に 1 か所）
+    assert cli_main([str(TABLEFIG), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli")]) == 1
     err = capsys.readouterr().err
     assert "要対応: 図の本体（画像・表）が見つからない図 2 件" in err and "「図2\u3000間に段落がある問題」" in err
 

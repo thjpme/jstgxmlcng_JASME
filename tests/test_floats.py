@@ -6,7 +6,7 @@ import pytest
 from lxml import etree
 
 import make_fixtures as mf
-from conftest import DATA, FLOAT, FLOAT_TEXT, PLACE
+from conftest import DATA, FLOAT, FLOAT_TEXT, META_EXAMPLE, PLACE
 from jasme_jats.ai_assist import AIOutcome, build_request, float_placements
 from jasme_jats.cli import main as cli_main
 from jasme_jats.model import Atom, Float, Layout, Para
@@ -163,12 +163,17 @@ def test_missing_placement_is_reported_after_ai(journal, meta, tmp_path, capsys)
     assert "1 件（アンカー段落の後ろに仮に配置）" in report
     assert f"AI による補完でも位置を決められなかったため、{place}に仮に置いた" in report.split("## 3.")[1]
     assert "仮の位置（アンカー段落の後ろ・本文の最後）に置いた図表" in report.split("## 14.")[1]
+    from jasme_jats.report import NEEDS_ACTION, actions
+    assert [a.key for a in actions(res) if a.level == NEEDS_ACTION] == ["forced"] and res.needs_action
     path = tmp_path / "resp.json"
     path.write_text(json.dumps(data), encoding="utf-8")
     capsys.readouterr()
-    assert cli_main([str(FLOAT), "--out", str(tmp_path / "cli"), "--ai", "manual", "--ai-response", str(path)]) == 1
+    # 仮に置いた図表は要対応で 1（--meta を付けて、書誌情報がないことによる要対応〈EMSGM230E〉と分ける）
+    assert cli_main([str(FLOAT), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli"), "--ai", "manual",
+                     "--ai-response", str(path)]) == 1
     # コマンドラインでも、図表ごとに、キャプションと XML の中の位置・ID を 1 行ずつ示す（レポートの冒頭と同じ）
     err = capsys.readouterr().err
+    assert "要対応: J-STAGE のアップロード時チェック" not in err
     assert "要対応: 位置を決められなかった図表 1 件を、仮の位置（アンカー段落の後ろ、または本文の最後）に置きました" in err
     assert f"\n  「図3\u3000面積図」「図4\u3000樹形図」: XML の{place}にある F2・F3" in err
 
@@ -522,20 +527,32 @@ def test_cut_response_applies_only_finished_placements(journal, meta, tmp_path):
     head, ch2, ch14 = report.split("## 2.")[0], report.split("## 2.")[1].split("## 3.")[0], report.split("## 14.")[1]
     assert "要対応: AI の回答が途中で切れていました（2 章）" in head and "AI の回答が途中で切れていました。" in ch2
     assert "AI の回答が途中で切れていた" in ch14 and "要対応: 位置を決められなかった図表が 2 件" in head
+    from jasme_jats.report import NEEDS_ACTION, actions
+    assert [a.key for a in actions(res) if a.level == NEEDS_ACTION] == ["partial", "forced"] and res.needs_action
     path = tmp_path / "cut.json"
     path.write_text(resp, encoding="utf-8")
-    assert cli_main([str(FLOAT), "--out", str(tmp_path / "cli"), "--ai", "manual", "--ai-response", str(path)]) == 1
+    assert cli_main([str(FLOAT), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli"), "--ai", "manual",
+                     "--ai-response", str(path)]) == 1
 
 
-def test_cut_response_placements_are_validated(journal, meta, tmp_path):
+def test_cut_response_placements_are_validated(journal, meta, tmp_path, capsys):
     """途中で切れた回答（operations の文字列の途中）から読んだ placements も、ふつうの回答と同じく検証する
-    （機械的に配置した s4 の指定は採用しない）。"""
+    （機械的に配置した s4 の指定は採用しない）。位置を決められない図表が残らなくても、途中で切れた回答は要対応
+    （operations と notes を使っていない）で、コマンドラインは 1 を返す（0.23.0 では 0。修正計画 D）。"""
+    from jasme_jats.report import NEEDS_ACTION, actions
     resp = cut_float_response(lambda t: t.index('"reason"', t.index('"operations"')) + 15)
     res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=resp,
                                                 convert_metafiles=False))
     assert res.fidelity.ok and res.dtd_valid and res.ai.error == ""
     assert "最後まで書かれていた 4 件だけ" in res.ai.partial and res.plan.unplaced_floats == []
     assert [op["src"] for op, _ in res.ai.rejected] == ["s4"] and "機械的に決めた" in res.ai.rejected[0][1]
+    assert [a.key for a in actions(res) if a.level == NEEDS_ACTION] == ["partial"] and res.needs_action
+    path = tmp_path / "cut.json"
+    path.write_text(resp, encoding="utf-8")
+    capsys.readouterr()
+    assert cli_main([str(FLOAT), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli"), "--ai", "manual",
+                     "--ai-response", str(path)]) == 1
+    assert "要対応: AI の回答が途中で切れていました。" in capsys.readouterr().err
 
 
 def test_unreadable_cut_response_is_reported(journal, meta, tmp_path):

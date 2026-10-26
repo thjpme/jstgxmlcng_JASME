@@ -11,6 +11,9 @@ test_blank_paragraphs_in_textbox_and_endnote_are_excluded）。単位 B（0.20.0
 再現と直した後の振る舞いのテスト（架空の文字）は、直すときに tests/test_pdfmatch.py に足した。単位 B3（0.22.0。N15〜N19）も同じで、
 再現と直した後の振る舞いのテスト（架空の文字）は、直すときに tests/test_floats.py・tests/test_ai.py・tests/test_figure_body.py に足した。
 単位 C（0.23.0。M1・M2・N4・U1）は tests/test_pipeline.py・tests/test_notebook.py に取り込んだ。
+単位 D（0.23.1。U2・M4・N5）も、このファイルにはもともとない（再現と直した後の振る舞いのテストは、直すときに tests/test_pipeline.py・
+tests/test_colab.py・tests/test_notebook.py・tests/test_pdfmatch.py・tests/test_ai.py・tests/test_floats.py・tests/test_figure_body.py・
+tests/test_lost_images.py に足した）。
 
 実行のしかた（tests/conftest.py のフィクスチャ journal・meta を使うため、tests/ に一時的に写して実行し、終わったら消す）:
 

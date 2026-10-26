@@ -6,6 +6,7 @@ from jasme_jats.config import ArticleMeta, JournalConfig
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 DATA = Path(__file__).resolve().parent / "data"
+META_EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "meta_example.toml"   # コマンドラインの --meta の例
 FULL = FIXTURES / "sample_full.docx"
 EDGE = FIXTURES / "sample_edge.docx"
 TEMPLATE = FIXTURES / "JASME_template_20261009.docx"
