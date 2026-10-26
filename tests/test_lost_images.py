@@ -220,6 +220,13 @@ def test_provisional_notices_for_textbox_and_endnote(journal, meta, tmp_path):
     assert "本文の注（テンプレートの書き方" in top and "「文末脚注の本文。」" in top
     assert "- [ ] **テキストボックスの中の文字 2 段落**（6 章。XML に出力していない）: 本文に必要か確かめ" in ch14
     assert "- [ ] **Word の文末脚注 1 段落**（6 章。XML に出力していない）: 本文の注" in ch14
+    # 暫定の知らせは冒頭の最後（要対応の後ろ。0.23.0 と同じ並び）
+    from jasme_jats.report import render
+    res.fidelity.ok = False
+    top = render(res).split("## 2.")[0]
+    assert top.index("> **注意: 文字の不変性チェックが不合格です。**") < top.index("> **要確認: テキストボックスの中の文字") \
+        < top.index("> **要確認: Word の文末脚注")
+    res.fidelity.ok = True
     # 該当がなければ出さない
     full = convert(FULL, meta, journal, Options(out_dir=tmp_path / "full", convert_metafiles=False)).report_path
     assert "要確認: テキストボックス" not in full.read_text(encoding="utf-8")

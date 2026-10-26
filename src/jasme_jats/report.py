@@ -3,11 +3,14 @@
 冒頭に結果の要約、続いて AI による補完（不確実性のある箇所）、機械処理で解決できなかった箇所、
 機械的な推定、出力しなかった文字の全件、落とした空白の全件、生成文字、画像、書誌情報、DTD 検証と J-STAGE の登載時チェック、
 出版版 PDF との照合、登載前のチェックリストの順に並べる。
+
+利用者に知らせること（要対応・要確認）は actions() の 1 か所で決める。レポートの冒頭・14 章、Colab の赤い枠
+（colab.result_boxes）、コマンドラインの標準エラーと終了コード（pipeline.Result.needs_action）は、どれもその結果を使う。
 """
 from __future__ import annotations
 
 from collections import Counter
-
+from dataclasses import dataclass
 from pathlib import Path
 
 from .ai_assist import PROVIDERS
@@ -286,7 +289,7 @@ def pdf_summary(r) -> str:
             parts.append(ignored_summary(r))
     if unmatched:
         parts.append(f"PDF に見つからない段落 {len(unmatched)} 件"
-                     + ("（半分以上の段落が見つからない。別の記事の PDF ではないか確認）" if len(unmatched) * 2 > pc.checked else ""))
+                     + ("（半分以上の段落が見つからない。別の記事の PDF ではないか確認）" if pdf_suspect(r) else ""))
     return " / ".join(parts) + "（13 章）"
 
 
@@ -480,6 +483,472 @@ def note_notes(plan):
     return out
 
 
+# ---------------------------------------------------------------------------- 要対応・要確認の知らせ（1 か所にまとめる）
+# 利用者に知らせることは、ここ（actions）に Action を 1 つ足す。レポートの冒頭・14 章、Colab の赤い枠（colab.result_boxes）と
+# 手順 8 の止め方、コマンドラインの標準エラーと終了コードは、どれも actions の結果だけで決まる（個別の表示を足さない）。
+NEEDS_ACTION = "要対応"     # コマンドラインの終了コード 1、Colab の手順 8 で一度止める、赤い枠、レポートの冒頭・14 章
+TO_CHECK = "要確認"         # 赤い枠、レポートの冒頭・14 章だけ（終了コードは 0）
+
+
+@dataclass
+class Action:
+    """利用者に知らせる 1 件（要対応か要確認）。文面の欄が空なら、そこには出さない。
+
+    top: レポートの冒頭の囲み（Markdown。複数行でもよい）。checklist: 14 章の行。box_title・box_detail: Colab の赤い枠の
+    見出しと本文。cli: コマンドラインの標準エラーに出す文（Colab の手順の番号ではなく、コマンドラインの指定で書く）。
+    """
+    level: str
+    key: str
+    top: str = ""
+    checklist: str = ""
+    box_title: str = ""
+    box_detail: str = ""
+    cli: str = ""
+
+
+def _fidelity_action(r):
+    fid = r.fidelity
+    if fid.ok and fid.final_ok:
+        return None
+    return Action(
+        NEEDS_ACTION, "fidelity",
+        top=("> **注意: 文字の不変性チェックが不合格です。** 出力された XML の本文が docx と一致していません。"
+             "下の 5 章の差分を確認し、この XML は登載に使わないでください（変換ツールの不具合の可能性があります）。"),
+        checklist=("- [ ] **文字の不変性チェックが不合格**（5 章）: この XML は登載に使わない（変換ツールの不具合の可能性がある。"
+                   "変換レポートを添えて開発者に知らせる）"),
+        box_title="文字の不変性チェックが不合格です（この XML は登載に使わないでください）",
+        box_detail=("出力された XML の本文が docx と一致していません。変換ツールの不具合の可能性があります。レポートの 5 章の"
+                    "差分を確認し、変換レポートを添えて開発者に知らせてください。"),
+        cli=("要対応: 文字の不変性チェックが不合格です。出力された XML の本文が docx と一致していないので、この XML は登載に"
+             "使わないこと（レポートの冒頭と 5 章。変換ツールの不具合の可能性がある）"))
+
+
+DTD_SHOWN = 5       # 赤い枠とコマンドラインに並べる DTD のエラーの数（全件はレポートの 12 章）
+
+
+def _dtd_action(r):
+    if r.dtd_valid:
+        return None
+    n = len(r.dtd_errors)
+    errs = list(r.dtd_errors[:DTD_SHOWN]) + ([f"…ほか {n - DTD_SHOWN} 件"] if n > DTD_SHOWN else [])
+    return Action(
+        NEEDS_ACTION, "dtd",
+        top=(f"> **要対応: J-STAGE 指定の DTD による検証が不合格です（{n} 件、12 章）。** この XML は J-STAGE にアップロード"
+             "できません。12 章のエラーを確認してください（変換ツールの不具合の可能性があります）。"),
+        checklist=(f"- [ ] **DTD 検証が不合格**（12 章、{n} 件）: この XML は J-STAGE にアップロードできない。12 章のエラーを"
+                   "確かめる（変換ツールの不具合の可能性がある）"),
+        box_title=f"J-STAGE 指定の DTD による検証が不合格です（{n} 件。要対応）",
+        box_detail=("この XML は J-STAGE にアップロードできません。変換ツールの不具合の可能性があります。レポートの 12 章の"
+                    "エラーを確認し、変換レポートを添えて開発者に知らせてください。\n" + "\n".join(f"・{e}" for e in errs)),
+        cli=(f"要対応: J-STAGE 指定の DTD による検証が不合格です（{n} 件。レポートの冒頭と 12 章）。この XML は J-STAGE に"
+             "アップロードできない（変換ツールの不具合の可能性がある）。\n" + "\n".join(f"  {e}" for e in errs)))
+
+
+def _upload_action(r):
+    issues = upload_issues(r)
+    if not issues:
+        return None
+    n = len(issues)
+    ids = "、".join(dict.fromkeys(mid for mid, _ in issues))
+    return Action(
+        NEEDS_ACTION, "upload",
+        top=(f"> **要対応: J-STAGE のアップロード時チェックで問題が {n} 件見つかりました（12 章）。** このままでは、J-STAGE に"
+             "アップロードするときに弾かれます。12 章の内容を見て、書誌情報（巻・号・ページ・日付など）か docx を直し、"
+             "変換し直してください。\n>\n" + "\n".join(f"> - {esc(mid)}: {esc(msg)}" for mid, msg in issues)),
+        checklist=(f"- [ ] **J-STAGE のアップロード時チェックの問題 {n} 件**（12 章）を、書誌情報か docx を直して変換し直す: "
+                   + esc(ids)),
+        box_title=f"J-STAGE のアップロード時チェックで問題が {n} 件あります（要対応）",
+        box_detail=("このままでは、J-STAGE にアップロードするときに弾かれます。書誌情報（巻・号・ページ・日付など）が原因なら"
+                    "手順 3 から、docx が原因なら docx を直して手順 2 から、やり直してください（レポートの 12 章）。\n"
+                    + "\n".join(f"・{mid}: {msg}" for mid, msg in issues)),
+        cli=(f"要対応: J-STAGE のアップロード時チェックで問題が {n} 件あります（レポートの冒頭と 12 章）。このままでは"
+             "アップロードのときに弾かれるので、書誌情報（--meta）か docx を直して変換し直すこと。\n"
+             + "\n".join(f"  {mid}: {msg}" for mid, msg in issues)))
+
+
+# AI の回答を反映できなかったときの見出し（手動モードは貼り付けた回答、API モードは API の呼び出しか回答）
+AI_ERROR_TITLE = {"manual": "貼り付けた回答を読み込めませんでした（AI による補完は反映されていません）",
+                  "api": "AI による補完ができませんでした"}
+
+
+def _ai_error_action(r):
+    ai = r.ai
+    if ai.mode == "none" or not ai.error:
+        return None
+    manual = ai.mode == "manual"
+    title = AI_ERROR_TITLE["manual" if manual else "api"]
+    todo = ("回答のコードブロックの中身だけを貼り付け直して、変換し直す" if manual
+            else "2 章の理由を確かめて、もう一度変換する（また失敗するときは「手動（チャットに貼り付け）」に切り替える）")
+    return Action(
+        NEEDS_ACTION, "ai_error",
+        top=(f"> **要対応: {'貼り付けた回答を読み込めませんでした（AI による補完は反映されていません。2 章）' if manual else 'AI による補完ができませんでした（2 章）'}。** "
+             f"{esc(ai.error)}"),
+        checklist=f"- [ ] **{'貼り付けた AI の回答を読み込めなかった' if manual else 'AI による補完ができなかった'}**（2 章）: {todo}",
+        box_title=title, box_detail=ai.error,
+        cli=f"要対応: {title}。{ai.error}")
+
+
+def ai_pending(r) -> bool:
+    """手動モードで、AI の回答をまだ貼り戻していない（この出力は AI による補完の前の状態。決定事項 5(c)）。"""
+    return r.ai.mode == "manual" and not r.ai.raw and not r.ai.error
+
+
+def _ai_pending_action(r):
+    if not ai_pending(r):
+        return None
+    floats = ("位置を決められない図表は、AI の回答を反映するまで仮の位置に置いています（3 章）。" if r.plan.unplaced_floats
+              else "")
+    prompt = r.prompt_path.name if r.prompt_path else "AI依頼文.txt"
+    # 冒頭には、変換のときに書いた手動モードの説明（Result.output_note）が出るので、ここでは冒頭に出さない
+    return Action(
+        NEEDS_ACTION, "ai_pending",
+        checklist=(f"- [ ] **AI の回答をまだ反映していない**（手動モード）: {esc(prompt)} を AI に渡し、返ってきた回答を貼り戻して"
+                   "変換し直す（Colab では手順 6、コマンドラインでは --ai-response）"),
+        box_title="AI の回答をまだ反映していません（手動モード）",
+        box_detail=("この結果は、AI による補完の前の状態です。手順 5 の依頼文を AI（claude.ai などのチャット）に渡し、"
+                    "返ってきた回答を手順 6 に貼り付けて ▶ を押してください。" + floats),
+        cli=(f"要対応: 手動モードで、AI の回答をまだ反映していません（この出力は AI による補完の前の状態）。{prompt} を"
+             "チャット（claude.ai など）に貼り付け、返ってきた回答をファイルに保存して --ai-response で指定し、変換し直すこと。"
+             + floats))
+
+
+PARTIAL_TITLE = "AI の回答が途中で切れていました（図表の位置の一部だけを反映しました）"
+
+
+def _partial_action(r):
+    if not r.ai.partial:
+        return None
+    return Action(
+        NEEDS_ACTION, "partial",
+        top=f"> **要対応: AI の回答が途中で切れていました（2 章）。** {esc(r.ai.partial)}",
+        checklist="- [ ] **AI の回答が途中で切れていた**（2 章）: AI に出し直してもらい、もう一度変換する",
+        box_title=PARTIAL_TITLE, box_detail=r.ai.partial,
+        cli=f"要対応: AI の回答が途中で切れていました。{r.ai.partial}")
+
+
+def unplaced_text(plan, partial="") -> tuple:
+    """AI の回答を反映した後も、位置を決められない図表が残っているときの赤い枠の (見出し, 本文)。なければ None。
+
+    図表ごとに、キャプション、XML の中の図表の ID（と、図形の中身から出した本文の段落など。structure.float_targets）、
+    仮に置いた位置（structure.ArticlePlan.float_place。アンカー段落の後ろか本文の最後）を示す。partial（AIOutcome.partial。
+    AI の回答が途中で切れていた）があれば、出し直しの頼み方は、途中で切れた回答の枠（PARTIAL_MSG）と同じものを示す
+    （別の頼み方を並べない）。
+    """
+    from .structure import float_caption, float_targets
+    if not plan.unplaced_floats:
+        return None
+    why = {"ai": "（AI が注などの本文の外の段落の後ろを指定したため）",
+           "anchor": "（図が結び付いている段落が本文の段落でないため）"}
+    rows = []
+    for fid in plan.unplaced_floats:
+        info = plan.floats[fid]
+        ids = float_targets(plan, info)
+        xml = f"、XML の{' ' if ids[:1].isascii() else ''}{ids}" if ids else ""
+        rows.append(f"・{fid}（{float_caption(info)}{xml}）: {plan.float_place(fid)}"
+                    f"{why.get(info.end_why, '')}")
+    if partial:
+        intro = ("AI の回答が途中で切れていて、次の図表の位置（placements）の指定を読み取れなかったか、指定が検証で採用されません"
+                 "でした（レポートの 2 章・3 章）。")
+        again = ("AI に出し直してもらう方法は、上の「AI の回答が途中で切れていました」の枠のとおりです（最初から出し直してもらうと、"
+                 "これらの図表の位置も反映されます）。")
+    else:
+        intro = "AI の回答に、次の図表の位置（placements）の指定がないか、指定が検証で採用されませんでした（レポートの 2 章・3 章）。"
+        again = ("AI に出し直してもらう場合は、手動モードではチャットで「位置を決められなかった図表をすべて placements に書いて、"
+                 "回答の書き方に従って出し直してください」と頼んで手順 6 で貼り付け直し、API モードでは手順 5 をもう一度実行してください。")
+    return ("位置を決められなかった図表があります（仮の位置に置いています。手作業で直してください）",
+            intro + "これらは仮の位置に置いているので、登載の前に、XML の中で手作業で正しい位置（Word で表示したときに、図の左上の"
+            "直上にある本文の段落の後）に移してください。\n" + "\n".join(rows) + "\n" + again)
+
+
+def _forced_action(r):
+    if not r.forced_floats:
+        return None
+    title, detail = unplaced_text(r.plan, r.ai.partial)
+    return Action(
+        NEEDS_ACTION, "forced",
+        top=(f"> **要対応: 位置を決められなかった図表が {len(r.forced_floats)} 件あります（AI による補完でも決まりませんでした）。** "
+             "図が結び付いている段落（アンカー段落）のすぐ後ろ（箇条書き・引用の途中なら、その終わり）か、本文の最後に仮に"
+             "置いています。登載の前に、XML の中でこれらの"
+             "図表を手作業で正しい位置（Word で表示したときに、図の左上の直上にある本文の段落の後）に移してください（3 章）: "
+             + "、".join(esc(x) for x in r.forced_floats)),
+        checklist=("- [ ] 仮の位置（アンカー段落の後ろ・本文の最後）に置いた図表（3 章の「図表の位置」）を、XML の中で手作業で"
+                   "正しい位置に移す"),
+        box_title=title, box_detail=detail,
+        # 図表ごとに、キャプションと、XML の中の位置・ID（レポートの冒頭と同じ。pipeline の forced_floats）
+        cli=(f"要対応: 位置を決められなかった図表 {len(r.forced_floats)} 件を、仮の位置（アンカー段落の後ろ、または"
+             "本文の最後）に置きました。XML の中で手作業で正しい位置（Word で表示したときに、図の左上の直上にある本文の段落の後）"
+             "に移してください（レポートの冒頭と 3 章）。\n" + "\n".join(f"  {x}" for x in r.forced_floats)))
+
+
+def figure_body_action(r):
+    """図の本体（画像・表）が見つからない図（structure.Classifier.table_for_figure）。なければ None。"""
+    plan = r.plan
+    if not plan.figure_issues:
+        return None
+    labels = figure_issue_labels(plan)
+    n = len(plan.figure_issues)
+    return Action(
+        NEEDS_ACTION, "figbody",
+        top=(f"> **要対応: 図の本体（画像・表）が見つからない図が {n} 件あります（3 章）。** "
+             f"{FIGURE_BODY_ACTION}対象の図: " + "、".join(labels)),
+        checklist=(f"- [ ] 図の本体が見つからない図 {n} 件（3 章の「図の本体」）を docx で確かめ、表が図の本体なら "
+                   "docx を直して変換し直す"),
+        box_title=f"図の本体（画像・表）が見つからない図が {len(labels)} 件あります（要対応）",
+        box_detail=f"{FIGURE_BODY_ACTION}（レポートの冒頭と 3 章）\n" + "\n".join(f"・{x}" for x in labels),
+        cli=(f"要対応: 図の本体（画像・表）が見つからない図 {len(labels)} 件（レポートの冒頭と 3 章）。{FIGURE_BODY_ACTION}\n"
+             + "\n".join(f"  {x}" for x in labels)))
+
+
+def images_action(r):
+    """画像ファイルを用意できなかった図（Word の図形で描かれた図など。images_to_prepare）。なければ None。"""
+    need = images_to_prepare(r)
+    if not need:
+        return None
+    zname = r.zip_path.name if r.zip_path else "アップロード用の ZIP"
+    items = "\n".join(f"・{name}: {cap or '（キャプションなし）'}（{why}）" for name, cap, why in need)
+    return Action(
+        NEEDS_ACTION, "images",
+        top="\n".join([(f"> **要対応: 画像ファイルを用意できなかった図が {len(need)} 件あります（9 章）。** 次の名前の画像（PNG）を"
+                        f"作り、{esc(zname)} の中の `{graphics_dir(r)}` に入れてください。画像がないままでは、その図が J-STAGE の"
+                        "画面に表示されません。"), ">"]
+                      + [f"> - `{name}`: {esc(cap, 40) or '（キャプションなし）'}（{esc(why)}）" for name, cap, why in need]),
+        checklist=(f"- [ ] **画像ファイルを用意できなかった図 {len(need)} 件**の画像を作り、ZIP の中の `{graphics_dir(r)}` に入れる: "
+                   + "、".join(f"`{name}`（{esc(cap, 20) or 'キャプションなし'}）" for name, cap, _ in need)),
+        box_title=f"画像ファイルを用意できなかった図が {len(need)} 件あります",
+        box_detail=("Word の図形で描かれた図などは、docx に画像ファイルがないので、変換で画像を作れません。画像がないままでは、"
+                    "その図が J-STAGE の画面に表示されません。手順 7「足りない画像をアップロード」で、図ごとにその図の画像を"
+                    f"選んでください（ファイル名は何でもかまいません）。手元で入れるときは、次の名前の画像を {zname} の中の "
+                    f"{graphics_dir(r)} に入れます（レポートの冒頭と 9 章）。\n{items}"),
+        cli=(f"要対応: 画像ファイルを用意できなかった図 {len(need)} 件。画像を作り、同じ名前でフォルダに入れて --images で"
+             f"指定するか、ZIP の中の {graphics_dir(r)} に入れること（レポートの冒頭と 9 章）: "
+             + ", ".join(f"{name}（{(cap[:20] + '…' if len(cap) > 20 else cap) or 'キャプションなし'}）"
+                         for name, cap, _ in need)))
+
+
+def lost_action(r):
+    """docx にあるのに XML に入らなかった画像（pipeline.lost_images）。なければ None。"""
+    lost = r.lost_images
+    if not lost:
+        return None
+    return Action(
+        NEEDS_ACTION, "lost",
+        top="\n".join([(f"> **要対応: XML に入らなかった画像が {len(lost)} 件あります（9 章）。** {LOST_IMAGES_WHY}"
+                        f"{LOST_IMAGES_ACTION}"), ">"]
+                      + [f"> - {esc(lost_image_label(li))}: {esc(li.reason)}" for li in lost]),
+        checklist=(f"- [ ] **XML に入らなかった画像 {len(lost)} 件**（9 章）が本文に必要か確かめ、必要なら Word でその画像を本文の段落に"
+                   "移して変換し直す: " + "、".join(esc(lost_image_label(li)) for li in lost)),
+        box_title=f"XML に入らなかった画像が {len(lost)} 件あります（要対応）",
+        box_detail=(f"{LOST_IMAGES_WHY}{LOST_IMAGES_ACTION}変換し直すときは、Word で直した docx を手順 2 でアップロードし直し、そこから"
+                    "順にやり直してください（レポートの冒頭と 9 章）。\n"
+                    + "\n".join(f"・{lost_image_label(li)}: {li.reason}" for li in lost)),
+        cli=(f"要対応: XML に入らなかった画像 {len(lost)} 件（画像を出力できない引用文献・題目・著者名・所属の段落や、"
+             f"出力しなかった段落の中にある。レポートの冒頭と 9 章）。{LOST_IMAGES_ACTION}\n"
+             + "\n".join(f"  {lost_image_label(li)}: {li.reason}" for li in lost)))
+
+
+def pdf_fallback(r) -> bool:
+    """ルート2 で出版版 PDF の文字を読めず、docx を直さずに変換した（pipeline.Result.pdf_fallback と同じ。M4）。"""
+    return r.route == "pdf" and r.docx_fix is None and r.pdf_check is not None
+
+
+def pdf_suspect(r) -> bool:
+    """docx の段落の半分以上が PDF に見つからない（別の記事の PDF の疑い。要確認）。"""
+    pc, fx = r.pdf_check, r.docx_fix
+    if pc is None or not pc.ok:
+        return False
+    unmatched = fx.unmatched if fx is not None else pc.unmatched
+    return len(unmatched) * 2 > pc.checked
+
+
+def _marks_note(docx_texts, pdf_texts, insert=False) -> str:
+    """赤い枠の一覧の前に添える、記号の説明（一覧に「〓」〈と、insert なら「［］」〉があるときだけ。レポートの 13 章の表と同じ
+    意味。docx の側と PDF の側で「〓」の意味が違う）。"""
+    in_docx = any(FORMULA_MARK in (t or "") for t in docx_texts)
+    in_pdf = any(FORMULA_MARK in (t or "") for t in pdf_texts)
+    notes = []
+    if in_docx or in_pdf:
+        parts = ([f"docx の側の「{FORMULA_MARK}」は docx の数式・画像"] if in_docx else []) + \
+            ([f"PDF の側の「{FORMULA_MARK}」は PDF で数式など文字として読み取れない部分"] if in_pdf else [])
+        notes.append("、".join(parts) + "です。")
+    if insert and any(INSERT_AT in (t or "") for t in docx_texts):
+        notes.append(f"docx の側の「{INSERT_AT}」は、docx に文字がなく PDF にだけ文字がある位置です（前後は docx の文字）。")
+    return "".join(n + "\n" for n in notes)
+
+
+def _pdf_fallback_action(r):
+    pc = r.pdf_check
+    if pc is None or pc.ok or not pdf_fallback(r):
+        return None
+    msg = pc.message
+    return Action(
+        NEEDS_ACTION, "pdf_fallback",
+        top=(f"> **要対応: 出版版 PDF に合わせられませんでした（13 章）。** PDF の文字を読めなかったため（{esc(msg)}）、docx を"
+             "直さずに、docx の文字のまま変換しました（「docx から作る」と同じ結果です）。PDF に合わせるときは、文字を読める"
+             "出版版 PDF を選んで変換し直すか、docx を手で直して変換し直してください。"),
+        checklist=("- [ ] **docx を PDF に合わせていない**（PDF の文字を読めなかった。13 章）: 文字を読める出版版 PDF で変換し直すか、"
+                   "docx を手で直して変換し直す（このままなら XML は docx の文字のまま）"),
+        box_title="出版版 PDF に合わせられませんでした（要対応）",
+        box_detail=(f"PDF の文字を読めなかったため（{msg}）、docx を直さずに、docx の文字のまま変換しました（「docx から作る」と"
+                    "同じ結果です。PDF に合わせて直した docx は作っていません）。画像だけの PDF（スキャンした PDF など）では、"
+                    "文字を読めません。PDF に合わせるときは、文字を読める出版版 PDF を手順 2 で選び直して変換し直すか、docx を手で"
+                    "直して手順 2 からやり直してください（レポートの冒頭と 13 章）。"),
+        cli=(f"要対応: 出版版 PDF に合わせられませんでした。PDF の文字を読めなかったため（{msg}）、docx を直さずに変換した"
+             "（「docx から作る」と同じ結果。レポートの冒頭と 13 章）。文字を読める出版版 PDF を --pdf で指定して変換し直すか、"
+             "docx を手で直して変換し直すこと"))
+
+
+def _pdf_unread_action(r):
+    pc = r.pdf_check
+    if pc is None or pc.ok or pdf_fallback(r):
+        return None
+    msg = pc.message
+    return Action(
+        TO_CHECK, "pdf_unread",
+        top=(f"> **要確認: 出版版 PDF と照合できませんでした（13 章）。** {esc(msg)}。XML は docx の文字のままです。"
+             "画像だけの PDF（スキャンした PDF など）では、文字を読めません。PDF がこの記事の出版版 PDF かを確かめてください。"),
+        checklist="- [ ] 出版版 PDF と照合できなかった（13 章）: PDF がこの記事の出版版 PDF か（画像だけの PDF でないか）を確かめる",
+        box_title="出版版 PDF と照合できませんでした（要確認）",
+        box_detail=(f"{msg}。XML は docx の文字のままです（レポートの 13 章）。画像だけの PDF（スキャンした PDF など）では、"
+                    "文字を読めません。手順 2 で選んだ PDF が、この記事の出版版 PDF かを確かめてください。"),
+        cli=f"要確認: 出版版 PDF と照合できませんでした（{msg}。レポートの 13 章）。XML は docx の文字のまま")
+
+
+def _pdf_diff_action(r):
+    pc, fx = r.pdf_check, r.docx_fix
+    if pc is None or not pc.ok or fx is not None or (not pc.diffs and not pc.width_count):
+        return None
+    items = _marks_note([x for d in pc.diffs[:10] for x in (d.context, d.docx)], [d.pdf for d in pc.diffs[:10]]) + \
+        "\n".join(f"・{d.context}（docx「{d.docx}」/ PDF「{d.pdf}」{why_mark(d.why)}）" for d in pc.diffs[:10])
+    more = f"\n…ほか {len(pc.diffs) - 10} 件" if len(pc.diffs) > 10 else ""
+    width = f"、全角・半角の違いが {pc.width_count} 文字" if pc.width_count else ""
+    return Action(
+        TO_CHECK, "pdf_diff",
+        top=(f"> **要確認: 出版版 PDF と文字が違う箇所が {len(pc.diffs)} 件、全角・半角の違いが {pc.width_count} 文字あります"
+             "（13 章）。** 受け取った docx が、著者校正を経た最終版ではない可能性があります。XML は docx の文字のままです。"
+             "PDF に合わせるときは、「出版版 PDF に合わせてから作る」で変換し直すか、docx を直して変換し直してください。"),
+        checklist=(f"- [ ] **13 章の、出版版 PDF との違い**（文字の違い {len(pc.diffs)} 件・全角・半角の違い {pc.width_count} 文字）を"
+                   "確認する（docx が最終版でなければ、docx を直すか「出版版 PDF に合わせてから作る」で変換し直す）"),
+        box_title=f"出版版 PDF と文字が違う箇所が {len(pc.diffs)} 件{width}あります（要確認）",
+        box_detail=("受け取った docx が、著者校正を経た最終版ではない可能性があります。XML は docx の文字のままです（レポートの 13 章）。"
+                    "PDF に合わせるときは、手順 2 で「出版版 PDF に合わせてから作る」を選んで変換し直すか、docx を直して"
+                    "手順 2 からやり直してください。" + (f"\n{items}{more}" if items else "")),
+        cli=(f"要確認: 出版版 PDF と文字が違う箇所が {len(pc.diffs)} 件{width}あります（レポートの冒頭と 13 章）。XML は docx の"
+             "文字のまま。docx が最終版でなければ、docx を直すか --route pdf で変換し直すこと"))
+
+
+def _pdf_unfixed_action(r):
+    pc, fx = r.pdf_check, r.docx_fix
+    if pc is None or not pc.ok or fx is None:
+        return None
+    rest = len(pc.diffs) + pc.width_count
+    if not fx.skipped and not rest:
+        return None
+
+    def line_note(f):       # 直せない理由のある箇所の PDF の文字は、行の変わり目に LINE_MARK が入る
+        return f"。{LINE_MARK} は PDF の行の変わり目" if LINE_MARK in f.new else ""
+    # docx の文字はレポートの 13.2 と同じ形（数式・画像は FORMULA_MARK、PDF にだけある文字は INSERT_AT と前後の文字）
+    shown = [(f, _skipped_docx(f, fx.texts.get(f.src, ""))) for f in fx.skipped[:10]]
+    items = _marks_note([d for _, d in shown], [f.new for f, _ in shown], insert=True) + \
+        "\n".join(f"・{f.src}: 「{d}」→「{f.new}」（{f.reason}{line_note(f)}）" for f, d in shown)
+    more = f"\n…ほか {len(fx.skipped) - 10} 件" if len(fx.skipped) > 10 else ""
+    head = []
+    if fx.skipped:
+        head.append(f"直せなかった箇所 {len(fx.skipped)} 件")
+    if rest:
+        head.append(f"直した後も PDF と違う箇所 {rest} 件")
+    # 冒頭（固定の「docx を直してから変換しました」の案内）と 14 章（固定の行）には、今までどおり render が出す
+    return Action(
+        TO_CHECK, "pdf_unfixed",
+        box_title="出版版 PDF に合わせきれなかった箇所があります（要確認）: " + "、".join(head),
+        box_detail=(f"PDF に合わせて直した docx（{fx.path.name}、変換結果の ZIP に入っています）を Word で開き、レポートの 13 章と"
+                    "照らして確認してください。XML は直した docx の文字のままです。" + (f"\n{items}{more}" if items else "")),
+        cli=(f"要確認: 出版版 PDF に合わせきれなかった箇所があります: {'、'.join(head)}（レポートの 13 章）。PDF に合わせて"
+             f"直した docx（{fx.path.name}）を Word で開き、13 章と照らして確認すること"))
+
+
+def _pdf_suspect_action(r):
+    if not pdf_suspect(r):
+        return None
+    pc, fx = r.pdf_check, r.docx_fix
+    n = len(fx.unmatched if fx is not None else pc.unmatched)
+    what = f"docx の段落 {pc.checked} 件のうち {n} 件が、出版版 PDF に見つかりませんでした"
+    return Action(
+        TO_CHECK, "pdf_suspect",
+        top=(f"> **要確認: 別の記事の PDF かもしれません（13 章）。** {what}。PDF がこの記事の出版版 PDF かを"
+             "確かめてください。"),
+        checklist=("- [ ] **PDF がこの記事のものか**を確かめる（docx の段落の半分以上が PDF に見つからない。13 章）。違っていたら、"
+                   "正しい PDF で変換し直す"),
+        box_title="別の記事の PDF かもしれません（要確認）",
+        box_detail=(f"{what}。手順 2 で選んだ PDF が、この記事の出版版 PDF かを確かめてください。違っていたら、正しい PDF を"
+                    "選んで手順 2 からやり直してください（レポートの 13 章）。"),
+        cli=f"要確認: 別の記事の PDF かもしれません。{what}（レポートの 13 章）。--pdf の PDF がこの記事のものか確かめること")
+
+
+IGNORED_SHOWN = 10      # 赤い枠に並べる、照合に使わなかった PDF の文字の段落の数（全件はレポートの 13 章の最後）
+
+
+def _pdf_ignored_action(r):
+    rows = ignored_lines(r)
+    if not rows:
+        return None
+    n = len(rows)
+    shown = ignored_rows(rows, lambda s: "")
+    items = "\n".join(f"・{s}: {t}" for s, _, _, t in shown[:IGNORED_SHOWN]) + \
+        (f"\n…ほか {len(shown) - IGNORED_SHOWN} 段落" if len(shown) > IGNORED_SHOWN else "")
+    return Action(
+        TO_CHECK, "pdf_ignored",
+        top=(f"> **要確認: 照合に使わなかった PDF の文字が {n} 件あります（13 章の最後）。** 組版で入る文字（誌名の行・投稿受付日"
+             "など）や、図・表の中の文字とみなしたものです。docx にない本文（校正で足された一文など）が混じっていないか"
+             "確かめてください。"),
+        checklist=(f"- [ ] 13 章の最後の「照合に使わなかった PDF の文字」（{n} 件）に、docx にない本文"
+                   "（校正で足された一文など）が混じっていないか確かめる（表・図の中の文字や、docx のほかの段落にすでにある文字なら"
+                   "対応は要らない。本文が足りなければ docx を手で直して変換し直す）"),
+        box_title=f"照合に使わなかった PDF の文字が {n} 件あります（要確認）",
+        box_detail=("組版で入る文字（誌名の行・投稿受付日など）や、図・表の中の文字とみなして、照合に使わなかった PDF の文字です"
+                    f"（{LINE_MARK} は PDF の行の変わり目）。docx にない本文（校正で足された一文など）が混じっていないか、レポートの"
+                    " 13 章の最後の一覧で確かめてください。表・図の中の文字や、docx のほかの段落にすでにある文字なら、対応は要りません。"
+                    "本文が足りなければ、docx を手で直して手順 2 からやり直してください。\n" + items),
+        cli=(f"要確認: 照合に使わなかった PDF の文字 {n} 件（レポートの冒頭と 13 章の最後）。docx にない本文（校正で足された"
+             "一文など）が混じっていないか確かめること"))
+
+
+def _provisional_actions(r) -> list:
+    out = []
+    for kind, prow in provisional_exclusions(r):
+        title, detail, todo = PROVISIONAL[kind]
+        what = title.format(n=len(prow))
+        out.append(Action(
+            TO_CHECK, kind,
+            top=f"> **要確認: {what}を、XML に出力していません（6 章）。** {detail}対象の段落: {_para_samples(prow)}",
+            checklist=f"- [ ] **{what}**（6 章。XML に出力していない）: {todo}",
+            box_title=f"{what}を、XML に出力していません（要確認）",
+            box_detail=f"{detail}（レポートの冒頭と 6 章）\n対象の段落: {_para_samples(prow)}",
+            cli=f"要確認: {what}を、XML に出力していません（レポートの冒頭と 6 章）。{detail}"))
+    return out
+
+
+def pdf_actions(r) -> list:
+    """出版版 PDF との照合の知らせ（actions の一部）。r は pdf_check・docx_fix・route があればよい（Colab の pdf_diff_box）。"""
+    makers = (_pdf_fallback_action, _pdf_unread_action, _pdf_diff_action, _pdf_unfixed_action, _pdf_suspect_action,
+              _pdf_ignored_action)
+    return [a for a in (f(r) for f in makers) if a is not None]
+
+
+PDF_KEYS = ("pdf_fallback", "pdf_unread", "pdf_diff", "pdf_unfixed", "pdf_suspect", "pdf_ignored")
+
+
+def actions(r) -> list:
+    """利用者に知らせること（要対応・要確認）の一覧。並びはレポートの冒頭の順。
+
+    ルート2 の「出版版 PDF に合わせて docx を直してから変換しました」の案内と、14 章の「Word で開き、変更履歴を確認する」は、
+    すべて直せたときにも出すものなので、ここには入れない（render の固定の部分。直せなかった箇所は pdf_unfixed の枠）。
+    記事フォルダにあるのに ZIP に入れなかったファイル（Result.not_zipped）は 10 章の警告のまま。
+    """
+    head = [f(r) for f in (_fidelity_action, _dtd_action, _upload_action, _ai_error_action, _ai_pending_action,
+                           _partial_action, _forced_action, figure_body_action, images_action, lost_action)]
+    return [a for a in head if a is not None] + pdf_actions(r) + _provisional_actions(r)
+
+
 def render(r) -> str:
     plan, fid = r.plan, r.fidelity
     L = []
@@ -493,7 +962,7 @@ def render(r) -> str:
     ai_mode = {"none": "使用しない", "api": api, "manual": "手動（チャットに貼り付け）"}.get(ai.mode, ai.mode)
     L.append(f"- AI による補完: {ai_mode}")
     L.append(f"- 作り方: {ROUTE_JA.get(r.route, r.route)}"
-             + ("（PDF の文字を読めなかったので、docx を直さずに変換した）" if r.route == "pdf" and r.docx_fix is None else ""))
+             + ("（PDF の文字を読めなかったので、docx を直さずに変換した）" if pdf_fallback(r) else ""))
     L.append("")
 
     # ------------------------------------------------------------------ 1. 要約
@@ -528,41 +997,13 @@ def render(r) -> str:
         rows.insert(7, ("位置を決められなかった図表（3 章）", f"{len(plan.unplaced_floats)} 件（{float_places(plan)}に仮に配置）"))
     L.append(table(["項目", "結果"], rows))
     L.append("")
-    if not fid.ok or fid.final_ok is False:
-        L.append("> **注意: 文字の不変性チェックが不合格です。** 出力された XML の本文が docx と一致していません。"
-                 "下の 5 章の差分を確認し、この XML は登載に使わないでください（変換ツールの不具合の可能性があります）。")
-        L.append("")
-    if ai.partial:
-        L.append(f"> **要対応: AI の回答が途中で切れていました（2 章）。** {esc(ai.partial)}")
-        L.append("")
-    if r.forced_floats:
-        L.append(f"> **要対応: 位置を決められなかった図表が {len(r.forced_floats)} 件あります（AI による補完でも決まりませんでした）。** "
-                 "図が結び付いている段落（アンカー段落）のすぐ後ろ（箇条書き・引用の途中なら、その終わり）か、本文の最後に仮に"
-                 "置いています。登載の前に、XML の中でこれらの"
-                 "図表を手作業で正しい位置（Word で表示したときに、図の左上の直上にある本文の段落の後）に移してください（3 章）: "
-                 + "、".join(esc(x) for x in r.forced_floats))
-        L.append("")
-    if plan.figure_issues:
-        L.append(f"> **要対応: 図の本体（画像・表）が見つからない図が {len(plan.figure_issues)} 件あります（3 章）。** "
-                 f"{FIGURE_BODY_ACTION}対象の図: " + "、".join(figure_issue_labels(plan)))
-        L.append("")
-    need = images_to_prepare(r)
-    if need:
-        zname = r.zip_path.name if r.zip_path else "アップロード用の ZIP"
-        L.append(f"> **要対応: 画像ファイルを用意できなかった図が {len(need)} 件あります（9 章）。** 次の名前の画像（PNG）を"
-                 f"作り、{esc(zname)} の中の `{graphics_dir(r)}` に入れてください。画像がないままでは、その図が J-STAGE の"
-                 "画面に表示されません。")
-        L.append(">")
-        for name, cap, why in need:
-            L.append(f"> - `{name}`: {esc(cap, 40) or '（キャプションなし）'}（{esc(why)}）")
-        L.append("")
-    lost = r.lost_images
-    if lost:
-        L.append(f"> **要対応: XML に入らなかった画像が {len(lost)} 件あります（9 章）。** {LOST_IMAGES_WHY}{LOST_IMAGES_ACTION}")
-        L.append(">")
-        for li in lost:
-            L.append(f"> - {esc(lost_image_label(li))}: {esc(li.reason)}")
-        L.append("")
+    # 要対応・要確認（actions）。ルート2 の「docx を直してから変換しました」の案内は、PDF の知らせの前に固定で出す
+    acts = actions(r)
+    late = [a for a in acts if a.key in PDF_KEYS or a.key in PROVISIONAL]
+    for a in [a for a in acts if a not in late]:
+        if a.top:
+            L.append(a.top)
+            L.append("")
     pc, fx = r.pdf_check, r.docx_fix
     if fx is not None:
         L.append(f"> **出版版 PDF に合わせて docx を直してから変換しました（13 章）。** 直した docx（{esc(fx.path.name)}）は "
@@ -570,17 +1011,10 @@ def render(r) -> str:
                  "「docx から作る」で変換し直してください。"
                  + (f"**直せなかった箇所が {len(fx.skipped)} 件あります。**" if fx.skipped else ""))
         L.append("")
-    elif pc is not None and pc.ok and (pc.diffs or pc.width_count):
-        L.append(f"> **要確認: 出版版 PDF と文字が違う箇所が {len(pc.diffs)} 件、全角・半角の違いが {pc.width_count} 文字あります"
-                 "（13 章）。** 受け取った docx が、著者校正を経た最終版ではない可能性があります。XML は docx の文字のままです。"
-                 "PDF に合わせるときは、「出版版 PDF に合わせてから作る」で変換し直すか、docx を直して変換し直してください。")
-        L.append("")
-    provisional = provisional_exclusions(r)
-    for kind, prow in provisional:
-        title, detail, _ = PROVISIONAL[kind]
-        L.append(f"> **要確認: {title.format(n=len(prow))}を、XML に出力していません（6 章）。** {detail}"
-                 f"対象の段落: {_para_samples(prow)}")
-        L.append("")
+    for a in late:
+        if a.top:
+            L.append(a.top)
+            L.append("")
     if r.output_note:
         L.append(r.output_note)
         L.append("")
@@ -758,6 +1192,7 @@ def render(r) -> str:
     # ------------------------------------------------------------------ 9. 画像
     L.append("## 9. 画像")
     L.append("")
+    lost = r.lost_images
     if r.images:
         st = {"ok": "そのまま出力", "converted": "変換して出力", "failed": "要対応", "missing": "要対応（画像なし）",
               "user": "利用者が用意"}
@@ -865,32 +1300,18 @@ def render(r) -> str:
                  "（却下したい変更があれば、却下して保存した docx を「docx から作る」で変換し直す）")
         if fx.skipped:
             L.append(f"- [ ] 13 章の、PDF に合わせて直せなかった箇所（{len(fx.skipped)} 件）を確認する")
-    elif pc is not None and pc.ok and (pc.diffs or pc.width_count):
-        L.append(f"- [ ] **13 章の、出版版 PDF との違い**（文字の違い {len(pc.diffs)} 件・全角・半角の違い {pc.width_count} 文字）を"
-                 "確認する（docx が最終版でなければ、docx を直すか「出版版 PDF に合わせてから作る」で変換し直す）")
-    if ignored_lines(r):
-        L.append(f"- [ ] 13 章の最後の「照合に使わなかった PDF の文字」（{len(ignored_lines(r))} 件）に、docx にない本文"
-                 "（校正で足された一文など）が混じっていないか確かめる（表・図の中の文字や、docx のほかの段落にすでにある文字なら"
-                 "対応は要らない。本文が足りなければ docx を手で直して変換し直す）")
-    if ai.partial:
-        L.append("- [ ] **AI の回答が途中で切れていた**（2 章）: AI に出し直してもらい、もう一度変換する")
-    if r.forced_floats:
-        L.append("- [ ] 仮の位置（アンカー段落の後ろ・本文の最後）に置いた図表（3 章の「図表の位置」）を、XML の中で手作業で"
-                 "正しい位置に移す")
-    if plan.figure_issues:
-        L.append(f"- [ ] 図の本体が見つからない図 {len(plan.figure_issues)} 件（3 章の「図の本体」）を docx で確かめ、表が図の本体なら "
-                 "docx を直して変換し直す")
-    if need:
-        L.append(f"- [ ] **画像ファイルを用意できなかった図 {len(need)} 件**の画像を作り、ZIP の中の `{graphics_dir(r)}` に入れる: "
-                 + "、".join(f"`{name}`（{esc(cap, 20) or 'キャプションなし'}）" for name, cap, _ in need))
-    elif r.images and not lost:
+    # 要対応・要確認（actions）。PDF の項目を先に、残りを actions の順に。「画像はすべて Graphics/ に入っている」は、XML に
+    # 入らなかった画像・暫定の知らせの前に出す
+    checks = [a for a in acts if a.key in PDF_KEYS] + [a for a in acts if a.key not in PDF_KEYS]
+    all_images = bool(r.images) and not images_to_prepare(r) and not lost
+    for a in checks:
+        if all_images and (a.key == "lost" or a.key in PROVISIONAL):
+            L.append(f"- [x] 画像 {len(r.images)} 件はすべて Graphics/ に入っている（9 章）")
+            all_images = False
+        if a.checklist:
+            L.append(a.checklist)
+    if all_images:
         L.append(f"- [x] 画像 {len(r.images)} 件はすべて Graphics/ に入っている（9 章）")
-    if lost:
-        L.append(f"- [ ] **XML に入らなかった画像 {len(lost)} 件**（9 章）が本文に必要か確かめ、必要なら Word でその画像を本文の段落に"
-                 "移して変換し直す: " + "、".join(esc(lost_image_label(li)) for li in lost))
-    for kind, prow in provisional:
-        title, _, todo = PROVISIONAL[kind]
-        L.append(f"- [ ] **{title.format(n=len(prow))}**（6 章。XML に出力していない）: {todo}")
     L.append("- [ ] 11 章の書誌情報（巻・号・頁・日付・DOI）を確認する")
     L.append(f"- [ ] J-STAGE 編集登載システムで、巻（{esc(m.volume or '?')}）・号（{esc(m.issue or '?')}）と、その号のセクション"
              "（目次の見出し。例: 論文）を作成しておく（ないとアップロード時に EMSGM181E「巻号が学会誌別巻号の設定に存在しません」・"

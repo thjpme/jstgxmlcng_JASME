@@ -43,7 +43,8 @@ from .model import Decision, LostImage
 from .package import article_dir, make_zip, unzipped_files, write_package, zip_image_names, zip_problems
 from .pdfdocx import DocxFix, make_fixed_docx
 from .pdfmatch import PdfCheck, check_pdf
-from .report import figure_body_detail, images_to_prepare, render, render_ai_only
+from .report import NEEDS_ACTION, actions, figure_body_detail, images_to_prepare, render, render_ai_only
+from .report import pdf_fallback as report_pdf_fallback
 from .structure import classify, float_caption, float_targets
 from .tracking import SPAN
 from .validate import validate
@@ -163,7 +164,19 @@ class Result:
 
     @property
     def ok(self) -> bool:
+        """文字の不変性チェック・最終出力の再チェック・DTD 検証がすべて合格（要対応の有無は needs_action）。"""
         return bool(self.fidelity.ok and self.fidelity.final_ok and self.dtd_valid)
+
+    @property
+    def needs_action(self) -> bool:
+        """要対応の知らせ（report.actions の level が「要対応」）があるか。コマンドラインの終了コード 1、Colab の手順 8 で
+        一度止める。ok でなければ必ず真（不変性チェック・DTD 検証の不合格は要対応）。"""
+        return any(a.level == NEEDS_ACTION for a in actions(self))
+
+    @property
+    def pdf_fallback(self) -> bool:
+        """ルート2（出版版 PDF に合わせてから作る）で PDF の文字を読めず、docx を直さずに変換した（要対応。M4）。"""
+        return report_pdf_fallback(self)
 
 
 def installed_from_git() -> tuple:

@@ -128,136 +128,53 @@ def ai_required_box(message: str) -> str:
     return error_box("AI による補完が必要です（変換を中止しました）", message)
 
 
+def _box(action) -> str:
+    """report.Action を赤い枠にする（枠の見出しがなければ空文字）。"""
+    return error_box(action.box_title, action.box_detail) if action is not None and action.box_title else ""
+
+
+def result_boxes(res, level=None, skip=()) -> str:
+    """変換の結果の、要対応・要確認の赤い枠（report.actions の順。なければ空文字）。手順 5・6・8 で使う。
+
+    level を "要対応" にすると要対応だけ（手順 8 で一度止めるとき）。skip は出さない知らせの key（手順 5 の手動モードでは、
+    依頼文の枠を出すので ai_pending を出さない）。
+    """
+    from .report import actions
+    return "".join(_box(a) for a in actions(res) if (level is None or a.level == level) and a.key not in skip)
+
+
 def missing_images_box(res) -> str:
     """画像ファイルを用意できなかった図（Word の図形で描かれた図など）があるときの表示（赤い枠）。なければ空文字。"""
-    from .report import graphics_dir, images_to_prepare
-    need = images_to_prepare(res)
-    if not need:
-        return ""
-    items = "\n".join(f"・{name}: {cap or '（キャプションなし）'}（{why}）" for name, cap, why in need)
-    return error_box(
-        f"画像ファイルを用意できなかった図が {len(need)} 件あります",
-        "Word の図形で描かれた図などは、docx に画像ファイルがないので、変換で画像を作れません。画像がないままでは、その図が "
-        "J-STAGE の画面に表示されません。手順 7「足りない画像をアップロード」で、図ごとにその図の画像を選んでください"
-        f"（ファイル名は何でもかまいません）。手元で入れるときは、次の名前の画像を {res.zip_path.name} の中の "
-        f"{graphics_dir(res)} に入れます（レポートの冒頭と 9 章）。\n{items}")
+    from .report import images_action
+    return _box(images_action(res))
 
 
 def lost_images_box(res) -> str:
     """docx にあるのに XML に入らなかった画像（引用文献の段落の中の画像など）があるときの表示（赤い枠）。なければ空文字。"""
-    from .report import LOST_IMAGES_ACTION, LOST_IMAGES_WHY, lost_image_label
-    lost = res.lost_images
-    if not lost:
-        return ""
-    items = "\n".join(f"・{lost_image_label(li)}: {li.reason}" for li in lost)
-    return error_box(
-        f"XML に入らなかった画像が {len(lost)} 件あります（要対応）",
-        f"{LOST_IMAGES_WHY}{LOST_IMAGES_ACTION}変換し直すときは、Word で直した docx を手順 2 でアップロードし直し、そこから"
-        f"順にやり直してください（レポートの冒頭と 9 章）。\n{items}")
-
-
-def _marks_note(docx_texts, pdf_texts, insert=False) -> str:
-    """赤い枠の一覧の前に添える、記号の説明（一覧に「〓」〈と、insert なら「［］」〉があるときだけ。レポートの 13 章の表と同じ
-    意味。docx の側と PDF の側で「〓」の意味が違う）。"""
-    from .pdfmatch import FORMULA_MARK
-    from .report import INSERT_AT
-    in_docx = any(FORMULA_MARK in (t or "") for t in docx_texts)
-    in_pdf = any(FORMULA_MARK in (t or "") for t in pdf_texts)
-    notes = []
-    if in_docx or in_pdf:
-        parts = ([f"docx の側の「{FORMULA_MARK}」は docx の数式・画像"] if in_docx else []) + \
-            ([f"PDF の側の「{FORMULA_MARK}」は PDF で数式など文字として読み取れない部分"] if in_pdf else [])
-        notes.append("、".join(parts) + "です。")
-    if insert and any(INSERT_AT in (t or "") for t in docx_texts):
-        notes.append(f"docx の側の「{INSERT_AT}」は、docx に文字がなく PDF にだけ文字がある位置です（前後は docx の文字）。")
-    return "".join(n + "\n" for n in notes)
+    from .report import lost_action
+    return _box(lost_action(res))
 
 
 def pdf_diff_box(res) -> str:
-    """出版版 PDF との照合で確認が必要なことがあるときの表示（赤い枠）。なければ空文字。
+    """出版版 PDF との照合で確認が必要なことがあるときの表示（赤い枠。report.pdf_actions）。なければ空文字。
 
-    ルート1（docx から作る）: docx と PDF で文字が違う箇所。ルート2（出版版 PDF に合わせてから作る）: 直せなかった箇所と、
-    直した後も残る違い（直した docx は変換結果の ZIP に入る）。
+    ルート1（docx から作る）: docx と PDF で文字が違う箇所。PDF の文字を読めなければ「照合できませんでした」（要確認）。
+    ルート2（出版版 PDF に合わせてから作る）: 直せなかった箇所と、直した後も残る違い（直した docx は変換結果の ZIP に入る）。
+    PDF の文字を読めなければ「出版版 PDF に合わせられませんでした」（要対応）。どちらでも、docx の段落の半分以上が PDF に
+    見つからなければ「別の記事の PDF かもしれません」、照合に使わなかった PDF の文字があればその枠も出す。
     """
-    from .pdfmatch import LINE_MARK
-    from .report import _skipped_docx, why_mark
-    pc, fx = res.pdf_check, res.docx_fix
-    if pc is None or not pc.ok:
-        return ""
-    if fx is not None:
-        rest = len(pc.diffs) + pc.width_count
-        if not fx.skipped and not rest:
-            return ""
-        def line_note(f):       # 直せない理由のある箇所の PDF の文字は、行の変わり目に LINE_MARK が入る
-            return f"。{LINE_MARK} は PDF の行の変わり目" if LINE_MARK in f.new else ""
-        # docx の文字はレポートの 13.2 と同じ形（数式・画像は FORMULA_MARK、PDF にだけある文字は INSERT_AT と前後の文字）
-        shown = [(f, _skipped_docx(f, fx.texts.get(f.src, ""))) for f in fx.skipped[:10]]
-        items = _marks_note([d for _, d in shown], [f.new for f, _ in shown], insert=True) + \
-            "\n".join(f"・{f.src}: 「{d}」→「{f.new}」（{f.reason}{line_note(f)}）" for f, d in shown)
-        more = f"\n…ほか {len(fx.skipped) - 10} 件" if len(fx.skipped) > 10 else ""
-        head = []
-        if fx.skipped:
-            head.append(f"直せなかった箇所 {len(fx.skipped)} 件")
-        if rest:
-            head.append(f"直した後も PDF と違う箇所 {rest} 件")
-        return error_box(
-            "出版版 PDF に合わせきれなかった箇所があります（要確認）: " + "、".join(head),
-            f"PDF に合わせて直した docx（{fx.path.name}、変換結果の ZIP に入っています）を Word で開き、レポートの 13 章と"
-            "照らして確認してください。XML は直した docx の文字のままです。" + (f"\n{items}{more}" if items else ""))
-    if not pc.diffs and not pc.width_count:
-        return ""
-    items = _marks_note([x for d in pc.diffs[:10] for x in (d.context, d.docx)], [d.pdf for d in pc.diffs[:10]]) + \
-        "\n".join(f"・{d.context}（docx「{d.docx}」/ PDF「{d.pdf}」{why_mark(d.why)}）" for d in pc.diffs[:10])
-    more = f"\n…ほか {len(pc.diffs) - 10} 件" if len(pc.diffs) > 10 else ""
-    width = f"、全角・半角の違いが {pc.width_count} 文字" if pc.width_count else ""
-    return error_box(
-        f"出版版 PDF と文字が違う箇所が {len(pc.diffs)} 件{width}あります（要確認）",
-        "受け取った docx が、著者校正を経た最終版ではない可能性があります。XML は docx の文字のままです（レポートの 13 章）。"
-        "PDF に合わせるときは、手順 2 で「出版版 PDF に合わせてから作る」を選んで変換し直すか、docx を直して手順 2 から"
-        "やり直してください。" + (f"\n{items}{more}" if items else ""))
+    from .report import pdf_actions
+    return "".join(_box(a) for a in pdf_actions(res))
 
 
 def unplaced_box(plan, partial="") -> str:
-    """AI の回答を反映した後も、位置を決められない図表が残っているときの表示。なければ空文字。
-
-    図表ごとに、キャプション、XML の中の図表の ID（と、図形の中身から出した本文の段落など。structure.float_targets）、
-    仮に置いた位置（structure.ArticlePlan.float_place。アンカー段落の後ろか本文の最後）を示す。partial（AIOutcome.partial。
-    AI の回答が途中で切れていた）があれば、出し直しの頼み方は、途中で切れた回答の枠（PARTIAL_MSG）と同じものを示す
-    （別の頼み方を並べない）。
-    """
-    from .structure import float_caption, float_targets
-    if not plan.unplaced_floats:
-        return ""
-    why = {"ai": "（AI が注などの本文の外の段落の後ろを指定したため）",
-           "anchor": "（図が結び付いている段落が本文の段落でないため）"}
-    rows = []
-    for fid in plan.unplaced_floats:
-        info = plan.floats[fid]
-        ids = float_targets(plan, info)
-        xml = f"、XML の{' ' if ids[:1].isascii() else ''}{ids}" if ids else ""
-        rows.append(f"・{fid}（{float_caption(info)}{xml}）: {plan.float_place(fid)}"
-                    f"{why.get(info.end_why, '')}")
-    if partial:
-        intro = ("AI の回答が途中で切れていて、次の図表の位置（placements）の指定を読み取れなかったか、指定が検証で採用されません"
-                 "でした（レポートの 2 章・3 章）。")
-        again = ("AI に出し直してもらう方法は、上の「AI の回答が途中で切れていました」の枠のとおりです（最初から出し直してもらうと、"
-                 "これらの図表の位置も反映されます）。")
-    else:
-        intro = "AI の回答に、次の図表の位置（placements）の指定がないか、指定が検証で採用されませんでした（レポートの 2 章・3 章）。"
-        again = ("AI に出し直してもらう場合は、手動モードではチャットで「位置を決められなかった図表をすべて placements に書いて、"
-                 "回答の書き方に従って出し直してください」と頼んで手順 6 で貼り付け直し、API モードでは手順 5 をもう一度実行してください。")
-    return error_box(
-        "位置を決められなかった図表があります（仮の位置に置いています。手作業で直してください）",
-        intro + "これらは仮の位置に置いているので、登載の前に、XML の中で手作業で正しい位置（Word で表示したときに、図の左上の"
-        "直上にある本文の段落の後）に移してください。\n" + "\n".join(rows) + "\n" + again)
+    """AI の回答を反映した後も、位置を決められない図表が残っているときの表示（report.unplaced_text）。なければ空文字。"""
+    from .report import unplaced_text
+    text = unplaced_text(plan, partial)
+    return error_box(*text) if text else ""
 
 
 def figure_body_box(res) -> str:
     """図の本体（画像・表）が見つからない図があるときの表示（赤い枠）。なければ空文字。"""
-    from .report import FIGURE_BODY_ACTION, figure_issue_labels
-    labels = figure_issue_labels(res.plan)
-    if not labels:
-        return ""
-    return error_box(
-        f"図の本体（画像・表）が見つからない図が {len(labels)} 件あります（要対応）",
-        f"{FIGURE_BODY_ACTION}（レポートの冒頭と 3 章）\n" + "\n".join(f"・{x}" for x in labels))
+    from .report import figure_body_action
+    return _box(figure_body_action(res))

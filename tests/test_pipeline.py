@@ -1,5 +1,7 @@
 """変換全体: 文字の不変性・DTD 妥当性・リンク・出力ファイル。"""
+import os
 import zipfile
+from pathlib import Path
 
 import pytest
 from lxml import etree
@@ -179,7 +181,7 @@ def test_cli_images_option(journal, tmp_path, capsys):
     meta = tmp_path / "meta.toml"
     meta.write_text('[article]\nvolume = "31"\nissue = "1"\nfpage = "1"\npeer_review = "あり"\n', encoding="utf-8")
     args = [str(TEMPLATE), "--meta", str(meta), "--no-metafile-conversion"]
-    assert main(args + ["--out", str(tmp_path / "a")]) == 0
+    assert main(args + ["--out", str(tmp_path / "a")]) == 1           # 画像が足りないのは要対応（修正計画 D）
     assert "--images で指定するか" in capsys.readouterr().err
     imgs = tmp_path / "imgs"
     imgs.mkdir()
@@ -749,3 +751,118 @@ def test_dates_accept_common_forms():
         ArticleMeta.from_dict({"received": "2026/13/1"})
     m = ArticleMeta.from_dict({"pub_date": "2026/3/31", "received": "2025年6月1日", "approved": "２０２５．１１．１０"})
     assert (m.pub_date, m.received, m.approved) == (dt.date(2026, 3, 31), dt.date(2025, 6, 1), dt.date(2025, 11, 10))
+
+
+# ---------------------------------------------------------------------------- 要対応・要確認の知らせ（修正計画 D の U2）
+def test_upload_issues_are_needs_action(journal, tmp_path):
+    """J-STAGE のアップロード時チェックの問題（受付日が受理日より後など）は要対応: レポートの冒頭と 14 章に出し、
+    コマンドラインは 1 を返して、標準エラーにメッセージ ID を出す。"""
+    from jasme_jats.config import ArticleMeta
+    from jasme_jats.report import NEEDS_ACTION, actions
+    meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "lpage": "12", "pub_date": "2026-03-31",
+                                  "received": "2026-01-10", "accepted": "2025-11-20", "peer_review": "あり"})
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    assert res.ok and res.needs_action                     # ok（不変性・DTD）の意味は変えない
+    act = next(a for a in actions(res) if a.key == "upload")
+    assert act.level == NEEDS_ACTION and "EMSGM106E" in act.box_detail and "EMSGM106E" in act.cli
+    report = res.report_path.read_text(encoding="utf-8")
+    assert "要対応: J-STAGE のアップロード時チェック" in report.split("## 2.")[0]
+    assert "EMSGM106E" in report.split("## 2.")[0]
+    ch14 = report.split("## 14.")[1]
+    assert any("J-STAGE のアップロード時チェック" in line and "12 章" in line for line in ch14.splitlines())
+
+
+def test_cli_exits_1_on_upload_issues(tmp_path, capsys):
+    from jasme_jats.cli import main
+    meta = tmp_path / "meta.toml"
+    meta.write_text('[article]\nvolume = "31"\nissue = "1"\nfpage = "1"\npeer_review = "あり"\n'
+                    'received = "2026-01-10"\naccepted = "2025-11-20"\n', encoding="utf-8")
+    assert main([str(FULL), "--meta", str(meta), "--out", str(tmp_path / "out"), "--no-metafile-conversion"]) == 1
+    err = capsys.readouterr().err
+    assert "要対応: J-STAGE のアップロード時チェック" in err and "EMSGM106E" in err
+    # --meta がないと開始ページがなく（EMSGM230E）、要対応で 1（README に明記）
+    assert main([str(FULL), "--out", str(tmp_path / "nometa"), "--no-metafile-conversion"]) == 1
+    assert "EMSGM230E" in capsys.readouterr().err
+
+
+def test_cli_template_needs_image_until_given(tmp_path, capsys):
+    """テンプレート（EMF を変換しない設定では図 1 の画像を用意できない）は 1、--images で画像を渡すと 0。"""
+    from conftest import META_EXAMPLE
+
+    from jasme_jats.cli import main
+    args = [str(TEMPLATE), "--meta", str(META_EXAMPLE), "--no-metafile-conversion"]
+    assert main(args + ["--out", str(tmp_path / "a")]) == 1
+    assert "--images で指定するか" in capsys.readouterr().err
+    imgs = tmp_path / "imgs"
+    imgs.mkdir()
+    (imgs / "31_1_01.png").write_bytes(_image_bytes())
+    assert main(args + ["--out", str(tmp_path / "b"), "--images", str(imgs)]) == 0
+    assert "要対応" not in capsys.readouterr().err
+
+
+def test_cli_input_errors_exit_2(tmp_path, capsys):
+    """指定したファイル・フォルダがないとき（トレースバックにしない）と、--images の画像を読めないときは、中止の 2（要対応の 1 ではない）。"""
+    from conftest import META_EXAMPLE
+
+    from jasme_jats.cli import main
+    for args, word in (([str(tmp_path / "ない.docx")], "変換する docx"),
+                       ([str(FULL), "--meta", str(tmp_path / "ない.toml")], "--meta"),
+                       ([str(FULL), "--pdf", str(tmp_path / "ない.pdf")], "--pdf"),
+                       ([str(FULL), "--ai", "manual", "--ai-response", str(tmp_path / "ない.json")], "--ai-response"),
+                       ([str(FULL), "--images", str(tmp_path / "ない")], "--images"),
+                       ([str(FULL), "--meta", str(tmp_path)], "--meta")):            # ファイルの代わりにフォルダ
+        with pytest.raises(SystemExit) as e:
+            main(args + ["--out", str(tmp_path / "out")])
+        assert e.value.code == 2 and f"{word} の" in capsys.readouterr().err
+    assert not (tmp_path / "out").exists()                  # 変換する前に止める
+    # 通常のファイルでなくても読めるもの（シェルのプロセス置換 <(...) の /dev/fd/NN など）は、0.23.0 と同じく変換する
+    if Path("/dev/fd").is_dir():
+        r, wfd = os.pipe()
+        os.write(wfd, META_EXAMPLE.read_bytes())
+        os.close(wfd)
+        try:
+            assert main([str(FULL), "--meta", f"/dev/fd/{r}", "--no-metafile-conversion", "--out", str(tmp_path / "fd")]) == 0
+        finally:
+            os.close(r)
+    imgs = tmp_path / "imgs"
+    imgs.mkdir()
+    (imgs / "31_1_01.png").write_bytes(b"not an image")     # 読めない画像
+    args = [str(TEMPLATE), "--meta", str(META_EXAMPLE), "--no-metafile-conversion", "--out", str(tmp_path / "a")]
+    assert main(args + ["--images", str(imgs)]) == 2
+    assert "画像: " in capsys.readouterr().err
+    assert not (tmp_path / "a/jasme/31/1/31_1/Graphics/31_1_01.png").exists()
+
+
+def test_fidelity_failure_is_needs_action(journal, meta, tmp_path):
+    """不変性チェックが不合格なら、冒頭に今と同じ文で知らせ、要対応にする（決定事項 5(d)）。"""
+    from jasme_jats.report import actions, render
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    assert actions(res) == [] and not res.needs_action
+    res.fidelity.ok = False
+    assert res.needs_action and not res.ok
+    head = render(res).split("## 2.")[0]
+    assert ("> **注意: 文字の不変性チェックが不合格です。** 出力された XML の本文が docx と一致していません。"
+            "下の 5 章の差分を確認し、この XML は登載に使わないでください（変換ツールの不具合の可能性があります）。") in head
+    assert "文字の不変性チェックが不合格" in render(res).split("## 14.")[1]
+    res.fidelity.ok = True
+    res.dtd_valid, res.dtd_errors = False, ["31_1.xml:3: Element body content does not follow the DTD"]
+    assert res.needs_action
+    report = render(res)
+    assert "要対応: J-STAGE 指定の DTD による検証が不合格です（1 件、12 章）" in report.split("## 2.")[0]
+    assert "DTD 検証が不合格" in report.split("## 14.")[1]
+
+
+def test_manual_mode_before_answer_is_needs_action(journal, meta, tmp_path, capsys):
+    """手動モードで AI の回答を貼り戻す前の出力は要対応（決定事項 5(c)）。冒頭は手動モードの説明のまま、14 章とコマンドラインで
+    回答を貼り戻すよう知らせる。"""
+    from jasme_jats.cli import main
+    from jasme_jats.report import actions
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "a", ai_mode="manual", convert_metafiles=False))
+    assert [a.key for a in actions(res)] == ["ai_pending"] and res.needs_action
+    report = res.report_path.read_text(encoding="utf-8")
+    assert "手動モード: 「AI依頼文.txt」をチャット" in report.split("## 2.")[0]
+    assert "AI の回答をまだ反映していない" in report.split("## 14.")[1]
+    from conftest import META_EXAMPLE
+    assert main([str(FULL), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "b"), "--ai", "manual",
+                 "--no-metafile-conversion"]) == 1
+    assert "--ai-response で指定し" in capsys.readouterr().err

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -466,6 +467,15 @@ def call_api(request_text, images, model=DEFAULT_MODEL, api_key=None, effort="hi
         return out
     except anthropic.APIConnectionError:
         out.error = "API に接続できませんでした（ネットワークを確認してください）"
+        return out
+    except TypeError as e:
+        # API キーが見つからないと、anthropic のライブラリは送るときに TypeError を投げる（「Could not resolve authentication
+        # method」）。それ以外の TypeError（古いライブラリが引数を受け付けないなど）は、API キーの問題として知らせない
+        if not (api_key or os.environ.get("ANTHROPIC_API_KEY")) or "authentication" in str(e).lower():
+            out.error = ("API キーが見つかりません（Colab では「シークレット」に、コマンドラインでは環境変数に ANTHROPIC_API_KEY を"
+                         f"登録してください）: {e}")
+        else:
+            out.error = f"AI の呼び出しに失敗しました: {e}"
         return out
     if msg.stop_reason == "refusal":
         out.error = "AI が回答を断りました（安全上の判定）。手動モードで再試行してください"
