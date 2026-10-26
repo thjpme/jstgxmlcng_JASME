@@ -87,13 +87,15 @@ def _read_cut(outcome, text):
 
 
 def _float_ids(plan, info) -> str:
-    """浮動配置の図形の中身を出力した図・表の ID（F1、T2 など）。表のセルの画像とキャプションで組んだ図も。"""
+    """浮動配置の図形の中身を出力した図・表の ID（F1、T2 など）。表のセルの画像とキャプションで組んだ図、表のない表キャプション
+    も（キャプションのない図には ID がないので出ない）。"""
     paras = {id(q) for q in info.paras} | {id(q) for t in info.tables for q in t.paragraphs()}
     tables = {id(t) for t in info.tables}
     ids = [f.fid for f in plan.figures if f.fid and (
         any(id(q) in paras for q in f.image_paras + ([f.caption] if f.caption is not None else []))
         or any(id(t) in tables for t in f.tables))]
-    ids += [t.tid for t in plan.tables if t.table is not None and id(t.table) in tables]
+    ids += [t.tid for t in plan.tables if (t.table is not None and id(t.table) in tables)
+            or (t.caption is not None and id(t.caption) in paras)]
     return "・".join(ids)
 
 

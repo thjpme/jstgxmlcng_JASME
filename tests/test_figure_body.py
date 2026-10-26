@@ -70,20 +70,80 @@ def test_cell_figures_without_ai(journal, meta, tmp_path):
 
 
 @pytest.mark.parametrize("variant, fid", [("text", "s1"), ("tabcap", "s1"), ("cross", "s3"), ("extra", "s3")])
-def test_cell_figures_left_to_ai_when_not_unique(journal, meta, tmp_path, variant, fid):
+def test_cell_figures_not_unique_stay_a_table(journal, meta, tmp_path, variant, fid):
     """組み方が一つに決まらない表（キャプションでない文字・表キャプションがある、画像とキャプションの組を決められない）は、
-    今までどおり AI に任せる（AI なしでは止まる）。AI の回答を反映する前は、中身をそのまま（キャプションのない表として）
-    アンカー段落の後ろに置く。"""
+    図に組まず、今までどおり（0.21.0 と同じ）キャプションのない表として出す。位置が機械的に決まる図形なら、AI を使わない
+    設定でも止まらず、アンカー段落の前に置く。位置を決められない図形なら今までどおり AI に任せ（AI なしでは止まる）、
+    AI の回答を反映する前は、表のままアンカー段落の後ろに置く。"""
+    anchor = {"s1": "この段落に図1と図2", "s3": "この段落に図4と図5"}[fid]
     path = tmp_path / f"cells_{variant}.docx"
     mf.make_b3_cells(path, variant)
-    with pytest.raises(AIRequiredError) as e:
-        convert(path, meta, journal, Options(out_dir=tmp_path / "none", convert_metafiles=False))
-    assert [f.float.fid for f in e.value.floats] == [fid]
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "manual", ai_mode="manual", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "none", convert_metafiles=False))
     checks_pass(res)
-    anchor = {"s1": "この段落に図1と図2", "s3": "この段落に図4と図5"}[fid]
+    assert res.plan.unplaced_floats == [] and res.plan.floats[fid].mode == "mechanical"
+    seq = sequence(load(res))
+    k = next(i for i, x in enumerate(seq) if x.startswith(anchor))
+    assert seq[k - 1].startswith("表:")                                  # アンカー段落の前に、表のまま
+    assert len(figures(load(res))) == 3                                  # ほかの図形は図に組む
+    path = tmp_path / f"cells_{variant}_down.docx"
+    mf.make_b3_cells(path, variant + ("+down" if fid == "s1" else "+down3"))
+    with pytest.raises(AIRequiredError) as e:
+        convert(path, meta, journal, Options(out_dir=tmp_path / "down_none", convert_metafiles=False))
+    assert [f.float.fid for f in e.value.floats] == [fid]
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "down_manual", ai_mode="manual", convert_metafiles=False))
+    checks_pass(res)
     nxt = after(sequence(load(res)), anchor)[0]
     assert nxt.startswith("表:") and res.plan.floats[fid].where == "anchor"
+
+
+def cells_doc(tmp_path, name, rows):
+    """図の左上がアンカー段落の左上にある（位置が機械的に決まる）図形 1 つの中に、rows の表を入れた原稿。"""
+    def parts(b):
+        im = [b.add_image(f"{name}_{k}.png", mf.png_bytes(f"{name} {k}", size=(300, 200))) for k in range(3)]
+
+        def pic(k):
+            return mf.para(mf.S["body"], mf.drawing(im[k], 1440000, 960000, 861 + k))
+        return [mf.para(mf.S["sec1"], "１．表のセルの図"), mf.para(mf.S["body"], "試験（2024）にならう。"),
+                mf.para(mf.S["body"], "この段落に図形が結び付いている。", mf.textbox(
+                    mf.table(rows(pic)), 860, cx=16 * mf.B3_CM, cy=6 * mf.B3_CM, wrap="wrapTopAndBottom")),
+                mf.para(mf.S["body"], "以上で終わる。")]
+    path = tmp_path / f"{name}.docx"
+    mf.make_article(path, "表のセルの図の検証用文書", parts)
+    return path
+
+
+def cap(text):
+    return mf.para(mf.S["fig_cap"], text)
+
+
+@pytest.mark.parametrize("shape", ["mixed_cell", "vmerge", "sentence"])
+def test_cell_figures_guards(journal, meta, tmp_path, shape):
+    """組み方が一つに決まらない表は組まない（表のまま。文字は落とさない）: 画像とキャプションが同じセルにあるセルと、画像
+    だけ・キャプションだけのセルがまじる表、結合したセルのある表、キャプションでない「図1は…」の文がセルにある表。"""
+    rows = {"mixed_cell": lambda pic: [[mf.cell([pic(0), cap("図1\u3000左上の図")]), mf.cell(pic(1))],
+                                       [mf.cell(cap("図2\u3000左下のキャプション")), mf.cell(cap("図3\u3000右下のキャプション"))]],
+            "vmerge": lambda pic: [[mf.cell(pic(0), vmerge="restart"), mf.cell(pic(1))],
+                                   [mf.cell(mf.para(mf.S["body"], ""), vmerge="continue"), mf.cell(cap("図2\u3000右の図"))],
+                                   [mf.cell(cap("図1\u3000左の図")), mf.cell("")]],
+            "sentence": lambda pic: [[mf.cell([pic(0), mf.para(mf.S["body"], "図1は，左の画像を示す。")]),
+                                      mf.cell([pic(1), cap("図2\u3000右のセルの図")])]]}[shape]
+    path = cells_doc(tmp_path, shape, rows)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    checks_pass(res)
+    root = load(res)
+    assert figures(root) == {} and after(sequence(root), "試験（2024）にな", 2)[1] == "この段落に図形が結び"
+    assert after(sequence(root), "試験（2024）にな")[0].startswith("表:")     # アンカー段落の前に、表のまま
+    cells = "".join("".join(td.itertext()) for td in root.iter("td"))
+    assert "図2" in cells and ("図1" in cells)
+
+
+def test_cell_figures_one_caption_in_a_row(journal, meta, tmp_path):
+    """横 1 行に画像 2 つとキャプション 1 つが並ぶ表は、2 つの画像を本体にした図 1 つに組む（図キャプションが表全体で 1 つ）。"""
+    path = cells_doc(tmp_path, "row3", lambda pic: [[mf.cell(pic(0)), mf.cell(pic(1)), mf.cell(cap("図1\u3000二つの画像の図"))]])
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    checks_pass(res)
+    root = load(res)
+    assert figures(root) == {"図1": (2, 0)} and root.find("body").find(".//table-wrap") is None
 
 
 def test_table_with_caption_but_no_image_stays_a_table(journal, meta, tmp_path):
@@ -184,6 +244,8 @@ def above_marker(b):
 
 @pytest.mark.parametrize("shape, why", [
     ("below_next", "直後にキャプションのない表があるが、この原稿は図キャプションを図の下に置いているため、図の本体にしなかった"),
+    ("below_gap2", "図キャプションの前にキャプションのない表があるが、間にほかの段落がある"),
+    ("above_gap2", "図キャプションの後ろにキャプションのない表があるが、間にほかの段落がある"),
     ("below_tabcap_gap", "直前の表に表キャプション「表1\u3000架空の表」が付いている"),
     ("above_prev", "直前にキャプションのない表があるが、この原稿は図キャプションを図の上に置いているため、図の本体にしなかった"),
     ("above_tabcap", "直後の表の次に表キャプションがあり、どちらの表か決められない"),
@@ -195,7 +257,10 @@ def test_table_near_caption_that_cannot_be_the_body(journal, meta, tmp_path, sha
     text = mf.para(mf.S["body"], "この段落は図キャプションと表の間にある。")
 
     def parts(b):
+        text2 = mf.para(mf.S["body"], "この段落も図キャプションと表の間にある。")
         body = {"below_next": [cap, bare_table("問1\u3000架空の問題")],
+                "below_gap2": [bare_table("問1\u3000架空の問題"), text, text2, cap],
+                "above_gap2": above_marker(b) + [cap, text, text2, bare_table("問1\u3000架空の問題")],
                 "below_tabcap_gap": [mf.para(mf.S["tab_cap"], "表1\u3000架空の表"), text, bare_table("問1\u3000架空の問題"),
                                      cap],
                 "above_prev": above_marker(b) + [bare_table("問1\u3000架空の問題"), cap, text],
@@ -258,6 +323,23 @@ def place_parts(b, shape):
         inner = mf.para(mf.S["body"], mf.drawing(img, 1440000, 960000, 831)) + mf.para(mf.S["fig_cap"], "図2\u3000仮に置く図")
         return head + above_marker(b) + [mf.para(mf.S["fig_cap"], "図1\u3000表の上のキャプション", shape_box(inner, 830)),
                                          bare_table("問1\u3000架空の問題"), mf.para(mf.S["body"], "以上で終わる。")]
+    if shape == "prov_tabcap":
+        img = b.add_image("place_tabcap.png", mf.png_bytes("Tabcap", size=(300, 200)))
+        inner = mf.para(mf.S["tab_cap"], "表1\u3000図形の中の表の見出し") + mf.para(mf.S["body"], mf.drawing(img, 1440000, 960000, 851))
+        return head + [mf.para(mf.S["body"], "この段落に図形が結び付いている。", shape_box(inner, 850)),
+                       bare_table("問A\u3000本文のキャプションのない表"), mf.para(mf.S["body"], "以上で終わる。")]
+    if shape == "prov_tables":
+        img = b.add_image("place_tables.png", mf.png_bytes("Tables", size=(300, 200)))
+        inner = (mf.para(mf.S["body"], mf.drawing(img, 1440000, 960000, 871)) + bare_table("図形の中の表その一")
+                 + bare_table("図形の中の表その二"))
+        return head + [mf.para(mf.S["body"], "この段落に図形が結び付いている。", shape_box(inner, 870)),
+                       mf.para(mf.S["tab_cap"], "表1\u3000本文の表キャプション"), mf.para(mf.S["body"], "以上で終わる。")]
+    if shape == "prov_image":
+        body_img = b.add_image("place_body.png", mf.png_bytes("Body", size=(300, 200)))
+        img = b.add_image("place_float.png", mf.png_bytes("Float", size=(300, 200)))
+        inner = mf.para(mf.S["body"], mf.drawing(img, 1440000, 960000, 881)) + mf.para(mf.S["body"], "\u3000")
+        return head + [mf.para(mf.S["body"], mf.drawing(body_img, 1440000, 960000, 882), shape_box(inner, 880)),
+                       mf.para(mf.S["fig_cap"], "図1\u3000本文の画像の図"), mf.para(mf.S["body"], "以上で終わる。")]
     inner = mf.para(mf.S["fig_cap"], "図2\u3000キャプションだけの図形")
     return head + above_marker(b) + [mf.para(mf.S["body"], "この段落にキャプションだけの図形が結び付いている。",
                                              shape_box(inner, 840)),
@@ -291,6 +373,45 @@ def test_provisional_float_is_not_paired_with_outside(journal, meta, tmp_path, s
         assert figures(root) == {"図9": (1, 0), "図2": (0, 0)}
         assert after(seq, "この段落にキャプショ", 3) == ["図2", "表:問1\u3000架", "以上で終わる。"]
         assert "にある F2 を正しい位置" in detail
+
+
+def floats_in_body(root):
+    """本文の図・表の並び: 「ID:キャプションの番号（なければ -）:中身（g は画像、t は表）」。"""
+    out = []
+    for el in root.find("body").iter("fig", "table-wrap"):
+        if el.getparent().tag == "fig":
+            continue
+        cap = el.find("caption")
+        inner = "g" * len(el.findall("graphic")) + "t" * len(el.findall(".//table"))
+        out.append(f"{el.get('id')}:{''.join(cap.itertext())[:2] if cap is not None else '-'}:{inner}")
+    return out
+
+
+@pytest.mark.parametrize("shape", ["prov_tabcap", "prov_tables", "prov_image"])
+def test_provisional_float_is_not_paired_with_outside_captions(journal, meta, tmp_path, shape):
+    """位置を決められない図形（アンカー段落の後ろに仮に置いたもの）の中身は、その外の表・表キャプション・画像・図キャプション
+    とも組にしない（図形の表キャプションに本文の表を入れない。本文の表キャプションを図形の表に付けない。本文の図キャプションを
+    図形の画像と組にしない）。本文の画像と図キャプションは、間に図形の中身を仮に置いていても、docx で隣り合っていれば組にする。
+    手作業で移す図表の知らせには、図形の中身だけを出す。"""
+    path = tmp_path / f"{shape}.docx"
+    mf.make_article(path, "仮に置いた図形の検証用文書", lambda b: place_parts(b, shape))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False,
+                                               ai_response='{"placements": [], "operations": [], "notes": []}'))
+    checks_pass(res)
+    assert res.plan.unplaced_floats == ["s1"] and res.plan.floats["s1"].where == "anchor"
+    detail = next(u[3] for u in res.unresolved_after if u[0] == "float")
+    got = floats_in_body(load(res))
+    if shape == "prov_tabcap":
+        assert got == ["T1:表1:", "None:-:g", "T2:-:t"]      # 図形の表キャプションだけ・図形の画像・本文の表
+        assert "にある T1 を正しい位置" in detail                # 本文の表 T2 は、図形の中身ではない
+    elif shape == "prov_tables":
+        assert got == ["None:-:g", "T1:-:t", "T2:-:t", "T3:表1:"]  # 本文の表キャプションは図形の表に付けない
+        assert "にある T1・T2 を正しい位置" in detail
+    else:
+        assert got == ["None:-:g", "F1:図1:g"]                  # 図形の画像・本文の画像と本文の図キャプション
+        f1 = next(f for f in res.plan.figures if f.fid == "F1")
+        assert [q.float_id for q in f1.image_paras] == [""]
+        assert "にある図表の中身を正しい位置" in detail and "F1" not in detail
 
 
 def test_figure_without_image_or_table_nearby_is_unchanged(journal, meta, tmp_path):

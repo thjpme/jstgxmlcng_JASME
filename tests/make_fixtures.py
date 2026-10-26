@@ -866,30 +866,32 @@ def b3_cells_parts(b: Builder, variant=""):
 
     s1: 1 行 2 列。セルごとに画像とキャプション（図1・図2）。s2: 2 行 1 列。1 行目に画像 2 つ、2 行目にキャプション 1 つ（図3）。
     s3: 2 行 2 列。1 行目に画像、2 行目にキャプション（図4・図5。同じ列の画像とキャプションが組になる）。
-    variant（テストの中で作る）: "text"（s1 の右のセルにキャプションでない文字「（a）」）、"tabcap"（s1 の右のセルの
-    キャプションを表キャプションに）、"cross"（s3 の画像とキャプションを互い違いに置く: 組を一つに決められない）、
-    "extra"（s3 の 1 行目に、キャプションのない 3 つ目の画像）、"down"（s1 をアンカー段落から 2 cm 下にずらす: 位置を
-    決められない）、"mixed"（s1 の左のセルの画像の段落に、説明の文字も書く）
+    variant（テストの中で作る。「+」でつなぐと組み合わせる）: "text"（s1 の右のセルにキャプションでない文字「（a）」）、
+    "tabcap"（s1 の右のセルのキャプションを表キャプションに）、"cross"（s3 の画像とキャプションを互い違いに置く: 組を一つに
+    決められない）、"extra"（s3 の 1 行目に、キャプションのない 3 つ目の画像）、"down"・"down3"（s1・s3 をアンカー段落から
+    2 cm 下にずらす: 位置を決められない）、"mixed"（s1 の左のセルの画像の段落に、説明の文字も書く）
     """
+    vs = set(variant.split("+"))
     im = [b.add_image(f"b3_cell_{k}.png", png_bytes(f"Cell picture {k}", size=(300, 200))) for k in range(1, 8)]
 
     def pic(k, pid, text=""):
         return para(S["body"], drawing(im[k], 1440000, 960000, pid), text)
 
-    c1 = [pic(0, 711, "説明文：左のセルの画像と同じ段落にある文字。" if variant == "mixed" else ""),
+    c1 = [pic(0, 711, "説明文：左のセルの画像と同じ段落にある文字。" if "mixed" in vs else ""),
           para(S["fig_cap"], "図1\u3000左のセルの図")]
     c2 = [pic(1, 712), para(S["fig_cap"], "図2\u3000右のセルの図")]
-    if variant == "text":
+    if "text" in vs:
         c2.insert(1, para(S["body"], "（a）"))
-    if variant == "tabcap":
+    if "tabcap" in vs:
         c2[1] = para(S["tab_cap"], "表1\u3000セルの中の表キャプション")
-    v1 = ("paragraph", 2 * B3_CM) if variant == "down" else ("paragraph", 0)
+    v1 = ("paragraph", 2 * B3_CM) if "down" in vs else ("paragraph", 0)
+    v3 = ("paragraph", 2 * B3_CM) if "down3" in vs else ("paragraph", 0)
     rows3 = [[cell(pic(4, 731)), cell(pic(5, 732))],
              [cell(para(S["fig_cap"], "図4\u3000左の列の図")), cell(para(S["fig_cap"], "図5\u3000右の列の図"))]]
-    if variant == "cross":
+    if "cross" in vs:
         rows3 = [[cell(pic(4, 731)), cell(para(S["fig_cap"], "図4\u3000左の列の図"))],
                  [cell(para(S["fig_cap"], "図5\u3000右の列の図")), cell(pic(5, 732))]]
-    if variant == "extra":
+    if "extra" in vs:
         rows3[0].append(cell(pic(6, 733)))
         rows3[1].append(cell(""))
     return [
@@ -903,7 +905,7 @@ def b3_cells_parts(b: Builder, variant=""):
             720, cx=8 * B3_CM, cy=6 * B3_CM, wrap="wrapTopAndBottom")),
         para(S["body"], "図4と図5は，画像の行とキャプションの行に分けた表に並べた。"),
         para(S["body"], "この段落に図4と図5のテキストボックスが結び付いている。", textbox(
-            table(rows3), 730, cx=16 * B3_CM, cy=6 * B3_CM, wrap="wrapTopAndBottom")),
+            table(rows3), 730, cx=16 * B3_CM, cy=6 * B3_CM, v=v3, wrap="wrapTopAndBottom")),
         para(S["body"], "以上のように，表のセルに並べた図も図として出力する。"),
     ]
 
