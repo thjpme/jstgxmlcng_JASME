@@ -90,6 +90,8 @@ def test_route1_reports_without_changing_text(journal, meta, tmp_path):
     assert "作り方: docx から作る" in head
     assert "要確認: 出版版 PDF と文字が違う箇所が 1 件、全角・半角の違いが 25 文字あります" in head
     assert "XML は docx の文字のままで、照合の結果を載せているだけです" in report
+    # 照合しないものの説明: 資料の中の段落は照合し、資料の見出しだけを照合しない（pdfmatch.target_paragraphs）
+    assert "表のセル・別行の数式・資料の見出しと、4 文字未満の段落は除く" in report
     assert "| d13 |" in report and "| 資料 | 付録 |" in report
     assert "「(→（」5 件" in report and "「架空理論 (Fict」→「架空理論（Fict」" in report
     assert "出版版 PDF との違い**（文字の違い 1 件・全角・半角の違い 25 文字）" in report.split("## 14.")[1]
@@ -128,6 +130,7 @@ def test_route2_fixes_docx_with_tracked_changes(journal, meta, tmp_path):
     assert "PDF に合わせて docx を直した 44 箇所（変更履歴: 挿入 26・削除 40）" in head
     assert f"照合の相手は、出版版 PDF に合わせて直した docx（{fx.path.name}）" in head
     assert "「詳しくは資料の学習指」→「詳しくは付録の学習指」" in report
+    assert "表のセル・別行の数式・図の中の文字・資料の見出しと、4 文字未満の段落は照合せず、docx のままです。" in report
     assert "### 13.2 PDF と違うが直さなかった箇所（要確認）\n\nありません。" in report
     assert "Word で開き、変更履歴を確認する" in report.split("## 14.")[1]
 
@@ -243,22 +246,24 @@ def test_endnote_numbers_and_text_follow_pdf_in_route2(journal, meta, tmp_path, 
     report = res.report_path.read_text(encoding="utf-8")
     assert "| 本文の脚注番号 | Word の文末脚注 5 | 「2)」→「2）」 |" in report
     assert "| 注の一覧の脚注番号 | Word の文末脚注 5 | 「2)」→「２）」 |" in report
-    assert "| fn2 | Word の文末脚注 5 | ２） | あり |" in report             # 8 章の対応の表は PDF に合わせた番号
+    # 8 章の対応の表は PDF に合わせた番号（注の書き出しは、PDF に合わせて直した docx の文字）
+    assert "| fn2 | Word の文末脚注 5 | ２） | 文末脚注の本文ＡＢＣである。 | あり |" in report
 
 
 def test_route2_keeps_abstract_appendix_border(journal, meta, tmp_path, monkeypatch):
     """ルート2: 直すと英文要旨と資料の境が動く違い（英文要旨の「資料-1 …」を PDF の「資料－1 …」に直すと、資料の見出しになる）は
-    直さない（pdfdocx._structure で段落の領域も比べる。修正計画の D3）。13 章に直さなかった理由を出し、英文要旨のまま。"""
+    直さない（pdfdocx._structure で段落の領域も比べる。修正計画の D3）。13 章に直さなかった理由を出し、英文要旨のまま。
+    段落は見出しの形（「資料－1 Worksheet …」）にする（「資料－1 shows …」のような文の形は、直しても資料の見出しにならない）。"""
     b = mf.Builder()
     body = mf.front_ja(b, "境の検証", "―英文要旨と資料―", [("架空大学", "試験\u3000十郎")])
     body += [mf.para(mf.S["sec1"], "１．はじめに"), mf.para(mf.S["body"], "本文の段落である。")]
     body += mf.front_en(b, "Checking the Border", "Abstract and Appendix", [("Juro SHIKEN", "Fictional University")],
-                        ["The abstract of this article.", "資料-1 shows the worksheet used in the lesson."])
+                        ["The abstract of this article.", "資料-1 Worksheet used in the lesson"])
     body += mf.tail(b)
     path = tmp_path / "border.docx"
     b.save(path, body)
     pages = [("境の検証\n―英文要旨と資料―\n１．はじめに\n本文の段落である。\nChecking the Border\nAbstract and Appendix\n"
-              "Abstract\nThe abstract of this article.\n資料－1 shows the worksheet used in the lesson.\n")]
+              "Abstract\nThe abstract of this article.\n資料－1 Worksheet used in the lesson\n")]
     res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "pdf", docx=path)
     assert res.fidelity.ok and res.dtd_valid
     from jasme_jats.pdfdocx import STRUCTURE_REASON
@@ -266,7 +271,7 @@ def test_route2_keeps_abstract_appendix_border(journal, meta, tmp_path, monkeypa
     root = load(res)
     assert root.find(".//app-group") is None
     assert ["".join(p.itertext()) for p in root.findall(".//trans-abstract/p")] == [
-        "The abstract of this article.", "資料-1 shows the worksheet used in the lesson."]
+        "The abstract of this article.", "資料-1 Worksheet used in the lesson"]
 
 
 def test_autonum_follows_pdf(journal):
