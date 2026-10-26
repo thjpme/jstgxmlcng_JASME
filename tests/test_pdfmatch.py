@@ -90,6 +90,8 @@ def test_route1_reports_without_changing_text(journal, meta, tmp_path):
     assert "作り方: docx から作る" in head
     assert "要確認: 出版版 PDF と文字が違う箇所が 1 件、全角・半角の違いが 25 文字あります" in head
     assert "XML は docx の文字のままで、照合の結果を載せているだけです" in report
+    # 照合しないものの説明: 資料の中の段落は照合し、資料の見出しだけを照合しない（pdfmatch.target_paragraphs）
+    assert "表のセル・別行の数式・資料の見出しと、4 文字未満の段落は除く" in report
     assert "| d13 |" in report and "| 資料 | 付録 |" in report
     assert "「(→（」5 件" in report and "「架空理論 (Fict」→「架空理論（Fict」" in report
     assert "出版版 PDF との違い**（文字の違い 1 件・全角・半角の違い 25 文字）" in report.split("## 14.")[1]
@@ -128,6 +130,7 @@ def test_route2_fixes_docx_with_tracked_changes(journal, meta, tmp_path):
     assert "PDF に合わせて docx を直した 44 箇所（変更履歴: 挿入 26・削除 40）" in head
     assert f"照合の相手は、出版版 PDF に合わせて直した docx（{fx.path.name}）" in head
     assert "「詳しくは資料の学習指」→「詳しくは付録の学習指」" in report
+    assert "表のセル・別行の数式・図の中の文字・資料の見出しと、4 文字未満の段落は照合せず、docx のままです。" in report
     assert "### 13.2 PDF と違うが直さなかった箇所（要確認）\n\nありません。" in report
     assert "Word で開き、変更履歴を確認する" in report.split("## 14.")[1]
 
@@ -203,7 +206,7 @@ def test_word_footnote_numbers_follow_pdf(journal, meta, tmp_path, monkeypatch):
     assert "".join(x.itertext()) == "1）"
     # 注の一覧: 番号を PDF に合わせ、docx の記号の後の空白も PDF にないので直した docx で消す（番号の後に空白を補わない）
     assert "".join(root.find(".//fn/p").itertext()) == "１）Word の脚注機能で付けた注です。"
-    assert res.pdf_check.number_edits == {("fnref", "5"): "1）", ("fnlist", "5"): "１）"}
+    assert res.pdf_check.number_edits == {("fnref", "footnote:5"): "1）", ("fnlist", "footnote:5"): "１）"}   # 鍵は note_key
     assert [(f.src, f.kind) for f in res.docx_fix.applied] == [("f3", "space")]   # 脚注 5 の段落
     report = res.report_path.read_text(encoding="utf-8")
     assert "| 注の一覧の脚注番号 | Word の脚注 5 | 「1)」→「１）」 |" in report
@@ -213,6 +216,63 @@ def test_word_footnote_numbers_follow_pdf(journal, meta, tmp_path, monkeypatch):
     assert "".join(load(res).find(".//fn/p").itertext()) == "1) Word の脚注機能で付けた注です。"
     report = res.report_path.read_text(encoding="utf-8")
     assert "| 注の一覧の脚注番号 | Word の脚注 5 | 「1)」→「１）」 |" in report
+
+
+def test_endnote_numbers_and_text_follow_pdf_in_route2(journal, meta, tmp_path, monkeypatch):
+    """ルート2: Word の文末脚注も脚注と同じく、番号（本文の「2）」、注の一覧の「２）」）の全角・半角を変換のときに PDF に合わせ、
+    文末脚注の段落の違いは、直した docx の文末脚注（word/endnotes.xml）に変更履歴として書き込む（修正計画の D4）。
+    番号の表の鍵は注の鍵（脚注 5 と文末脚注 5 を分ける）。PDF は作らず、extract_pages を差し替える。"""
+    from jasme_jats.pdfdocx import tracked_counts
+
+    def parts(b):
+        return [mf.para(mf.S["sec1"], "１．はじめに"),
+                mf.para(mf.S["body"], "脚注の付いた文", mf.footnote_ref(5), "と文末脚注の付いた文", mf.endnote_ref(5), "である。")]
+    path = tmp_path / "r2.docx"
+    mf.make_article(path, "ルート2の文末脚注", parts, footnotes=[mf.footnote(5, " 脚注の本文である。")],
+                    endnotes=[mf.endnote(5, " 文末脚注の本文 ABC である。")])
+    pages = [("ルート2の文末脚注\n―検証用の小さな論文―\n１．はじめに\n脚注の付いた文1）と文末脚注の付いた文2）である。\n"
+              "引用および参考文献\n試験六郎（2024）．「小さな論文」．『架空誌』，第5巻，pp.9-10．\n"
+              "注\n１）脚注の本文である。\n２）文末脚注の本文ＡＢＣである。\n")]
+    res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "pdf", docx=path)
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    assert res.pdf_check.number_edits == {("fnref", "footnote:5"): "1）", ("fnlist", "footnote:5"): "１）",
+                                          ("fnref", "endnote:5"): "2）", ("fnlist", "endnote:5"): "２）"}
+    fixed = [(f.kind, f.old, f.new) for f in res.docx_fix.applied if f.src.startswith("e")]
+    assert ("width", "A", "Ａ") in fixed and ("width", "C", "Ｃ") in fixed and res.docx_fix.skipped == []
+    assert tracked_counts(res.docx_fix.path)[0] >= 3          # 文末脚注の段落にも変更履歴を書き込んだ（読み直して合った）
+    root = load(res)
+    assert ["".join(fn.itertext()) for fn in root.iter("fn")] == ["１）脚注の本文である。", "２）文末脚注の本文ＡＢＣである。"]
+    assert ["".join(x.itertext()) for x in root.iter("xref") if x.get("ref-type") == "fn"] == ["1）", "2）"]
+    report = res.report_path.read_text(encoding="utf-8")
+    assert "| 本文の脚注番号 | Word の文末脚注 5 | 「2)」→「2）」 |" in report
+    assert "| 注の一覧の脚注番号 | Word の文末脚注 5 | 「2)」→「２）」 |" in report
+    # 8 章の対応の表は PDF に合わせた番号（注の書き出しは、PDF に合わせて直した docx の文字）
+    assert "| fn2 | Word の文末脚注 5 | ２） | 文末脚注の本文ＡＢＣである。 | あり |" in report
+
+
+def test_route2_keeps_abstract_appendix_border(journal, meta, tmp_path, monkeypatch):
+    """ルート2: 直すと英文要旨と資料の境が動く違い（英文要旨の「資料-1 …」を PDF の「資料－1 …」に直すと、資料の見出しになる）は
+    直さない（pdfdocx._structure で段落の領域も比べる。修正計画の D3）。13 章に直さなかった理由を出し、英文要旨のまま。
+    段落は見出しの形（「資料－1 Worksheet …」）にする（「資料－1 shows the worksheet.」のような文の形は、直しても資料の見出しに
+    ならない）。"""
+    b = mf.Builder()
+    body = mf.front_ja(b, "境の検証", "―英文要旨と資料―", [("架空大学", "試験\u3000十郎")])
+    body += [mf.para(mf.S["sec1"], "１．はじめに"), mf.para(mf.S["body"], "本文の段落である。")]
+    body += mf.front_en(b, "Checking the Border", "Abstract and Appendix", [("Juro SHIKEN", "Fictional University")],
+                        ["The abstract of this article.", "資料-1 Worksheet used in the lesson"])
+    body += mf.tail(b)
+    path = tmp_path / "border.docx"
+    b.save(path, body)
+    pages = [("境の検証\n―英文要旨と資料―\n１．はじめに\n本文の段落である。\nChecking the Border\nAbstract and Appendix\n"
+              "Abstract\nThe abstract of this article.\n資料－1 Worksheet used in the lesson\n")]
+    res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "pdf", docx=path)
+    assert res.fidelity.ok and res.dtd_valid
+    from jasme_jats.pdfdocx import STRUCTURE_REASON
+    assert [(f.old, f.new, f.reason) for f in res.docx_fix.fixes] == [("-", "－", STRUCTURE_REASON)]
+    root = load(res)
+    assert root.find(".//app-group") is None
+    assert ["".join(p.itertext()) for p in root.findall(".//trans-abstract/p")] == [
+        "The abstract of this article.", "資料-1 Worksheet used in the lesson"]
 
 
 def test_autonum_follows_pdf(journal):

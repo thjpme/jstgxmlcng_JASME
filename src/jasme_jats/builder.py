@@ -713,10 +713,12 @@ class Builder:
 
 
 def word_note_marks(plan, journal) -> dict:
-    """Word の脚注機能で書かれた注の番号: Word の脚注 ID -> (番号, 出力する文字列（設定 fn_mark。本誌は「1)」）)。
+    """Word の脚注機能・文末脚注機能で書かれた注の番号: 注の鍵（model.note_key。FnNode.word_id）-> (番号, 出力する文字列
+    （設定 fn_mark。本誌は「1)」）)。
 
-    本文の脚注番号と注の一覧の先頭の両方に使う。ルート2（出版版 PDF に合わせてから作る）では、全角・半角を PDF に合わせたもの
-    （plan.pdf_numbers）で置き換えて出力する。
+    番号は plan.fns の中の Word の注の順（structure.Classifier.attach_word_notes が、脚注と文末脚注をまとめて本文で最初に
+    参照される順に並べる）の通し番号。本文の脚注番号と注の一覧の先頭の両方に使う。ルート2（出版版 PDF に合わせてから作る）では、
+    全角・半角を PDF に合わせたもの（plan.pdf_numbers）で置き換えて出力する。
     """
     out = {}
     k = 0

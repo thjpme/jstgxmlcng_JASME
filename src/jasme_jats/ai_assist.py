@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from lxml import etree
 
 from .floats import describe, estimate_top_left
-from .model import OBJ, LinkSpec, Para
+from .model import OBJ, LinkSpec, Para, note_label
 from .omml import MML_NS, OmmlConverter, math_display_text
 from .structure import AFTER_BODY_REGIONS, ArticlePlan, _para_text, float_caption
 
@@ -35,7 +35,8 @@ ROLES = {
     "table_caption": "表キャプション", "quote": "ブロック引用", "ref": "引用文献（参考文献リストの 1 件）",
     "ref_heading": "参考文献見出し", "notes_heading": "付記見出し", "ack_heading": "謝辞見出し",
     "fn_heading": "注見出し", "fn_start": "注の始まり（注の一覧で、新しい注が始まる段落）",
-    "abstract": "英文要旨の段落", "title": "題目", "subtitle": "副題",
+    "abstract": "英文要旨の段落", "app_heading": "資料の見出し（英文要旨の後ろの、資料・付録の始まり）",
+    "title": "題目", "subtitle": "副題",
     "exclude": "論文の本文ではない（テンプレートの装飾など）",
 }
 _HEADINGS = {"ref_heading", "notes_heading", "ack_heading", "fn_heading"}
@@ -44,7 +45,8 @@ REGION_ROLES = {
     "body": {"sec1", "sec2", "sec3", "p", "fig_caption", "table_caption", "quote", "exclude"} | _HEADINGS,
     "notes": {"p", "exclude"} | _HEADINGS, "ack": {"p", "exclude"} | _HEADINGS,
     "fn": {"fn_start", "p", "exclude"} | _HEADINGS, "refs": {"ref", "exclude"} | _HEADINGS, "back": {"p", "exclude"} | _HEADINGS,
-    "front_en": {"abstract", "exclude"}, "app": {"p", "exclude"},
+    # 英文の部分では、資料の始まり（app_heading）を指定でき、資料の見出しに abstract を指定すると英文要旨に戻せる
+    "front_en": {"abstract", "app_heading", "exclude"}, "app": {"p", "abstract", "app_heading", "exclude"},
     "authors": set(),   # 著者表の中の著者名・所属（確認のために見せるだけで、役割は変えさせない）
 }
 TARGET_PREFIX = {"link_citation": "B", "link_figure": "F", "link_table": "T", "link_note": "fn", "link_formula": "FD"}
@@ -133,6 +135,11 @@ Python のプログラムがすでに機械的な変換を済ませています�
 3. set_role: スタイルが正しく設定されておらず、役割を機械的に決められなかった段落の役割を指定する。role には次のいずれかを書く:
    {roles}
    著者表の中の段落（役割 author_ja / aff_ja / author_en / aff_en）は確認のために載せているもので、役割は変えられません。
+   Word の脚注・文末脚注の段落と、英文の題目・副題の段落の役割も変えられません。英文要旨の後ろの資料（付録）が英文要旨に
+   入っているときは、資料の見出しの段落を app_heading にしてください（その段落から後ろが資料になります）。逆に、英文要旨の
+   段落が誤って資料にされているときは、その資料の見出しの段落を abstract にしてください（次の資料の見出しまで英文要旨に戻ります）。
+   資料の見出しにされた段落が、見出しではなく資料の中の文のときは p にしてください（前の資料の続きになります。前に資料がなければ、
+   見出しのない資料の最初の段落になります）。
 4. formula_image: 画像として貼り付けられた数式を MathML（MathML 2.0、<math xmlns="http://www.w3.org/1998/Math/MathML"> を根要素とする）に書き起こす。元の画像は残したまま、読み取った数式を併記します。数式でない画像には提案しないでください。
 5. split_name: 姓と名の間に空白がない和文の著者名について、姓と名の境目を指定する（surname + given が氏名の文字列と完全に一致すること）。
 
@@ -195,7 +202,7 @@ def para_view(p: Para) -> str:
         elif a.kind == "image":
             out.append(f"⟦画像 {a.image.image_id}: {a.image.width_cm:.1f}cm×{a.image.height_cm:.1f}cm⟧")
         elif a.kind == "fnref":
-            out.append("⟦Word の脚注参照⟧")
+            out.append("⟦Word の文末脚注参照⟧" if a.fn_kind.startswith("endnote") else "⟦Word の脚注参照⟧")
     s = "".join(out)
     return s
 
@@ -263,7 +270,7 @@ def build_request(plan: ArticlePlan, linker, build_exclusions=(), unsplit_names=
         cap = _para_text(t.caption) if t.caption is not None else "（キャプションなし）"
         lines.append(f"[{t.tid}] 表 {cap}")
     for fn in plan.fns:
-        where = "Word の脚注" if fn.word_note else "段落 " + ", ".join(p.src for p in fn.paras)
+        where = note_label(fn.word_id) if fn.word_note else "段落 " + ", ".join(p.src for p in fn.paras)
         lines.append(f"[{fn.fid}]（{where}）注 {(fn.paras[0].autonum or '')}{para_view(fn.paras[0])[:80]}")
     for fm in plan.formulas:
         if fm.fid:
@@ -286,7 +293,9 @@ def build_request(plan: ArticlePlan, linker, build_exclusions=(), unsplit_names=
         lines.append(f"- 本文でリンクされていない文献: {', '.join(unc)}（本文中に引用があれば link_citation を提案）")
     for e in list(plan.exclusions) + list(build_exclusions):
         if e.text.strip():
-            lines.append(f"- [{e.src}] 出力から除外: {e.reason}: 「{e.text[:60]}」（本文の一部なら set_role を提案）")
+            p = plan.paras.get(e.src)
+            hint = set_role_hint(p, plan) if p is not None else ""
+            lines.append(f"- [{e.src}] 出力から除外: {e.reason}: 「{e.text[:60]}」{hint}")
     for src, text in unsplit_names:
         lines.append(f"- [{src}] 姓と名の区切りがない氏名: 「{text}」")
     images = []
@@ -945,8 +954,45 @@ def split_ops(data):
     return ops
 
 
+def set_role_problem(p, plan: ArticlePlan, role: str) -> str:
+    """段落 p に set_role で役割 role を指定できない理由（指定できれば ''）。
+
+    回答の検証（role_overrides）と、依頼文の除外の一覧の案内（set_role_hint）の両方で使う（指定しても必ず捨てられる操作を
+    AI に勧めないように、判定を 1 か所にまとめる。修正計画の N6）。上から順に見て、最初に当たった理由を返す。
+    文字だけのテキストボックスの段落（float_id のないもの）の規則は、修正計画の F で足す。
+    """
+    if role not in ROLES:
+        return f"役割「{role}」は指定できない"
+    if p.float_id:
+        return "テキストボックス・グループ図形の中の段落の役割は placements で指定する"
+    if p.src in plan.note_of:
+        # 参照のない注も含めて、Word の脚注・文末脚注の段落すべて（構造の組み立てで役割を見ないので、指定しても何も変わらない）
+        return "Word の脚注・文末脚注の段落の役割は変えられない（注の区切りは Word のとおりにする）"
+    region = plan.region.get(p.src, "")
+    if not region:
+        return "表のセルなど、論文の中の位置が決まっていない段落の役割は変えられない"
+    if any(q is p for q in plan.title_en + plan.subtitle_en):
+        # 暫定の判断（修正計画にない）: 英文題目を abstract・exclude などにすると、英文副題が XML から落ちる
+        return "英文の題目・副題の段落の役割は変えられない（変えると英文の題目・副題が XML から落ちる）"
+    if role == "app_heading" and region != "app" and not any(q is p for q in plan.abstract):
+        return "資料の見出し（app_heading）にできるのは、英文要旨と資料の段落だけ"
+    if role not in REGION_ROLES.get(region, set()):
+        return f"この位置（{region}）では役割「{role}」を指定できない"
+    return ""
+
+
+def set_role_hint(p, plan: ArticlePlan) -> str:
+    """依頼文の除外の一覧で、段落 p に添える set_role の案内（set_role_problem で指定できる役割だけを勧める）。"""
+    if not set_role_problem(p, plan, "p"):
+        return "（本文の一部なら set_role を提案）"
+    ok = [r for r in ROLES if r != "exclude" and not set_role_problem(p, plan, r)]
+    if ok:
+        return f"（set_role で指定できる役割: {', '.join(ok)}）"
+    return "（この段落の役割は set_role では変えられない）"
+
+
 def role_overrides(ops, plan: ArticlePlan, outcome: AIOutcome) -> dict:
-    """set_role 操作を検証し、段落の役割の上書き表にする（構造の組み立てをやり直すため）。"""
+    """set_role 操作を検証し、段落の役割の上書き表にする（構造の組み立てをやり直すため）。可否は set_role_problem で決める。"""
     out = {}
     for op in ops:
         if op["op"] != "set_role":
@@ -955,18 +1001,9 @@ def role_overrides(ops, plan: ArticlePlan, outcome: AIOutcome) -> dict:
         if src not in plan.paras:
             outcome.rejected.append((op, f"段落 {src} が存在しない"))
             continue
-        if role not in ROLES:
-            outcome.rejected.append((op, f"役割「{role}」は指定できない"))
-            continue
-        if plan.paras[src].float_id:
-            outcome.rejected.append((op, "テキストボックス・グループ図形の中の段落の役割は placements で指定する"))
-            continue
-        if role == "fn_start" and any(q is plan.paras[src] for fn in plan.fns if fn.word_note for q in fn.paras):
-            outcome.rejected.append((op, "Word の脚注機能で書かれた注は、Word の区切りのとおりにする"))
-            continue
-        region = plan.region.get(src, "")
-        if region and role not in REGION_ROLES.get(region, set()):
-            outcome.rejected.append((op, f"この位置（{region}）では役割「{role}」を指定できない"))
+        why = set_role_problem(plan.paras[src], plan, role)
+        if why:
+            outcome.rejected.append((op, why))
             continue
         out[src] = role
     return out
@@ -1140,8 +1177,13 @@ def apply_ops(ops, plan: ArticlePlan, doc, outcome: AIOutcome):
         if kind == "set_role":
             if any(r[0] is op for r in outcome.rejected):
                 continue
-            d = plan.decide("ai", "style", op["src"], f"段落の役割を「{ROLES[op['role']]}」とした。{op['reason']}",
-                            op["confidence"])
+            what = f"段落の役割を「{ROLES[op['role']]}」とした。"
+            para = plan.paras.get(op["src"])
+            if op["role"] == "p" and any(q is para for q in plan.abstract):
+                # abstract で英文要旨に戻した後ろの、資料の見出しでない段落への p（structure.Classifier.build_front_en）。
+                # 採用しても役割は変わらないので、そのとおりに記録する
+                what = "段落を資料の中の段落（p）にする指定だが、AI の abstract で英文要旨に戻した後ろの段落なので、英文要旨の段落のままにした。"
+            d = plan.decide("ai", "style", op["src"], f"{what}{op['reason']}", op["confidence"])
             outcome.accepted.append((op, d))
             continue
         if kind in TARGET_PREFIX:

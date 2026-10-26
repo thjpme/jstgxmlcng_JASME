@@ -13,6 +13,30 @@ from typing import Optional
 # リンク範囲がこの文字をまたがないように使う。
 OBJ = "\ufffc"
 
+# Word の脚注・文末脚注の種類（Atom.fn_kind から「-custom」を除いたもの）の日本語
+NOTE_KINDS_JA = {"footnote": "脚注", "endnote": "文末脚注"}
+
+
+def _note_kind(kind: str) -> str:
+    return kind.removesuffix("-custom")
+
+
+def note_key(fn_kind: str, fn_id: str) -> str:
+    """Word の脚注・文末脚注の鍵（"footnote:5" / "endnote:5"）。脚注と文末脚注は ID が重なりうるので、種類と ID の組で区別する。
+
+    記号を自分で付けた参照（fn_kind が "footnote-custom" など。customMarkFollows）も、同じ注を指す鍵にする。
+    注の番号（builder.word_note_marks）・本文の参照のリンク（emit.Emitter.write_object）・出版版 PDF との照合（pdfmatch）・
+    レポートは、どれもこの鍵で注を引く。
+    """
+    return f"{_note_kind(fn_kind)}:{fn_id}"
+
+
+def note_label(key: str) -> str:
+    """note_key の人が読める表記（「Word の脚注 5」「Word の文末脚注 5」）。鍵に「-custom」が残っていても同じ表記。"""
+    kind, _, nid = key.partition(":")
+    kind = _note_kind(kind)
+    return f"Word の{NOTE_KINDS_JA.get(kind, kind)} {nid}"
+
 
 @dataclass(eq=False)
 class LinkSpec:
@@ -42,7 +66,8 @@ class Atom:
       text   : 文字列（text, fmt）
       math   : 数式（omml 要素, display=True なら別行数式）
       image  : 画像（image: ImageRef）
-      fnref  : Word の脚注参照（fn_kind, fn_id。番号は Word が自動生成）
+      fnref  : Word の脚注・文末脚注の参照（fn_kind: footnote / endnote。記号を自分で付けたもの〈customMarkFollows〉は
+               末尾に -custom。fn_id。注の鍵は note_key。番号は Word が自動生成）
       gen    : docx の文字ではなく、Word が自動生成して表示する文字（自動番号など）
     """
     kind: str
@@ -240,6 +265,7 @@ class Document:
     styles: dict                       # {style_id: StyleInfo}
     warnings: list = field(default_factory=list)
     hidden_text: list = field(default_factory=list)   # [(src, text)]
+    deleted_note_refs: set = field(default_factory=set)   # 変更履歴で削除された脚注・文末脚注の参照の note_key（docx_reader）
     textbox_excluded: list = field(default_factory=list)
     tracked_changes: int = 0
     comments: int = 0

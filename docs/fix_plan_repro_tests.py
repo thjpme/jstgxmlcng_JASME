@@ -14,6 +14,10 @@ test_blank_paragraphs_in_textbox_and_endnote_are_excluded）。単位 B（0.20.0
 単位 D（0.23.1。U2・M4・N5）も、このファイルにはもともとない（再現と直した後の振る舞いのテストは、直すときに tests/test_pipeline.py・
 tests/test_colab.py・tests/test_notebook.py・tests/test_pdfmatch.py・tests/test_ai.py・tests/test_floats.py・tests/test_figure_body.py・
 tests/test_lost_images.py に足した）。
+単位 E（0.24.0。N6・D4・D3）で取り除いたもの: 資料の見出しの直後がかっこ（test_PROBLEM_appendix_with_paren_goes_into_abstract。
+逆は tests/test_structure.py の test_appendix_with_paren_is_not_in_abstract）とその比較（test_appendix_with_space_is_recognized。
+tests/test_structure.py の test_appendix_heading_forms_are_recognized の「資料　授業プリント」）、Word の文末脚注が XML に出ない
+（test_PROBLEM_endnotes_are_excluded。逆は tests/test_notes.py の test_endnotes_are_output_as_notes）。
 
 実行のしかた（tests/conftest.py のフィクスチャ journal・meta を使うため、tests/ に一時的に写して実行し、終わったら消す）:
 
@@ -23,7 +27,6 @@ tests/test_lost_images.py に足した）。
 """
 import json
 import sys
-import zipfile
 from pathlib import Path
 
 from lxml import etree
@@ -97,58 +100,6 @@ def test_PROBLEM_superscript_exponent_linked_as_note(journal, meta, tmp_path):
     links = [(text(x), x.get("rid")) for x in load(res).iter("xref") if x.get("ref-type") == "fn"]
     assert ("1)", "fn1") in links
     assert ("2", "fn2") in links          # ← 指数の 2 が注 2 へのリンクになる（誤り）
-
-
-# --------------------------------------------------------------------------- 4. 英文要旨の後ろの段落
-def test_PROBLEM_appendix_with_paren_goes_into_abstract(journal, meta, tmp_path):
-    """「資料（…）」のように、「資料」の直後がかっこの見出しは資料と認識されず、その後の段落ごと英文要旨（trans-abstract）に入る。"""
-    def parts(b):
-        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "本文。")]
-    path = make_doc(tmp_path / "app.docx", parts, abstract=["This is the abstract."],
-                    appendix=[mf.para(S["abs"], "資料（授業プリント）"), mf.para(S["abs"], "問1　次の式を計算せよ。")])
-    res = convert(path, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
-    root = load(res)
-    abstract = text(root.find(".//trans-abstract"))
-    assert "資料（授業プリント）" in abstract and "次の式を計算せよ" in abstract
-    assert root.find(".//app-group") is None
-    assert res.jstage_issues == []       # J-STAGE のチェックでも気づけない
-
-
-def test_appendix_with_space_is_recognized(journal, meta, tmp_path):
-    """比較: 「資料　…」（空白）なら資料として認識される。"""
-    def parts(b):
-        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "本文。")]
-    path = make_doc(tmp_path / "app2.docx", parts, abstract=["This is the abstract."],
-                    appendix=[mf.para(S["abs"], "資料　授業プリント"), mf.para(S["abs"], "問1　次の式を計算せよ。")])
-    res = convert(path, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
-    assert load(res).find(".//app-group/app") is not None
-
-
-# --------------------------------------------------------------------------- 7. 文末脚注は XML に出ない
-def test_PROBLEM_endnotes_are_excluded(journal, meta, tmp_path):
-    """Word の文末脚注（注を末尾にまとめる機能。脚注より「注」の書き方に近い）は、本文の参照も注の本文も XML に出ない。"""
-    def parts(b):
-        return [mf.para(S["sec1"], "１．はじめに"),
-                mf.para(S["body"], "文末脚注", '<w:r><w:rPr><w:rStyle w:val="a9"/></w:rPr><w:endnoteReference w:id="3"/></w:r>',
-                        "が付いた文。")]
-    path = make_doc(tmp_path / "end.docx", parts)
-    # endnotes.xml に注を足す
-    tmp = tmp_path / "end2.docx"
-    with zipfile.ZipFile(path) as zin, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
-        for item in zin.infolist():
-            data = zin.read(item.filename)
-            if item.filename == "word/endnotes.xml":
-                data = data.decode("utf-8").replace(
-                    "</w:endnotes>",
-                    '<w:endnote w:id="3"><w:p><w:r><w:endnoteRef/></w:r><w:r><w:t xml:space="preserve"> 文末脚注の本文である。'
-                    '</w:t></w:r></w:p></w:endnote></w:endnotes>').encode("utf-8")
-            zout.writestr(item, data)
-    res = convert(tmp, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
-    assert res.fidelity.ok and res.dtd_valid      # 検査は通る（除外として記録されるため）
-    root = load(res)
-    assert "文末脚注の本文である" not in text(root)
-    assert root.find(".//fn-group") is None
-    assert any("文末脚注" in reason for _, reason, _ in res.fidelity.excluded)
 
 
 # --------------------------------------------------------------------------- 9. 図表参照の誤検出
