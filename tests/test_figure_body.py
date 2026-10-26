@@ -234,6 +234,34 @@ def test_cell_figures_of_unplaced_float_and_mixed_paragraph(journal, meta, tmp_p
     assert any("画像と文字が同じ段落にある" in d.message for d in res.plan.decisions)
 
 
+@pytest.mark.parametrize("shape", ["cells", "float_text"])
+def test_unplaced_float_notice_lists_its_paragraphs(journal, meta, tmp_path, capsys, shape):
+    """位置を決められない図形の中で画像と文字が同じ段落の文字は、図の直後に本文の段落として出すので、手作業で移す図表の
+    知らせ（レポートの冒頭・3 章、Colab の枠、コマンドライン）にも、図表の ID と並べてその段落を示す（図表だけを移すと、
+    段落が仮の位置に残る）。表のセルで組んだ図（cells）と、キャプション 1 つと画像の図形（float_text）。"""
+    from jasme_jats.colab import unplaced_box
+    path = tmp_path / f"{shape}.docx"
+    if shape == "cells":
+        mf.make_b3_cells(path, "mixed+down")
+        want = "F1・F2 と段落「説明文：左のセルの画像と同じ段落にある文」"
+    else:
+        mf.make_float_text(path, down_cm=3)
+        want = "F1 と段落「説明文：図1の画像と同じ段落にある文字。」"
+    resp = tmp_path / "empty.json"
+    resp.write_text('{"placements": [], "operations": [], "notes": []}', encoding="utf-8")
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False,
+                                               ai_response=resp.read_text(encoding="utf-8")))
+    checks_pass(res)
+    assert res.plan.unplaced_floats == ["s1"]
+    detail = next(u[3] for u in res.unresolved_after if u[0] == "float")
+    assert f"の後ろにある {want}を正しい位置" in detail                       # 3 章
+    assert [x.split(": ", 1)[1].endswith(f"にある {want}") for x in res.forced_floats] == [True]   # 冒頭・CLI
+    assert f"にある {want}" in res.report_path.read_text(encoding="utf-8").split("## 2.")[0]      # 冒頭の要対応
+    assert f"、XML の {want}）" in unplaced_box(res.plan)                     # Colab の枠
+    assert cli_main([str(path), "--out", str(tmp_path / "cli"), "--ai", "manual", "--ai-response", str(resp)]) == 1
+    assert f"にある {want}" in capsys.readouterr().err
+
+
 # ---------------------------------------------------------------------------- 画像のない図キャプションと、隣の表
 def test_caption_less_table_becomes_figure_body(journal, meta, tmp_path, capsys):
     """画像のない図キャプションの直前の、キャプションのない表は、その図の本体にする（fig の中の table-wrap）。
@@ -502,10 +530,10 @@ def test_provisional_float_is_not_paired_with_outside_captions(journal, meta, tm
     got = floats_in_body(load(res))
     if shape == "prov_tabcap":
         assert got == ["T1:表1:", "None:-:g", "T2:-:t"]      # 図形の表キャプションだけ・図形の画像・本文の表
-        assert "にある T1 を正しい位置" in detail                # 本文の表 T2 は、図形の中身ではない
+        assert "にある T1 とキャプションのない図を正しい位置" in detail     # 本文の表 T2 は、図形の中身ではない
     elif shape == "prov_tables":
         assert got == ["None:-:g", "T1:-:t", "T2:-:t", "T3:表1:"]  # 本文の表キャプションは図形の表に付けない
-        assert "にある T1・T2 を正しい位置" in detail
+        assert "にある T1・T2 とキャプションのない図を正しい位置" in detail
     elif shape == "prov_image":
         assert got == ["None:-:g", "F1:図1:g"]                  # 図形の画像・本文の画像と本文の図キャプション
         f1 = next(f for f in res.plan.figures if f.fid == "F1")
