@@ -6,6 +6,7 @@ Colab の出力欄は暗い配色のこともあるので、枠の中の文字�
 from __future__ import annotations
 
 import html
+import unicodedata
 import uuid
 
 _COPY_JS = """
@@ -95,8 +96,13 @@ PER_ARTICLE_FIELDS = {"fpage": "最初のページ", "lpage": "最後のペー�
 
 
 def same_first_page(previous: dict, current: dict) -> bool:
-    """巻と最初のページが前の論文と同じ（出力のファイル名と DOI が前の論文と同じになる）か。"""
-    return all(str(current.get(k, "")).strip() and current.get(k) == previous.get(k) for k in ("volume", "fpage"))
+    """巻と最初のページが前の論文と同じ（出力のファイル名と DOI が前の論文と同じになる）か。
+
+    ArticleMeta.from_dict と同じく NFKC にしてから比べる（「３１」と「31」は同じフォルダ名・ファイル名になる）。
+    """
+    def norm(d, k):
+        return unicodedata.normalize("NFKC", str(d.get(k, "") or "")).strip()
+    return all(norm(current, k) and norm(current, k) == norm(previous, k) for k in ("volume", "fpage"))
 
 
 def carried_over(previous: dict, current: dict) -> list:

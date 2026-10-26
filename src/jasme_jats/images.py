@@ -137,15 +137,22 @@ def _bbox(img):
     return ImageChops.difference(rgb, bg).convert("L").point(lambda v: 255 if v > 8 else 0).getbbox()
 
 
-def export_images(doc, images, out_dir: Path, convert_metafiles=True):
-    """BuildInfo.images（出力した画像）を out_dir に書き出す。"""
+def export_images(doc, images, out_dir: Path, convert_metafiles=True, *, keep_dir: Path):
+    """BuildInfo.images（出力した画像）を out_dir に書き出す。
+
+    変換できなかった EMF/WMF の元の画像は keep_dir に置く（省略できない。記事フォルダの中に置くと、記事フォルダを
+    そのまま ZIP にしたときに入ってしまうため）。pipeline は出力フォルダの直下の 要変換/ を渡す（記事フォルダの外。
+    日本語のフォルダ名はアップロード用の ZIP に入れられない: EMSGM034E・074E）。
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     results = []
     for img in images:
         name = img.export_name
         if img.shape_only or not img.target:
             results.append(ImageResult(img.image_id, name, "", "missing",
-                                       "Word の図形・グラフなどで画像ファイルがない。PDF 等から画像を作り、この名前で Graphics/ に置くこと"))
+                                       "Word の図形・グラフなどで画像ファイルがない。PDF 等から画像を作り、Colab の手順 7"
+                                       "（コマンドラインでは --images）で入れること（記事フォルダの Graphics/ に手で置いても ZIP には"
+                                       "入らない）"))
             continue
         data = doc.media.get(img.target)
         src_ext = img.target.rsplit(".", 1)[-1].lower()
@@ -181,7 +188,7 @@ def export_images(doc, images, out_dir: Path, convert_metafiles=True):
                 (out_dir / name).write_bytes(png)
                 results.append(ImageResult(img.image_id, name, img.target, "converted", msg))
             else:
-                keep = out_dir.parent / "要変換" / f"{name.rsplit('.', 1)[0]}.{src_ext}"
+                keep = Path(keep_dir) / f"{name.rsplit('.', 1)[0]}.{src_ext}"
                 keep.parent.mkdir(parents=True, exist_ok=True)
                 keep.write_bytes(data)
                 results.append(ImageResult(img.image_id, name, img.target, "failed",
