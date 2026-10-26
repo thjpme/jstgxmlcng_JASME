@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from .floats import at_anchor, why_not_at_anchor
-from .model import Decision, Exclusion, Float, Para, Table
+from .model import Decision, Exclusion, Float, Para, Table, note_key, note_label
 from .ooxml import is_ws
 
 BODY_ROLES = {"sec1", "sec2", "sec3", "p", "fig_caption", "table_caption", "quote", "fn"}
@@ -22,10 +22,9 @@ FRONT_EN_ROLES = {"title_en", "subtitle_en", "author_en", "aff_en", "abstract_he
 BACK_HEADINGS = {"notes_heading": "notes", "ack_heading": "ack", "fn_heading": "fn", "ref_heading": "refs"}
 HEADING_LEVEL = {"sec1": 1, "sec2": 2, "sec3": 3}
 
-# 文字だけのテキストボックスの段落と、Word の文末脚注を除外したときの理由。レポートは、この理由の除外の件数を、冒頭と
-# 14 章に「要確認」として出す（文字だけのテキストボックスと文末脚注を XML に出力できるようになるまでの暫定の知らせ）
+# 文字だけのテキストボックスの段落を除外したときの理由。レポートは、この理由の除外の件数を、冒頭と 14 章に「要確認」として
+# 出す（文字だけのテキストボックスを XML に出力できるようになるまでの暫定の知らせ。report.provisional_exclusions）
 TEXTBOX_TEXT_EXCLUDED = "テキストボックス内の文字（図の一部とみなして本文から除外）"
-ENDNOTE_EXCLUDED = "Word の文末脚注（未対応。内容を確認して本文の注に移してください）"
 # 位置を決められない図表を仮に置く位置のうち「本文の最後」（本文の領域の最後の要素の後ろ）。place_floats の差し込み位置
 BODY_END = float("inf")
 # 本文より後ろにある領域（ArticlePlan.region の値）。AI がこれらの段落の後ろを指定した図表は、本文の最後に仮に置く
@@ -54,7 +53,36 @@ RE_REF_HEADING_TEXT = re.compile(r"^\s*(?:引用(?:・|及び|および)?参考�
 RE_ACK_TEXT = re.compile(r"^\s*(?:謝辞|Acknowledge?ments?)\s*$")
 RE_NOTES_TEXT = re.compile(r"^\s*付記\s*$")
 RE_FN_TEXT = re.compile(r"^\s*(?:注|註|注釈|Notes?)\s*$")
-RE_APPENDIX = re.compile(r"^[\s\u3000]*(?:資料|付録|附録|Appendix)(?:[\s\u3000]*[0-9０-９A-ZＡ-Ｚ]+)?(?=[\s\u3000:：]|$)")
+# 資料（付録）の見出し: 「資料」「付録」「附録」「Appendix」で始まる段落（英文要旨の後ろで、資料の始まりとみなす。build_front_en）。
+# 先頭の開き括弧を 1 つ許す（「【資料1】」「（資料3）」。閉じ括弧はそろえなくてよい）。語の後ろの番号は、数字・英字・
+# Ⅰ-Ⅻ・ⅰ-ⅻ・①-⑳で、前に空白と全角のハイフン「－」・ハイフン「‐」、後ろに枝番（「資料1-2」）を許す。番号の直後には、
+# 空白・コロン・ピリオド・読点・括弧・ダッシュ・行末だけを許す（「資料1を配布した」「資料12の結果」は本文の文）。ASCII の
+# ハイフン「-」は語の直後に許さない（「資料-1」は本文の文とみなす。枝番の区切りにだけ使う）。番号がないときは、語の直後に
+# 空白・コロン・括弧・ダッシュ・行末だけを許す（「資料、図表」「資料.」は本文の文）。この形に合う文（「資料1、2は…である。」
+# 「Appendix shows ….」）は appendix_sentence で見分ける
+_APP_OPEN = "【［\\[〔〈《＜<(（"
+_APP_CLOSE = "】］\\]〕〉》＞>)）"
+_APP_DASH = "－‐‒–—―"          # ASCII のハイフン「-」は入れない（枝番の区切りにだけ使う）
+_APP_NUM = "[0-9０-９A-ZＡ-Ｚ]+|[Ⅰ-Ⅻ]|[ⅰ-ⅻ]|[①-⑳]"
+RE_APPENDIX = re.compile(
+    rf"^{_WS}[{_APP_OPEN}]?{_WS}(?:資料|付録|附録|Appendix)"
+    rf"(?:{_WS}[－‐]?{_WS}(?:{_APP_NUM})(?:[-{_APP_DASH}](?:{_APP_NUM}))*"                 # 番号（前に全角のハイフン、後ろに枝番）
+    rf"(?=[\s\u3000:：.．、,，{_APP_OPEN}{_APP_CLOSE}{_APP_DASH}]|$)"                      # 番号の直後
+    rf"|(?=[\s\u3000:：{_APP_OPEN}{_APP_CLOSE}{_APP_DASH}]|$))")                           # 番号のないとき、語の直後
+# RE_APPENDIX に合う段落のうち、文の形のもの（appendix_sentence。資料の見出しとみなさない）を見分ける規則。和文の文は、語・番号の
+# 後ろにかな・漢字があり、段落が「。」か「．」で終わるもの（「資料1、2は…である。」。括弧・かぎ括弧の中の「。」〈「資料2　…
+# （下線は筆者。）」〉は段落の終わりでないので数えない）。英文の文は、語・番号（と閉じ括弧）の後ろが「空白 + 英小文字」で、
+# かな・漢字がなく、段落が「.」「?」「!」で終わるもの（「(Appendix 1) lists ….」。「Appendix 1 questionnaire」「資料2 iPad の画面」は見出し）
+RE_APPENDIX_SENTENCE = re.compile(rf"[{_APP_CLOSE}]*[\s\u3000]+[a-z]")
+RE_JA_SENTENCE_END = re.compile(r"[。．][\s\u3000]*$")
+RE_EN_SENTENCE_END = re.compile(r"[.?!][\s\u3000]*$")
+# かな・漢字（英文要旨の中の和文の段落の判定。config.RE_JA_CHARS は全角英数字も含むので使わない）
+RE_KANA_KANJI = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff々]")
+ABSTRACT_JA_RATIO = 0.3        # 英文要旨の段落のうち、かな・漢字がこの割合以上なら和文の段落とみなして知らせる
+# 引用文献などの後ろの資料の見出しと思われる段落を知らせるときの、後付けの節の名前（build_back。決定事項 8(b) は暫定で警告だけ）
+APP_PLACE = {"refs": "引用文献", "fn": "注", "notes": "付記", "ack": "謝辞"}
+# 注の番号をリンクにしない段落の種類（ArticlePlan.no_link_paras。判断の一覧と、レポートの 8 章の表で知らせる）
+NO_LINK_KINDS = "題目・副題・著者名・所属・引用文献"
 
 
 def nfkc(s: str) -> str:
@@ -74,6 +102,59 @@ def note_mark(s: str) -> Optional[tuple]:
     if not m:
         return None
     return m.start(1), m.end(1), num_of(m.group("n1") or m.group("n2") or m.group("n3"))
+
+
+def appendix_sentence(text: str) -> str:
+    """資料の見出しの形（RE_APPENDIX）に合う段落が文の形なら、その形の名前（判断の一覧の文言に使う）。合わない・文の形でなければ ''。
+
+    和文の文: 語・番号の後ろにかな・漢字があり、段落が「。」か「．」で終わる（「資料1、2は授業の記録である。」「（資料1）に
+    示すように、…。」）。括弧・かぎ括弧の中の「。」（「資料2　児童の記述（下線は筆者。）」「資料1　問い「なぜだろう。」の…」）は
+    段落の終わりでないので、見出しのまま。英文の文: 語・番号（と閉じ括弧）の後ろが「空白 + 英小文字」で、かな・漢字がなく、
+    段落が「.」「?」「!」で終わる（「(Appendix 1) lists ….」）。英文の終わりがない「Appendix 1 questionnaire」と、和文の
+    「資料2 iPad の画面」は見出しのまま（0.23.1 と同じ）。
+    """
+    m = RE_APPENDIX.match(text)
+    if not m:
+        return ""
+    rest = text[m.end():]
+    if RE_KANA_KANJI.search(rest):
+        return "「。」か「．」で終わる和文の文" if RE_JA_SENTENCE_END.search(rest) else ""
+    if RE_APPENDIX_SENTENCE.match(rest) and RE_EN_SENTENCE_END.search(rest):
+        return "番号などの後ろが英小文字の語で、「.」などで終わる英文の文"
+    return ""
+
+
+def appendix_heading(text: str) -> bool:
+    """段落の文字が資料（付録）の見出しの形か（英文要旨の後ろの資料の始まり〈build_front_en〉と、引用文献などの後ろの資料の
+    知らせ〈build_back〉で使う）。RE_APPENDIX に合い、文の形（appendix_sentence）でないもの。
+    """
+    return bool(RE_APPENDIX.match(text)) and not appendix_sentence(text)
+
+
+def unreferenced_note_reason(key: str, deleted: bool) -> str:
+    """本文から参照されていない Word の脚注・文末脚注を除外したときの理由（レポートの 6 章）。
+
+    deleted: 参照が削除の変更履歴の中にだけある（Word で変更をすべて承諾すると、注も消える）。
+    """
+    if deleted:
+        return f"{note_label(key)}（本文の参照が変更履歴で削除された注。Word で変更をすべて承諾すると消える）"
+    return f"{note_label(key)}（本文から参照されていない注）"
+
+
+def no_link_rule(kinds) -> str:
+    """注の番号をリンクにしない段落の中の、Word の注の参照の書き出し方（判断の一覧の説明）。
+
+    kinds: 参照のある段落の種類（ArticlePlan.no_link_paras の値。「題目」「著者名」など）。題目・所属・引用文献などでは
+    上付きの番号だけを出し、著者名では番号も出さない（著者名の要素には上付きの文字を置けない。emit.Emitter.write_object）。
+    """
+    kinds = list(dict.fromkeys(kinds))
+    out = []
+    shown = [k for k in kinds if k != "著者名"]
+    if shown:
+        out.append(f"{'・'.join(shown)}の中の注の番号は、リンクにせず上付きの番号だけにする")
+    if "著者名" in kinds:
+        out.append("著者名の中の注の番号は、著者名に上付きの文字を置けないので出力しない")
+    return "。".join(out)
 
 
 # ----------------------------------------------------------------------------- nodes
@@ -137,8 +218,14 @@ class FnNode:
     fid: str = ""
     number: Optional[int] = None
     mark_range: tuple = None      # 先頭の「1)」の位置（para.plain() 上）
-    word_note: bool = False       # Word の脚注機能による注
-    word_id: str = ""
+    word_note: bool = False       # Word の脚注機能・文末脚注機能による注
+    word_kind: str = ""           # footnote（脚注）/ endnote（文末脚注）
+    word_id: str = ""             # 注の鍵（model.note_key。"footnote:5" など）
+    word_refs: list = field(default_factory=list)   # 参照のある段落の ID（docx の順。重複なし。注の中の参照も）
+    # 参照の少なくとも 1 つを、注へのリンクにして出力するか（False なら、参照は XML に出力しなかった段落と、注の番号をリンクに
+    # しない段落〈ArticlePlan.no_link_paras〉の中だけ。本文からのリンクのない注）
+    linked: bool = True
+    custom_mark: bool = False     # 参照のどれかが、記号を自分で付けたもの（customMarkFollows。本文の記号は docx の文字のまま）
 
 
 @dataclass(eq=False)
@@ -232,6 +319,12 @@ class ArticlePlan:
     cell_paras: set = field(default_factory=set)
     layout: object = None                            # 本文の段組みと行の設定（model.Layout）
     pdf_numbers: dict = field(default_factory=dict)  # ルート2: Word が付ける番号を PDF に合わせたもの: (種類, ID) -> 文字列（pdfmatch）
+    note_of: dict = field(default_factory=dict)      # Word の脚注・文末脚注の段落 ID -> 注の鍵（model.note_key。参照のない注も）
+    warnings: list = field(default_factory=list)     # 構造の組み立ての警告（pipeline がレポートの 10 章の警告に加える）
+    abstract_ja: list = field(default_factory=list)  # 英文要旨の中の、かな・漢字が 3 割以上の段落 ID（自動では移さない。要確認）
+    app_after_refs: list = field(default_factory=list)   # 引用文献などの後ろの、資料の見出しと思われる段落 ID（暫定で警告だけ）
+    # 手で書いた注と Word の脚注・文末脚注の両方にある注の番号（Word の注の番号は 1 から付けるので重なる。要確認）
+    note_overlap: list = field(default_factory=list)
 
     @property
     def unplaced_floats(self) -> list:
@@ -267,6 +360,32 @@ class ArticlePlan:
             return "本文の最後"
         src = self.float_text_src(fid)
         return f"段落「{_para_text(self.paras[src]).strip()[:20]}」の後ろ" if src else "本文の最初"
+
+    def no_link_paras(self) -> dict:
+        """XML に出力するが、Word の脚注・文末脚注の参照（注の番号）をリンクにしない段落: 段落 ID -> 段落の種類（「題目」など）。
+
+        題目・副題（和文・英文）・著者名・所属・引用文献の段落。builder はこれらを emit の xref=False の文脈（TITLE・NAME・AFF・
+        REF）で書き出すので、注の番号は上付きの文字だけになる（上付きを置けない NAME では、番号も出さない）。Word の注の
+        リンクの有無（FnNode.linked。Classifier.attach_word_notes）と、レポートの 1 章のリンクの数（report.word_note_refs）・
+        8 章の表が使う。builder の書き出しの文脈を変えたら、ここも合わせる（tests/test_notes.py が XML の注へのリンクと照らして
+        確かめる）。
+        """
+        out = {}
+        for kind, paras in (("題目", self.title), ("副題", self.subtitle), ("英文題目", self.title_en),
+                            ("英文副題", self.subtitle_en),
+                            ("著者名", [p for a in self.authors for p in (a.name_ja, a.name_en) if p is not None]),
+                            ("所属", [p for aff in self.affs for p in (aff.ja, aff.en) if p is not None]),
+                            ("引用文献", [r.para for r in self.refs])):
+            for p in paras:
+                out.setdefault(p.src, kind)
+        return out
+
+    def unlinked_places(self, refs) -> tuple:
+        """本文からのリンクのない Word の注（FnNode.linked が偽）の、参照のある段落 refs（FnNode.word_refs）を分ける:
+        (XML に出力しなかった段落の ID の列, 注の番号をリンクにしない段落〈no_link_paras〉の「題目の段落 d3」の形の列)。
+        判断の一覧と、レポートの 8 章の表の説明に使う。"""
+        nolink = self.no_link_paras()
+        return [s for s in refs if s not in nolink], [f"{nolink[s]}の段落 {s}" for s in refs if s in nolink]
 
     def decide(self, stage, category, src, message, confidence="", applied=True) -> Decision:
         n = sum(1 for x in self.decisions if x.stage == stage) + 1
@@ -444,10 +563,11 @@ class Classifier:
             else:
                 plan.paras[b.src] = b
                 flat.append((b, self.role_of(b)))
-        for notes in (self.doc.footnotes, self.doc.endnotes):
-            for paras in notes.values():
+        for kind, notes in (("footnote", self.doc.footnotes), ("endnote", self.doc.endnotes)):
+            for nid, paras in notes.items():
                 for p in paras:
                     plan.paras[p.src] = p
+                    plan.note_of[p.src] = note_key(kind, nid)
 
         kept = []
         for b, role in flat:
@@ -1551,6 +1671,14 @@ class Classifier:
                 current_fn = None
                 continue
             plan.region[b.src] = state or "back"
+            if state in APP_PLACE and not b.is_blank and role != "ref" and appendix_heading(_para_text(b)):
+                # 引用文献などの後ろの、資料の見出しと思われる段落（参考文献のスタイル以外で、「資料1　…」などの見出しの形の
+                # 段落。見出しのスタイルでも文字で決める〈引用文献を分ける「＜英文献＞」などの小見出しを知らせない〉）。暫定の判断で、
+                # 資料にはせず知らせるだけにする（決定事項 8(b) は利用者に未確認）。段落の扱い（引用文献の 1 件など）は変えない
+                plan.app_after_refs.append(b.src)
+                plan.warnings.append(f"{b.src}: {APP_PLACE[state]}の中に、資料の見出しと思われる段落「{_para_text(b).strip()[:20]}」"
+                                     f"があります。今の版では、引用文献などの後ろの資料は資料として扱わず、{APP_PLACE[state]}の"
+                                     "段落として出力しました")
             if b.is_blank:
                 plan.exclude_blank(b)
                 continue
@@ -1599,6 +1727,7 @@ class Classifier:
         in_abstract = False
         app = None
         pending_name = None
+        ai_abstract = False         # AI が abstract を指定した段落があった（後ろで資料が始まっていなければ、そこから英文要旨が続く）
         for b, role in items:
             if isinstance(b, Table):
                 troles = self.table_roles(b)
@@ -1634,16 +1763,61 @@ class Classifier:
                 plan.exclude_blank(b)
                 continue
             text = _para_text(b)
-            if (in_abstract or app is not None) and RE_APPENDIX.match(text):
+            ai = b.src in self.overrides
+            by_style = by_text = False
+            sentence = ""
+            # 「資料1　…」などの見出しの形の段落（文の形の段落は除く。appendix_heading）と、英文要旨の後ろの、章・節・項見出しの
+            # スタイルの段落（英文要旨の中に見出しは来ないので、資料の始まりとみなす。決定事項 8(a)。資料の中の見出しのスタイルの
+            # 段落は、今までどおり資料の中の段落）。AI の指定がなければ、ここから資料を始める
+            head_text = (in_abstract or app is not None) and appendix_heading(text)
+            head_style = in_abstract and app is None and (self.style_role(b) if ai else role) in HEADING_LEVEL
+            if ai and role in ("abstract", "p"):
+                starts = False              # AI が資料の見出しではないと指定した（文字・見出しのスタイルより優先）
+            elif role == "app_heading":
+                starts = True               # AI が資料の見出しと指定した
+            elif head_text:
+                starts = by_text = True
+            else:
+                starts = by_style = head_style and b.role_origin == "style"
+                if not starts and (in_abstract or app is not None):
+                    # 見出しの形に合うが、文とみなした段落（判断の一覧に記録する。下。AI が役割を指定した段落は、上で決まる）
+                    sentence = appendix_sentence(text)
+            if ai and role == "abstract":
+                app = None                  # AI の指定で英文要旨に戻す（後ろの段落も、次の資料の見出しまで英文要旨）
+                ai_abstract = True
+            elif ai and role == "p" and app is None and not (in_abstract and ai_abstract and not (head_text or head_style)):
+                # AI が資料の中の段落と指定した段落の前に資料がない（最初の資料の見出しへの p など）: 見出しのない資料を始め、
+                # その最初の段落にする（資料の文字を英文要旨に入れない。英文要旨に戻すのは abstract だけ）。ただし、AI が
+                # abstract で英文要旨に戻した後ろの、見出しでない段落への p は、英文要旨のまま（資料を始めない）
+                app = AppNode(title=None)
+                plan.apps.append(app)
+                in_abstract = False
+            if starts:
+                first = app is None
                 app = AppNode(title=b)
                 plan.apps.append(app)
                 plan.region[b.src] = "app"
                 plan.locations[b.src] = f"資料{len(plan.apps)}（見出し）"
                 in_abstract = False
+                head = text.strip()[:20]
+                if by_style:
+                    plan.decide("mechanical", "style", b.src,
+                                f"英文要旨の後ろの、見出しのスタイル「{b.style_name}」の段落「{head}」から資料とした"
+                                "（英文要旨の中に見出しは来ないため）。資料でなければ、Word でその段落のスタイルを英文要旨の"
+                                "スタイルに直して変換し直す（AI による補完では、set_role の abstract で英文要旨に戻せる）")
+                elif by_text:
+                    # 文字の規則で始めた資料も記録する（文の形の段落を見出しと誤ったときに、レポートの 4 章と AI 依頼文の推定で
+                    # 気づけるように）
+                    back = "英文要旨の段落（abstract）" if first else "前の資料の段落（p）"
+                    plan.decide("mechanical", "style", b.src,
+                                f"段落「{head}」を資料の見出しとした（「資料」「付録」「附録」「Appendix」で始まる見出しの形のため）。"
+                                f"資料の見出しでなければ、AI による補完の set_role で{back}に戻せる")
                 continue
             if app is not None:
                 plan.region[b.src] = "app"
                 plan.locations[b.src] = f"資料{len(plan.apps)} 第{len(app.children) + 1}要素"
+                if sentence:
+                    self.note_appendix_sentence(b, text, sentence, first=False)
                 if role in HEADING_LEVEL or self.guess_heading(b, strict=False):
                     app.children.append(PNode(b))   # 資料内の見出しは段落として出力
                 else:
@@ -1668,9 +1842,52 @@ class Classifier:
                 plan.abstract.append(b)
                 plan.locations[b.src] = f"英文要旨 第{len(plan.abstract)}段落"
                 in_abstract = True
+                if sentence:
+                    self.note_appendix_sentence(b, text, sentence, first=True)
+                if plan.lang == "ja":
+                    self.check_abstract_ja(b, text, sentence)
             else:
                 plan.locations[b.src] = "英文部分"
                 plan.exclude(b, "英文部分の、題目・著者・要旨以外の段落")
+
+    def note_appendix_sentence(self, b, text, sentence, first):
+        """「資料」などで始まり資料の見出しの形（RE_APPENDIX）に合うが、文の形（appendix_sentence）なので資料の見出しにしなかった
+        段落を、判断の一覧に記録する（applied=False。レポートの 4 章と、AI 依頼文の「推定:」に載る）。
+
+        文の形の判定で見出しを文と誤ったときに、気づいて直せるように（最初の資料なら見出しと資料の段落が英文要旨に入り、2 つ目
+        からの資料なら前の資料につながる）。first: 英文要旨の段落（最初の資料の見出しの位置）か。
+        """
+        where = "英文要旨の段落のまま" if first else "前の資料の段落のまま"
+        how = ("Word でその段落に章・節・項見出しのスタイルを付けて変換し直すと、文字はそのままで資料になる（AI による補完では、"
+               "set_role の app_heading で資料にできる）") if first else "AI による補完の set_role の app_heading で資料にできる"
+        self.plan.decide("mechanical", "style", b.src,
+                         f"段落「{text.strip()[:20]}」は「資料」「付録」「附録」「Appendix」で始まるが、{sentence}の形なので、"
+                         f"資料の見出しにしなかった（{where}）。資料の見出しなら、{how}", applied=False)
+
+    def check_abstract_ja(self, b, text, sentence=""):
+        """英文要旨の段落に、かな・漢字が 3 割以上あれば知らせる（資料などの和文が英文要旨に入っているかもしれない）。
+
+        自動では移さない。判断の記録（applied=False。AI 依頼文の「推定:」に載り、AI が app_heading を提案できる）と、
+        10 章の警告と、要確認の知らせ（report.actions の abstract_ja）にする。sentence: 段落が「資料1　…。」のように資料の見出しの
+        形で始まるが、文の形なので資料の見出しにしなかった（appendix_sentence）。このときは、見出しを付ける案内ではなく、その段落に
+        見出しのスタイルを付ける案内にする（文字を変えずに資料にできる）。
+        """
+        plan = self.plan
+        t = "".join(text.split())
+        if not t or len(RE_KANA_KANJI.findall(t)) < ABSTRACT_JA_RATIO * len(t):
+            return
+        head = text.strip()[:20]
+        plan.abstract_ja.append(b.src)
+        plan.decide("mechanical", "style", b.src,
+                    f"英文要旨の段落「{head}」は、かな・漢字が 3 割以上ある（資料などの和文が英文要旨に入っているかもしれない）。"
+                    "自動では移していない", applied=False)
+        if sentence:
+            how = (f"この段落は「資料」などで始まりますが、{sentence}の形なので、資料の見出しにしていません。資料の見出しなら、Word で"
+                   "この段落に章・節・項見出しのスタイルを付けて変換し直してください（文字はそのままで資料になります）")
+        else:
+            how = ("資料などの和文なら、Word で資料の見出しの段落に章・節・項見出しのスタイルを付けて（見出しがなければ、資料の前に"
+                   "「資料1」などの見出しを付けて）変換し直してください")
+        plan.warnings.append(f"{b.src}: 英文要旨の段落「{head}」に、かな・漢字が 3 割以上あります。{how}")
 
     def add_author_en(self, p) -> Author:
         plan = self.plan
@@ -1710,34 +1927,112 @@ class Classifier:
             author.affs.append(aff)
 
     def attach_word_notes(self):
-        """Word の脚注機能で付けた注を、注のリストの後ろに加える。"""
+        """Word の脚注・文末脚注を、本文で最初に参照される順の通し番号で、注のリストの後ろに加える（決定事項 7）。
+
+        参照の順は doc.all_paragraphs() の順（document.xml の段落の順。XML に出力しなかった段落の参照も、その位置で数える。
+        Word が脚注に番号を付ける順と同じ）。続けて、集めた注の中の参照を順に足す（脚注の中から参照した文末脚注も出力する）。
+        番号は、builder.word_note_marks が plan.fns の中の Word の注の順に付ける（設定 fn_mark。本誌は「1)」）。
+        削除の変更履歴の中の参照は、参照として数えない（docx_reader が Document.deleted_note_refs に記録する）。
+        参照されていない注の段落は、理由を付けて除外する（空白だけの段落は exclude_blank）。
+        参照がどれも、XML に出力しなかった段落か、注の番号をリンクにしない段落（題目・著者名・所属・引用文献など。
+        ArticlePlan.no_link_paras）の中にある注は、本文からのリンクのない注（FnNode.linked が偽）として出力し、判断の一覧と
+        レポートの 8 章で知らせる。手で書いた注と番号が重なるときは、番号は変えずに plan.note_overlap に記録し、10 章の警告に
+        する（要確認の知らせは report の note_overlap）。
+        """
         plan = self.plan
-        order = []
-        for p in self.doc.all_paragraphs():
-            for a in p.atoms:
-                if a.kind == "fnref" and a.fn_kind.startswith("footnote") and a.fn_id not in order:
-                    order.append(a.fn_id)
-        for nid in order:
-            paras = self.doc.footnotes.get(nid, [])
-            if not paras:
-                continue
-            node = FnNode(paras=paras, word_note=True)
+        notes = {note_key(kind, nid): paras
+                 for kind, d in (("footnote", self.doc.footnotes), ("endnote", self.doc.endnotes)) for nid, paras in d.items()}
+        order, where, custom = [], {}, set()
+
+        def collect(paras):
             for p in paras:
+                for a in p.atoms:
+                    if a.kind != "fnref":
+                        continue
+                    k = note_key(a.fn_kind, a.fn_id)
+                    if not notes.get(k):
+                        continue            # 参照先の注が docx にない（今までどおり注にしない。本文の参照は何も出力されない）
+                    refs = where.setdefault(k, [])
+                    if p.src not in refs:
+                        refs.append(p.src)
+                    if a.fn_kind.endswith("-custom"):
+                        custom.add(k)
+                    if k not in order:
+                        order.append(k)
+
+        collect(self.doc.all_paragraphs())
+        i = 0
+        while i < len(order):               # 集めた注の中の参照（足した注の中も続けて見る）
+            collect(notes[order[i]])
+            i += 1
+        # リンクにならない参照: XML に出力しなかった段落と、注の番号をリンクにしない段落（題目・著者名・所属・引用文献など）の中のもの
+        nolink = plan.no_link_paras()
+        unlinked = {e.src for e in plan.exclusions} | set(nolink)
+        nodes = []
+        for n, k in enumerate(order, 1):
+            paras = notes[k]
+            node = FnNode(paras=paras, word_note=True, word_kind=k.partition(":")[0], word_id=k, word_refs=where[k],
+                          linked=any(s not in unlinked for s in where[k]), custom_mark=k in custom)
+            for j, p in enumerate(paras, 1):
                 plan.region[p.src] = "fn"
-                plan.locations[p.src] = f"Word の脚注 {len(order)}件中"
-            node.word_id = nid
+                plan.locations[p.src] = f"{note_label(k)}（注 {n}）" + (f" 第{j}段落" if len(paras) > 1 else "")
             plan.fns.append(node)
-        word = [fn for fn in plan.fns if fn.word_note]
-        if word:
-            plan.decide("mechanical", "note", word[0].paras[0].src,
-                        f"Word の脚注機能で書かれた注 {len(word)} 件を、注の一覧にした（テンプレートの規定は、本文に上付きの「1)」を書き、"
-                        f"注は「注」の節にまとめる）。本文と注の一覧の番号、注の見出しは補った（8 章）")
-        for p in self.doc.endnotes.values():
-            for q in p:
-                if q.is_blank:
-                    plan.exclude_blank(q)          # 全角空白だけの段落も記録する（記録しないと出力漏れになる）
+            nodes.append((n, node))
+        for k, paras in notes.items():      # 参照されていない注
+            if k in where:
+                continue
+            why = unreferenced_note_reason(k, k in self.doc.deleted_note_refs)
+            for p in paras:
+                plan.locations[p.src] = note_label(k)
+                if p.is_blank:
+                    plan.exclude_blank(p)   # 空白だけの段落（文字がまったくない段落は記録しない）
+                elif p.plain():
+                    plan.exclude(p, why)
+        if not nodes:
+            return
+        ends = sum(1 for _, fn in nodes if fn.word_kind == "endnote")
+        if ends == len(nodes):
+            what = f"Word の文末脚注機能で書かれた注 {ends} 件を、本文で最初に参照される順の通し番号で注の一覧にした"
+        elif ends:
+            what = (f"Word の脚注・文末脚注機能で書かれた注 {len(nodes)} 件（脚注 {len(nodes) - ends} 件・文末脚注 {ends} 件）を、"
+                    "本文で最初に参照される順の通し番号で注の一覧にした")
+        else:
+            what = f"Word の脚注機能で書かれた注 {len(nodes)} 件を、注の一覧にした"
+        plan.decide("mechanical", "note", nodes[0][1].paras[0].src,
+                    f"{what}（テンプレートの規定は、本文に上付きの「1)」を書き、注は「注」の節にまとめる）。"
+                    "本文と注の一覧の番号、注の見出しは補った（8 章）")
+        # 手で書いた注（「注」の節の「1)」など）と番号が重なる Word の注（Word の注は 1 から番号を付ける〈builder.word_note_marks〉）。
+        # 手で書いた注の後ろから番号を続けるかは利用者に確かめていないので、番号は変えずに知らせる（10 章の警告と要確認）
+        manual = {fn.number for fn in plan.fns if not fn.word_note and fn.number is not None}
+        plan.note_overlap = sorted(manual & set(range(1, len(nodes) + 1)))
+        if plan.note_overlap:
+            marks = "、".join(self.journal.fn_mark.format(n=k) for k in plan.note_overlap)
+            plan.warnings.append(f"手で書いた注と Word の脚注・文末脚注が両方あり、注の番号 {marks} が重なっています（Word の注の番号は"
+                                 "本誌の形式で 1 から付けるため）。注の一覧に、同じ番号の別の注が並びます（本文からリンクしている"
+                                 "注は、それぞれ正しい注を指します）。Word でどちらかの書き方にそろえて、変換し直してください")
+        for n, fn in nodes:
+            label = f"{note_label(fn.word_id)}（注 {n}）"
+            if not fn.linked:
+                out, shown = plan.unlinked_places(fn.word_refs)
+                move = "本文からリンクする注なら、Word で参照を本文の段落に移して変換し直す"
+                if not shown:
+                    msg = (f"{label}は、本文の参照が XML に出力しなかった段落（{'、'.join(out)}）の中にだけあるので、"
+                           f"本文からのリンクのない注として出力した（8 章）。{move}")
                 else:
-                    plan.exclude(q, ENDNOTE_EXCLUDED)
+                    # 題目・引用文献などの中の参照（注の番号は上付きの文字だけで、リンクにしない。著者名の中では番号も出さない）
+                    before = f" XML に出力しなかった段落 {'、'.join(out)} と、" if out else ""
+                    msg = (f"{label}は、参照が{before}{'、'.join(shown)} の中にだけあるので、本文からのリンクのない注として"
+                           f"出力した（{no_link_rule(nolink[s] for s in fn.word_refs if s in nolink)}。8 章）"
+                           + (f"。{move}" if out else ""))
+                plan.decide("mechanical", "note", fn.paras[0].src, msg)
+            if fn.custom_mark:
+                # 暫定の判断: 記号を自分で付けた注も、脚注と同じく番号を 1 つ使う（本文の記号は docx の文字のまま）。本文の参照は
+                # 中身のない <xref> で、記号はその後ろに出るので、記号はリンクにならない（emit.Emitter.write_object）
+                plan.decide("mechanical", "note", fn.paras[0].src,
+                            f"{label}は、本文の記号を自分で付けた注（Word の「記号」）。本文の記号は docx の文字のまま、"
+                            f"注の一覧の番号は「{self.journal.fn_mark.format(n=n)}」にした（本文と注の一覧で記号が違う。"
+                            "本文の注へのリンクは記号の前の中身のない参照で、記号はリンクにならない。PDF と照らし、J-STAGE の"
+                            "プレビューで確認すること）")
 
     def assign_ids(self):
         plan = self.plan

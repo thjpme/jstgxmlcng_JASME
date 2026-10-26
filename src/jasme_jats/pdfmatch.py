@@ -91,7 +91,7 @@ import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
 
-from .model import OBJ
+from .model import OBJ, note_key
 
 FW_FIRST, FW_LAST = 0xFF01, 0xFF5E   # 全角の英数字・記号（！〜～）。半角の 0x21〜0x7E と 1 対 1 に対応する
 SKIP = ""        # docx の数式・画像・脚注番号・自動番号（docx の文字ではない、または PDF と文字で比べられないもの）
@@ -217,9 +217,10 @@ class PdfCheck:
     width: dict = field(default_factory=dict)       # src -> {plain 上の位置: PDF の文字}
     drops: dict = field(default_factory=dict)       # src -> {plain 上の位置（落とす空白）}
     diffs: list = field(default_factory=list)       # TextDiff
-    numbers: dict = field(default_factory=dict)     # Word が付ける番号: (種類, 段落 ID または脚注 ID) -> {番号の中の位置: PDF の文字}
+    numbers: dict = field(default_factory=dict)     # Word が付ける番号: (種類, 段落 ID または注の鍵) -> {番号の中の位置: PDF の文字}
     original: dict = field(default_factory=dict)    # Word が付ける番号の元の文字列: (種類, ID) -> 文字列
-    # 種類: auto（段落の自動番号。ID は段落）/ fnref（本文の脚注番号）/ fnlist（注の一覧の脚注番号。ID は Word の脚注 ID）
+    # 種類: auto（段落の自動番号。ID は段落）/ fnref（本文の脚注番号）/ fnlist（注の一覧の脚注番号）。fnref・fnlist の ID は
+    # Word の脚注・文末脚注の注の鍵（model.note_key。"footnote:5" など）
     # 組版で入る文字（誌名の行・柱・投稿受付日など）や図・表の中の文字とみなして照合に使わなかった PDF の文字:
     # [(段落 ID, 行または投稿受付日の文字列)]。
     # 段落の違いの範囲（段落の途中の、PDF にだけある文字と、docx の文字と違う PDF の文字）から実際に除いたものと、段落の最初・
@@ -461,8 +462,9 @@ def _para_seq(p, fn_marks=None, list_marks=None):
     {列の位置: (種類, ID, 番号の中の位置, 番号のアトムの plain 上の位置（段落の自動番号は -1）)}。
 
     空白は除く。数式・画像は SKIP。Word が付ける番号（段落の自動番号、本文の脚注番号、注の一覧の脚注番号）は、
-    出力する文字を列に入れ、plain 上の位置は -1 とする。fn_marks: Word の脚注 ID -> 本文・注の一覧に出力する番号。
-    list_marks: 注の一覧の最初の段落 ID -> Word の脚注 ID。
+    出力する文字を列に入れ、plain 上の位置は -1 とする。fn_marks: Word の脚注・文末脚注の注の鍵（model.note_key）-> 本文・注の
+    一覧に出力する番号。list_marks: 注の一覧の最初の段落 ID -> 注の鍵。記号を自分で付けた参照（customMarkFollows）は番号を
+    出力しないので、照合しない（SKIP）。
     """
     fn_marks, list_marks = fn_marks or {}, list_marks or {}
     seq, gens = [], {}
@@ -482,8 +484,8 @@ def _para_seq(p, fn_marks=None, list_marks=None):
                     seq.append((ch, pos + k))
             pos += len(a.text)
             continue
-        if a.kind == "fnref" and a.fn_kind == "footnote" and a.fn_id in fn_marks:
-            number("fnref", a.fn_id, fn_marks[a.fn_id], pos)
+        if a.kind == "fnref" and a.fn_kind in ("footnote", "endnote") and note_key(a.fn_kind, a.fn_id) in fn_marks:
+            number("fnref", note_key(a.fn_kind, a.fn_id), fn_marks[note_key(a.fn_kind, a.fn_id)], pos)
         elif a.kind == "gen" and a.fn_kind == "mark" and p.src in list_marks and list_marks[p.src] in fn_marks:
             number("fnlist", list_marks[p.src], fn_marks[list_marks[p.src]], pos)
         elif a.kind != "gen":
@@ -520,7 +522,8 @@ def target_paragraphs(plan) -> list:
 def compare(plan, pages, fn_marks=None) -> PdfCheck:
     """docx の段落と PDF の文字を照合する。pages は PDF の各ページの文字（extract_pages）。
 
-    fn_marks: Word の脚注 ID -> 出力する脚注番号（builder.word_note_marks）。Word の脚注番号も PDF と照合する。
+    fn_marks: Word の脚注・文末脚注の注の鍵（model.note_key）-> 出力する番号（builder.word_note_marks）。Word の脚注・文末脚注の
+    番号も PDF と照合する。
     段落の途中にある柱・投稿受付日・図や表の中の文字など（どの段落にも当たらない、ページの端の行など）は照合に使わず、
     res.ignored_lines に記録する（ページ番号は列から除く。pdf_stream）。
     """

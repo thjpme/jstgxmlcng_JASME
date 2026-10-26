@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .model import Atom, Cell, Document, Float, ImageRef, Layout, Para, Row, Table
+from .model import Atom, Cell, Document, Float, ImageRef, Layout, Para, Row, Table, note_key
 from .numbering import Numbering
 from .ooxml import (A_NS, BR_TEXT_TYPES, O_NS, PIC_NS, R_NS, V_NS, WP_NS, DocxPackage, m,
                     on_off, paragraph_ids, run_hidden, sym_char, w, wval)
@@ -83,6 +83,8 @@ class Reader:
         self.warnings = []
         self.hidden = []
         self.textbox_excluded = []
+        # 削除の変更履歴の中の脚注・文末脚注の参照の注の鍵（参照として数えない。structure.Classifier.attach_word_notes が除外の理由に使う）
+        self.deleted_note_refs = set()
         self._img_count = 0
         self.floats = []
         self._float = None      # 読み取り中の浮動配置の図形（Float）
@@ -125,7 +127,8 @@ class Reader:
         doc = Document(blocks=blocks, footnotes=footnotes, endnotes=endnotes, media=self.media,
                        styles=self.styles, warnings=self.warnings, hidden_text=self.hidden,
                        textbox_excluded=self.textbox_excluded, tracked_changes=tracked, comments=comments,
-                       images=self.images, floats=self.floats, layout=read_layout(root, self.pkg))
+                       images=self.images, floats=self.floats, layout=read_layout(root, self.pkg),
+                       deleted_note_refs=self.deleted_note_refs)
         return doc
 
     def read_notes(self, part, tag, prefix) -> dict:
@@ -323,9 +326,13 @@ class Reader:
             if tag in (w("rPr"), w("delText"), w("lastRenderedPageBreak")):
                 continue
             if tag in (w("footnoteReference"), w("endnoteReference")):
+                kind = "footnote" if tag == w("footnoteReference") else "endnote"
+                if deleted and not self._in_code():
+                    # 削除の変更履歴の中の参照は、参照として数えない（Word で変更をすべて承諾した状態）。参照先の注を
+                    # 理由付きで除外するために記録する（文字の読み方は変えない）
+                    self.deleted_note_refs.add(note_key(kind, ch.get(w("id")) or ""))
                 if deleted or self._in_code():
                     continue
-                kind = "footnote" if tag == w("footnoteReference") else "endnote"
                 if ch.get(w("customMarkFollows")) in ("1", "true"):
                     kind += "-custom"   # 記号は直後の w:t に本文の文字として入っている
                 para.atoms.append(Atom(kind="fnref", fn_kind=kind, fn_id=ch.get(w("id")), fmt=frozenset({"sup"})))
