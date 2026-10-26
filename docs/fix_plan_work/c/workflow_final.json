@@ -1,0 +1,418 @@
+{
+ "impl": {
+  "changed_files": [
+   "src/jasme_jats/package.py",
+   "src/jasme_jats/images.py",
+   "src/jasme_jats/pipeline.py",
+   "src/jasme_jats/config.py",
+   "src/jasme_jats/report.py",
+   "src/jasme_jats/cli.py",
+   "tools/make_notebook.py",
+   "notebooks/JASME_docx_to_JSTAGE_XML.ipynb",
+   "tests/test_pipeline.py",
+   "tests/test_notebook.py",
+   "README.md",
+   "docs/DESIGN.md",
+   "docs/DEVELOPMENT.md",
+   "docs/JSTAGE_NOTES.md"
+  ],
+  "summary": "I built unit C of FIX_PLAN (M1+M2, N4, U1) as uncommitted changes in the working tree, on top of main/HEAD 17b3498 (0.22.0). The design memo is at /tmp/claude-0/-home-user-jstgxmlcng-JASME/fb4d86bb-6ffb-5369-990a-10fe830c8789/scratchpad/c/DESIGN_C.md. This unit does not touch the docx text. XML and AI依頼文 came out identical to 0.22.0 in golden and in td1–3.\n\nM1+M2 (what goes into the upload ZIP):\n- images.export_images(…, keep_dir=None): an EMF/WMF that could not be converted is saved to keep_dir. pipeline passes out_dir/'要変換' (directly under the output folder, outside the article folder). The message text stays the same.\n- New in package.py:\n  - ZIP_STATUSES and zip_image_names: the images whose status is ok, converted or user.\n  - upload_entries: lists the ZIP items, which are {aid}.xml, this run's {aid}.pdf, and those images.\n  - make_zip(out_dir, journal, meta, image_names=(), has_pdf=False): packs only that list.\n  - write_package(…, image_names=()): passes the image names on to make_zip.\n  - zip_problems(zpath, journal, meta): reads the ZIP back and returns (message ID, text) pairs. It reports EMSGM034E for a non-alphanumeric ZIP name and for each bad folder or file name (Graphics image names are left to jstage_rules). It reports '-' for each article folder found outside this article's folder, and EMSGM074E for an unexpected item inside the article folder. Empty files give 053E (XML), 059E (PDF) and 073E (image). A file that cannot be read as a ZIP gives 034E.\n  - unzipped_files: files in the article folder that are not in the ZIP.\n- Result.zip_issues and Result.not_zipped are recomputed in both convert and add_images. They are not added to res.warnings.\n- Report changes:\n  - Chapter 1: the 「J-STAGE のアップロード時チェック」 row counts jstage_issues + zip_issues together (helper report.upload_issues), and its label changed to 「XML と ZIP で判定できるもの」. The 「警告」 row adds 「ZIP に入れなかったファイル n 件」 when there are any.\n  - Chapter 10: one item for not_zipped. It explains that the ZIP holds only this run's XML, images and the PDF given this time, and what to do: PDF via 手順 2 / --pdf, images via 手順 7 / --images, anything else needs no action.\n  - Chapter 12: the table and its explanation now include the ZIP check.\n  - Chapter 14: the PDF line now reads [x] 「ZIP に入っている」 or [ ] 「ZIP に入っていない」, with both the Colab 手順 2 and the CLI --pdf instructions.\n- CLI and notebook 手順 5・6 show both kinds of upload issues. The CLI also prints the not_zipped files after the --images step.\n- README: the 要変換/ row and the ZIP row are updated.\n\nN4 (volume, issue, pages):\n- ArticleMeta.from_dict NFKC-normalizes volume, issue, fpage and lpage. When a value changes, a notice such as 「巻「３１」を「31」として読みました（全角の文字を半角にしました）」 goes into the new field ArticleMeta.input_notes. Any input key with the same name is ignored.\n- If volume, issue or fpage is not [A-Za-z0-9]+, from_dict raises ValueError. The message names the field (巻・号・最初のページ) and shows the bad character(s), with 空白 written out. If any of them is non-ASCII it says 全角の文字 are not allowed; otherwise it says 記号・空白.\n- Where the notices appear:\n  - Colab 手順 3 prints them as 「※ …」 after 「入力しました」. The error still uses the existing 「入力を確認してください: …」 SystemExit.\n  - The CLI catches ValueError from ArticleMeta.load, prints 「書誌情報（ファイル）を確認してください: …」 to stderr and exits with 2 (the same as AIRequiredError). Notices go to stdout as 「※ 書誌情報: …」.\n  - Report chapter 11 lists the notices under the table.\n\nU1 (dates):\n- config._date(v, label='日付') is rewritten as the plan specifies.\n  - A datetime is checked first and becomes .date().\n  - Otherwise the value is NFKC-normalized and all whitespace is removed. It is accepted if it fully matches [0-9]{8}, or [0-9]{4}[-/.年][0-9]{1,2}[-/.月][0-9]{1,2}日?.\n  - Anything else raises a ValueError that names the field and keeps 「YYYY-MM-DD」 in the text.\n- from_dict passes the field names through DATE_FIELDS: 発行日・J-STAGE 公開日・受付日・再受付日・受理日・最終査読日.\n- The 手順 3 explanation in make_notebook.py is updated. I regenerated the notebook with tools/make_notebook.py; the version number is unchanged.\n\nDocs:\n- DESIGN: chapter 3 now has a jstage_rules step and the ZIP checks. Chapter 6 has new rows for ZIP contents, volume/issue/page input and date input. Chapter 7 has a new limitation.\n- DEVELOPMENT: config.py row and package/report description in the code table, a test entry, and a remaining-issues row.\n- JSTAGE_NOTES: the meanings of the message IDs (034E, 053E, 059E, 073E, 074E, 219E, 057E), checked against 別紙3 fetched on 2026-10-26, and what now goes into the ZIP.",
+  "tests_added": [
+   "tests/test_pipeline.py::test_upload_zip_has_only_this_article（付録 M1 (1)〜(3)）",
+   "tests/test_pipeline.py::test_zip_problems_on_handmade_zips（付録 M1 点検: jasme_３１_１.zip→034E 1件、0バイト xml/pdf/画像→053E/059E/073E、31_13→'-'、正常な ZIP は []）",
+   "tests/test_pipeline.py::test_rerun_with_user_images_keeps_report_consistent（付録 M1 点検）",
+   "tests/test_pipeline.py::test_files_put_by_hand_are_not_zipped（付録 M1 点検 memo.txt）",
+   "tests/test_pipeline.py::test_empty_pdf_is_reported_by_zip_check（付録 M1 点検 PDFCHECK+空の PDF→zip_issues に EMSGM059E）",
+   "tests/test_pipeline.py::test_zip_of_second_article_in_same_out_dir（付録 M2 と点検の開始ページ 1→15）",
+   "tests/test_pipeline.py::test_pdf_of_previous_run_is_not_zipped（付録 M2 点検: not_zipped==['31_1.pdf']、14 章の行が '- [ ]' で '--pdf'・'手順 2'）",
+   "tests/test_pipeline.py::test_cli_prints_files_not_zipped",
+   "tests/test_pipeline.py::test_volume_issue_pages_are_normalized（付録 M1『入力の正規化』と N4）",
+   "tests/test_pipeline.py::test_full_width_volume_gives_ascii_zip",
+   "tests/test_pipeline.py::test_cli_meta_input_errors_and_notes",
+   "tests/test_pipeline.py::test_dates_accept_common_forms（付録 U1 と点検の項目すべて）",
+   "tests/test_notebook.py::test_step3_reads_full_width_numbers_and_common_dates"
+  ],
+  "pytest_result": "Python 3.13: 664 passed (python -m pytest -q -p no:cacheprovider). Python 3.10 (venv310, PYTHONPATH=src): 664 passed. Against the 0.22.0 src (base022_src, -o pythonpath=tests --rootdir .), all 12 new tests in test_pipeline.py fail and the 43 existing ones pass. test_upload_zip_has_only_this_article fails on the namelist assertion because 要変換/31_1_01.emf is in the ZIP. test_zip_of_second_article fails because 31_1/ is in the second ZIP. The volume tests fail because the result is ３１_１. The date test fails because 2026/3/31 raises ValueError. The new test in test_notebook.py also fails on 0.22.0 (1 failed, 9 passed).",
+  "measures": "- ruff check src tests tools: 194 at 0.22.0 → 197 now (+3). The extra three are 1 S102 (exec in the new step-3 test, the same style as the existing 13) and 2 DTZ001 (the date test deliberately uses a naive datetime, which is what TOML returns). The new code adds no other kinds; I fixed the ISC004 and I001 it introduced.\n- golden: compared with b3/golden_final/manifest.json (0.22.0). xml and prompt are identical in all 23 cases, and the ok values ([True, True, True, 0]) are all the same. The report differs in all 23, by exactly these intended lines:\n  - (1) chapter 1 row label 「（XML で判定できるもの）」→「（XML と ZIP で判定できるもの）」 (23)\n  - (2) the chapter 12 explanation now covers the ZIP check (23)\n  - (3) the chapter 14 PDF line: 「- [ ] PDF（31_1.pdf）を記事フォルダに入れる」→「- [ ] **PDF（31_1.pdf）がアップロード用の ZIP に入っていない**…手順 2…--pdf…変換し直す」 (21); 「- [x] …記事フォルダに入れる」→「- [x] PDF（31_1.pdf）がアップロード用の ZIP に入っている」 (2, route1 and route2)\n  - Chapters 10 and 11 do not change in golden: none of these cases has a not_zipped file or a normalization notice.\n- td1–3 (--route pdf --ai manual): exit 0 on both the new src and 0.22.0. In all three, the ZIP namelist is inside jasme/31/1/31_1/ only and ASCII only (7, 4 and 4 items), with the same entries as 0.22.0. Fidelity check, final re-check, DTD and the J-STAGE upload check all pass, and zip_issues is empty. XML (cmp) and AI依頼文 are byte-identical to 0.22.0. The report diff is only the three kinds of lines above.\n- Disk: I deleted td outputs, the golden bodies (kept manifest.json), the HEAD copy used for ruff, and the downloaded 別紙3. scratchpad/c/impl is now 64K; df shows 23G free. I deleted tests/__pycache__. No tests/private text is copied into tests, docs, src or comments.",
+  "deviations": "Where I departed from the C design:\n1. The first version of appendix M2 says 「warnings に「31_1.pdf」があること」. I followed the C section and the plan's 反証 policy instead (not_zipped, never res.warnings). The test checks not_zipped == ['31_1.pdf'] and that no warning mentions 31_1.pdf.\n2. zip_problems (c): items outside the article folder are grouped into one '-' issue per article folder (journal/volume/issue/article, 4 levels). Listing every item would repeat once per image. Directory entries for the folders leading to the article folder are ignored.\n3. I added things the plan does not spell out:\n   - ArticleMeta.input_notes, and showing the notices in report chapter 11 as well (decision 3 only fixes Colab 手順 3 and the CLI).\n   - CLI meta-input errors exit with 2.\n   - The CLI prints the not_zipped files.\n   - A line in the --pdf help.\n   - report.upload_issues, which merges the two lists for display only (Result keeps them separate).\n   - Changing the chapter 1 row label to 「XML と ZIP で判定できるもの」, and the chapter 12 explanation. The plan's file order lists 「12 章の zip_issues」, so these are intended changes beyond chapters 10 and 14.\n4. Field names in messages follow the Colab form, so they read 最初のページ・最後のページ. Report chapter 11 still says 開始ページ/終了ページ, and I left that as is. The revised field has no Colab input; I labelled it 再受付日.\n5. lpage is only normalized, never rejected. This follows the plan, which checks only volume, issue and fpage. So 「12頁」 passes through unchanged.\n6. I regenerated the notebook (needed for test_notebook_is_up_to_date). The version number is still 0.22.0, so the finishing pass must regenerate it again after the bump.\n\nDoc–code mismatches I found:\n- (fixed) docs/DESIGN.md chapter 3 had no jstage_rules step, while the pipeline.py docstring has it as step 10. I added it as step 10 and renumbered ZIP/report to 11.\n- (fixed) The DEVELOPMENT.md code table had no config.py row. I added it.\n- (fixed) README's 要変換/ row said 「PNG にして Graphics/ に入れる」. After this unit, a file placed by hand is not added to the ZIP. It now says to use 手順 7 / --images.\n- (fixed) The make_notebook.py 手順 3 explanation said dates must be YYYY-MM-DD.\n- (fixed) The report.py chapter 14 line said 「記事フォルダに入れる」. Rewritten as the plan specifies.\n- (not fixed) FIX_PLAN's 「計画全体で足した作業」 asks for a CLAUDE.md line for C (「ZIP に入れるものは package.upload_entries だけで決め、zip_problems で読み直す」) and the same in DEVELOPMENT's 守るべき原則. CLAUDE.md is the project's instruction file and this task did not ask for it, so I left both for the coordinator or the user. I put the content in the DEVELOPMENT code table instead.\n- (not fixed) DESIGN chapter 3 says the PDF check happens 「4 と 5 の間」. In the code it runs after AI completion and the build, just before the fidelity check (route 2 builds again). It is roughly right, so I left it.\n- (no change needed) DESIGN 4.3 has nothing about the ZIP or 要変換, so I did not touch it. FIX_PLAN's line numbers (config.py:149〜153) are from 0.18.1 and do not match the current code.\n- (consistent) FIX_PLAN appendix M1 says the existing test_package_layout, test_template_emf_conversion and test_add_images_… 「そのまま通るはず」. All of them pass unchanged.",
+  "open_issues": "- Left for the finishing pass: bump the version to 0.23.0 (__init__.py and pyproject.toml), regenerate the notebook, and record C in FIX_PLAN. JSTAGE_NOTES already says 「0.23.0 から」.\n- CLAUDE.md and the DEVELOPMENT.md 守るべき原則 have not been updated with the ZIP-contents principle; FIX_PLAN asks for it. The user or coordinator needs to decide.\n- Whether J-STAGE accepts the new ZIP (no 要変換/, no leftovers from earlier runs) is untested. I added this to DEVELOPMENT's remaining issues as something to check in the trial run.\n- The Colab 「変換結果」 ZIP (the whole output folder) can still contain leftovers from earlier runs, for example after re-converting at 手順 6. FIX_PLAN rates the harm as small and suggests emptying Graphics/ and 要変換/ at the start of 手順 6; not done.\n- In the CLI, the 「J-STAGE のアップロード時チェック」 line is printed before the --images add_images step, so ZIP problems that appear after add_images are not shown on screen (they are in the report). In practice add_images does not create ZIP problems. Unifying this display belongs to unit D (actions()).\n- zip_issues does not change the exit code, the same as jstage_issues. Unit D (U2) decides that.\n- A PDF that the user puts into the article folder by hand is no longer zipped (decision 2), and both the report and the CLI tell them to re-run with --pdf. Someone used to the old behaviour may be surprised, so this should go in the change log when C is released."
+ },
+ "verify": {
+  "passed_all": true,
+  "measures": "I made no changes to any repository file (only /tmp/claude-0/-home-user-jstgxmlcng-JASME/fb4d86bb-6ffb-5369-990a-10fe830c8789/scratchpad/c/verify/). I found no blocking problem. The one gap in the C scope is that docs/fix_plan_repro_tests.py was not updated: three of its repro tests now fail. I rate that \"should\".\n\n**pytest**\n- 664 passed on Python 3.13 and 664 passed on 3.10 (PYTHONPATH=src, venv310).\n- The notebook up-to-date test passes.\n\n**ruff check src tests tools**\n- 194 on 0.22.0 (checked on a git archive of HEAD) and 197 now. A diff of the rule lists shows exactly +1 S102 in tests/test_notebook.py (exec in the step-3 test) and +2 DTZ001 in tests/test_pipeline.py (naive datetime in the date test). This matches the implementer's report.\n\n**golden (23 cases)**\n- manifest.json differs from b3/golden_final in `report` only, in all 23 cases. The `xml` and `prompt` entries are identical, and the ok values are all [True, True, True, 0].\n- I diffed the report bodies of all 23 cases. Only these lines change, and all are intended:\n  - Chapter 1 row label: 「（XML で判定できるもの）」 becomes 「（XML と ZIP で判定できるもの）」 (23 cases).\n  - Chapter 12 explanation, now covering the ZIP check (23 cases).\n  - Chapter 14 PDF line (23 cases). The unchecked line (21 cases) becomes 「**PDF（31_1.pdf）がアップロード用の ZIP に入っていない**…手順 2…--pdf…変換し直す」. The checked line (2 cases) becomes 「PDF（31_1.pdf）がアップロード用の ZIP に入っている」.\n- Chapters 10 and 11 do not change in any case, because none of the cases has a not_zipped file or a normalization notice.\n\n**td1–3 (`--route pdf --ai manual`), new tree against a 0.22.0 tree from base022_src/src**\n- Exit 0 in all cases, in both trees.\n- ZIP contents:\n  - New ZIP namelists are 7, 4 and 4 items. Every item is under `jasme/31/1/31_1/`, and every name is ASCII.\n  - There is no 要変換 and no other article folder in any of them.\n  - The entries are the same as in 0.22.0, except that the order is now xml, pdf, Graphics.\n- Checks: the fidelity check, final re-check, DTD and J-STAGE upload check all pass, and zip_issues is empty.\n- XML: `cmp` shows the XML byte-identical to 0.22.0 in all three. The AI依頼文 is also identical.\n- Report diff versus 0.22.0, per td:\n  - The tool-line commit suffix 「（コミット 17b3498）」. This is only the git-info line of the editable install, not a regression.\n  - The chapter 1 label.\n  - The chapter 12 explanation.\n  - The chapter 14 PDF line.\n\n**Two articles in the same output folder (CLI, td2.docx, `--route docx`, fpage 1 then 13)**\n- Both runs exit 0.\n- jasme_31_1.zip holds only `31_1/` items and jasme_31_13.zip holds only `31_13/` items. The second ZIP does not contain the first article.\n\n**EMF template (`JASME_template_20261009`, `convert_metafiles=False`)**\n- The EMF is saved to `<out>/要変換/31_1_01.emf`, which is directly under the output folder and outside the article folder.\n- The ZIP namelist is `['jasme/31/1/31_1/31_1.xml']`, and zip_issues and not_zipped are both empty.\n- After `add_images` the namelist gains `Graphics/31_1_01.png`.\n- After re-converting with a stray `Graphics/old.png` and `stray.docx` present, the ZIP stays XML only. `not_zipped` lists `Graphics/31_1_01.png`, `Graphics/old.png` and `stray.docx`.\n\n**Handmade ZIPs through `zip_problems`**\n- A ZIP holding `要変換/x.emf` gives EMSGM034E plus EMSGM074E.\n- A ZIP holding `memo.txt`, a `31_2/` folder and `__MACOSX` gives 074E plus a '-' entry for each folder outside the article folder.\n- `Graphics/sub/a.png` and `31_1.PDF` give 074E.\n- A non-ZIP file and a missing file give 034E.\n- A normal ZIP gives [].\n\n**Chapters 10 and 14 when not_zipped exists**\n- With an old PDF plus a hand-placed memo.txt left over, chapter 10 says what happened and what to do:\n  - Re-run Colab step 2 or `--pdf` to get the PDF into the ZIP.\n  - The other files need no action.\n- Chapter 14 shows the PDF line unchecked.\n- The chapter 1 warnings row reads 「0 件（10 章）。ほかに、ZIP に入れなかったファイル 2 件（10 章）」.\n\n**N4 and U1 input forms (same `ArticleMeta.from_dict` that Colab step 3 calls)**\n- Full-width numbers (volume ３１, issue １, fpage １, lpage １２) are read as 31, 1, 1 and 12. Notices such as 「巻「３１」を「31」として読みました（全角の文字を半角にしました）」 are shown after 「入力しました」. The article_id is `31_1`.\n- Rejected, with the field name and the bad character shown:\n  - 「31巻」 and 「第31巻」 (volume), 「1号」 (issue), 「p.1」 and 「1-2」 (fpage), 「3 1」 (shows 「空白」).\n- Dates:\n  - Accepted: 2026/3/31, 2025.6.1, ２０２５年１１月２０日, an integer 20260331, date objects, and a blank (→ None).\n  - Rejected, with the field name (発行日 and so on) and 「YYYY-MM-DD の形で入力してください。2026/3/31 のようにも書けます」: 令和8年3月31日, R8.3.31, 2026-3, 2026年3月, 26/3/31, 2026/2/30, a trailing \"/\" or \".\", and 2026-03-31T10:00.\n- CLI:\n  - A full-width volume prints 「※ 書誌情報: 巻「３１」…」 and exits 0.\n  - 「31巻」 prints 「書誌情報（…bad.toml）を確認してください: …」 to stderr and exits 2.\n- The Colab step-3 error path (`SystemExit` 「入力を確認してください: …」) reads clearly for a non-technical editor.\n\n**Appendix items**\n- All appendix test items for M1, M2 and U1 are present in the new tests and pass. M2's 「warnings に「31_1.pdf」」 item was replaced by `not_zipped`, as the plan's later point and the implementer's deviation 1 say. The chapter 14 PDF line shows '--pdf' and '手順 2', and in the 31_1 → 31_15 retype case the second ZIP's namelist is all 31_15 with no zip_issues.\n\n**Cleanup**\n- I deleted tests/__pycache__ and src/jasme_jats/__pycache__. I deleted the large outputs in verify/ (64K left). `df` shows 23G free.\n- `git status` shows only the 14 modified files, with no untracked files.",
+  "problems": [
+   {
+    "severity": "should",
+    "where": "docs/fix_plan_repro_tests.py (docstring and the three tests below)",
+    "problem": "C did not take the repro tests for the fixed items out of docs/fix_plan_repro_tests.py. That file's docstring says that when a unit is fixed, its tests are removed and the unit is added to the list of removed units (A and B3 did this). Three tests now fail when run as the file's header describes.",
+    "evidence": "cp docs/fix_plan_repro_tests.py tests/test_zz_fix_plan_repro.py && pytest gives 3 failed, 8 passed. The failures are test_PROBLEM_zip_contains_youhenkan_folder, test_PROBLEM_zip_accumulates_articles_in_shared_out_dir, and test_PROBLEM_date_with_slash_not_zero_padded (DID NOT RAISE ValueError). git status shows the file is not modified.",
+    "fix": "Remove the three tests and the section comments for sections 1 and 10 from docs/fix_plan_repro_tests.py. Add 「単位 C（0.23.0。M1・M2・N4・U1）は tests/test_pipeline.py・tests/test_notebook.py に取り込んだ」 to the docstring's list of removed units. Add docs/fix_plan_repro_tests.py to the list of files C touched, which the finishing pass writes in FIX_PLAN."
+   },
+   {
+    "severity": "nit",
+    "where": "src/jasme_jats/config.py error text for volume/issue/fpage (non-ASCII branch)",
+    "problem": "A zero-width or other invisible character is shown as an empty-looking 「​」 in 「使えない文字「​」があります」, so the editor cannot see what is wrong. The message then also says 「全角の文字（漢字・かな・記号など）」, which does not fit an invisible character.",
+    "evidence": "from_dict({'volume': '31', 'issue': '１​'}) gives 号「１​」に、使えない文字「​」があります。… The ordinary space case is already written out as 「空白」.",
+    "fix": "Write characters that Unicode treats as non-printing (category Cf/Cc/Zs) out as 「見えない文字」, in the same way 「空白」 is written out."
+   },
+   {
+    "severity": "nit",
+    "where": "src/jasme_jats/config.py (lpage handling)",
+    "problem": "The last page (lpage) is only normalized, never checked. A value such as 「12頁」 passes silently and goes into the XML as a page value. This follows the plan, which names only volume, issue and fpage, and the implementer reported it as deviation 5.",
+    "evidence": "from_dict(lpage='12頁') is OK with no notice. lpage='１２' is converted to 12 with a notice.",
+    "fix": "No change needed for C. If wanted later, add a notice (not an error) when lpage is not [A-Za-z0-9]+, since it does not affect the ZIP name. Record this in DESIGN 7 as a known limit."
+   },
+   {
+    "severity": "nit",
+    "where": "docs/DESIGN.md chapter 3 versus src/jasme_jats/pipeline.py convert, and images.export_images docstring",
+    "problem": "Two small mismatches between documents and code. (1) DESIGN chapter 3 says the PDF check runs 「4 と 5 の間」, but in the code it runs after AI completion and the build, just before the fidelity check. The implementer already noted this. (2) The export_images docstring says that when keep_dir is None the default is 「out_dir の親の 要変換/」, which is inside the article folder when out_dir is Graphics/. That would put 要変換/ back in the ZIP's article folder if another caller used the default.",
+    "evidence": "images.py:188 uses `Path(keep_dir or out_dir.parent / \"要変換\")`. pipeline.py:393 is the only caller and always passes keep_dir.",
+    "fix": "Fix the step number in DESIGN chapter 3. Either make keep_dir required, or say in the docstring that the default location is inside the article folder and is not for upload. The code is the standard, so the documents follow it."
+   },
+   {
+    "severity": "nit",
+    "where": "CLAUDE.md and docs/DEVELOPMENT.md 守るべき原則",
+    "problem": "FIX_PLAN's 「計画全体で足した作業」 asks for the line 「ZIP に入れるものは package.upload_entries だけで決め、zip_problems で読み直す」 in CLAUDE.md and in DEVELOPMENT's principles. Neither has it. The content is in DEVELOPMENT's code table only. The implementer flagged this as open.",
+    "evidence": "git diff shows CLAUDE.md is unchanged, and the DEVELOPMENT.md diff touches only the code table, a test entry and the remaining-issues row.",
+    "fix": "The finishing pass adds the line to both files, or the user decides to skip it."
+   },
+   {
+    "severity": "nit",
+    "where": "chapter 11 of the report versus Colab step 3 field names",
+    "problem": "Chapter 11 of the report still says 開始ページ/終了ページ, while the input errors and notices say 最初のページ/最後のページ, which are the Colab labels. The implementer left this as is (deviation 4).",
+    "evidence": "The messages in config.py use 最初のページ and 最後のページ. The chapter 11 table in report.py uses 開始ページ and 終了ページ.",
+    "fix": "No change needed for C. Pick one wording in unit D or later."
+   }
+  ]
+ },
+ "pre": {
+  "changed_files": [
+   "docs/fix_plan_repro_tests.py",
+   "src/jasme_jats/config.py",
+   "src/jasme_jats/images.py",
+   "docs/DESIGN.md",
+   "tests/test_pipeline.py"
+  ],
+  "summary": "I fixed the one should finding and the nits that could be fixed inside C. These are uncommitted changes in the working tree, on top of C's implementation diff, with HEAD still at 17b3498. Nothing here touches the docx text, and XML and AI依頼文 are unchanged.\n\n1. (should) docs/fix_plan_repro_tests.py\n   - Removed these three tests and the comments for sections 1 and 10: test_PROBLEM_zip_contains_youhenkan_folder, test_PROBLEM_zip_accumulates_articles_in_shared_out_dir and test_PROBLEM_date_with_slash_not_zero_padded.\n   - With those gone, four imports were no longer used (FULL, TEMPLATE, ArticleMeta, pytest), so I removed them.\n   - Added 「単位 C（0.23.0。M1・M2・N4・U1）は tests/test_pipeline.py・tests/test_notebook.py に取り込んだ。」 to the docstring's list of removed units.\n   - Run as the file's header describes, it now gives 8 passed (it gave 3 failed and 8 passed before). The temporary copy was deleted.\n\n2. (nit) config._id_value\n   - Added _shown_char. A space is written as 「空白」 as before. A zero-width or control character (Unicode category Cf, Cc, Co, Cn, Zs, Zl or Zp) is written as 「見えない文字」.\n   - The reason text depends on the bad characters:\n     - Any visible full-width character: 「全角の文字（漢字・かな・記号など）は使えません」, as before.\n     - Only invisible characters, with or without ASCII symbols: 「見えない文字は使えません。貼り付けたときに入ることがあるので、欄を空にして打ち直してください」.\n     - Otherwise: 「記号・空白は使えません」, as before.\n   - Example: from_dict(issue='１​') now gives 号「１​」に、使えない文字「見えない文字」があります。…打ち直してください….\n   - Added two cases to test_volume_issue_pages_are_normalized: U+200B on its own, and 巻 mixed with U+2060.\n\n3. (nit) images.export_images\n   - keep_dir is now a required keyword argument (`*, keep_dir: Path`). The default of 「out_dir の親の 要変換/」 is gone, so another caller can no longer put 要変換/ inside the article folder by accident.\n   - The docstring now says why keep_dir is required. pipeline is the only caller and already passes it, so nothing else changed.\n\n4. (nit) docs/DESIGN.md\n   - Chapter 3: the PDF check is now described as running after the AI completion in step 4 and the build in step 5, before the fidelity check in step 6. Route 2 rebuilds step 5 when Word's numbers are matched to the PDF. This follows pipeline.convert.\n   - Chapter 7: added a known limit. lpage is only NFKC-normalized and never checked, so an input like 「12頁」 goes into the XML without a notice. If a check is added later, it should notify, not stop.",
+  "tests_added": [
+   "tests/test_pipeline.py::test_volume_issue_pages_are_normalized（追記: U+200B だけ→「見えない文字」と書き、「全角の文字」と言わず「打ち直してください」を含む。「31巻」+U+2060→「巻」「見えない文字」と全角の理由）"
+  ],
+  "pytest_result": "- Python 3.13 (python -m pytest -q -p no:cacheprovider): 664 passed.\n- Python 3.10 (venv310, PYTHONPATH=src): 664 passed.\n- docs/fix_plan_repro_tests.py, copied into tests/ and run as its header describes: 8 passed. The copy was deleted.\n- tests/ has no leftover __pycache__ or test_zz* files.",
+  "measures": "- ruff check src tests tools: 197 errors. This is the same as C's implementation (0.22.0 had 194; the 3 extra are the S102 and 2 DTZ001 C's implementer already explained). These fixes add none.\n  - Run on its own, docs/fix_plan_repro_tests.py (not one of the ruff targets) went from 6 issues to 5 after removing the newly unused pytest import. The remaining I001, RUF100 ×2 and ISC004 were already there in 0.22.0.\n- golden (n10, golden.py): the manifest is the same as C's implementation (impl/golden/manifest.json).\n  - Compared with b3/golden_final (0.22.0): xml, prompt and ok are the same in all 23 cases. The report differs in all 23.\n  - I regenerated the 0.22.0 bodies from base022_src; their manifest equals golden_final. Diffing every report against them gives only these intended lines:\n    - (a) Chapter 1 row 「XML で判定できるもの」→「XML と ZIP で判定できるもの」 (23).\n    - (b) The chapter 12 explanation now covers the ZIP check (23).\n    - (c) The chapter 14 PDF line becomes 「- [ ] **PDF（31_1.pdf）がアップロード用の ZIP に入っていない**…手順 2…--pdf…変換し直す」 (21) or 「- [x] PDF（31_1.pdf）がアップロード用の ZIP に入っている」 (2).\n- td1–3 (--route pdf --ai manual): exit 0 on both the new src and 0.22.0.\n  - The ZIP namelist is inside jasme/31/1/31_1/ only and ASCII only (7, 4 and 4 items), with the same entries as 0.22.0.\n  - The fidelity check, final re-check and DTD pass, and the J-STAGE upload check (XML and ZIP) shows 問題なし.\n  - 31_1.xml (both the article folder copy and the copy directly under the output folder) and AI依頼文.txt are byte-identical (cmp) to 0.22.0.\n- Cleanup: I deleted the td outputs, logs, 0.22.0 golden bodies and new golden bodies. scratchpad/c/fix_verify is 12K (manifest.json only), and df shows 23G free. No tests/private text was copied into tests, docs, src or comments.",
+  "deviations": "How I handled each finding:\n- (should) fix_plan_repro_tests.py: fixed as the finding said. I also removed the imports that removing the tests left unused (FULL, TEMPLATE, ArticleMeta, pytest). Adding this file to FIX_PLAN's list of files C touched belongs to the finishing pass, which writes that list, so I did not edit FIX_PLAN. That list should now include docs/fix_plan_repro_tests.py, src/jasme_jats/images.py (signature change) and the extra DESIGN chapter 7 line.\n- (nit) invisible characters: fixed. Besides Cf, Cc and Zs, I also counted Co, Cn, Zl and Zp as 「見えない文字」. A space is still 「空白」 (isspace is checked first). Full-width and no-break spaces become an ASCII space under NFKC, so they show as 「空白」 too.\n- (nit) lpage: no code change, as the finding said. I added it to DESIGN chapter 7 as a known limit.\n- (nit) DESIGN chapter 3 / export_images: fixed both. For export_images I chose to make keep_dir required rather than only reword the docstring. The only caller (pipeline.py) already passes it as a keyword, so its behaviour is unchanged.\n- (nit) CLAUDE.md and the DEVELOPMENT 守るべき原則 line: not done. CLAUDE.md is the project's instruction file, so the finishing pass or the user should add it. The proposed line is 「ZIP に入れるものは package.upload_entries だけで決め、zip_problems で読み直す」.\n- (nit) 開始ページ/終了ページ in report chapter 11 versus 最初のページ/最後のページ in messages: not done, as the finding said. It is left for unit D or later.\n\nMismatches between documents and code:\n- (fixed) DESIGN chapter 3 said the PDF check runs 「4 と 5 の間」. The code runs it after the AI completion and the build, just before the fidelity check. I changed DESIGN to match.\n- (fixed) The export_images docstring described a default 要変換/ location that was inside the article folder. Resolved by making keep_dir required and rewriting the docstring.\n- (not fixed) CLAUDE.md and the DEVELOPMENT 守るべき原則 lack the line FIX_PLAN's 「計画全体で足した作業」 asks for (see above).\n- (not fixed) Report chapter 11 uses 開始ページ/終了ページ while config.py messages and Colab use 最初のページ/最後のページ.",
+  "open_issues": "- Left for the finishing pass:\n  - Bump the version to 0.23.0 (__init__.py and pyproject.toml).\n  - Regenerate the notebook. The fixes here do not touch make_notebook.py, but the version bump requires it.\n  - Write the C entry in FIX_PLAN, including docs/fix_plan_repro_tests.py and images.py in the list of files touched.\n- Whether to add the C principle line to CLAUDE.md and DEVELOPMENT's 守るべき原則 is still for the coordinator or the user to decide.\n- Still open from the implementer's report:\n  - Untested: whether J-STAGE accepts the new ZIP.\n  - The Colab 「変換結果」 ZIP (the whole output folder) can still contain leftovers from earlier runs.\n  - The CLI's on-screen ZIP check is printed before the --images step (unit D).\n  - zip_issues does not change the exit code (unit D, U2).\n  - The change log needs a note that a PDF placed in the article folder by hand is no longer zipped.\n- lpage is still unchecked (DESIGN chapter 7). If a check is wanted, it should notify, not stop."
+ },
+ "fin": {
+  "changed_files": [
+   "src/jasme_jats/__init__.py",
+   "pyproject.toml",
+   "notebooks/JASME_docx_to_JSTAGE_XML.ipynb",
+   "docs/FIX_PLAN.md",
+   "docs/DEVELOPMENT.md"
+  ],
+  "summary": "Finalized unit C. The version is now 0.23.0 in __init__.py and pyproject.toml, and I regenerated the notebook with tools/make_notebook.py (it now contains 0.23.0). In docs/FIX_PLAN.md, C is marked 実装済み in the order table. The C section now has what was decided in the implementation, the tests, the verified numbers, the remaining limits and the doc/code mismatches. I added a line to the 「同じファイルを触る順」 section listing the files C touched, including docs/fix_plan_repro_tests.py and images.py. The rows for M1, M2, N4 and U1 needed no change. In docs/DEVELOPMENT.md I added principle 7: ZIP contents are decided only by package.upload_entries and read back with zip_problems, not_zipped is reported in chapter 10 and never goes into warnings, and 要変換/ sits directly under the output folder. I checked the opening text of DESIGN, README, JSTAGE_NOTES and fix_plan_repro_tests.py against the code. They already match, so I made no edit there. git status shows only modified files, no untracked ones, and I found no actual paper text or temp files in the diff. I removed the __pycache__ folders.",
+  "tests_added": [],
+  "pytest_result": "Python 3.13: 664 passed. Python 3.10 (venv310, PYTHONPATH=src): 664 passed. This is after the version bump and notebook regeneration, and test_notebook_is_up_to_date passes.",
+  "measures": "ruff check src tests tools gives 197 errors, against 194 at 0.22.0. The extra 3 are the exec in the step-3 test (S102) and the naive datetime in 2 places in the date test (DTZ001). I did not re-run golden or td1–3 in this pass, because nothing in the source changed except the version string. The figures in the FIX_PLAN C section come from the earlier verification and fix runs: golden XML and prompt identical in all 23 cases, with the report differing only in the chapter 1 label, the chapter 12 explanation and the chapter 14 PDF line; td1–3 XML byte-identical to 0.22.0 and the ZIP holding only the article folder with ASCII names.",
+  "deviations": "- I did not add the line 「ZIP に入れるものは package.upload_entries だけで決め、zip_problems で読み直す」 to CLAUDE.md. FIX_PLAN's 「計画全体で足した作業」 asks for it, but CLAUDE.md is the user's instruction file and the task did not name it. I put the same content in DEVELOPMENT's 守るべき原則 as item 7. The user may want to add it to CLAUDE.md.\n- I left the docs/fix_plan_repro_tests.py docstring phrase 「0.18.1 の時点の振る舞い」 as it is. The file still holds the repro tests for the remaining units.\n- The FIX_PLAN line number config.py:149〜153 in the N4 row comes from 0.18.1 and does not match the current code. I left it and noted it in the C section.\n- Report chapter 11 says 開始ページ/終了ページ, while the config.py messages and Colab say 最初のページ/最後のページ. I left it and noted it as a limit.\n- Doc/code mismatches already fixed by the earlier passes (listed in the C section): DESIGN chapter 3 had no jstage_rules step; the PDF check position in DESIGN was wrong; DEVELOPMENT had no config.py row; the README 要変換/ row; the notebook step-3 date text; the chapter 14 PDF line; the export_images default for the 要変換 location.",
+  "open_issues": "- Whether J-STAGE accepts the new ZIP is untested; check it in the trial run.\n- The Colab 「変換結果」 ZIP (the whole output folder) can still hold leftover images from earlier runs after re-converting at 手順 6. Emptying Graphics/ and 要変換/ at the start of 手順 6 is not done.\n- The CLI prints the 「J-STAGE のアップロード時チェック」 line before the --images step, so ZIP problems that appear after add_images are not shown on screen (they are in the report). Unit D (actions()) should unify the display.\n- zip_issues does not change the CLI exit code (unit D, U2).\n- A PDF placed in the article folder by hand is no longer zipped. This belongs in the change log when C is released.\n- lpage is only normalized and never checked (DESIGN chapter 7).\n- Whether to add the C principle line to CLAUDE.md is for the user to decide.\n- The commit is the coordinator's job; the working tree holds 18 uncommitted modified files."
+ },
+ "reviews": [
+  {
+   "checked": "I changed no repository file. Experiments are in /tmp/claude-0/-home-user-jstgxmlcng-JASME/fb4d86bb-6ffb-5369-990a-10fe830c8789/scratchpad/c/review/principle/. Large outputs were deleted afterwards (432K left, 23G free). I also removed src/jasme_jats/__pycache__, tests/__pycache__ and tools/__pycache__. git status shows only the 18 modified files and nothing untracked.\n\n**Diff read**: package.py, images.py, pipeline.py, config.py, cli.py, report.py, tools/make_notebook.py, README, DESIGN, DEVELOPMENT, JSTAGE_NOTES, fix_plan_repro_tests.py and the new tests, against FIX_PLAN C, decisions 2 and 3, and the M1/M2/U1 appendix.\n\n**Text invariance**: unit C touches no docx text.\n- golden, 23 cases (b3/golden_final = 0.22.0): xml and prompt are identical in every case. The only report changes are the chapter 1 row label (23 cases), the chapter 12 explanation (23), and the chapter 14 PDF line (21 unchecked, 2 checked).\n- td1–3, `--route pdf --ai manual`, new tree against base022_src:\n  - Exit 0 in all three, and the XML is byte-identical to 0.22.0.\n  - Fidelity, final re-check, DTD and J-STAGE checks all pass.\n  - ZIP namelists have 7, 4 and 4 entries. All are ASCII and all sit under jasme/31/1/31_1/. The entries are the same as 0.22.0; only the order differs.\n\n**ZIP contents (exp1.py)**:\n- All fixtures: no duplicate entries (UserWarning raised as an error), and everything is inside the article folder.\n- TEMPLATE with the EMF and convert_metafiles=False: 要変換/31_1_01.emf is directly under the output folder, and the ZIP holds only xml+pdf.\n- Re-converting with a leftover PDF, Graphics/old.png, memo.txt, sub/a.xml and jasme/31/1/stray.txt: the ZIP holds only the XML. not_zipped lists the 4 files inside the article folder.\n- After add_images, the user image joins the ZIP, and not_zipped is recomputed correctly.\n- Two articles in the same output folder: the 31_13 ZIP does not contain 31_1.\n- Full-width volume, issue and pages: ZIP name, folder, aid and DOI are all ASCII, and 4 input_notes are recorded.\n- CLI re-run of td2 with no `--pdf`: prints 「※ 記事フォルダにあるが ZIP に入れなかったファイル 1 件…」, chapter 1 shows 「ほかに、ZIP に入れなかったファイル 1 件」, and chapters 10 and 14 tell the user to use 手順 2 / `--pdf`.\n\n**Handmade ZIPs through zip_problems**:\n- Backslash paths, absolute paths, the article folder stored as a file, Graphics stored as a file, another journal or volume, .DS_Store, and `..` all get 034E, '-' or 074E.\n- An empty ZIP and a ZIP with no XML return [] (nit 2).\n\n**Inputs**:\n- Accepted and normalized, with a notice: Ⅲ, ①, ＩＩ, ｐ１, ３１+U+3000.\n- Rejected with the field name and the character: 31.0, 1・2, 1-2, é, ZWSP (shown as 「見えない文字」).\n- Dates:\n  - Accepted: 2026/3/31, 2026 03 31, full-width forms, 年月日, 20260331, datetime → date, 2024-02-29.\n  - Rejected, with the field name and 「YYYY-MM-DD」 in the message: 2026331, 2026/13/1, 0000/1/1, 2026-02-29, U+2010, em dash, ー.\n\n**Mutation tests**: 23 mutations, all killed (copied tree; test_pipeline + test_notebook):\n- add_images not recomputing the ZIP results\n- the image status set\n- the PDF included whenever it exists\n- dropping the (a), (c) or (d) check, or the 074E check\n- keep_dir inside the article folder\n- no NFKC, or no normalization notice\n- lpage checked, or issue not checked\n- 2-digit years\n- no field label in date errors\n- the datetime order\n- report chapters 10, 14 and upload_issues\n- the CLI not_zipped line, exit code 2, and the notes line\n\n**Measures**:\n- pytest: 664 passed on 3.13, and 664 passed on 3.10 (PYTHONPATH=src).\n- ruff check src tests tools: 197. That is +3 over 0.22.0's 194, all from tests (S102 ×1, DTZ001 ×2).\n- docs/fix_plan_repro_tests.py copied into tests: 8 passed. Its ruff count is 4, down from 6 at 0.22.0.\n\n**Earlier verifier findings**, all fixed in the current tree:\n- repro file updated\n- keep_dir made required\n- invisible characters shown as 「見えない文字」\n- DESIGN chapter 3 PDF position corrected\n- export_images docstring corrected\n- DEVELOPMENT principle 7 added\n\n**Doc/code mismatches**:\n- Fixed by the implementation and finishing passes:\n  - DESIGN chapter 3 had no jstage_rules step.\n  - DESIGN put the PDF check 「4 と 5 の間」.\n  - DEVELOPMENT had no config.py row.\n  - The README 要変換/ row.\n  - The notebook step-3 date text.\n  - The chapter 14 PDF line.\n  - The export_images default location.\n- Not fixed:\n  - (a) The FIX_PLAN N4 row cites config.py:149〜153, which are 0.18.1 line numbers.\n  - (b) Report chapter 11 says 開始ページ/終了ページ, while config and Colab say 最初のページ/最後のページ.\n  - (c) The ZIP line from 「計画全体で足した作業」 is not in CLAUDE.md. It is in DEVELOPMENT principle 7; whether to add it to CLAUDE.md is for the user.\n  - (d) New: the chapter 9 note for missing images, from images.py (should 1).\n  - (e) New: the step order in DESIGN chapter 3 and the pipeline docstring (nit 5).",
+   "findings": [
+    {
+     "severity": "should",
+     "file": "src/jasme_jats/images.py",
+     "line": 153,
+     "problem": "The note shown in report chapter 9 for a missing image still says 「PDF 等から画像を作り、この名前で Graphics/ に置くこと」. Since C, a file placed in Graphics/ by hand is never put in the upload ZIP (decision 2), so following this advice no longer works.",
+     "evidence": "td3 (route 2, `--ai manual`): the chapter 9 備考 for img1 and img2 contains that text (counted twice in the report). I saved 31_1_01.png and 31_1_02.png into the article folder's Graphics/ by hand and converted again with the same arguments. The new ZIP holds only xml, pdf, 31_1_03 and 31_1_04. The CLI prints 「※ …ZIP に入れなかったファイル 2 件」, and images_to_prepare still lists 2 images. The same steps on 0.22.0 (base022_src) put Graphics/31_1_01.png in the ZIP. The user is told (not_zipped, chapter 10), so nothing is lost silently. But the guidance contradicts the new behaviour, while the Colab missing_images_box already says to use 手順 7 or to put the image inside the ZIP.",
+     "fix": "Change the note to match the code, for example: 「Word の図形・グラフなどで画像ファイルがない。PDF 等から画像を作り、Colab では手順 7、コマンドラインでは --images で入れること（記事フォルダに手で置いても ZIP には入らない）」. The chapter 9 lines of golden cases with missing images will change; record that as an intended change."
+    },
+    {
+     "severity": "nit",
+     "file": "src/jasme_jats/package.py",
+     "line": 101,
+     "problem": "zip_problems does not check that the article's XML is in the ZIP. A ZIP with no XML, or an empty ZIP, returns [] and is reported as 問題なし.",
+     "evidence": "I passed handmade ZIPs to zip_problems. One holding only jasme/31/1/31_1/31_1.pdf returned [], and an empty ZIP returned []. make_zip always writes the XML, so this cannot happen today (td1–3 and all fixtures include it). This is a gap in the re-check only.",
+     "fix": "Optional: when f\"{adir}/{aid}.xml\" is missing, add one item (message ID '-', 「アップロード用の ZIP に XML がない」). Otherwise, note in DESIGN chapter 7 that the re-check does not look for missing items."
+    },
+    {
+     "severity": "nit",
+     "file": "src/jasme_jats/config.py",
+     "line": 212,
+     "problem": "A DOI typed by the user is only stripped, never NFKC-normalized or checked. A full-width DOI goes into the XML unchanged. This was the same in 0.22.0 and is outside the N4 scope; I found it in this review.",
+     "evidence": "ArticleMeta.from_dict({'doi': '１０．２４５２９/x', …}) is accepted with doi='１０．２４５２９/x' and input_notes=[]. The DOI built from doi_pattern uses the normalized volume, issue and fpage, so it is ASCII (10.24529/jasme.31.1_13).",
+     "fix": "No change needed for C. If wanted later, normalize the doi field with NFKC and add a notice to input_notes, in the same way as volume and the other page fields."
+    },
+    {
+     "severity": "nit",
+     "file": "src/jasme_jats/colab.py",
+     "line": 99,
+     "problem": "same_first_page compares the raw step-3 inputs. Since C reads 「３１」「１」 as 31 and 1, a re-entry like that produces the same output names (31_1) as the previous article but is not caught as 「巻と最初のページが前の論文と同じ」. Before C, full-width input gave a different (Japanese) folder, so this gap is new with C.",
+     "evidence": "same_first_page({'volume':'31','fpage':'1'}, {'volume':'３１','fpage':'１'}) returns False (the values are compared without normalization), while both give article_id 31_1. Impact is small: values carried over from the previous article are identical strings and are still caught.",
+     "fix": "Optional: compare after unicodedata.normalize('NFKC', str(v)).strip(), or compare the article_id built from ArticleMeta.from_dict."
+    },
+    {
+     "severity": "nit",
+     "file": "docs/DESIGN.md",
+     "line": 35,
+     "problem": "DESIGN chapter 3, newly edited by C, lists 10 jstage_rules before 11 images, ZIP and report (the pipeline.py docstring has the same order). In the code, export_images runs first and jstage_check runs after it, because it takes the image names.",
+     "evidence": "pipeline.py:392-395: images = export_images(...) and then jstage_issues = jstage_check(final_root, aid, [i.name for i in images if i.name]).",
+     "fix": "Following the code, say in DESIGN chapter 3 and the pipeline docstring that the J-STAGE check runs after the images are written, using the image names. For example, add 「画像の書き出しの後、出力した画像の名前で」 to step 10."
+    }
+   ]
+  },
+  {
+   "checked": "I changed no repository file. Experiments ran under /tmp/claude-0/-home-user-jstgxmlcng-JASME/fb4d86bb-6ffb-5369-990a-10fe830c8789/scratchpad/c/review/regression/. Afterwards I deleted the large outputs (84K left) and the __pycache__ folders my pytest run created in the repo. git status shows 18 modified files and no untracked files. df shows 23G free.\n\n**pytest**\n- Python 3.13: 664 passed.\n- Python 3.10 (venv310, PYTHONPATH=src): 664 passed.\n\n**ruff check src tests tools**\n- 0.22.0 (git archive 17b3498): 194. Working tree: 197.\n- By file and rule, the extra 3 are exactly S102 in tests/test_notebook.py and two DTZ001 in tests/test_pipeline.py. This matches the C section.\n\n**New tests on 0.22.0**\n- I put the working tree's tests/test_pipeline.py and test_notebook.py into the 0.22.0 tree.\n- All 13 new tests fail: 12 in test_pipeline and test_step3 in test_notebook.\n- The 52 existing tests in those files pass.\n\n**docs/fix_plan_repro_tests.py**\n- The verifier's \"should\" is fixed: M1, M2 and U1 are removed and the C line is in the docstring.\n- Copied to tests/test_zz_*.py inside a copy of the tree, it gives 8 passed.\n\n**golden (23 cases), compared with b3/golden_final**\n- xml and prompt are identical in all cases. ok is [True, True, True, 0] in all cases. Only report differs.\n- I diffed the report bodies and counted unique lines. Only 3 kinds change:\n  - The chapter 1 row label becomes 「XML と ZIP で判定できるもの」 (23 cases).\n  - The chapter 12 explanation (23 cases).\n  - The chapter 14 PDF line: 21 cases become the unchecked 「ZIP に入っていない…手順 2…--pdf…変換し直す」, and 2 cases become the checked 「ZIP に入っている」.\n- All are intended.\n\n**td1–3 (--route pdf --ai manual), 0.22.0 tree against working tree**\n- Exit 0 in both trees.\n- The XML is byte-identical (cmp), and AI依頼文.txt is identical.\n- The ZIP entry set and CRCs are identical to 0.22.0: 7, 4 and 4 entries, all under jasme/31/1/31_1/, all ASCII, no duplicates.\n- Fidelity check, final re-check, DTD and J-STAGE check are all 合格 / 問題なし.\n- The report diff is only the 3 kinds of lines above. The stdout diff is only the output paths.\n\n**Mutation testing**\nI took out or weakened each new rule in turn: 45 mutants, each run against the full test suite.\n- Killed: zip_problems (a), (b) (whole check and last part only), (c) outside the article folder, 074E, (d) 0 bytes, and the swapped 053E/059E/073E IDs; make_zip reverted to rglob or to the whole article folder; adding leftover PDFs; status without \"user\"; keep_dir inside the article folder; add_images not recalculating; convert without zip_issues; upload_issues using XML only; N4 (no NFKC, no check, match, \\w, issue excluded, lpage also checked, no notes, 「空白」 wording); U1 (datetime order, no NFKC, 2-digit year, match, no label, no 8-digit form, blank as error, 日 required); CLI (catch, notes, not_zipped); report chapters 10, 11 and 14.\n- Survived:\n  - status without \"converted\" (finding 1).\n  - add_images with has_pdf=False (finding 2).\n  - add_images not recalculating only zip_issues; \\d instead of [0-9]; .strip() instead of removing whitespace (finding 6).\n  - Skipping the last part of everything under Graphics. This is almost equivalent, because a lower folder is caught by 074E anyway. Not a finding.\n\n**FIX_PLAN appendix M1, M2, U1**\n- Every item is in the tests: (1)–(3), the user-image rerun, memo.txt, the handmade ZIPs (034E for the zip name, 059E, '-'), the empty PDF, the full-width volume and 「31巻」, the chapter 14 --pdf/手順 2 line, the second article in the same folder and r1 unchanged, the old PDF, 1→15.\n- U1: all the forms, 受付日, datetime, 「　」, and 「10:00」.\n- Following the plan's later decision, M2's 「warnings に 31_1.pdf」 is replaced by not_zipped == ['31_1.pdf'] plus \"not in warnings\".\n\n**Other checks against 0.22.0**\n- Two articles in one folder, a stale PDF, and a hand-placed Graphics/31_1_01.png that is re-converted: the image is not zipped (in 0.22.0 it was, together with 要変換/). It shows in not_zipped, in the CLI 「※」 line and in chapter 10. This is the intended change (decision 2).\n- No duplicate image names in any golden case.\n- Colab step 6 passes pdf_path again, so the PDF stays in the ZIP after re-conversion.\n- The ArticleMeta.load TOMLDecodeError is a subclass of ValueError, so it also gives exit 2.\n\n**Guidance against the code**\n- Steps 3 and 7, CLI --pdf and --images, README 要変換/, the --images help, missing_images_box, and the DESIGN chapter 3 order (pipeline.py:356–367) all match the code.\n- Doc/code mismatches I found, none fixed by me (findings 3 and 4):\n  - Step 2: 「後で jasme_巻_開始ページ.zip に入れることもできます」 against chapter 14's 「変換し直す」.\n  - images.py:153: 「この名前で Graphics/ に置くこと」.\n- Mismatches already reported by the implementer and verifier, re-checked:\n  - The FIX_PLAN line number config.py:149〜153 is from 0.18.1 (not fixed).\n  - Chapter 11 says 開始ページ/終了ページ while the messages say 最初のページ/最後のページ (not fixed).\n  - DESIGN chapter 3 PDF position (fixed).\n  - export_images default location (fixed: keep_dir is now a required keyword).\n  - DEVELOPMENT principle 7 (added).\n  - The CLAUDE.md line is still not added (the implementer's deviation).\n- The message texts quoted in JSTAGE_NOTES (EMSGM053E, 059E, 073E, 074E, 219E, 057E, 「2026-10-26 に確認」) have no source in the repo. I could not check them.",
+   "findings": [
+    {
+     "severity": "should",
+     "file": "tests/test_pipeline.py",
+     "line": 98,
+     "problem": "No test checks that a converted image (status \"converted\") goes into the ZIP. If ZIP_STATUSES lost \"converted\", every test would still pass, and an EMF/WMF or Pillow-converted image would silently drop out of the upload ZIP. Chapter 1 would say 問題なし, and chapter 10 would tell the user the image is 「前の変換の残りなので、対応は要りません」. That is the 'required file silently drops from the ZIP' case.",
+     "evidence": "Mutation test: ZIP_STATUSES = (\"ok\", \"user\") still gives 664 passed. With soffice present (/usr/bin/soffice), converting TEMPLATE under this mutation gives images=[('31_1_01.png','converted')], ZIP namelist ['jasme/31/1/31_1/31_1.xml'], zip_issues=[], jstage_issues=[], not_zipped=['Graphics/31_1_01.png']. test_template_emf_conversion only checks that the file exists in Graphics/, not the ZIP. test_package_layout covers only \"ok\". 0.22.0 rglobbed the folder, so it had no such path.",
+     "fix": "In test_template_emf_conversion, when soffice_path() is set, also check that 'jasme/31/1/31_1/Graphics/31_1_01.png' is in the ZIP namelist and that res.not_zipped == []. To test without soffice, add a unit test that zip_image_names returns names for ok, converted and user and leaves out failed and missing. Optionally, add a check to zip_problems that every graphic href in the XML is in the ZIP, as a safety net for silent drops."
+    },
+    {
+     "severity": "should",
+     "file": "src/jasme_jats/pipeline.py",
+     "line": 508,
+     "problem": "No test checks that the PDF stays in the ZIP when add_images rebuilds it (Colab step 2 PDF + step 7, or CLI --pdf + --images). If res.has_pdf here became False, every test would pass, and the PDF would silently drop out of the ZIP after images were added. The chapter 14 line is drawn from has_pdf, so it would still show the checked 「PDF（31_1.pdf）がアップロード用の ZIP に入っている」: a false pass.",
+     "evidence": "Mutation test: `make_zip(..., zip_image_names(res.images), False)` gives 664 passed. Under this mutation I converted TEMPLATE with convert_metafiles=False, pdf_path=dummy and route=docx. Before add_images the namelist is [xml, pdf]. After add_images({'31_1_01.png': png}) it is [xml, Graphics/31_1_01.png], zip_issues=[], not_zipped=['31_1.pdf'], and chapter 14 still shows '- [x] PDF（31_1.pdf）がアップロード用の ZIP に入っている'. The current code is correct (it passes res.has_pdf); only the guard is missing.",
+     "fix": "Add a test that converts TEMPLATE (convert_metafiles=False) with a dummy pdf_path, calls add_images, and checks that 'jasme/31/1/31_1/31_1.pdf' is still in the ZIP and not_zipped == []. One option is to extend test_upload_zip_has_only_this_article with a PDF. Optionally, base chapter 14's PDF line on what is actually in the ZIP (the namelist), not on has_pdf."
+    },
+    {
+     "severity": "nit",
+     "file": "src/jasme_jats/images.py",
+     "line": 153,
+     "problem": "The note for an image with no image file (missing) still says 「PDF 等から画像を作り、この名前で Graphics/ に置くこと」. Since C, placing a file in Graphics/ on disk does not put it in the ZIP, even after re-converting. Only --images or step 7 do, or editing the ZIP by hand. The note appears in the chapter 9 table, which does not match the code.",
+     "evidence": "In the CLI I converted TEMPLATE with --no-metafile-conversion, put 31_1_01.png into Graphics/ by hand and re-converted. 0.22.0 zipped it (along with 要変換/). The working tree's ZIP is ['jasme/31/1/31_1/31_1.xml'], and 10章 and the CLI 「※」 line point to --images. The same instruction elsewhere names the ZIP or --images (chapter 14 「ZIP の中の `…/Graphics/` に入れる」, missing_images_box, the CLI 要対応 line), so this note is the only one out of line.",
+     "fix": "Following the code, reword it to match the other guidance, for example: 「PDF 等から画像を作り、Colab の手順 7（コマンドラインでは --images）で入れること」."
+    },
+    {
+     "severity": "nit",
+     "file": "tools/make_notebook.py",
+     "line": 216,
+     "problem": "The UPLOAD_PDF explanation in Colab step 2 still says 「後で jasme_巻_開始ページ.zip に入れることもできます」, but chapters 10 and 14 now only say to choose the PDF in step 2 and convert again. Two ways of adding the PDF are given. Adding it by hand does not say where in the ZIP it goes (jasme/巻/号/記事/{aid}.pdf), and zip_problems does not check it afterwards.",
+     "evidence": "tools/make_notebook.py:216 against report.pdf_checklist_line and not_zipped_note (「Colab では手順 2 で記事の PDF を選び…変換し直してください」). The text was there in 0.22.0, but C changed chapter 14 to say convert again, so the two now differ.",
+     "fix": "Bring the step 2 text in line with chapter 14 (the code), for example: 「PDF が用意できたら、手順 2 から PDF を選んで変換し直します」. If adding it by hand stays, say where it goes."
+    },
+    {
+     "severity": "nit",
+     "file": "src/jasme_jats/package.py",
+     "line": 63,
+     "problem": "Following the new guidance (the --pdf help, chapter 10 and the CLI line 「PDF は --pdf…で指定し直すと入る」), a user may well pass --pdf the PDF left over in the article folder (output/jasme/31/1/31_1/31_1.pdf). shutil.copyfile then raises SameFileError and the run ends with a traceback (exit 1). The crash already existed in 0.22.0, but C's guidance makes this path more likely.",
+     "evidence": "In the CLI: convert sample_pdfcheck with --pdf, convert again without it (not_zipped is shown), then convert with --pdf o/jasme/31/1/31_1/31_1.pdf. Both 0.22.0 and the working tree raise `shutil.SameFileError ... are the same file`, exit 1.",
+     "fix": "In write_package, skip the copy when pdf_path and the destination are the same file (Path.samefile) and keep has_pdf=True. Or make the guidance say to pass the original PDF, not the one in the output folder."
+    },
+    {
+     "severity": "nit",
+     "file": "src/jasme_jats/config.py",
+     "line": 79,
+     "problem": "Some of the new rules can be loosened without any test failing. (1) U1's [0-9] in RE_DATE (the plan says to use [0-9], not \\d). (2) Removing whitespace from inside the date (re.sub(\\s)) rather than only stripping the ends. (3) add_images recalculating zip_issues (zip_issues alone).",
+     "evidence": "Mutation test, 664 passed in each case: u1_digit_d (\\d{4} and so on), u1_strip_only (`.strip()` in place of re.sub(r\"\\s\",…)), addimg_no_issues (dropping only the `res.zip_issues = zip_problems(...)` line in add_images). The current code works as the plan says. The only test inputs with spaces are ' 2026/3/31 ' (ends only) and '2026-03-31 10:00' (an error either way).",
+     "fix": "Add to test_dates_accept_common_forms: '2026 / 3 / 31' and '２０２６年 ３月 ３１日' read as a date, and Arabic-Indic digits such as '٢٠٢٦/٣/٣١' give ValueError. For (3), add a test where zip_issues changes after add_images, for example by checking that zip_issues goes back to [] in a case where zip_problems finds an issue in convert."
+    }
+   ]
+  }
+ ],
+ "failedFirst": [],
+ "firstFindings": [
+  {
+   "lens": "principle",
+   "severity": "should",
+   "file": "src/jasme_jats/images.py",
+   "line": 153,
+   "problem": "The note shown in report chapter 9 for a missing image still says 「PDF 等から画像を作り、この名前で Graphics/ に置くこと」. Since C, a file placed in Graphics/ by hand is never put in the upload ZIP (decision 2), so following this advice no longer works.",
+   "evidence": "td3 (route 2, `--ai manual`): the chapter 9 備考 for img1 and img2 contains that text (counted twice in the report). I saved 31_1_01.png and 31_1_02.png into the article folder's Graphics/ by hand and converted again with the same arguments. The new ZIP holds only xml, pdf, 31_1_03 and 31_1_04. The CLI prints 「※ …ZIP に入れなかったファイル 2 件」, and images_to_prepare still lists 2 images. The same steps on 0.22.0 (base022_src) put Graphics/31_1_01.png in the ZIP. The user is told (not_zipped, chapter 10), so nothing is lost silently. But the guidance contradicts the new behaviour, while the Colab missing_images_box already says to use 手順 7 or to put the image inside the ZIP.",
+   "fix": "Change the note to match the code, for example: 「Word の図形・グラフなどで画像ファイルがない。PDF 等から画像を作り、Colab では手順 7、コマンドラインでは --images で入れること（記事フォルダに手で置いても ZIP には入らない）」. The chapter 9 lines of golden cases with missing images will change; record that as an intended change."
+  },
+  {
+   "lens": "principle",
+   "severity": "nit",
+   "file": "src/jasme_jats/package.py",
+   "line": 101,
+   "problem": "zip_problems does not check that the article's XML is in the ZIP. A ZIP with no XML, or an empty ZIP, returns [] and is reported as 問題なし.",
+   "evidence": "I passed handmade ZIPs to zip_problems. One holding only jasme/31/1/31_1/31_1.pdf returned [], and an empty ZIP returned []. make_zip always writes the XML, so this cannot happen today (td1–3 and all fixtures include it). This is a gap in the re-check only.",
+   "fix": "Optional: when f\"{adir}/{aid}.xml\" is missing, add one item (message ID '-', 「アップロード用の ZIP に XML がない」). Otherwise, note in DESIGN chapter 7 that the re-check does not look for missing items."
+  },
+  {
+   "lens": "principle",
+   "severity": "nit",
+   "file": "src/jasme_jats/config.py",
+   "line": 212,
+   "problem": "A DOI typed by the user is only stripped, never NFKC-normalized or checked. A full-width DOI goes into the XML unchanged. This was the same in 0.22.0 and is outside the N4 scope; I found it in this review.",
+   "evidence": "ArticleMeta.from_dict({'doi': '１０．２４５２９/x', …}) is accepted with doi='１０．２４５２９/x' and input_notes=[]. The DOI built from doi_pattern uses the normalized volume, issue and fpage, so it is ASCII (10.24529/jasme.31.1_13).",
+   "fix": "No change needed for C. If wanted later, normalize the doi field with NFKC and add a notice to input_notes, in the same way as volume and the other page fields."
+  },
+  {
+   "lens": "principle",
+   "severity": "nit",
+   "file": "src/jasme_jats/colab.py",
+   "line": 99,
+   "problem": "same_first_page compares the raw step-3 inputs. Since C reads 「３１」「１」 as 31 and 1, a re-entry like that produces the same output names (31_1) as the previous article but is not caught as 「巻と最初のページが前の論文と同じ」. Before C, full-width input gave a different (Japanese) folder, so this gap is new with C.",
+   "evidence": "same_first_page({'volume':'31','fpage':'1'}, {'volume':'３１','fpage':'１'}) returns False (the values are compared without normalization), while both give article_id 31_1. Impact is small: values carried over from the previous article are identical strings and are still caught.",
+   "fix": "Optional: compare after unicodedata.normalize('NFKC', str(v)).strip(), or compare the article_id built from ArticleMeta.from_dict."
+  },
+  {
+   "lens": "principle",
+   "severity": "nit",
+   "file": "docs/DESIGN.md",
+   "line": 35,
+   "problem": "DESIGN chapter 3, newly edited by C, lists 10 jstage_rules before 11 images, ZIP and report (the pipeline.py docstring has the same order). In the code, export_images runs first and jstage_check runs after it, because it takes the image names.",
+   "evidence": "pipeline.py:392-395: images = export_images(...) and then jstage_issues = jstage_check(final_root, aid, [i.name for i in images if i.name]).",
+   "fix": "Following the code, say in DESIGN chapter 3 and the pipeline docstring that the J-STAGE check runs after the images are written, using the image names. For example, add 「画像の書き出しの後、出力した画像の名前で」 to step 10."
+  },
+  {
+   "lens": "regression",
+   "severity": "should",
+   "file": "tests/test_pipeline.py",
+   "line": 98,
+   "problem": "No test checks that a converted image (status \"converted\") goes into the ZIP. If ZIP_STATUSES lost \"converted\", every test would still pass, and an EMF/WMF or Pillow-converted image would silently drop out of the upload ZIP. Chapter 1 would say 問題なし, and chapter 10 would tell the user the image is 「前の変換の残りなので、対応は要りません」. That is the 'required file silently drops from the ZIP' case.",
+   "evidence": "Mutation test: ZIP_STATUSES = (\"ok\", \"user\") still gives 664 passed. With soffice present (/usr/bin/soffice), converting TEMPLATE under this mutation gives images=[('31_1_01.png','converted')], ZIP namelist ['jasme/31/1/31_1/31_1.xml'], zip_issues=[], jstage_issues=[], not_zipped=['Graphics/31_1_01.png']. test_template_emf_conversion only checks that the file exists in Graphics/, not the ZIP. test_package_layout covers only \"ok\". 0.22.0 rglobbed the folder, so it had no such path.",
+   "fix": "In test_template_emf_conversion, when soffice_path() is set, also check that 'jasme/31/1/31_1/Graphics/31_1_01.png' is in the ZIP namelist and that res.not_zipped == []. To test without soffice, add a unit test that zip_image_names returns names for ok, converted and user and leaves out failed and missing. Optionally, add a check to zip_problems that every graphic href in the XML is in the ZIP, as a safety net for silent drops."
+  },
+  {
+   "lens": "regression",
+   "severity": "should",
+   "file": "src/jasme_jats/pipeline.py",
+   "line": 508,
+   "problem": "No test checks that the PDF stays in the ZIP when add_images rebuilds it (Colab step 2 PDF + step 7, or CLI --pdf + --images). If res.has_pdf here became False, every test would pass, and the PDF would silently drop out of the ZIP after images were added. The chapter 14 line is drawn from has_pdf, so it would still show the checked 「PDF（31_1.pdf）がアップロード用の ZIP に入っている」: a false pass.",
+   "evidence": "Mutation test: `make_zip(..., zip_image_names(res.images), False)` gives 664 passed. Under this mutation I converted TEMPLATE with convert_metafiles=False, pdf_path=dummy and route=docx. Before add_images the namelist is [xml, pdf]. After add_images({'31_1_01.png': png}) it is [xml, Graphics/31_1_01.png], zip_issues=[], not_zipped=['31_1.pdf'], and chapter 14 still shows '- [x] PDF（31_1.pdf）がアップロード用の ZIP に入っている'. The current code is correct (it passes res.has_pdf); only the guard is missing.",
+   "fix": "Add a test that converts TEMPLATE (convert_metafiles=False) with a dummy pdf_path, calls add_images, and checks that 'jasme/31/1/31_1/31_1.pdf' is still in the ZIP and not_zipped == []. One option is to extend test_upload_zip_has_only_this_article with a PDF. Optionally, base chapter 14's PDF line on what is actually in the ZIP (the namelist), not on has_pdf."
+  },
+  {
+   "lens": "regression",
+   "severity": "nit",
+   "file": "src/jasme_jats/images.py",
+   "line": 153,
+   "problem": "The note for an image with no image file (missing) still says 「PDF 等から画像を作り、この名前で Graphics/ に置くこと」. Since C, placing a file in Graphics/ on disk does not put it in the ZIP, even after re-converting. Only --images or step 7 do, or editing the ZIP by hand. The note appears in the chapter 9 table, which does not match the code.",
+   "evidence": "In the CLI I converted TEMPLATE with --no-metafile-conversion, put 31_1_01.png into Graphics/ by hand and re-converted. 0.22.0 zipped it (along with 要変換/). The working tree's ZIP is ['jasme/31/1/31_1/31_1.xml'], and 10章 and the CLI 「※」 line point to --images. The same instruction elsewhere names the ZIP or --images (chapter 14 「ZIP の中の `…/Graphics/` に入れる」, missing_images_box, the CLI 要対応 line), so this note is the only one out of line.",
+   "fix": "Following the code, reword it to match the other guidance, for example: 「PDF 等から画像を作り、Colab の手順 7（コマンドラインでは --images）で入れること」."
+  },
+  {
+   "lens": "regression",
+   "severity": "nit",
+   "file": "tools/make_notebook.py",
+   "line": 216,
+   "problem": "The UPLOAD_PDF explanation in Colab step 2 still says 「後で jasme_巻_開始ページ.zip に入れることもできます」, but chapters 10 and 14 now only say to choose the PDF in step 2 and convert again. Two ways of adding the PDF are given. Adding it by hand does not say where in the ZIP it goes (jasme/巻/号/記事/{aid}.pdf), and zip_problems does not check it afterwards.",
+   "evidence": "tools/make_notebook.py:216 against report.pdf_checklist_line and not_zipped_note (「Colab では手順 2 で記事の PDF を選び…変換し直してください」). The text was there in 0.22.0, but C changed chapter 14 to say convert again, so the two now differ.",
+   "fix": "Bring the step 2 text in line with chapter 14 (the code), for example: 「PDF が用意できたら、手順 2 から PDF を選んで変換し直します」. If adding it by hand stays, say where it goes."
+  },
+  {
+   "lens": "regression",
+   "severity": "nit",
+   "file": "src/jasme_jats/package.py",
+   "line": 63,
+   "problem": "Following the new guidance (the --pdf help, chapter 10 and the CLI line 「PDF は --pdf…で指定し直すと入る」), a user may well pass --pdf the PDF left over in the article folder (output/jasme/31/1/31_1/31_1.pdf). shutil.copyfile then raises SameFileError and the run ends with a traceback (exit 1). The crash already existed in 0.22.0, but C's guidance makes this path more likely.",
+   "evidence": "In the CLI: convert sample_pdfcheck with --pdf, convert again without it (not_zipped is shown), then convert with --pdf o/jasme/31/1/31_1/31_1.pdf. Both 0.22.0 and the working tree raise `shutil.SameFileError ... are the same file`, exit 1.",
+   "fix": "In write_package, skip the copy when pdf_path and the destination are the same file (Path.samefile) and keep has_pdf=True. Or make the guidance say to pass the original PDF, not the one in the output folder."
+  },
+  {
+   "lens": "regression",
+   "severity": "nit",
+   "file": "src/jasme_jats/config.py",
+   "line": 79,
+   "problem": "Some of the new rules can be loosened without any test failing. (1) U1's [0-9] in RE_DATE (the plan says to use [0-9], not \\d). (2) Removing whitespace from inside the date (re.sub(\\s)) rather than only stripping the ends. (3) add_images recalculating zip_issues (zip_issues alone).",
+   "evidence": "Mutation test, 664 passed in each case: u1_digit_d (\\d{4} and so on), u1_strip_only (`.strip()` in place of re.sub(r\"\\s\",…)), addimg_no_issues (dropping only the `res.zip_issues = zip_problems(...)` line in add_images). The current code works as the plan says. The only test inputs with spaces are ' 2026/3/31 ' (ends only) and '2026-03-31 10:00' (an error either way).",
+   "fix": "Add to test_dates_accept_common_forms: '2026 / 3 / 31' and '２０２６年 ３月 ３１日' read as a date, and Arabic-Indic digits such as '٢٠٢٦/٣/٣١' give ValueError. For (3), add a test where zip_issues changes after add_images, for example by checking that zip_issues goes back to [] in a case where zip_problems finds an issue in convert."
+  }
+ ],
+ "rounds": [
+  {
+   "round": 1,
+   "fix": {
+    "changed_files": [
+     "src/jasme_jats/images.py",
+     "src/jasme_jats/package.py",
+     "src/jasme_jats/colab.py",
+     "src/jasme_jats/pipeline.py",
+     "tools/make_notebook.py",
+     "notebooks/JASME_docx_to_JSTAGE_XML.ipynb",
+     "tests/test_pipeline.py",
+     "tests/test_colab.py",
+     "docs/DESIGN.md",
+     "docs/DEVELOPMENT.md",
+     "docs/JSTAGE_NOTES.md",
+     "docs/FIX_PLAN.md"
+    ],
+    "summary": "点検（1 回目）の should 3 件をすべて直し、nit も小さく価値のあるものは直した。差分は作業ツリーに積んだだけで、コミットはしていない。docx の文字には触れていない。pdfmatch.py・pdfdocx.py・structure.py は変えていない。\n\n- [should] images.py:153: 画像ファイルがない図（missing）の 9 章の備考を、コードに合わせて直した。新しい文面は「Word の図形・グラフなどで画像ファイルがない。PDF 等から画像を作り、Colab の手順 7（コマンドラインでは --images）で入れること（記事フォルダの Graphics/ に手で置いても ZIP には入らない）」。先頭の理由の文は変えていない。\n- [should] 変換した画像（converted）が ZIP に入ることを確かめるテストを足した。\n  - test_template_emf_conversion: soffice があるとき、ZIP の namelist に Graphics/31_1_01.png があり、not_zipped と zip_issues が空であることを確かめる。\n  - test_zip_image_names_by_status（新規）: soffice がなくても動く単体テスト。ok・converted・user の画像は入れ、failed・missing と名前のない画像は入れないことを確かめる。\n- [should] test_pdf_stays_in_zip_after_add_images（新規）: TEMPLATE を仮の PDF つきで変換し、add_images の後も ZIP に PDF が残ることを確かめる。namelist が [xml, pdf, Graphics/31_1_01.png] で、not_zipped が空で、14 章の [x] の行が出ること。あわせて、add_images が zip_issues を計算し直すことも確かめる（変換のときの値を入れておき、[] に戻ること）。\n- [nit] package.zip_problems に (e) を足した。記事の XML が ZIP にないとき、ID「-」で 1 件知らせる（「アップロード用の ZIP に XML（…/31_1.xml）が入っていない（変換し直してください）」）。テストは、PDF だけの ZIP と空の ZIP。\n- [nit] colab.same_first_page は、NFKC にして前後の空白を除いてから比べる。テストは test_colab に足した。\n- [nit] package.write_package: 記事フォルダに残っている PDF をそのまま --pdf に指定すると、0.22.0 から SameFileError で落ちていた。同じファイルなら写さずに使い、has_pdf=True のままにする。テストは test_pdf_left_in_article_folder_can_be_given_again（新規）。CLI でも、終了コード 0 で ZIP に PDF が入ることを確かめた。\n- [nit] test_dates_accept_common_forms に足した入力:\n  - 日付として読むもの: 「2026 / 3 / 31」「２０２６年 ３月 ３１日」\n  - ValueError にするもの: アラビア・インド数字の「٢٠٢٦/٣/٣١」\n- [nit] 文書をコードに合わせた:\n  - DESIGN 3 章と pipeline.py の docstring: J-STAGE のチェック（10）は、実際には画像の書き出しの後、ZIP を作る前に、出力した画像の名前で行うと書いた。\n  - DESIGN 3 章・7 章と JSTAGE_NOTES: zip_problems の (e) を書き足した。\n  - 手順 2 の UPLOAD_PDF の説明: 「PDF が用意できたら、この手順 2 から PDF を選んで変換し直します」にした（make_notebook.py を直し、ノートブックを作り直した）。\n  - DEVELOPMENT のテストの段落と、FIX_PLAN C の「実装で決めたこと」「テスト」「確かめた数」「文書とコードの食い違い」「触ったファイル」も更新した。\n\nミューテーションテスト（pytest の -o pythonpath で src の写しを差し替えて実行）では、指摘にあった変異はすべて、いまのテストで失敗するようになった。\n- ZIP_STATUSES から converted を抜く\n- add_images に has_pdf=False を渡す\n- add_images で zip_issues を計算し直さない\n- 日付の正規表現の [0-9] を \\d にする\n- 日付の空白を strip だけにする\n- 同じファイルでも写す\n- XML の確かめを外す\n- same_first_page を元に戻す\n\n最初、PYTHONPATH だけで差し替えたときは、pyproject の pythonpath=src が優先されて、どの変異でも全件が通ってしまった。点検役の 664 passed も、同じ理由かもしれない。",
+    "tests_added": [
+     "tests/test_pipeline.py::test_zip_image_names_by_status",
+     "tests/test_pipeline.py::test_missing_image_note_points_to_step7_and_images_option",
+     "tests/test_pipeline.py::test_pdf_stays_in_zip_after_add_images",
+     "tests/test_pipeline.py::test_pdf_left_in_article_folder_can_be_given_again",
+     "tests/test_pipeline.py::test_template_emf_conversion（soffice があるときの ZIP の確認を追加）",
+     "tests/test_pipeline.py::test_zip_problems_on_handmade_zips（XML のない ZIP・空の ZIP を追加）",
+     "tests/test_pipeline.py::test_dates_accept_common_forms（日付の中の空白・アラビア・インド数字を追加）",
+     "tests/test_colab.py::test_detects_values_left_from_previous_article（全角の巻・最初のページを追加）"
+    ],
+    "pytest_result": "Python 3.13: 668 passed。Python 3.10（venv310、PYTHONPATH=src）: 668 passed。修正の前は 664 件で、新しいテストが 4 件増えた。",
+    "measures": "- ruff check src tests tools: 197 件。修正の前（C の実装）と同じで、増えていない。0.22.0 は 194 件。\n- golden 23 件: manifest.json は C の実装（c/impl/golden）とバイトまで同じ。0.22.0（b3/golden_final）と比べると、XML と AI 依頼文は全件同じで、レポートだけが違う。違いは本体を diff して確かめ、次の 3 種類だけだった。\n  - 1 章の行の名前「XML と ZIP で判定できるもの」（23 件）\n  - 12 章の説明に ZIP の読み直しを足したこと（23 件）\n  - 14 章の PDF の行（ZIP に入っていない 21 件、入っている 2 件）\n  - golden の例には missing の画像がないので、9 章の備考の変更はどの例にも出ない。\n- td1〜3（ルート2、--ai manual）:\n  - XML は 0.22.0（base022_src）とバイトまで同じ。\n  - 不変性・最終出力の再チェック・DTD・J-STAGE のチェックはすべて合格。\n  - ZIP の namelist は記事フォルダ jasme/31/1/31_1/ の中だけで、ASCII だけ（td1 は 7 項目、td2 は 4 項目、td3 は 4 項目。いずれも xml と pdf を含む）。\n  - td3 の 9 章の備考は、0.22.0 では「この名前で Graphics」が 2 件あったが、いまは 0 件で、手順 7 の案内に変わった。\n- CLI（sample_pdfcheck）: 記事フォルダの 31_1.pdf を --pdf に指定し直しても、終了コード 0 で ZIP に PDF が入る。\n- 片付け: 実験の置き場所は /tmp/claude-0/-home-user-jstgxmlcng-JASME/fb4d86bb-6ffb-5369-990a-10fe830c8789/scratchpad/c/fix1。大きな出力（td の出力・golden の本体・sf）は消し、manifest.json とログだけを残した（36K）。tests/__pycache__ も消した。df -h / は空き 23G。",
+    "deviations": "直さなかった指摘:\n- config.py:212（DOI の NFKC・検査）: 点検役の fix のとおり「C では変更不要」とし、直していない。0.22.0 と同じ挙動で、N4 の範囲の外。FIX_PLAN の C に、DOI は今のままと書いた。\n- package.py:63 の任意の案（14 章の PDF の行を、has_pdf ではなく ZIP の namelist から決める）: 採っていない。いまのコードは正しく、test_pdf_stays_in_zip_after_add_images が has_pdf の劣化を捕まえる。\n\n指摘のうち 2 件は同じ内容（images.py:153 の principle と regression）で、まとめて 1 つの修正にした。\n\n設計（FIX_PLAN の C）から足したこと:\n- zip_problems の (e)（記事の XML がない）。ID は「-」にした。XML がないときのメッセージ ID は、手元の文書（JSTAGE_NOTES）では分からなかったため。\n- write_package の、写し元と写し先が同じファイルのときの扱い。0.22.0 からある不具合で、C の案内で起きやすくなるため直した。\n\n文書とコードの食い違い（コードに合わせて文書を直したもの）:\n1. DESIGN 3 章と pipeline.py の docstring で、J-STAGE のチェック（10）が画像の書き出し（11）より前と読めた。\n2. images.py の missing の備考が「Graphics/ に置く」だった（C の後は ZIP に入らない）。\n3. 手順 2 の UPLOAD_PDF の説明が「後で jasme_巻_開始ページ.zip に入れることもできます」で、14 章の「手順 2 で変換し直す」と違っていた。\n4. DESIGN 7 章と JSTAGE_NOTES の zip_problems の確かめの範囲に、(e) を書き足した。\n\n直さなかった食い違い:\n- 手順 8 の SystemExit の文（「後で ZIP の Graphics/ に入れることもできます」。make_notebook.py:571）は残した。14 章の「ZIP の中の …/Graphics/ に入れる」と同じ書き方なので、食い違いではないと判断した。\n- 実装の担当が挙げたもの（FIX_PLAN の config.py の行番号 149〜153 が古い、CLAUDE.md に ZIP の 1 行がない）は、そのままにした。",
+    "open_issues": "- 0.22.0 の確認は、利用者が後で行う。\n- zip_issues はまだ終了コードに影響しない。CLI のアップロード時チェックの行は --images の前に出る。どちらも D の U2 で扱う予定で、この回では変えていない。\n- 新しい ZIP（要変換/ なし、前回の残りなし）を J-STAGE が受け付けるかは、試験運用で確かめる必要がある。\n- 点検役のミューテーションテストは、PYTHONPATH だけで src を差し替えていたなら、pyproject の pythonpath=src が優先されて、変異が効いていなかった可能性がある。再点検では pytest -o pythonpath=\"<写し> tests\" を使うとよい。"
+   },
+   "findings": [
+    {
+     "lens": "principle",
+     "severity": "nit",
+     "file": "src/jasme_jats/report.py",
+     "line": 836,
+     "problem": "12 章「J-STAGE のアップロード時チェック」の説明は、ZIP を読み直して分かるものを（ファイル名・フォルダ名の文字、記事フォルダの外の項目や想定外のファイル、0 バイトのファイル）と並べている。修正で zip_problems に足した (e)（記事の XML が ZIP にない）が入っていない。DESIGN 3 章・7 章と JSTAGE_NOTES は (e) を書いているので、利用者向けの説明だけがコードと合っていない。",
+     "evidence": "package.zip_problems の終わりに `if not any(info.filename == f\"{adir}/{aid}.xml\" ...)` がある。一方、report.py:835-837 の文は「…想定外のファイル、0 バイトのファイル）を『記事アップロードメッセージ一覧』に沿って確かめた結果です。」のまま。golden の 23 件でも、12 章の説明はこの文。",
+     "fix": "コードに合わせて説明を直す。例: 「（ファイル名・フォルダ名の文字、記事フォルダの外の項目や想定外のファイル、0 バイトのファイル、記事の XML が入っているか）」。golden の 12 章の説明が全件変わるので、意図した変化として記録する。"
+    },
+    {
+     "lens": "principle",
+     "severity": "nit",
+     "file": "docs/FIX_PLAN.md",
+     "line": 406,
+     "problem": "C の「テスト」に「tests/test_pipeline.py に 17 件」とある。しかし括弧の中に挙げた項目は 12 + 点検の後の 4 = 16 で、diff で増えた test_ 関数も 16 件。数が実際と合っていない。",
+     "evidence": "git diff tests/test_pipeline.py | grep -c '^+def test_' は 16。0.22.0 の src で失敗する test_pipeline の新しいテストも 16 件。ほかに失敗するのは、拡張した既存の test_template_emf_conversion。",
+     "fix": "「16 件」に直す。既存のテストの拡張は、すでに別の文で書かれているので、それを数に入れるつもりなら、そう書き分ける。"
+    },
+    {
+     "lens": "regression",
+     "severity": "nit",
+     "file": "docs/FIX_PLAN.md",
+     "line": 406,
+     "problem": "The C テスト paragraph does not match the tests. It says tests/test_pipeline.py gained 「17 件」, but the actual number is 16. It also says 「0.22.0 の src では、新しいテストはすべて失敗し、既存のテストは通る」, but the existing tests extended in fix round 1 also fail on 0.22.0, and so does test_notebook_is_up_to_date.",
+     "evidence": "Top-level test functions in tests/test_pipeline.py go from 24 at 17b3498 to 40 now (+16); `git diff tests/test_pipeline.py | grep '^+def test'` lists 16. The listed contents also add up to 16 (12 + 4 added after review). Running all of the working tree's tests on 0.22.0's src (base022_src) gives 20 failed, 648 passed. The failures include test_template_emf_conversion (existing; the soffice branch now uses res.not_zipped and fails with AttributeError), test_colab.py::test_detects_values_left_from_previous_article (existing, with the full-width assertions added) and test_notebook_is_up_to_date.",
+     "fix": "Following the code and tests, change 「17 件」 to 「16 件」. Change 「既存のテストは通る」 to something like 「既存のテストのうち、点検の後に確かめを足した test_template_emf_conversion・test_colab の test_detects_values_left_from_previous_article と、ノートブックの test_notebook_is_up_to_date は 0.22.0 では失敗する（意図どおり）。ほかの既存のテストは通る」."
+    }
+   ],
+   "failedLens": []
+  }
+ ],
+ "remaining": [
+  {
+   "lens": "principle",
+   "severity": "nit",
+   "file": "src/jasme_jats/report.py",
+   "line": 836,
+   "problem": "12 章「J-STAGE のアップロード時チェック」の説明は、ZIP を読み直して分かるものを（ファイル名・フォルダ名の文字、記事フォルダの外の項目や想定外のファイル、0 バイトのファイル）と並べている。修正で zip_problems に足した (e)（記事の XML が ZIP にない）が入っていない。DESIGN 3 章・7 章と JSTAGE_NOTES は (e) を書いているので、利用者向けの説明だけがコードと合っていない。",
+   "evidence": "package.zip_problems の終わりに `if not any(info.filename == f\"{adir}/{aid}.xml\" ...)` がある。一方、report.py:835-837 の文は「…想定外のファイル、0 バイトのファイル）を『記事アップロードメッセージ一覧』に沿って確かめた結果です。」のまま。golden の 23 件でも、12 章の説明はこの文。",
+   "fix": "コードに合わせて説明を直す。例: 「（ファイル名・フォルダ名の文字、記事フォルダの外の項目や想定外のファイル、0 バイトのファイル、記事の XML が入っているか）」。golden の 12 章の説明が全件変わるので、意図した変化として記録する。"
+  },
+  {
+   "lens": "principle",
+   "severity": "nit",
+   "file": "docs/FIX_PLAN.md",
+   "line": 406,
+   "problem": "C の「テスト」に「tests/test_pipeline.py に 17 件」とある。しかし括弧の中に挙げた項目は 12 + 点検の後の 4 = 16 で、diff で増えた test_ 関数も 16 件。数が実際と合っていない。",
+   "evidence": "git diff tests/test_pipeline.py | grep -c '^+def test_' は 16。0.22.0 の src で失敗する test_pipeline の新しいテストも 16 件。ほかに失敗するのは、拡張した既存の test_template_emf_conversion。",
+   "fix": "「16 件」に直す。既存のテストの拡張は、すでに別の文で書かれているので、それを数に入れるつもりなら、そう書き分ける。"
+  },
+  {
+   "lens": "regression",
+   "severity": "nit",
+   "file": "docs/FIX_PLAN.md",
+   "line": 406,
+   "problem": "The C テスト paragraph does not match the tests. It says tests/test_pipeline.py gained 「17 件」, but the actual number is 16. It also says 「0.22.0 の src では、新しいテストはすべて失敗し、既存のテストは通る」, but the existing tests extended in fix round 1 also fail on 0.22.0, and so does test_notebook_is_up_to_date.",
+   "evidence": "Top-level test functions in tests/test_pipeline.py go from 24 at 17b3498 to 40 now (+16); `git diff tests/test_pipeline.py | grep '^+def test'` lists 16. The listed contents also add up to 16 (12 + 4 added after review). Running all of the working tree's tests on 0.22.0's src (base022_src) gives 20 failed, 648 passed. The failures include test_template_emf_conversion (existing; the soffice branch now uses res.not_zipped and fails with AttributeError), test_colab.py::test_detects_values_left_from_previous_article (existing, with the full-width assertions added) and test_notebook_is_up_to_date.",
+   "fix": "Following the code and tests, change 「17 件」 to 「16 件」. Change 「既存のテストは通る」 to something like 「既存のテストのうち、点検の後に確かめを足した test_template_emf_conversion・test_colab の test_detects_values_left_from_previous_article と、ノートブックの test_notebook_is_up_to_date は 0.22.0 では失敗する（意図どおり）。ほかの既存のテストは通る」."
+  }
+ ],
+ "incomplete": null
+}

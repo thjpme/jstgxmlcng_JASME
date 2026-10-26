@@ -1,0 +1,31 @@
+# B2.1 点検ワークフロー（再開、2026-10-25）
+- Run ID: wf_f216b677-a5a / taskId: wcjkx0bih（止めるときは taskId）
+- スクリプト: scratchpad/scripts/jasme-b21-review.js、引数: scratchpad/scripts/b21_review_args.json
+- journal: ~/.claude/projects/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/subagents/workflows/wf_f216b677-a5a/journal.jsonl
+- 確認の予約: trig_017ChZtMufXPJ7PaA5HPcx8r（2 時間後）
+- 起動時の状態: HEAD 45d8314、作業ツリーに B2.1 の差分 11 ファイル（origin のブランチの控え 2d59655 と同じ）
+- 2026-10-25 11:33 UTC: fix:1 が終わった直後に止めた（taskId wcjkx0bih）。控え d454123 を push。スクリプトを担当すべて Opus に書き換え（原則・回帰・修正 max、利用者向け high）。
+- 再開の予約: trig_01TL47YNXS7KYEf8NLWakth7（2026-10-25 13:50 UTC = 22:50 JST）。resumeFromRunId wf_f216b677-a5a、args は scripts/b21_review_args.json。
+- 2026-10-25 13:51 UTC: 利用者の指示で再開（taskId wj5gd86bj、同じ Run wf_f216b677-a5a）。担当は Opus（再点検・修正 max）。確認の予約 trig_019DBvGpgDiMzPoTKjeMU1bc（2 時間後）。引数は scripts/b21_review_args_exact.json（起動時と同一）。
+- 2026-10-25 17:56 UTC: 定時確認。fix:2・再点検 2 回目まで終わり fix:3 が進行中。控え 7cd50c5b04605ab3e85b89cc07dc3c77f1a7b854 を push。
+- 2026-10-25 19:58 UTC: 定時確認。fix:3・再点検 3 回目まで終わり fix:4（最後）が進行中。控え feb5ca18d214d4295aeb40099349f1bfa2fadd2d を push。
+- 2026-10-25 21:3x UTC: ワークフロー終了（15 担当、約 7.8 時間）。4 回目の再点検で blocking 3・should 1・nit 4 が残る。控え 6afd5092701c8340d019a1cc33602cc4acb4a649 を push。利用者に相談。
+- 2026-10-25 22:17 UTC: 判断 25（5 回目を 1 回だけ。残れば B3 へ。速さ 1.15 倍まで可）を FIX_PLAN に記録。5 回目のワークフロー jasme-b21-round5 を起動（Run wf_9802c0cc-6e2、taskId wziaxoryr、args {scratch}）。入力は b21/review/round5_input.json。確認の予約 trig_01CVnZTynAntTyKjN9ZNabke。
+- 2026-10-26 00:19 UTC: 定時確認。fix:5 終了（981 件合格）、再点検 2 人が進行中。控え 67a854b2b448c7b9325f359b51860705cce80321 を push。
+- 2026-10-26 00:2x UTC: 5 回目のワークフロー終了（3 担当、約 2.2 時間）。再点検で blocking 4（根は 2 つ: 本体の核が写しの側になる形、キャプションの一部と同じ図の行の最後の側）・should 1・nit 3。判断 25 により B2.1 は反映せず保留（控え 67a854b）。結果は b21/review/round5_final.json。B3 へ。
+- 2026-10-26 00:35 UTC: B2.1 を保留（作業ツリーを main 45d8314 に戻した。B2.1 の差分は控え 67a854b）。main の FIX_PLAN に判断 25 と保留の記録を書いた（コミットしていない差分）。B3 のワークフロー jasme-unit-b3 を起動（Run wf_5eed8d8b-cae、taskId w03sb34h6、args {scratch}、作業の場所 b3/）。確認の予約 trig_016eKqNMienqCYyPhLC3FFf3。
+- 2026-10-26 02:38 UTC: 定時確認。B3 は design・oracle・impl・verify 終了、fix_verify 進行中。控え 1d3f07a35488f06beda600094005dc5b12d6d8d2 を push。
+- 2026-10-26 03:55 UTC: 利用者の指示で休止の手配。fix:1 の終了を見張り（bptcn7wk2）、終わったら止める。再開の予約 trig_01T4fafTH3jNkECtciKg5dHM（04:45 UTC）。控え e485ad7b2b01beb1751df2ef26d3461c56c47b08。
+- 2026-10-26 04:42 UTC: 上限で fix:1・再点検が失敗しワークフロー終了。利用者の指示でただちに再開（fix:1 から。途中の変更あり）。控え 24d4bc7d955a72d57d32b0be5896b049226511cb。
+- 2026-10-26 04:43 UTC: B3 を再開（taskId w7sgkwzbp、同じ Run wf_5eed8d8b-cae。fix:1 から。手順書の注を fix の指示に足した）。確認の予約 trig_01WHWgXmSjDHpLJXaA3mCare。
+- 2026-10-26 05:0x UTC: 利用者の決まり「文書と既存のコードが食い違うときはコードの書き方に従い、見つけた食い違いは最後の返答ですべて挙げる」。手順書と B3 スクリプト（2 回目以降の修正・再点検）に反映。以後の単位のスクリプトの COMMON にも入れる。
+- 2026-10-26 05:1x UTC: 控え 6c44d80d8f2f0a15091edcfe3e060b2a1f3bd377 を push（fix:1・再点検 1 回目まで終了、fix:2 進行中）。
+- 2026-10-26 06:45 UTC: 定時確認。fix:2 進行中（1 回目の再点検は should 1・nit 5）。控え 2f1105d3356abb53a8448c8766bc8d635b2c7785 を push。
+- 2026-10-26 07:0x UTC: 利用者の決まり 2 つ（食い違いはコードに従う／点検は最大 3 回）を CLAUDE.md・FIX_PLAN・手順書に書いた。B3 スクリプトを最大 3 回に。fix:2 終了で止めて再開する見張り byn89hc5j。控え 0ef0a4993b5cf0f1764f25564f85e1756285fc89。
+- 2026-10-26 07:20 UTC: fix:2 終了で止め、最大 3 回版のスクリプトで再開（taskId w5e29szd5）。再点検 2 回目から。控え c49310b4457cb3c8f1bbf617f64201e1f50cd0a1。確認の予約 trig_01TQawztoMGjFq4fKnvt4aL6。
+- 2026-10-26 07:3x UTC: 指示文の改行の差でキャッシュが外れ fix:1 が再実行されかけたので止め、改行を直して再開（taskId wm32hxcxo）。
+- 2026-10-26 08:0x UTC: B3 を main に反映（17b3498、0.22.0）。控え f3391f85aacbe4e62d74aa78aae6ace20b88dd5d（手順書を更新）。次は C。
+- 2026-10-26 09:20 UTC: 単位 C のワークフロー jasme-unit-c を起動（軽い構成。Run wf_05bf8057-8f7、taskId w0k4kpvd0、作業の場所 c/）。確認の予約 trig_01CXGBkDUrbZCWn7RhgT3oaP。利用者: 週間の使用量 50% 済み、C は 30% 以内の見込みで実行。0.22.0 の Colab 確認は後日。
+- 2026-10-26 10:5x UTC: C を main に反映（3e0f0d6、0.23.0。担当 169 万トークン）。控え 5e40b0d151fe126f0acd0d1e49e8b0135bf7797e。次は D。
+- 2026-10-26 12:20 UTC: 単位 D のワークフロー jasme-unit-d を起動（軽い構成。Run wf_8ec68e29-eb0、taskId wo7hfcall、作業の場所 d/、確認の予約 trig_01DhVgWLYDvxuiQ3it877b8T）。利用者: D まで行い、E は結果を見て判断。
+- 2026-10-26 14:0x UTC: D を main に反映（e2dbf73、0.23.1。担当 187 万トークン）。控え 40577d2dd19a442f42a7f54b067df00d99ef2578。次は E（利用者の判断待ち）。
