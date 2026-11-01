@@ -321,30 +321,40 @@ def test_joined_paragraph_shapes_and_notes():
     # スタイルの違う段落をつないだ連鎖（structure が判断の一覧に記録する）
     S = mf.S
     assert sorted((tuple(j.style_ids), j.used) for j in doc.joins) == sorted([
-        ((S["sec2"], S["body"]), S["body"]), ((S["sec2"], S["body"]), S["sec2"]), ((S["body"], S["sec2"]), S["body"])])
+        ((S["sec2"], S["body"]), S["body"]), ((S["sec2"], S["body"]), S["sec2"]), ((S["body"], S["sec2"]), S["body"]),
+        ((S["body"], "gHidP"), S["body"]), (("gHidP", S["body"]), S["body"])])
 
 
 def test_hidden_text_from_styles():
     """文字スタイル・段落スタイル（w:basedOn の派生も）の隠し文字も、Word と同じく隠す（修正計画の U8）。隠した文字は 6 章の
-    隠し文字の一覧（Document.hidden_text）に載る。ランの中の改行・記号・改行なしハイフンも一覧に載る。"""
+    隠し文字の一覧（Document.hidden_text）に載る。ランの中の改行・記号・改行なしハイフンも一覧に載る。スタイル・既定の書式で
+    隠した文字は Document.style_hidden にも載る（要確認。ランの直接の指定で隠した文字は載らない）。段落記号の削除でつないだ
+    段落の隠し文字は、段落ごとの段落スタイルで決める（見える段落＋隠す段落、隠す段落＋見える段落）。"""
     doc = read_docx(READER)
     texts = [p.text_only() for p in read_paragraphs(doc)]
     assert not any("〔" in t for t in texts)
     for t in ("文字スタイルで隠した文字。", "派生の文字スタイルで隠した文字。", "直接の指定で隠した文字。",
               "文字スタイルを直接の指定で打ち消して見える文字。", "段落と文字のスタイルの反転で見える文字。",
-              "表示を指定した派生の文字スタイルの見える文字。", "直接の指定で見える後半。", "隠した改行と記号の後の文字。"):
+              "表示を指定した派生の文字スタイルの見える文字。", "直接の指定で見える後半。", "隠した改行と記号の後の文字。",
+              "隠す段落に続く見える前半。", "隠す段落に続いた見える後半。"):
         assert t in texts, t
     hidden = [t for _, t in doc.hidden_text]
-    for t in ("〔文字スタイルで隠す〕", "〔派生の文字スタイルで隠す〕", "〔直接の指定で隠す〕", "〔段落スタイルで隠した段落〕",
-              "〔派生の段落スタイルで隠した段落〕", "〔段落スタイルで隠れる文字〕", "〔段落スタイルで隠れる前半〕",
-              "〔表示を指定した派生の文字スタイルでも隠れる文字〕"):
+    style = ["〔文字スタイルで隠す〕", "〔派生の文字スタイルで隠す〕", "〔段落スタイルで隠した段落〕", "〔派生の段落スタイルで隠した段落〕",
+             "〔段落スタイルで隠れる文字〕", "〔段落スタイルで隠れる前半〕", "〔表示を指定した派生の文字スタイルでも隠れる文字〕",
+             "〔見える段落に続いた隠す段落〕", "〔見える段落に続く隠す段落〕"]
+    for t in style + ["〔直接の指定で隠す〕"]:
         assert t in hidden, t
+    assert [t for _, t in doc.style_hidden] == style
     src = next(p.src for p in read_paragraphs(doc) if p.text_only() == "隠した改行と記号の後の文字。")
     assert [t for s, t in doc.hidden_text if s == src] == ["〔隠Ａ〕", "\n", "α", chr(0x2011), "〔隠Ｂ〕"]
+    # つないだ段落の隠した文字は、連鎖の最初の段落の ID（読み取った段落の ID）で記録する
+    paras = {p.text_only(): p.src for p in read_paragraphs(doc)}
+    assert ((paras["隠す段落に続く見える前半。"], "〔見える段落に続いた隠す段落〕") in doc.style_hidden
+            and (paras["隠す段落に続いた見える後半。"], "〔見える段落に続く隠す段落〕") in doc.style_hidden)
 
 
 def test_deleted_table_rows():
-    """変更履歴で削除された表の行（w:trPr/w:del）のうち、文字がすべて削除されている行は読み飛ばして記録する（修正計画の N8）。
+    """変更履歴で削除された表の行（w:trPr/w:del）のうち、Word で表示される文字・画像などが残らない行は読み飛ばして記録する（修正計画の N8）。
     削除の印だけで文字の残る行と、削除されたセル（w:tcPr/w:cellDel）は出力し、10 章の警告に出す。"""
     doc = read_docx(READER)
     t = table_with(doc, "最後の内容")
@@ -395,7 +405,7 @@ def test_deleted_row_numbering_and_hidden_text(tmp_path):
     doc = read_docx(path)
     nums = {p.text_only(): p.autonum for p in read_paragraphs(doc) if p.text_only().startswith("表の後の番号")}
     assert nums == {"表の後の番号の一つ目。": "1.", "表の後の番号の二つ目。": "2."}
-    assert not any("削除した行の中の隠し文字" in t for _, t in doc.hidden_text)
+    assert not any("削除した行の中の隠し文字" in t for _, t in doc.hidden_text) and doc.style_hidden == []
     assert [(d.row, d.head) for d in doc.deleted_rows] == [(2, "区分")]
     t = table_with(doc, "最後の内容")
     assert cell_texts(t) == [["区分", "内容"], ["最後", "最後の内容"]] and t.skipped_rows == 1
@@ -511,6 +521,62 @@ def test_hidden_rule_details():
     # styles.xml がなければ直接の指定だけ（文字スタイルの指定は見ない）
     assert canonical_text(hidden_para("body", rstyle="H"), NO_RULE) == "TEST"
     assert canonical_text(hidden_para("body", vanish=True), None) == ""
+
+
+def test_hidden_rule_cause():
+    """隠したときの指定（ooxml.HiddenRule.run_hidden_by）: ランの直接の指定（w:vanish・w:specVanish）なら "direct"、文字スタイル・
+    段落スタイル・既定の書式なら "style"（読み取りが要確認として記録する）、隠れなければ ""。隠れるかは run_hidden と同じ。"""
+    rules = (HiddenRule(styles_root()), HiddenRule(styles_root(doc_defaults=True)))
+    for name, pstyle, kw, hidden, hidden_dd in U8_CASES:
+        p = hidden_para(pstyle, **kw)
+        r = p.find(w("r"))
+        for rule, want in zip(rules, (hidden, hidden_dd)):
+            ps = rule.para_state(p)
+            by = rule.run_hidden_by(r, ps)
+            assert (by != "") is want is rule.run_hidden(r, ps), name
+            if want:
+                assert by == ("direct" if kw.get("vanish") or kw.get("spec") else "style"), name
+    assert NO_RULE.run_hidden_by(hidden_para("body", rstyle="H").find(w("r")), False) == ""
+
+
+def test_joined_paragraph_section_break(tmp_path):
+    """段落記号の削除でつないだ段落のセクションの区切り（Para.section_break）は、連鎖の最後の段落のもの（Word で承諾すると、
+    削除した段落記号といっしょに、その段落のセクションの区切りも消える）。"""
+    S = mf.S
+
+    def with_sect(xml):
+        return xml.replace("</w:pPr>", '<w:sectPr><w:type w:val="continuous"/></w:sectPr></w:pPr>', 1)
+
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"),
+                mf.para_mark_deleted(S["body"], "区切りのない前半，"), with_sect(mf.para(S["body"], "区切りのある後半。")),
+                with_sect(mf.para_mark_deleted(S["body"], "区切りを削除した前半，")), mf.para(S["body"], "区切りのない後半。")]
+    path = tmp_path / "sect.docx"
+    mf.make_article(path, "セクションの区切りの検証用文書", parts)
+    doc = read_docx(path)
+    paras = {p.text_only(): p for p in read_paragraphs(doc)}
+    assert paras["区切りのない前半，区切りのある後半。"].section_break
+    assert not paras["区切りを削除した前半，区切りのない後半。"].section_break
+
+
+def test_textbox_keeps_outer_hidden_state(tmp_path):
+    """隠す段落スタイルの段落の中のテキストボックスを読んだ後も、外側の段落の隠し文字の状態のまま読む（テキストボックスの後ろの
+    ランも隠す）。テキストボックスの中の段落は、その段落自身の段落スタイルで決める（本文なら見える）。"""
+    S = mf.S
+
+    def parts(b):
+        b.styles_extra.append(mf.READER_STYLES)
+        box = mf.textbox_inline(mf.para(S["body"], "隠す段落の中の囲みの見える文字。"), 741)
+        return [mf.para(S["sec1"], "１．はじめに"),
+                mf.para("gHidP", "〔囲みの前の隠れる文字〕", box, "〔囲みの後ろの隠れる文字〕")]
+    path = tmp_path / "tbhidden.docx"
+    mf.make_article(path, "隠し文字の検証用文書", parts)
+    doc = read_docx(path)
+    canon = source_texts(path)
+    for p in read_paragraphs(doc):
+        assert atoms_text(p) == canon[p.src], p.src
+    assert "隠す段落の中の囲みの見える文字。" in [p.text_only() for p in read_paragraphs(doc)]
+    assert [t for _, t in doc.style_hidden] == ["〔囲みの前の隠れる文字〕", "〔囲みの後ろの隠れる文字〕"]
 
 
 def _body(xml):

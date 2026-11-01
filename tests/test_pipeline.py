@@ -969,9 +969,10 @@ def test_line_breaks_in_cells(journal, meta, tmp_path):
 
 def test_cell_breaks_in_emitter():
     """emit.Emitter.span: 表のセル（CELL）では、書き込み先が jx:span そのもののときだけ、改行の前に <break/> を入れる（空の部分には
-    書式の要素を作らない）。本文（BODY）は今までどおり。改行の数と <break/> の数を記録する。"""
+    書式の要素を作らない）。本文（BODY）は今までどおり。改行の数と <break/> の数を記録する。リンク（<xref>）の中の改行には
+    <break/> を入れない（DTD で <xref> の中に置けない）。"""
     from jasme_jats.emit import BODY, CELL, Emitter
-    from jasme_jats.model import Atom, Para
+    from jasme_jats.model import Atom, LinkSpec, Para
     p = Para(src="d1", atoms=[Atom(kind="text", text="\n前", fmt=frozenset({"bold"})), Atom(kind="text", text="後\n")])
     em = Emitter(lambda img: "x.png")
     sp = em.span(etree.Element("td"), p, CELL)
@@ -980,11 +981,22 @@ def test_cell_breaks_in_emitter():
     sp = em.span(etree.Element("p"), p, BODY)
     assert parts_of(sp) == [("bold", ["\n前"]), "後\n"]
     assert em.breaks == 2 and [(n.count, n.breaks, n.cell) for n in em.newlines[1:]] == [(2, 0, False)]
+    # 引用文献・図表などへのリンク（<xref>）の中の改行は文字のまま。リンクの外の改行の前には入れる（改行の数には数え、<break/> の
+    # 数には数えない）
+    link = LinkSpec(kind="xref", attrs={"ref-type": "bibr", "rid": "B1"})
+    q = Para(src="d2", atoms=[Atom(kind="text", text="前\n"), Atom(kind="text", text="試験\n2024", link=link),
+                              Atom(kind="text", text="\n後")])
+    em = Emitter(lambda img: "x.png")
+    sp = em.span(etree.Element("td"), q, CELL)
+    assert parts_of(sp) == ["前", ("break", []), "\n", ("xref", ["試験\n2024"]), ("break", []), "\n後"]
+    assert sp.find("xref").get("rid") == "B1" and sp.find("xref/break") is None
+    assert em.breaks == 2 and [(n.src, n.count, n.breaks, n.cell) for n in em.newlines] == [("d2", 3, 2, True)]
 
 
 def test_reader_report_and_notices(journal, meta, tmp_path, capsys):
-    """sample_reader のレポート: 6 章につないだ段落と読み飛ばした表の行、隠し文字の改行・記号、10 章に改行の一覧、4 章にスタイルの
-    違う段落をつないだ判断。題目・引用文献の改行は要確認（冒頭・14 章・Colab の枠・コマンドライン。終了コード 0）。"""
+    """sample_reader のレポート: 6 章につないだ段落と読み飛ばした表の行、隠し文字の改行・記号、スタイルで隠した文字、10 章に改行の
+    一覧、4 章にスタイルの違う段落をつないだ判断。スタイル・既定の書式で隠した文字（規則が暫定）と、題目・引用文献の改行は要確認
+    （冒頭・14 章・Colab の枠・コマンドライン。終了コード 0）。"""
     from conftest import META_EXAMPLE, READER
 
     from jasme_jats.cli import main
@@ -993,27 +1005,43 @@ def test_reader_report_and_notices(journal, meta, tmp_path, capsys):
     res = convert(READER, meta, journal, Options(out_dir=tmp_path / "a", convert_metafiles=False))
     report = res.report_path.read_text(encoding="utf-8")
     ch6, ch10, ch4 = chapter(report, 6), chapter(report, 10), chapter(report, 4)
-    assert "変更履歴で段落記号（段落の区切り）が削除された段落を、次の段落とつないで 1 段落として出力しました（12 か所:" in ch6
-    _, srcs = res.joined[0]
-    assert f"{'＋'.join(srcs)}、" in ch6
-    assert ("変更履歴で削除された表の行 2 行は、行の文字がすべて削除されていたので、Word で変更を承諾した状態と同じく出力して"
-            "いません: 「区分」で始まる表の 2 行目、「区分」で始まる表の 4 行目") in ch6
+    assert "変更履歴で段落記号（段落の区切り）が削除された段落を、次の段落とつないで 1 段落として出力しました（14 か所:" in ch6
+    first, srcs = res.joined[0]
+    assert f"{'＋'.join(srcs)}「{res.plan.paras[first].text_only()[:15]}…」、" in ch6     # つないだ段落の文字の冒頭を添える
+    assert ("変更履歴で削除された表の行 2 行は、行に Word で表示される文字・画像などが残っていなかったので、Word で変更を承諾した"
+            "状態と同じく出力していません: 「区分」で始まる表の 2 行目、「区分」で始まる表の 4 行目") in ch6
     assert "〔隠Ａ〕、" in ch6 and "］⏎、" in ch6 and "］α、" in ch6
-    assert ("表のセルの段落の中の改行（Shift+Enter）6 か所のうち 5 か所の位置に、XML の改行の要素（`<break/>`）を入れました"
-            "（改行の文字も残しています。リンクの中の 1 か所は、改行の文字のまま）: ") in ch10
+    style_line = next(x for x in ch6.splitlines() if x.startswith("- 上の隠し文字のうち"))
+    assert "〔文字スタイルで隠す〕" in style_line and "〔直接の指定で隠す〕" not in style_line and "〔隠Ａ〕" not in style_line
+    cell_line = next(x for x in ch10.splitlines() if "表のセルの中に" in x)
+    assert ("表のセルの中に、改行（Shift+Enter）が 6 か所あります。Word と同じ位置で改行して表示されるように、XML ではその位置に"
+            "改行の印（`<break/>`）を入れました（リンクの中の 1 か所は、改行の文字のまま）。J-STAGE のプレビューで、表のセルの中の"
+            "改行の位置を確かめてください: ") in cell_line
+    assert "（キャプション「表7　改行のあるセル」の表）" in cell_line         # セルの段落は、表のキャプションで示す
     assert "題目・著者・所属・引用文献の段落の中に、改行（Shift+Enter）が 2 か所あります" in ch10
     assert "（題目・副題）" in ch10 and "（引用文献）" in ch10
     assert "本文などの段落の中の改行（Shift+Enter）1 か所は、XML では改行の文字のまま出力しました" in ch10
-    assert ch4.count("変更履歴で段落記号が削除された") == 3 and "のスタイル「節見出し」にした" in ch4
+    assert ch4.count("変更履歴で段落記号が削除された") == 5 and "のスタイル「節見出し」にした" in ch4
+    assert "この段落のスタイル〈見出しか本文かなど〉を確かめ、違えば、Word で承諾して保存してから変換し直す" in ch4
     acts = {a.key: a for a in actions(res)}
-    assert list(acts) == ["newline"] and acts["newline"].level == TO_CHECK and not res.needs_action
+    assert list(acts) == ["style_hidden", "newline"] and {a.level for a in acts.values()} == {TO_CHECK}
+    assert not res.needs_action
     head = report.split("## 2.")[0]
+    assert ("要確認: Word のスタイル（段落スタイル・文字スタイル）や既定の書式の設定で隠し文字になっている文字が 8 段落あり、XML に"
+            "出力していません（6 章）") in head
+    assert "「〔文字スタイルで隠す〕」" in head and "〔直接の指定で隠す〕" not in head
     assert "要確認: 題目・著者・所属・引用文献の段落の中に、改行（Shift+Enter）が 2 か所あります（10 章）" in head
     assert "（題目・副題）、" in head and "（引用文献）" in head
-    assert "**題目・著者・所属・引用文献の中の改行**（2 か所。10 章）" in report.split("## 14.")[1]
-    assert "題目・著者・所属・引用文献の中に改行があります（要確認）" in result_boxes(res)
+    ch14 = report.split("## 14.")[1]
+    assert "**スタイルの設定で隠し文字になっているもの**（文字が 8 段落。6 章）" in ch14
+    assert "**題目・著者・所属・引用文献の中の改行**（2 か所。10 章）" in ch14
+    boxes = result_boxes(res)
+    assert "スタイルの設定で隠し文字になっている文字を出力していません（要確認）" in boxes
+    assert "題目・著者・所属・引用文献の中に改行があります（要確認）" in boxes
     assert main([str(READER), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "b"), "--no-metafile-conversion"]) == 0
-    assert "要確認: 題目・著者・所属・引用文献の段落の中に、改行（Shift+Enter）が 2 か所あります" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "要確認: Word のスタイル（段落スタイル・文字スタイル）や既定の書式の設定で隠し文字になっている文字が 8 段落あり" in err
+    assert "要確認: 題目・著者・所属・引用文献の段落の中に、改行（Shift+Enter）が 2 か所あります" in err
 
 
 def test_newline_action_lists_samples():
@@ -1030,13 +1058,32 @@ def test_newline_action_lists_samples():
     assert act.top.endswith(f"d{NEWLINE_SAMPLES - 1}（引用文献）、ほか") and "d99" not in act.top
 
 
+def test_style_hidden_action_counts_paragraphs():
+    """スタイルで隠した文字の要確認（report._style_hidden_action）は、段落ごとに数え、空白だけの段落は数えない（隠しても見える
+    違いがない）。対象の段落を STYLE_HIDDEN_SAMPLES 件まで並べ、それより多ければ「ほか」を付け、画像は最後に並べる。"""
+    from types import SimpleNamespace
+
+    from jasme_jats.report import STYLE_HIDDEN_SAMPLES, _style_hidden_action
+    assert _style_hidden_action(SimpleNamespace(style_hidden=[("d1", "\u3000"), ("d1", "\t")], style_hidden_images=[])) is None
+    rows = [(f"d{k}", f"〔隠{k}〕") for k in range(STYLE_HIDDEN_SAMPLES + 1)] + [("d0", "続き"), ("d99", " ")]
+    act = _style_hidden_action(SimpleNamespace(style_hidden=rows, style_hidden_images=["img2"]))
+    assert f"隠し文字になっている文字が {STYLE_HIDDEN_SAMPLES + 1} 段落、画像が 1 件あり、XML に出力していません" in act.top
+    assert "d0「〔隠0〕続き」" in act.top and act.top.endswith("、ほか、画像 img2") and "d99" not in act.top
+
+
 def test_body_line_break_is_only_listed(journal, meta, tmp_path):
-    """本文の段落の中の改行（sample_edge）は、10 章の一覧に出すだけ（要確認にしない）。XML は文字のまま。"""
+    """本文の段落の中の改行（sample_edge）は、10 章の一覧に出すだけ（要確認にしない）。XML は文字のまま。ランに直接付けた隠し文字
+    （w:vanish）だけの docx では、スタイルの隠し文字の要確認は出ない（6 章の隠し文字の一覧に載るだけ）。"""
     from conftest import EDGE
 
     from jasme_jats.report import actions
     res = convert(EDGE, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
-    ch10 = chapter(res.report_path.read_text(encoding="utf-8"), 10)
+    report = res.report_path.read_text(encoding="utf-8")
+    ch10 = chapter(report, 10)
     assert "本文などの段落の中の改行（Shift+Enter）1 か所は、XML では改行の文字のまま出力しました" in ch10
-    assert "newline" not in {a.key for a in actions(res)}
+    keys = {a.key for a in actions(res)}
+    assert "newline" not in keys and "style_hidden" not in keys
+    assert res.hidden_text and res.style_hidden == [] and res.style_hidden_images == []
+    ch6 = chapter(report, 6)
+    assert "隠し文字（Word で非表示に設定された文字）: ［" in ch6 and "上の隠し文字のうち" not in ch6
     assert load(res).find(".//body//break") is None

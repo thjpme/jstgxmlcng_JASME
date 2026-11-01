@@ -14,6 +14,7 @@ from lxml import etree
 
 from . import emit as E
 from .config import ArticleMeta, JournalConfig, keyword_problem
+from .docx_reader import table_head, table_where
 from .model import Exclusion, Newline, Para
 from .ooxml import is_ws
 from .structure import (ArticlePlan, BackSec, BoxNode, FigNode, FnNode, FormulaNode, ListNode, PNode, QuoteNode,
@@ -148,10 +149,11 @@ class Builder:
         other = [x for x in per.values() if not x.cell and not x.label]
         if cells:
             n, b = sum(x.count for x in cells), sum(x.breaks for x in cells)
-            how = (f"{n} か所の位置に、XML の改行の要素（`<break/>`）を入れました（改行の文字も残しています）" if b == n else
-                   f"{n} か所のうち {b} か所の位置に、XML の改行の要素（`<break/>`）を入れました（改行の文字も残しています。"
-                   f"リンクの中の {n - b} か所は、改行の文字のまま）")
-            self.info.warnings.append(f"表のセルの段落の中の改行（Shift+Enter）{how}: {self._newline_paras(cells)}")
+            link = f"（リンクの中の {n - b} か所は、改行の文字のまま）" if b < n else ""
+            self.info.warnings.append(
+                f"表のセルの中に、改行（Shift+Enter）が {n} か所あります。Word と同じ位置で改行して表示されるように、XML では"
+                f"その位置に改行の印（`<break/>`）を入れました{link}。J-STAGE のプレビューで、表のセルの中の改行の位置を"
+                f"確かめてください: {self._newline_paras(cells)}")
         if noted:
             self.info.warnings.append(
                 f"題目・著者・所属・引用文献の段落の中に、改行（Shift+Enter）が {sum(x.count for x in noted)} か所あります。"
@@ -165,8 +167,9 @@ class Builder:
                 f"変換し直してください）: {self._newline_paras(other)}")
 
     def _newline_paras(self, rows, label=False) -> str:
-        """改行のある段落の一覧（d12・d13（場所）、…。場所が同じ段落はまとめる）。label なら、場所の代わりに段落の文字の冒頭と
-        文脈の名前（d3「…」（題目・副題）。題目・著者・所属には場所がないため）。"""
+        """改行のある段落の一覧（d12・d13（場所）、…。場所が同じ段落はまとめる）。表のセルの段落の場所は、その表を Word で探す
+        手がかり（キャプションの冒頭か、表の最初の文字。docx_reader.table_where。資料などの表のセルには本文の場所がないため）。
+        label なら、場所の代わりに段落の文字の冒頭と文脈の名前（d3「…」（題目・副題）。題目・著者・所属には場所がないため）。"""
         if label:
             out = []
             for x in rows[:NEWLINE_SHOWN]:
@@ -175,12 +178,25 @@ class Builder:
                 out.append(f"{x.src}「{head}」（{x.label}）" if head else f"{x.src}（{x.label}）")
             rest = len(rows) - NEWLINE_SHOWN
             return "、".join(out) + (f"、ほか {rest} 段落" if rest > 0 else "")
+        tables = self._cell_tables() if any(x.cell for x in rows) else {}
         groups = {}
         for x in rows[:NEWLINE_SHOWN]:
-            groups.setdefault(self.plan.locations.get(x.src, ""), []).append(x.src)
+            groups.setdefault(tables.get(x.src) or self.plan.locations.get(x.src, ""), []).append(x.src)
         out = [f"{'・'.join(srcs)}（{where}）" if where else "・".join(srcs) for where, srcs in groups.items()]
         rest = len(rows) - NEWLINE_SHOWN
         return "、".join(out) + (f"、ほか {rest} 段落" if rest > 0 else "")
+
+    def _cell_tables(self) -> dict:
+        """表のセルの段落 ID -> その表を Word で探す手がかり（キャプションの冒頭か、表の最初の文字。docx_reader.table_where）。
+        表で組んだ図の表は、図のキャプション。"""
+        out = {}
+        pairs = ([(t.table, t.caption) for t in self.plan.tables if t.table is not None]
+                 + [(tb, f.caption) for f in self.plan.figures for tb in f.tables])
+        for t, cap in pairs:
+            where = table_where(table_head(t), cap.text_only() if cap is not None else "")
+            for p in t.paragraphs():
+                out.setdefault(p.src, where)
+        return out
 
     # ------------------------------------------------------------------ journal-meta
     def journal_meta(self, front):

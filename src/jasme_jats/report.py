@@ -932,6 +932,49 @@ def lost_action(r):
              + "\n".join(f"  {lost_image_label(li)}: {li.reason}" for li in lost)))
 
 
+STYLE_HIDDEN_SAMPLES = 5     # スタイルの隠し文字の要確認に並べる段落の数（全件はレポートの 6 章）
+
+
+def _style_hidden_paras(r) -> list:
+    """スタイル・既定の書式の設定で隠した文字（Result.style_hidden）を段落ごとにまとめたもの [(段落 ID, 隠した文字)]（文書の順）。"""
+    per = {}
+    for src, text in r.style_hidden:
+        per[src] = per.get(src, "") + text
+    return list(per.items())
+
+
+def _style_hidden_action(r):
+    """スタイル（段落スタイル・文字スタイル）や既定の書式の設定で隠し文字になっていて、XML に出力しなかった文字・画像
+    （docx_reader が記録する。ooxml.HiddenRule.run_hidden_by が "style"）。空白だけの文字なら数えない。なければ None。
+
+    ランに直接付けた隠し文字（w:vanish・w:specVanish）は Word と同じに隠せるが、スタイル・既定の書式の w:vanish の規則は暫定で
+    （修正計画の G。Word では確かめていない）、不変性チェックも同じ規則で docx の文字を取り出すので、規則が Word と違っても
+    検出できない（Word で見える文字が XML から消えても合格する）。隠した文字が利用者の目に入るように、要確認として知らせる
+    （終了コードは 0）。直接の指定だけで隠した文字は、0.25.0 までと同じく 6 章に載せるだけ。
+    """
+    paras = [(s, t) for s, t in _style_hidden_paras(r) if t.strip()]
+    imgs = r.style_hidden_images
+    if not paras and not imgs:
+        return None
+    what = "、".join(x for x in (f"文字が {len(paras)} 段落" if paras else "", f"画像が {len(imgs)} 件" if imgs else "") if x)
+    samples = "、".join([f"{s}「{esc(t.strip(), 15)}」" for s, t in paras[:STYLE_HIDDEN_SAMPLES]]
+                       + (["ほか"] if len(paras) > STYLE_HIDDEN_SAMPLES else [])
+                       + ([f"画像 {'・'.join(imgs)}"] if imgs else []))
+    how = ("この判定は暫定で、Word の表示と違うことがあります。Word で開き（［ホーム］の［編集記号の表示/非表示］はオフにして）、"
+           "これらが表示されないことを確かめてください。表示されるものがあれば、XML に出力されていないので、変換レポートを添えて"
+           "開発者に知らせてください。")
+    head = f"Word のスタイル（段落スタイル・文字スタイル）や既定の書式の設定で隠し文字になっている{what}あり、XML に出力していません"
+    return Action(
+        TO_CHECK, "style_hidden",
+        top=f"> **要確認: {head}（6 章）。** {how}対象: {samples}",
+        checklist=(f"- [ ] **スタイルの設定で隠し文字になっているもの**（{what}。6 章）: Word で表示されないことを確かめる"
+                   "（表示されるなら開発者に知らせる）"),
+        box_title="スタイルの設定で隠し文字になっている文字を出力していません（要確認）",
+        box_detail=f"{head}。{how}（レポートの冒頭と 6 章）\n対象: {samples}",
+        cli=(f"要確認: {head}（レポートの冒頭と 6 章）。Word で表示されないことを確かめ、表示されるものがあれば"
+             "開発者に知らせること"))
+
+
 def _abstract_ja_action(r):
     """英文要旨の中の、かな・漢字が 3 割以上の段落（structure.Classifier.check_abstract_ja。自動では移さない）。なければ None。"""
     plan = r.plan
@@ -1013,15 +1056,15 @@ def _deleted_row_where(r):
     caps = {t.table.tid: t.caption for t in r.plan.tables if t.table is not None and t.caption is not None}
 
     def where(d):
-        cap = caps[d.tid].text_only().strip() if not d.head and d.tid in caps else ""
-        return f"キャプション「{cap[:20]}{'…' if len(cap) > 20 else ''}」の表" if cap else table_where(d.head)
+        return table_where(d.head, caps[d.tid].text_only() if not d.head and d.tid in caps else "")
     return where
 
 
 def _newline_action(r):
     """題目・副題・著者名・所属・引用文献の段落の中の改行（Word の Shift+Enter。builder の BuildInfo.newlines の label）。なければ None。
 
-    これらの文脈は <break/> を置けないので（J-STAGE の修飾タグ許容一覧でも ×）、XML では改行の文字のまま出力している。
+    これらの文脈には <break/> を置けないので（題目・副題は、同梱の DTD では置けるが J-STAGE の修飾タグ許容一覧で ×。著者名・所属・
+    引用文献は DTD でも置けない）、XML では改行の文字のまま出力している。
     決定事項 13(2) のとおり要確認として知らせる（終了コードは 0）。本文・見出し・表のセルの改行は 10 章の警告だけ。
     """
     rows = [x for x in r.newlines if x.label and not x.cell]
@@ -1231,7 +1274,7 @@ def actions(r) -> list:
     head = [f(r) for f in (_fidelity_action, _dtd_action, _upload_action, _ai_error_action, _ai_pending_action,
                            _partial_action, _forced_action, figure_body_action, _textbox_undecided_action,
                            _textbox_place_action, _textbox_figure_text_action, images_action, lost_action,
-                           _abstract_ja_action, _app_after_refs_action, _note_overlap_action, _newline_action)]
+                           _style_hidden_action, _abstract_ja_action, _app_after_refs_action, _note_overlap_action, _newline_action)]
     return [a for a in head if a is not None] + pdf_actions(r)
 
 
@@ -1433,10 +1476,19 @@ def render(r) -> str:
     if r.hidden_images:
         other.append(f"隠し文字の中の画像 {len(r.hidden_images)} 件（{'、'.join(r.hidden_images)}）: Word で表示されないので、"
                      "出力していません。")
+    if r.style_hidden or r.style_hidden_images:
+        items = ([f"［{s}］{esc(t, 40)}" for s, t in _style_hidden_paras(r)]
+                 + ([f"画像 {'・'.join(r.style_hidden_images)}"] if r.style_hidden_images else []))
+        other.append("上の隠し文字のうち、文字に直接付けた隠し文字ではなく、スタイル（段落スタイル・文字スタイル）や既定の書式の設定で"
+                     "隠し文字になっているもの（Word の表示と同じかの判定は暫定。要確認）: " + "、".join(items))
     if r.tracked_changes:
         other.append(f"変更履歴が {r.tracked_changes} 箇所あります。挿入は反映し、削除は出力していません（Word で表示される最終版と同じ）。")
     if r.joined:
-        shown = "、".join("＋".join(srcs) for _, srcs in r.joined[:JOINED_SHOWN])
+        def joined(first, srcs):
+            # つないだ段落を Word で探せるように、つないだ後の段落の文字の冒頭を添える
+            head = plan.paras[first].text_only().strip() if first in plan.paras else ""
+            return "＋".join(srcs) + (f"「{esc(head, 15)}」" if head else "（文字なし）")
+        shown = "、".join(joined(first, srcs) for first, srcs in r.joined[:JOINED_SHOWN])
         more = f"、ほか {len(r.joined) - JOINED_SHOWN} か所" if len(r.joined) > JOINED_SHOWN else ""
         other.append(f"変更履歴で段落記号（段落の区切り）が削除された段落を、次の段落とつないで 1 段落として出力しました"
                      f"（{len(r.joined)} か所: {shown}{more}。Word で変更をすべて承諾した状態に合わせています）。")
@@ -1444,8 +1496,8 @@ def render(r) -> str:
         where = _deleted_row_where(r)
         rows = "、".join(f"{where(d)}の {d.row} 行目" for d in r.deleted_rows[:JOINED_SHOWN])
         more = f"、ほか {len(r.deleted_rows) - JOINED_SHOWN} 行" if len(r.deleted_rows) > JOINED_SHOWN else ""
-        other.append(f"変更履歴で削除された表の行 {len(r.deleted_rows)} 行は、行の文字がすべて削除されていたので、Word で変更を"
-                     f"承諾した状態と同じく出力していません: {esc(rows)}{more}")
+        other.append(f"変更履歴で削除された表の行 {len(r.deleted_rows)} 行は、行に Word で表示される文字・画像などが残っていなかった"
+                     f"ので、Word で変更を承諾した状態と同じく出力していません: {esc(rows)}{more}")
     if r.comments:
         other.append(f"コメントが {r.comments} 件ありました（コメントは本文ではないため出力していません）。")
     other.append("ヘッダー・フッター（柱・ページ番号）は対象外です。")

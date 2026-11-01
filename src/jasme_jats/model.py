@@ -102,6 +102,7 @@ class ImageRef:
     image_id: str = ""          # レポート・AI 用の識別子 (img1, img2, ...)
     float_id: str = ""          # 浮動配置の図形（Float）の中の画像なら、その図形の ID
     hidden: bool = False        # 隠し文字（w:vanish）のランの中の画像。段落のアトムにしない（XML に出力しない）
+    hidden_style: bool = False  # hidden のうち、スタイル・既定の書式の設定で隠したもの（ランの直接の指定でない。要確認で知らせる）
 
     @property
     def height_cm(self) -> float:
@@ -280,7 +281,8 @@ class JoinInfo:
 
 @dataclass
 class DeletedRow:
-    """変更履歴で削除された表の行（w:trPr/w:del）で、文字がすべて削除されていたので読み飛ばしたもの（docx_reader）。"""
+    """変更履歴で削除された表の行（w:trPr/w:del）のうち、どの段落にも Word で表示される文字（画像・数式・注の参照も）がなく、
+    図形も読まなかったので読み飛ばしたもの（docx_reader。隠し文字だけが残る行も含む）。"""
     tid: str                # 読み取りの表の ID（t1, t2, …）
     row: int                # docx の表の何行目か（1 から。読み飛ばした行も数える）
     head: str               # 表の最初の文字のあるセルの文字の冒頭（Word で表を探す手がかり）
@@ -318,6 +320,8 @@ class Document:
     styles: dict                       # {style_id: StyleInfo}
     warnings: list = field(default_factory=list)
     hidden_text: list = field(default_factory=list)   # [(src, text)]
+    # hidden_text のうち、スタイル・既定の書式の設定で隠したもの [(src, text)]（ooxml.HiddenRule.run_hidden_by が "style"。要確認）
+    style_hidden: list = field(default_factory=list)
     deleted_note_refs: set = field(default_factory=set)   # 変更履歴で削除された脚注・文末脚注の参照の note_key（docx_reader）
     tracked_changes: int = 0
     comments: int = 0

@@ -155,6 +155,9 @@ class Result:
     zip_issues: list = field(default_factory=list)      # アップロード用の ZIP を読み直して見つけた問題（package.zip_problems。jstage_issues とは別）
     not_zipped: list = field(default_factory=list)      # 記事フォルダにあるのに ZIP に入れなかったファイル（package.unzipped_files。10 章）
     hidden_images: list = field(default_factory=list)   # 隠し文字の中の画像の ID（Word で表示されないので出力しない）
+    # 隠し文字のうち、スタイル・既定の書式の設定で隠した文字 [(src, text)] と画像の ID（規則が暫定なので要確認。6 章）
+    style_hidden: list = field(default_factory=list)
+    style_hidden_images: list = field(default_factory=list)
     joined: list = field(default_factory=list)          # 段落記号の削除でつないだ段落 [(最初の段落の ID, [段落の ID, …])]（6 章）
     deleted_rows: list = field(default_factory=list)    # 変更履歴で削除された、文字のない表の行（model.DeletedRow。読み飛ばした。6 章）
     newlines: list = field(default_factory=list)        # 段落の中の改行（model.Newline。段落ごと。10 章と、題目などは要確認）
@@ -498,7 +501,8 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         prompt_path=prompt_path, forced_floats=forced_floats, pdf_check=pdf_check, route=opts.route, docx_fix=docx_fix,
         lost_images=lost, hidden_images=hidden_images, zip_issues=zip_problems(zip_path, journal, meta),
         not_zipped=unzipped_files(out_dir, journal, meta, zip_path), joined=doc.joined, deleted_rows=doc.deleted_rows,
-        newlines=info.newlines)
+        newlines=info.newlines, style_hidden=doc.style_hidden,
+        style_hidden_images=[img.image_id for img in doc.images if img.hidden_style])
     report_path = out_dir / f"{aid}_変換レポート.md"
     report_path.write_text(render(res), encoding="utf-8")
     res.report_path = report_path

@@ -930,6 +930,7 @@ def reader_hidden_styles(b: Builder):
     """文字スタイル・段落スタイル（派生も）・直接の指定の隠し文字（w:vanish。修正計画の U8）。スタイルは READER_STYLES。
 
     隠す文字は「〔〕」で囲む（テストは「〔」が XML にないことを確かめる）。隠し文字のランの中に画像は入れない。
+    段落記号の削除でつないだ段落（D5）の隠し文字は、段落ごとの段落スタイルで決める（つないだ後の段落のスタイルにはしない）。
     """
     return [
         para(S["body"], "文字スタイルで", run_styled("〔文字スタイルで隠す〕", rstyle="gHid"), "隠した文字。"),
@@ -944,6 +945,10 @@ def reader_hidden_styles(b: Builder):
         para(S["body"], "表示を指定した派生の文字スタイルの", run_styled("見える文字。", rstyle="gHidOff")),
         para("gHidP", "〔段落スタイルで隠れる前半〕", run_styled("〔表示を指定した派生の文字スタイルでも隠れる文字〕", rstyle="gHidOff"),
              run_styled("直接の指定で見える後半。", vanish=False)),
+        # 段落記号を削除した段落と、隠す段落スタイルの段落の連鎖（見える段落＋隠す段落、隠す段落＋見える段落）。隠し文字は
+        # 段落ごとの段落スタイルで決め、書式は文字のある最初の段落（どちらも本文）のもの
+        para_mark_deleted(S["body"], "隠す段落に続く見える前半。"), para("gHidP", "〔見える段落に続いた隠す段落〕"),
+        para_mark_deleted("gHidP", "〔見える段落に続く隠す段落〕"), para(S["body"], "隠す段落に続いた見える後半。"),
         # 隠し文字のランの中の改行・記号・改行なしハイフン（レポートの 6 章の隠し文字の一覧に載る）
         para(S["body"], "隠した改行と記号", '<w:r><w:rPr><w:vanish/></w:rPr><w:t>〔隠Ａ〕</w:t><w:br/>'
              '<w:sym w:font="Symbol" w:char="F061"/><w:noBreakHyphen/><w:t>〔隠Ｂ〕</w:t></w:r>', "の後の文字。"),

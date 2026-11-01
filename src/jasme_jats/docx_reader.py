@@ -4,7 +4,8 @@
 ooxml.canonical_texts() で独立に取り出した文字列と一致することを、最後に fidelity.py で確かめる。
 段落記号の削除でつながる段落（ooxml.joined_paragraphs）と隠し文字の判定（ooxml.HiddenRule）は、検証・ルート2 と同じ規則を使う:
 つながる段落は連鎖の最初の段落の ID の 1 つの段落として読み（後ろの段落の ID は欠番）、つなげない段落記号の削除は
-レポートの 10 章の警告で知らせる。変更履歴で削除された表の行のうち、文字がすべて削除されているものは読み飛ばして記録する。
+レポートの 10 章の警告で知らせる。変更履歴で削除された表の行のうち、Word で表示される文字・画像などが残らない行は読み飛ばして
+記録する。スタイル・既定の書式の設定で隠した文字・画像は、隠し文字の判定が暫定なので別にも記録する（要確認で知らせる）。
 """
 from __future__ import annotations
 
@@ -33,8 +34,12 @@ CELL_DELETED_MSG = ("{where}の {row} 行目に、変更履歴で削除された
                     "承諾して保存してから変換し直してください。")
 
 
-def table_where(head: str) -> str:
-    """読み取りの表を利用者が Word で探す手がかり（「区分」で始まる表 / 文字のない表）。head は DeletedRow.head と同じ形。"""
+def table_where(head: str, caption: str = "") -> str:
+    """読み取りの表を利用者が Word で探す手がかり（キャプション「表1　…」の表 / 「区分」で始まる表 / 文字のない表）。head は
+    table_head（DeletedRow.head と同じ形）、caption は表のキャプションの文字（あれば、キャプションの冒頭 20 字で示す）。"""
+    cap = caption.strip()
+    if cap:
+        return f"キャプション「{cap[:20]}{'…' if len(cap) > 20 else ''}」の表"
     return f"「{head}」で始まる表" if head else "文字のない表"
 
 
@@ -105,6 +110,9 @@ class Reader:
         self.images = []
         self.warnings = []
         self.hidden = []
+        # 隠し文字のうち、スタイル・既定の書式の設定で隠したもの（ooxml.HiddenRule.run_hidden_by が "style"。規則が暫定なので
+        # 要確認で知らせる。report._style_hidden_action）。self.hidden の一部
+        self.style_hidden = []
         # 削除の変更履歴の中の脚注・文末脚注の参照の注の鍵（参照として数えない。structure.Classifier.attach_word_notes が除外の理由に使う）
         self.deleted_note_refs = set()
         self._img_count = 0
@@ -158,7 +166,7 @@ class Reader:
         tracked = sum(1 for _ in root.iter(w("ins"), w("del"), w("moveFrom"), w("moveTo")))
         comments = sum(1 for _ in root.iter(w("commentRangeStart")))
         doc = Document(blocks=blocks, footnotes=footnotes, endnotes=endnotes, media=self.media,
-                       styles=self.styles, warnings=self.warnings, hidden_text=self.hidden,
+                       styles=self.styles, warnings=self.warnings, hidden_text=self.hidden, style_hidden=self.style_hidden,
                        tracked_changes=tracked, comments=comments,
                        images=self.images, floats=self.floats, textboxes=self.textboxes, layout=read_layout(root, self.pkg),
                        deleted_note_refs=self.deleted_note_refs, joined=self.joined, joins=self.joins,
@@ -243,7 +251,8 @@ class Reader:
             row = Row(header=trpr is not None and on_off(trpr.find(w("tblHeader"))))
             row_deleted = trpr is not None and trpr.find(w("del")) is not None
             shapes = (len(self.images), len(self.floats), len(self.textboxes))
-            records = (len(self.joined), len(self.joins), len(self.deleted_rows), len(self.hidden), len(self.warnings))
+            records = (len(self.joined), len(self.joins), len(self.deleted_rows), len(self.hidden), len(self.warnings),
+                       len(self.style_hidden))
             # 削除された行を読み飛ばすときに戻す、自動番号の数え方（Numbering.counters の写し）
             counters = {n: dict(c) for n, c in self.numbering.counters.items()} if row_deleted else None
             has_cell_del = False
@@ -270,14 +279,14 @@ class Reader:
                     # 読み飛ばした行の中でつないだ段落・読み飛ばした入れ子の表の行・隠し文字・警告は、出力した段落の記録から外し
                     # （行ごと記録する）、行の中で数えた自動番号は戻す（Word で承諾すると行ごと消え、後ろの番号が詰まる）
                     del (self.joined[records[0]:], self.joins[records[1]:], self.deleted_rows[records[2]:],
-                         self.hidden[records[3]:], self.warnings[records[4]:])
+                         self.hidden[records[3]:], self.warnings[records[4]:], self.style_hidden[records[5]:])
                     self.numbering.counters = counters
                     continue
                 kept.append(k)
             if has_cell_del:
                 cell_del.append(k)
             t.rows.append(row)
-        head = _table_head(t)
+        head = table_head(t)
         t.skipped_rows = len(skipped)
         self.deleted_rows += [DeletedRow(tid=t.tid, row=k, head=head) for k in skipped]
         self.warnings += [DELETED_ROW_KEPT_MSG.format(where=table_where(head), row=k) for k in kept]
@@ -326,7 +335,7 @@ class Reader:
             # フィールドと隠し文字の段落の状態は w:p ごと（段落をまたぐフィールドは扱わない）
             self._fields = []
             self._pstate = self.hidden_rule.para_state(q)
-            self._walk(q, para, fmt={}, href=None, hidden=False, deleted=False)
+            self._walk(q, para, fmt={}, href=None, hidden="", deleted=False)
         extra = self._extra
         self._extra = []
         return para, extra
@@ -361,6 +370,7 @@ class Reader:
             para.atoms.append(Atom(kind="text", text=text, fmt=f, href=href))
 
     def _walk(self, el, para, fmt, href, hidden, deleted):
+        """el の子を読む。hidden は隠し文字か（隠したときの指定。ooxml.HiddenRule.run_hidden_by の "direct"・"style"。隠さないなら ""）。"""
         for ch in el:
             tag = ch.tag
             if not isinstance(tag, str):
@@ -384,7 +394,7 @@ class Reader:
                 self._walk(ch, para, fmt, mm.group(1) if mm else href, hidden, deleted)
                 continue
             if tag == w("r"):
-                self._run(ch, para, fmt, href, hidden or self.hidden_rule.run_hidden(ch, self._pstate), deleted)
+                self._run(ch, para, fmt, href, hidden or self.hidden_rule.run_hidden_by(ch, self._pstate), deleted)
                 continue
             if tag == m("oMathPara") or tag == m("oMath"):
                 if deleted or hidden or self._in_code():
@@ -457,6 +467,8 @@ class Reader:
                 txt = _plain_of_run_child(ch)
                 if txt:
                     self.hidden.append((para.src, txt))
+                    if hidden == "style":
+                        self.style_hidden.append((para.src, txt))
                 continue
             if tag == w("t"):
                 self._add_text(para, ch.text or "", fmt, h)
@@ -581,7 +593,10 @@ class Reader:
         return t
 
     def _graphic(self, el, para, hidden):
-        """画像・図形。隠し文字のランの中の画像も doc.images に入れる（ImageRef.hidden）が、段落のアトムにはしない。"""
+        """画像・図形。隠し文字のランの中の画像も doc.images に入れる（ImageRef.hidden。スタイル・既定の書式で隠したものは
+        hidden_style も）が、段落のアトムにはしない。テキストボックスの中の段落は、隠し文字のランの中でも隠さずに読む
+        （画像と違う。0.25.0 と同じ。docs/DESIGN.md の 4.1）。"""
+        hid = {"hidden": bool(hidden), "hidden_style": hidden == "style"}
         if el.tag == w("drawing"):
             holder = el.find(f"{{{WP_NS}}}inline")
             inline = holder is not None
@@ -610,14 +625,13 @@ class Reader:
                 rid = blip.get(f"{{{R_NS}}}embed") if blip is not None else None
                 ext = pic.find(f".//{{{A_NS}}}ext")
                 pcx, pcy = (int(ext.get("cx", "0")), int(ext.get("cy", "0"))) if (ext is not None and len(pics) > 1) else (cx, cy)
-                img = self._new_image(rid, "drawing", cx_emu=pcx, cy_emu=pcy, inline=inline, descr=descr,
-                                      hidden=hidden)
+                img = self._new_image(rid, "drawing", cx_emu=pcx, cy_emu=pcy, inline=inline, descr=descr, **hid)
                 if not hidden:
                     para.atoms.append(Atom(kind="image", image=img))
             if not pics:
                 if not has_tx or "wordprocessingGroup" in uri or "wordprocessingCanvas" in uri or "chart" in uri:
                     img = self._new_image(None, "drawing", cx_emu=cx, cy_emu=cy, inline=inline, descr=descr,
-                                          shape_only=True, hidden=hidden)
+                                          shape_only=True, **hid)
                     if not hidden:
                         para.atoms.append(Atom(kind="image", image=img))
             if has_tx:
@@ -642,13 +656,12 @@ class Reader:
         for d in imgdata:
             rid = d.get(f"{{{R_NS}}}id")
             img = self._new_image(rid, "ole" if el.tag == w("object") else "vml",
-                                  cx_emu=cx, cy_emu=cy, ole_progid=progid, hidden=hidden)
+                                  cx_emu=cx, cy_emu=cy, ole_progid=progid, **hid)
             if not hidden:
                 para.atoms.append(Atom(kind="image", image=img))
         has_tx = any(True for _ in el.iter(w("txbxContent")))
         if not imgdata and not has_tx:
-            img = self._new_image(None, "vml", cx_emu=cx, cy_emu=cy, shape_only=True, ole_progid=progid,
-                                  hidden=hidden)
+            img = self._new_image(None, "vml", cx_emu=cx, cy_emu=cy, shape_only=True, ole_progid=progid, **hid)
             if not hidden:
                 para.atoms.append(Atom(kind="image", image=img))
         if has_tx:
@@ -822,7 +835,7 @@ def _row_empty(row) -> bool:
     return not any(q.atoms for c in row.cells for q in _cell_paragraphs(c))
 
 
-def _table_head(t) -> str:
+def table_head(t) -> str:
     """表の最初の文字のあるセルの文字の冒頭 20 字（長ければ「…」を付ける。Word で表を探す手がかり）。"""
     for row in t.rows:
         for c in row.cells:

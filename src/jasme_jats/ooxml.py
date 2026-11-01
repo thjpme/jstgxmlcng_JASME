@@ -22,9 +22,12 @@
           （スタイル区切り）は削除ではないので、つながない。
   隠し文字で扱わないもの: 数式の中のラン（m:r）の w:vanish（数式は全体を出す）、表スタイル（w:tblStylePr など）・番号の書式
           （w:lvl/w:rPr）の w:vanish、段落記号の w:vanish、リンクスタイル（w:link）の特別な扱い、テーマ・互換性の設定。
-          つないだ段落の後ろの段落の隠し文字は、その段落自身の段落スタイルで決める。
-  変更履歴で削除された表の行（w:trPr/w:del）のうち、文字がすべて削除されているものは、読み取りが行ごと読み飛ばす
-  （docx_reader.Reader.read_table）。行の段落の文字は空なので、検証は何もしなくても同じ結果になる。
+          つないだ段落の後ろの段落の隠し文字は、その段落自身の段落スタイルで決める。隠し文字のランの中のテキストボックス
+          （行内・浮動配置）の段落は、ランの隠し文字を継がない（別の段落として、その段落自身の規則で決める。読み取りも同じ。
+          隠し文字のランの中の画像は、読み取りが隠す）。
+  変更履歴で削除された表の行（w:trPr/w:del）のうち、どの段落にも Word で表示される文字（画像・数式・注の参照も）がなく、図形も
+  ない行は、読み取りが行ごと読み飛ばす（docx_reader.Reader.read_table。隠し文字だけが残る行も）。行の段落の文字は空なので、
+  検証は何もしなくても同じ結果になる。
 """
 from __future__ import annotations
 
@@ -208,6 +211,9 @@ class HiddenRule:
       2. 直接の w:specVanish があれば隠す（ECMA-376 では、常に隠れているようにふるまう）
       3. w:rStyle の文字スタイルの値が真なら、段落の状態を反転（偽か指定がなければ段落の状態のまま。XOR）
       4. どれもなければ段落の状態
+    run_hidden_by(r, ps): 同じ規則で、隠れるときに何で決まったか（1・2 のランの直接の指定なら "direct"、3・4 のスタイル・既定の
+      書式なら "style"。隠れなければ ""）。スタイル・既定の書式で隠した文字は、規則が暫定なので、読み取りが記録して要確認で
+      知らせる（Document.style_hidden。report._style_hidden_action）。
     styles_root が None なら（NO_RULE）、ランの直接の指定だけを見る。
     LibreOffice（24.2）で承諾・表示した結果とは、次の形で違う（暫定。Word では未確認。docs/DESIGN.md の 4.1・7 章）: 偽を指定した派生の
     文字スタイルを、隠す段落スタイルの段落で使ったラン（LibreOffice は表示）、既定の書式に w:vanish があり、段落スタイルにも
@@ -252,18 +258,18 @@ class HiddenRule:
         return self.dd ^ (self.style_value(sid or self.default_p) is True)
 
     def run_hidden(self, r, ps: bool) -> bool:
+        return self.run_hidden_by(r, ps) != ""
+
+    def run_hidden_by(self, r, ps: bool) -> str:
         rpr = r.find(w("rPr"))
-        if rpr is None:
-            return ps
-        direct = rpr.find(w("vanish"))
+        direct = rpr.find(w("vanish")) if rpr is not None else None
         if direct is not None:
-            return on_off(direct)
-        if on_off(rpr.find(w("specVanish"))):
-            return True
-        rs = wval(rpr.find(w("rStyle")))
-        if rs and self.style_value(rs) is True:
-            return not ps
-        return ps
+            return "direct" if on_off(direct) else ""
+        if rpr is not None and on_off(rpr.find(w("specVanish"))):
+            return "direct"
+        rs = wval(rpr.find(w("rStyle"))) if rpr is not None else None
+        hidden = (not ps) if rs and self.style_value(rs) is True else ps
+        return "style" if hidden else ""
 
 
 NO_RULE = HiddenRule(None)      # styles.xml がないとき（ランの直接の指定だけを見る）
