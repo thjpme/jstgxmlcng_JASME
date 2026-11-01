@@ -11,6 +11,7 @@ from pathlib import Path
 REPO = "thjpme/jstgxmlcng_JASME"
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "notebooks" / "JASME_docx_to_JSTAGE_XML.ipynb"
+OUT_GRADIO = ROOT / "notebooks" / "JASME_試作_Gradio.ipynb"      # Gradio の 1 画面アプリの試作（docs/GUI_PLAN.md）
 VERSION = re.search(r'__version__ = "([^"]+)"', (ROOT / "src" / "jasme_jats" / "__init__.py").read_text()).group(1)
 VERSION_NOTE = "（試用版。正式版は 1.0 から）" if VERSION.startswith("0.") else ""
 try:
@@ -54,18 +55,7 @@ def code(text, form=True):
 DOCS = f"https://github.com/{REPO}/blob/main/docs"      # 説明書（利用者向け）
 
 
-cells = [
-    md(f"""
-# 論文 docx → J-STAGE 全文 XML 変換（全国数学教育学会誌『数学教育学研究』）
-
-**ツールの版: {VERSION}**{VERSION_NOTE}
-
-論文の Word ファイル（.docx）を、J-STAGE の全文 XML（JATS 1.1）に変換します。パソコンに何かをインストールする必要はありません。
-**上から順に、各セルの左の ▶ を押してください**（前の手順の実行が終わってから、次の ▶ を押します）。手順 6・7 は必要なときだけ使います。
-
-説明書: [使い方・結果の見方・できないこと]({DOCS}/USAGE.md)　[AI の API キーと手動モード]({DOCS}/USAGE_AI.md)　ソースコード: https://github.com/{REPO}
-"""),
-    code(f"""
+PREP = f"""
 #@title 1. 準備（最初に 1 回だけ。1 分ほどかかります）
 #@markdown **CONVERT_EMF**: Word の図形（EMF/WMF）の図を変換するために、LibreOffice を裏でインストールします（通常はチェックのまま。数分かかりますが、手順 2 以降は待たずに進めます）。
 CONVERT_EMF = True  #@param {{type:"boolean"}}
@@ -110,7 +100,21 @@ elif ver and not ver.startswith("{VERSION}"):
 if globals().get("LO_PROC") is not None and LO_PROC.poll() is None:
     print("LibreOffice を裏でインストールしています（数分）。インストールは裏で続くので、このまま手順 2 に進んでください"
           "（手順 5 の変換は、インストールが終わってから始まります）。")
-""" + "DONE = {1}\n"),
+"""      # 手順 1（準備）のセル。試作の Gradio のノートブックも、一部を言い換えて使う
+
+
+cells = [
+    md(f"""
+# 論文 docx → J-STAGE 全文 XML 変換（全国数学教育学会誌『数学教育学研究』）
+
+**ツールの版: {VERSION}**{VERSION_NOTE}
+
+論文の Word ファイル（.docx）を、J-STAGE の全文 XML（JATS 1.1）に変換します。パソコンに何かをインストールする必要はありません。
+**上から順に、各セルの左の ▶ を押してください**（前の手順の実行が終わってから、次の ▶ を押します）。手順 6・7 は必要なときだけ使います。
+
+説明書: [使い方・結果の見方・できないこと]({DOCS}/USAGE.md)　[AI の API キーと手動モード]({DOCS}/USAGE_AI.md)　ソースコード: https://github.com/{REPO}
+"""),
+    code(PREP + "DONE = {1}\n"),
     code("""
 #@title 2. 作り方を選び、論文の docx と PDF をアップロード
 #@markdown **ROUTE**（作り方）: 「出版版 PDF に合わせてから作る」は、docx の文字を出版版 PDF に合わせて直した docx（Word の変更履歴つき）を作ってから変換します（PDF が必要）。「docx から作る」は docx の文字のまま変換します（PDF がまだないときはこちら）。違いは説明書の「出版版 PDF との照合と、2 通りの作り方」。
@@ -460,17 +464,55 @@ display(HTML(next_article_box(globals().get("PREVIOUS", {}).get("docx", ""))))
 
 
 
-def render() -> str:
+# 試作: Gradio の 1 画面アプリ。準備は手順 1 とほぼ同じ（pip の extras に gui が加わり、「手順 ○」の案内が変わる）
+_PREP_GRADIO = (PREP.replace("jasme-jats[ai,images,colab]", "jasme-jats[ai,images,colab,gui]")
+                .replace("手順 2 以降は待たずに進めます", "次のセルは待たずに進めます")
+                .replace("（手順 5 で終わるのを待つ）", "（変換のときに終わるのを待つ）")
+                .replace("このまま手順 2 に進んでください", "このまま次のセルに進んでください")
+                .replace("（手順 5 の変換は、インストールが終わってから始まります）", "（変換は、インストールが終わってから始まります）")
+                .replace("手順 1 からもう一度実行", "1. 準備からもう一度実行"))
+cells_gradio = [
+    md(f"""
+# 論文 docx → J-STAGE XML 変換（試作版・Gradio の 1 画面）
+
+**ツールの版: {VERSION}**{VERSION_NOTE}
+
+試作版です。確かめること: docx と PDF（10〜30 MB）をアップロードできるか、変換中に進捗が出るか、ZIP をダウンロードできるか、
+API モードでシークレットを読めるか、準備にかかる時間。
+上から順に、各セルの ▶ を押します（1. 準備が終わってから 2. 画面を開く）。
+
+説明書: [使い方・結果の見方・できないこと]({DOCS}/USAGE.md)　[AI の API キーと手動モード]({DOCS}/USAGE_AI.md)　ソースコード: https://github.com/{REPO}
+"""),
+    code(_PREP_GRADIO),
+    code("""
+#@title 2. 画面を開く
+from jasme_jats.app import launch
+launch()
+"""),
+]
+
+
+def render_gradio() -> str:
+    return _notebook(cells_gradio)
+
+
+def _notebook(cell_list) -> str:
     nb = {
         "nbformat": 4, "nbformat_minor": 0,
         "metadata": {"colab": {"provenance": [], "toc_visible": True},
                      "kernelspec": {"name": "python3", "display_name": "Python 3"}, "language_info": {"name": "python"}},
-        "cells": cells,
+        "cells": cell_list,
     }
     return json.dumps(nb, ensure_ascii=False, indent=1) + "\n"
+
+
+def render() -> str:
+    return _notebook(cells)
 
 
 if __name__ == "__main__":
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(render(), encoding="utf-8")
     print("written:", OUT)
+    OUT_GRADIO.write_text(render_gradio(), encoding="utf-8")
+    print("written:", OUT_GRADIO)
