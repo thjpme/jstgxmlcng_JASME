@@ -14,7 +14,7 @@ from lxml import etree
 
 from . import emit as E
 from .config import ArticleMeta, JournalConfig, keyword_problem
-from .model import Exclusion, Para
+from .model import Exclusion, Newline, Para
 from .ooxml import is_ws
 from .structure import (ArticlePlan, BackSec, BoxNode, FigNode, FnNode, FormulaNode, ListNode, PNode, QuoteNode,
                         RefNode, Sec, TableNode, _para_text)
@@ -32,6 +32,10 @@ RE_JA_CHARS = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff々]")
 RE_LABEL_SPLIT = re.compile(r"^([\s\u3000]*)((?:図|表|Figure|Fig\.?|Table)[\s\u3000]*[0-9０-９]+(?:[.．\-－][0-9０-９]+)?)"
                             r"([\s\u3000:：.．]*)")
 RE_HEAD_SPLIT = re.compile(r"^([\s\u3000]*)([0-9０-９]{1,2}[．.]|[(（][0-9０-９]{1,2}[)）]|[①-⑳])([\s\u3000]*)(?=\S)")
+NEWLINE_SHOWN = 10      # レポートの 10 章の改行の一覧に並べる段落の数（それより多ければ「ほか N 段落」）
+# 変更履歴ですべての行が削除された表（docx_reader が行をすべて読み飛ばした表。修正計画の N8）の 10 章の警告
+ALL_ROWS_DELETED_MSG = ("{where}: 変更履歴で表のすべての行が削除されています（Word で変更をすべて承諾すると、表が消えます）。XML には"
+                        "{what}を出力しました。Word で確かめ、表が要らなければ、{how}保存してから変換し直してください。")
 
 
 @dataclass
@@ -41,6 +45,7 @@ class BuildInfo:
     drops: list = field(default_factory=list)        # (src, text, reason)
     exclusions: list = field(default_factory=list)   # Exclusion（書き出しの段階で出力しないと決めたもの）
     notes: list = field(default_factory=list)        # (category, src, message) 機械的な判断の記録
+    newlines: list = field(default_factory=list)     # 段落の中の改行（model.Newline。段落ごとにまとめたもの。10 章と要確認）
 
 
 def _sub(parent, tag, text=None, **attrs):
@@ -116,11 +121,66 @@ class Builder:
         if len(back):
             root.append(back)
         self.em_warnings()
+        self.newline_warnings()
         return root
 
     def em_warnings(self):
         for w in sorted(set(self.em.math_warnings)):
             self.info.warnings.append(f"数式: {w}")
+
+    def newline_warnings(self):
+        """段落の中の改行（Word の Shift+Enter。emit の Newline）を段落ごとにまとめて info.newlines に入れ、レポートの 10 章の
+        警告を、表のセル（<break/> を入れたもの）・知らせる文脈（題目・著者・所属・引用文献。要確認は report._newline_action）・
+        そのほか（本文・見出し・要旨・キャプションなど。文字のまま）の組ごとに 1 行足す。"""
+        per = {}
+        for nl in self.em.newlines:
+            got = per.get(nl.src)
+            if got is None:
+                per[nl.src] = Newline(nl.src, nl.count, nl.breaks, nl.cell, nl.label)
+            else:
+                got.count += nl.count
+                got.breaks += nl.breaks
+                got.cell = got.cell or nl.cell
+                got.label = got.label or nl.label
+        self.info.newlines = list(per.values())
+        cells = [x for x in per.values() if x.cell]
+        noted = [x for x in per.values() if not x.cell and x.label]
+        other = [x for x in per.values() if not x.cell and not x.label]
+        if cells:
+            n, b = sum(x.count for x in cells), sum(x.breaks for x in cells)
+            how = (f"{n} か所の位置に、XML の改行の要素（`<break/>`）を入れました（改行の文字も残しています）" if b == n else
+                   f"{n} か所のうち {b} か所の位置に、XML の改行の要素（`<break/>`）を入れました（改行の文字も残しています。"
+                   f"リンクの中の {n - b} か所は、改行の文字のまま）")
+            self.info.warnings.append(f"表のセルの段落の中の改行（Shift+Enter）{how}: {self._newline_paras(cells)}")
+        if noted:
+            self.info.warnings.append(
+                f"題目・著者・所属・引用文献の段落の中に、改行（Shift+Enter）が {sum(x.count for x in noted)} か所あります。"
+                "XML では改行の文字のまま出力しました（J-STAGE の画面では、改行の位置が空白になるか、前後の文字が詰まって"
+                "表示されることがあります。改行が要らなければ、Word で消して変換し直してください）: "
+                f"{self._newline_paras(noted, label=True)}")
+        if other:
+            self.info.warnings.append(
+                f"本文などの段落の中の改行（Shift+Enter）{sum(x.count for x in other)} か所は、XML では改行の文字のまま出力しました"
+                "（J-STAGE の画面では、空白になるか、前後の文字が詰まって表示されることがあります。改行が要らなければ、Word で消して"
+                f"変換し直してください）: {self._newline_paras(other)}")
+
+    def _newline_paras(self, rows, label=False) -> str:
+        """改行のある段落の一覧（d12・d13（場所）、…。場所が同じ段落はまとめる）。label なら、場所の代わりに段落の文字の冒頭と
+        文脈の名前（d3「…」（題目・副題）。題目・著者・所属には場所がないため）。"""
+        if label:
+            out = []
+            for x in rows[:NEWLINE_SHOWN]:
+                p = self.plan.paras.get(x.src)
+                head = p.text_only().strip()[:20] if p is not None else ""
+                out.append(f"{x.src}「{head}」（{x.label}）" if head else f"{x.src}（{x.label}）")
+            rest = len(rows) - NEWLINE_SHOWN
+            return "、".join(out) + (f"、ほか {rest} 段落" if rest > 0 else "")
+        groups = {}
+        for x in rows[:NEWLINE_SHOWN]:
+            groups.setdefault(self.plan.locations.get(x.src, ""), []).append(x.src)
+        out = [f"{'・'.join(srcs)}（{where}）" if where else "・".join(srcs) for where, srcs in groups.items()]
+        rest = len(rows) - NEWLINE_SHOWN
+        return "、".join(out) + (f"、ほか {rest} 段落" if rest > 0 else "")
 
     # ------------------------------------------------------------------ journal-meta
     def journal_meta(self, front):
@@ -535,7 +595,19 @@ class Builder:
                 self.em.span(pe, node.caption, E.CAPTION)
             self.caption_more(tw, node.caption_more)
         if node.table is not None:
+            if node.table.skipped_rows and not node.table.rows:
+                self.all_rows_deleted(node)
             self.table(tw, node.table)
+
+    def all_rows_deleted(self, node: TableNode):
+        """変更履歴ですべての行が削除された表を、10 章の警告にする（キャプションは docx の文字なので出力し、表は今までどおり
+        空の表〈空の td を 1 つ〉にする）。"""
+        cap = node.caption.text_only().strip() if node.caption is not None else ""
+        name = f"表 {node.tid}" if node.tid else "表"
+        where = f"{name}（キャプション「{cap[:20]}{'…' if len(cap) > 20 else ''}」）" if cap else f"{name}（キャプションなし）"
+        self.info.warnings.append(ALL_ROWS_DELETED_MSG.format(
+            where=where, what="キャプションと空の表" if cap else "空の表",
+            how="変更をすべて承諾し、キャプションも消して" if cap else "変更をすべて承諾して"))
 
     def table(self, parent, t):
         # 縦の結合（vMerge）を rowspan に変換する（中間表現は書き換えない）

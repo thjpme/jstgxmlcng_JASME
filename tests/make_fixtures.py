@@ -13,7 +13,9 @@ tests/fixtures/sample_pdfcheck.docx / .pdf : 出版版 PDF との照合。PDF �
                                    句読点、「資料」→「付録」など）の docx を LibreOffice で PDF にしたもの（LibreOffice が
                                    なければ PDF は作り直さない）
 tests/fixtures/sample_reader.docx : 読み取りの境界ケースのうち sample_edge に入れていないもの（コンテンツコントロール
-                                   〈w:sdt〉や w:customXml に包まれた表の行・セル、テキストボックスの段落と表）
+                                   〈w:sdt〉や w:customXml に包まれた表の行・セル、テキストボックスの段落と表、段落記号の削除
+                                   〈つながる段落・つなげない場所〉、スタイルの隠し文字、段落の中の改行〈セル・本文・題目・
+                                   引用文献〉、変更履歴で削除された表の行・セル）
 tests/fixtures/sample_float_text.docx : テキストボックスの中で、画像と文字が同じ段落にある図形（キャプションのある図と、
                                    キャプションのない図形）。位置は機械的に決まる
 tests/fixtures/sample_structure.docx : 論文の構造（領域の分け方など）の境界ケース（本文中のテキストボックスにある
@@ -237,6 +239,7 @@ class Builder:
         self.rels_extra = []
         self.footnotes_extra = []
         self.endnotes_extra = []        # Word の文末脚注（endnote() の XML）
+        self.styles_extra = []          # word/styles.xml に足すスタイルの定義（w:style の XML。READER_STYLES など）
         self._rid = 900
 
     def add_image(self, name, data):
@@ -294,6 +297,10 @@ class Builder:
                     ex = self.zin.read(item.filename).decode("utf-8")
                     ex = ex.replace("</w:endnotes>", "".join(self.endnotes_extra) + "</w:endnotes>")
                     zout.writestr(item, ex)
+                elif item.filename == "word/styles.xml" and self.styles_extra:
+                    sx = self.zin.read(item.filename).decode("utf-8")
+                    sx = sx.replace("</w:styles>", "".join(self.styles_extra) + "</w:styles>")
+                    zout.writestr(item, sx)
                 elif item.filename == "[Content_Types].xml":
                     ct = self.zin.read(item.filename).decode("utf-8")
                     if 'Extension="png"' not in ct:
@@ -636,20 +643,42 @@ def make_notes(path):
 
 
 # ----------------------------------------------------------------------------- sample_pdfcheck
-def make_pdfcheck(path, published=False):
-    """出版版 PDF との照合の検証用。published=True なら、出版社が組版で直した想定の文字にする（PDF を作るため）。"""
+def make_pdfcheck(path, published=False, split=False, hidden=False):
+    """出版版 PDF との照合の検証用。published=True なら、出版社が組版で直した想定の文字にする（PDF を作るため）。
+
+    split=True なら、本文の段落「詳しくは資料の…。授業は2回行った。」を、段落記号を変更履歴で削除した 2 つの w:p に分ける
+    （Word で承諾すると 1 段落。PDF は今の sample_pdfcheck.pdf のまま使う。修正計画の D5 のルート2。リポジトリには入れず、
+    テストの中で作る）。
+    hidden=True なら、ルート2 で直す本文の段落（「本研究は…」「詳しくは…」。split なら「授業は…」も）の途中、直す文字のすぐ前に、
+    文字スタイル（READER_STYLES の gHid）で隠した文字「〔隠した注記〕」を入れる（Word では表示されないので、docx の文字は変わらない。
+    PDF は今の sample_pdfcheck.pdf のまま使う。修正計画の G のルート2。テストの中で作る）。
+    """
     def t(docx_text, pub_text=None):
         return (pub_text if pub_text is not None else docx_text) if published else docx_text
 
+    def h(text, at):
+        """段落の文字 text のラン。hidden なら、文字 at の前で分け、間に隠した文字のランを入れる。"""
+        if not hid:
+            return (text,)
+        k = text.index(at)
+        return (text[:k], hid, text[k:])
+
     b = Builder()
+    hid = run_styled("〔隠した注記〕", rstyle="gHid") if hidden and not published else ""
+    if hid:
+        b.styles_extra.append(READER_STYLES)
     link = b.add_hyperlink("https://example.com/a")
     body = []
     body += front_ja(b, "出版版 PDF との照合の検証用文書", "―全角と半角の違い―", [("架空大学", "試験\u3000四郎")])
     body.append(para(S["sec1"], "１．はじめに"))
-    body.append(para(S["body"], t("本研究は架空理論 (Fictional Theory, 以下, FT) に基づく (試験, 2020; 見本, 2021)。",
-                                  "本研究は架空理論（Fictional Theory, 以下，FT）に基づく（試験，2020；見本，2021）。")))
-    body.append(para(S["body"], t("詳しくは資料の学習指導案を参照されたい。授業は2回行った。",
-                                  "詳しくは付録の学習指導案を参照されたい。授業は２回行った。")))
+    body.append(para(S["body"], *h(t("本研究は架空理論 (Fictional Theory, 以下, FT) に基づく (試験, 2020; 見本, 2021)。",
+                                     "本研究は架空理論（Fictional Theory, 以下，FT）に基づく（試験，2020；見本，2021）。"), "(")))
+    if split and not published:
+        body.append(para_mark_deleted(S["body"], *h("詳しくは資料の学習指導案を参照されたい。", "資料")))
+        body.append(para(S["body"], *h("授業は2回行った。", "2")))
+    else:
+        body.append(para(S["body"], *h(t("詳しくは資料の学習指導案を参照されたい。授業は2回行った。",
+                                         "詳しくは付録の学習指導案を参照されたい。授業は２回行った。"), "資料")))
     body.append(para(S["sec2"], t("(1) 方法の概要", "（1）方法の概要")))
     body.append(para(S["body"], "この段落は出版版と同じで，架空の資料を ",
                      f'<w:hyperlink r:id="{link}">{run("https://example.com/a")}</w:hyperlink>', " で公開している。"))
@@ -745,6 +774,214 @@ def reader_textbox_sdt(b: Builder):
     ]
 
 
+# ----------------------------------------------------------------------------- 読み取りの文字ポリシー（修正計画の G）の部品
+def _mark_id(kind, xml):
+    """変更履歴の印の w:id（中身から決める。何度作っても同じ docx になるように。deleted() と同じ考え）。"""
+    return zlib.crc32((kind + xml).encode("utf-8")) % 90000 + 10000
+
+
+def _change_mark(tag, kind, xml):
+    """中身のない変更履歴の印（w:del・w:moveFrom・w:cellDel）。"""
+    return f'<w:{tag} w:id="{_mark_id(kind, xml)}" w:author="試験" w:date="2026-01-01T00:00:00Z"/>'
+
+
+def para_mark_deleted(style, *parts, kind="del", num_id=None):
+    """段落記号を変更履歴で削除した段落（w:pPr/w:rPr の w:del。kind="move" なら w:moveFrom）。Word で変更を承諾すると、
+    次の段落とつながって 1 段落になる。num_id があれば自動番号の段落（list_item と同じ）。"""
+    body = "".join(p if p.startswith("<") else run(p) for p in parts if p)
+    ppr = (f'<w:pStyle w:val="{style}"/>' if style else "")
+    if num_id is not None:
+        ppr += f'<w:numPr><w:ilvl w:val="0"/><w:numId w:val="{num_id}"/></w:numPr>'
+    tag = "moveFrom" if kind == "move" else "del"
+    return f"<w:p><w:pPr>{ppr}<w:rPr>{_change_mark(tag, tag, body)}</w:rPr></w:pPr>{body}</w:p>"
+
+
+def para_mark_hidden(style, *parts):
+    """段落記号を隠し文字にした段落（スタイル区切り。w:pPr/w:rPr の w:vanish と w:specVanish）。削除ではないので、つながない。"""
+    body = "".join(p if p.startswith("<") else run(p) for p in parts if p)
+    return (f'<w:p><w:pPr><w:pStyle w:val="{style}"/><w:rPr><w:vanish/><w:specVanish/></w:rPr></w:pPr>{body}</w:p>')
+
+
+def run_styled(text, rstyle=None, vanish=None, spec=False):
+    """文字スタイル（rstyle）・直接の隠し文字（vanish が True なら w:vanish、False なら w:vanish w:val="0"）・w:specVanish のラン。"""
+    rpr = f'<w:rStyle w:val="{rstyle}"/>' if rstyle else ""
+    if vanish is True:
+        rpr += "<w:vanish/>"
+    elif vanish is False:
+        rpr += '<w:vanish w:val="0"/>'
+    if spec:
+        rpr += "<w:specVanish/>"
+    rpr = f"<w:rPr>{rpr}</w:rPr>" if rpr else ""
+    sp = ' xml:space="preserve"' if text != text.strip() else ""
+    return f"<w:r>{rpr}<w:t{sp}>{escape(text)}</w:t></w:r>"
+
+
+def br():
+    """段落の中の改行（Word の Shift+Enter。w:br）だけのラン。"""
+    return "<w:r><w:br/></w:r>"
+
+
+def run_with_break(before, after, b=True):
+    """1 つのランの中に、文字・改行（w:br）・文字が並ぶ（太字のランの中の改行など）。"""
+    rpr = "<w:rPr><w:b/></w:rPr>" if b else ""
+    return f"<w:r>{rpr}<w:t>{escape(before)}</w:t><w:br/><w:t>{escape(after)}</w:t></w:r>"
+
+
+def deleted_row(*cells, text_deleted=True, marks=False):
+    """変更履歴で削除された表の行（w:trPr/w:del）。text_deleted なら、セルの文字も削除の変更履歴（deleted()）で包む（Word で行を
+    削除したときの形。文字の残る行は False）。marks なら、セルの段落記号も削除にする。"""
+    tcs = []
+    for text in cells:
+        inner = deleted(run(text)) if text_deleted else run(text)
+        tcs.append(cell(para_mark_deleted(S["body"], inner) if marks else para(S["body"], inner)))
+    return f"<w:tr><w:trPr>{_change_mark('del', 'row', ''.join(cells))}</w:trPr>{''.join(tcs)}</w:tr>"
+
+
+def cell_deleted(content):
+    """変更履歴で削除されたセル（w:tcPr/w:cellDel）。content は cell() と同じ。"""
+    c = cell(content)
+    return c.replace("</w:tcPr>", _change_mark("cellDel", "cell", c) + "</w:tcPr>", 1)
+
+
+def add_break(b: Builder, p_el, after):
+    """front_ja などが作った lxml の段落 p_el の最後に、改行（w:br）のランと、文字 after のランを足す（Builder.set_text では改行を
+    入れられないため）。"""
+    for r in list(b.frag(f"<w:p>{br()}{run(after)}</w:p>")[0]):
+        p_el.append(r)
+
+
+# 隠し文字（w:vanish）を指定した文字スタイル・段落スタイル（w:basedOn の派生も。Builder.styles_extra に足す）。段落スタイルは
+# 本文のスタイル（af5）から派生させる（段落の役割は本文のまま）
+READER_STYLES = (
+    '<w:style w:type="character" w:customStyle="1" w:styleId="gHid"><w:name w:val="G隠し文字"/><w:rPr><w:vanish/></w:rPr>'
+    '</w:style>'
+    '<w:style w:type="character" w:customStyle="1" w:styleId="gHidDer"><w:name w:val="G隠し文字の派生"/>'
+    '<w:basedOn w:val="gHid"/></w:style>'
+    '<w:style w:type="character" w:customStyle="1" w:styleId="gHidOff"><w:name w:val="G隠し文字の派生（表示）"/>'
+    '<w:basedOn w:val="gHid"/><w:rPr><w:vanish w:val="0"/></w:rPr></w:style>'
+    '<w:style w:type="paragraph" w:customStyle="1" w:styleId="gHidP"><w:name w:val="G隠し段落"/><w:basedOn w:val="af5"/>'
+    '<w:rPr><w:vanish/></w:rPr></w:style>'
+    '<w:style w:type="paragraph" w:customStyle="1" w:styleId="gHidPDer"><w:name w:val="G隠し段落の派生"/>'
+    '<w:basedOn w:val="gHidP"/></w:style>')
+
+
+def reader_deleted_marks(b: Builder):
+    """段落記号を変更履歴で削除した段落（Word で変更を承諾すると次の段落とつながる。修正計画の D5）と、つなげない場所。
+
+    図は、画像の段落とキャプションが組になる単純な形で、図の位置は機械的に決まる（reader_textbox_sdt と同じ形）。
+    """
+    img2 = b.add_image("reader_join.png", png_bytes("Joined paragraphs", size=(400, 240)))
+    img3 = b.add_image("reader_join_tb.png", png_bytes("Joined caption", size=(400, 240)))
+    mark = para_mark_deleted
+    b.footnotes_extra.append(f'<w:footnote w:id="31">{mark("a8", _note_first("footnoteRef", "脚注の前半と", ""))}'
+                             f'{para("a8", "脚注の後半。")}</w:footnote>')
+    return [
+        # 本文＋本文
+        mark(S["body"], "段落記号を削除した前半の文と，"),
+        para(S["body"], "次の段落の後半の文がつながる。"),
+        # 文字ごと削除した節見出し＋本文（前の段落が空なので、後ろの段落の書式になる）
+        mark(S["sec2"], deleted(run("（1）削除した見出し"))),
+        para(S["body"], "見出しを削除した後ろの本文である。"),
+        # 節見出し＋本文（前の段落の書式。見出しのまま）
+        mark(S["sec2"], "（2）見出しの前半と"),
+        para(S["body"], "続いた本文の後半"),
+        # 本文＋節見出し（前の段落の書式。本文のまま）
+        mark(S["body"], "本文の後ろに"),
+        para(S["sec2"], "（3）続いた見出し"),
+        # 3 段落の連鎖
+        mark(S["body"], "連鎖の一つ目，"), mark(S["body"], "連鎖の二つ目，"), para(S["body"], "連鎖の三つ目。"),
+        # 自動番号の段落の連鎖（numId=7 は「1.」の番号。文字ごと削除した 2 つ目の項目は、次の項目とつながり、番号を 1 つだけ使う）
+        list_item(S["body"], "番号の一つ目の項目。", num_id=7),
+        mark(S["body"], deleted(run("削除した番号の項目。")), num_id=7),
+        list_item(S["body"], "番号の三つ目の項目。", num_id=7),
+        list_item(S["body"], "番号の四つ目の項目。", num_id=7),
+        # 段落記号の移動（w:moveFrom）と、段落の間のしおり
+        mark(S["body"], "移動の印の前半，", kind="move"), para(S["body"], "移動の印の後半。"),
+        mark(S["body"], "しおりをはさむ前半，"), '<w:bookmarkStart w:id="71" w:name="g_join"/><w:bookmarkEnd w:id="71"/>',
+        para(S["body"], "しおりをはさむ後半。"),
+        # 段落記号の隠し文字（スタイル区切り）はつながない（警告もしない）
+        para_mark_hidden(S["body"], "スタイル区切りの前の段落。"), para(S["body"], "スタイル区切りの後の段落。"),
+        # つなげない: 次がコンテンツコントロール・カスタム XML、コンテンツコントロールの最後
+        mark(S["body"], "次がコンテンツコントロールの段落。"), sdt(para(S["body"], "コンテンツコントロールの中の段落。")),
+        mark(S["body"], "次がカスタムXMLの段落。"), custom_xml(para(S["body"], "カスタムXMLの中の段落。"), "para"),
+        sdt(para(S["body"], "包まれた段落の一つ目。") + mark(S["body"], "コンテンツコントロールの最後の段落。")),
+        para(S["body"], "コンテンツコントロールの後の段落。"),
+        # 表の直前（つなげない）と、セルの中（1 段落目はつなぎ、セルの最後の段落はつながない）
+        para(S["body"], "表6は段落記号を削除したセルの段落の例である。"),
+        mark(S["tab_cap"], "表6　段落記号を削除した表題"),
+        table([[cell("観点"), cell("内容")],
+               [cell([mark(S["body"], "セルの前半と"), para(S["body"], "セルの後半。")]),
+                cell([para(S["body"], "セルの一つ目。"), mark(S["body"], "セルの最後の段落。")])]]),
+        # 後ろの段落に結び付いたテキストボックス（図の位置は、つないだ段落の後ろに機械的に決まる）
+        mark(S["body"], "図2は段落記号を削除した段落に，"),
+        para(S["body"], "続く段落に結び付いた図である。", textbox(
+            para(S["body"], drawing(img2, 1800000, 1100000, 432, name="図"))
+            + para(S["fig_cap"], "図2　つないだ段落に結び付いた図"), 431, cy=1500000)),
+        # テキストボックスの中の連鎖（キャプションを 2 段落に分けたもの）と、テキストボックスの最後の段落（つながない）
+        para(S["body"], "図3はテキストボックスの中の表題をつないだ例である。", textbox(
+            para(S["body"], drawing(img3, 1800000, 1100000, 434, name="図"))
+            + mark(S["fig_cap"], "図3　テキストボックスの中で") + mark(S["fig_cap"], "つないだ表題"), 433, cy=1500000)),
+        # 脚注の 1 段落目の段落記号の削除（脚注は 1 段落になる）
+        para(S["body"], "段落記号を削除した脚注", footnote_ref(31), "のある文。"),
+    ]
+
+
+def reader_hidden_styles(b: Builder):
+    """文字スタイル・段落スタイル（派生も）・直接の指定の隠し文字（w:vanish。修正計画の U8）。スタイルは READER_STYLES。
+
+    隠す文字は「〔〕」で囲む（テストは「〔」が XML にないことを確かめる）。隠し文字のランの中に画像は入れない。
+    """
+    return [
+        para(S["body"], "文字スタイルで", run_styled("〔文字スタイルで隠す〕", rstyle="gHid"), "隠した文字。"),
+        para(S["body"], "派生の文字スタイルで", run_styled("〔派生の文字スタイルで隠す〕", rstyle="gHidDer"), "隠した文字。"),
+        para(S["body"], "直接の指定で", run_styled("〔直接の指定で隠す〕", vanish=True), "隠した文字。"),
+        para(S["body"], run_styled("文字スタイルを直接の指定で打ち消して見える文字。", rstyle="gHid", vanish=False)),
+        para("gHidP", "〔段落スタイルで隠した段落〕"),
+        para("gHidPDer", "〔派生の段落スタイルで隠した段落〕"),
+        para("gHidP", "〔段落スタイルで隠れる文字〕", run_styled("段落と文字のスタイルの反転で見える文字。", rstyle="gHid")),
+        # 偽（w:val="0"）を指定した派生の文字スタイルは、反転させないだけで、段落の状態は変えない（隠す段落の中では隠れる。
+        # 修正計画の規則。LibreOffice は表示する）
+        para(S["body"], "表示を指定した派生の文字スタイルの", run_styled("見える文字。", rstyle="gHidOff")),
+        para("gHidP", "〔段落スタイルで隠れる前半〕", run_styled("〔表示を指定した派生の文字スタイルでも隠れる文字〕", rstyle="gHidOff"),
+             run_styled("直接の指定で見える後半。", vanish=False)),
+        # 隠し文字のランの中の改行・記号・改行なしハイフン（レポートの 6 章の隠し文字の一覧に載る）
+        para(S["body"], "隠した改行と記号", '<w:r><w:rPr><w:vanish/></w:rPr><w:t>〔隠Ａ〕</w:t><w:br/>'
+             '<w:sym w:font="Symbol" w:char="F061"/><w:noBreakHyphen/><w:t>〔隠Ｂ〕</w:t></w:r>', "の後の文字。"),
+    ]
+
+
+def reader_line_breaks(b: Builder):
+    """段落の中の改行（Word の Shift+Enter。w:br。修正計画の U3）: 表のセル（<break/> を補う）と本文（文字のまま）。題目と
+    引用文献の改行は make_reader が足す。"""
+    link = b.add_hyperlink("https://example.com/reader-break")
+    return [
+        para(S["body"], "表7は改行のあるセルの例である（見本，2022）。本文の段落の", br(), "改行の後。"),
+        para(S["tab_cap"], "表7　改行のあるセル"),
+        table([[cell(para(S["body"], "見出しの", br(), "一行目")), cell("内容")],
+               [cell(para(S["body"], "普通の文字の", br(), "改行")),
+                cell(para(S["body"], run_with_break("太字の前", "太字の後")))],
+               [cell(para(S["body"], run("太字の一つ目", b=True), br(), run("太字の二つ目", b=True))),
+                cell(para(S["body"], f'<w:hyperlink r:id="{link}">{run("リンクの")}{br()}{run("中の改行")}</w:hyperlink>'))],
+               [cell([para(S["body"], "段落の最後で改行", br()), para(S["body"], "次の段落")]), cell("最後のセル")]],
+              header_rows=1),
+    ]
+
+
+def reader_deleted_rows(b: Builder):
+    """変更履歴で削除された表の行（w:trPr/w:del）とセル（w:tcPr/w:cellDel）（修正計画の N8）。"""
+    return [
+        para(S["body"], "表8は変更履歴で行を削除した表の例である。"),
+        para(S["tab_cap"], "表8　行を削除した表"),
+        table_of_rows([tr("区分", "内容"),
+                       deleted_row("削除した行", "削除した内容"),
+                       deleted_row("印だけの行", "文字は残る", text_deleted=False),
+                       deleted_row("段落記号も削除した行", "段落記号も削除した内容", marks=True),
+                       "<w:tr>" + cell("残るセル") + cell_deleted(para(S["body"], deleted(run("削除したセルの文字"))))
+                       + "</w:tr>",
+                       tr("最後の行", "最後の内容")], 2),
+    ]
+
+
 ZEN_DIGITS = str.maketrans("0123456789", "０１２３４５６７８９")
 
 # sample_reader の節（見出し, 部品を作る関数）。ケースを足すときは、部品を作る関数を足してここに加える。
@@ -752,19 +989,29 @@ ZEN_DIGITS = str.maketrans("0123456789", "０１２３４５６７８９")
 READER_SECTIONS = [
     ("包まれた表の行とセル", reader_wrapped_rows),
     ("テキストボックスの中の包まれた段落と表", reader_textbox_sdt),
+    ("段落記号の削除", reader_deleted_marks),
+    ("スタイルの隠し文字", reader_hidden_styles),
+    ("セルの改行", reader_line_breaks),
+    ("削除された表の行", reader_deleted_rows),
 ]
 
 
 def make_reader(path):
-    """読み取りの境界ケース。sample_edge は件数で確かめるテストがあるので、新しいケースはこちらに足す。"""
+    """読み取りの境界ケース。sample_edge は件数で確かめるテストがあるので、新しいケースはこちらに足す。
+
+    題目と 2 つ目の引用文献の段落には、段落の中の改行（w:br。修正計画の U3）を入れる。
+    """
     b = Builder()
+    b.styles_extra.append(READER_STYLES)
     body = []
     body += front_ja(b, "読み取りの検証用文書", "―包まれた要素を読み落とさない―", [("架空大学", "試験\u3000五郎")])
+    add_break(b, body[2], "（改行の後の題目）")
     for k, (heading, section) in enumerate(READER_SECTIONS, 1):
         body.append(para(S["sec1"], f"{str(k).translate(ZEN_DIGITS)}．{heading}"))
         body += section(b)
     body.append(para(S["ref_head"], "引用および参考文献"))
     body.append(para(S["ref"], "試験五郎（2023）．「読み取りの検証」．『架空誌』，第4巻，pp.7-8．"))
+    body.append(para(S["ref"], "見本六郎（2022）．「改行のある文献」．", br(), "『架空誌』，第3巻，pp.5-6．"))
     body += front_en(b, "Reading Wrapped Elements", "Checking the Reader", [("Goro SHIKEN", "Fictional University")],
                      ["Reader abstract."])
     body += tail(b)

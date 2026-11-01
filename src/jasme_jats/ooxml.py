@@ -6,11 +6,25 @@
 変換処理の誤りを検出できるようにしている。
 
 文字ポリシー
+  「docx の文字」は、Word で表示される文字（変更履歴をすべて承諾し、隠し文字を隠した状態）とする。読み取り（docx_reader）・
+  検証（canonical_text・canonical_texts。fidelity.source_texts）・ルート2（pdfdocx.paragraph_units・write_fixed_docx）の 3 か所は、
+  ここに置く規則（段落のつながり joined_paragraphs と、隠し文字の判定 HiddenRule）を共有し、文字の取り出しはそれぞれ別の実装で行う。
   含める: w:t, m:t（数式中の文字）, w:tab（タブ文字）, 改行 w:br / w:cr（改行文字）,
           w:noBreakHyphen（U+2011）, w:softHyphen（U+00AD）, w:sym（記号フォントは Unicode に対応付け）
-  含めない: 削除された変更履歴（w:del, w:moveFrom）, フィールドコード, 隠し文字（w:vanish）,
+  含めない: 削除された変更履歴（w:del, w:moveFrom）, フィールドコード, 隠し文字（HiddenRule。ランの直接の w:vanish・w:specVanish、
+          文字スタイル・段落スタイル〈w:basedOn をたどる〉と既定の書式〈w:docDefaults〉の w:vanish）,
           ページ区切り・段区切り, テキストボックス内の段落（別の段落として扱う）, ルビの読み（w:rt）,
           Word が自動生成する文字（脚注番号・自動段落番号。これらは XML では「生成文字」として区別する）
+  段落の区切り: 段落記号が削除された段落（w:pPr/w:rPr の w:del・w:moveFrom）は、Word で承諾した状態と同じく、同じ親の中の次の
+          段落とつないで 1 段落にする（joined_paragraphs。段落の ID は連鎖の最初の段落のもので、後ろの段落の ID は欠番）。
+          次が段落でない（表・コンテンツコントロール・カスタム XML など）か、親の最後の段落（本文・表のセル・テキストボックス・
+          注の最後など）なら、つながない（unjoined_deleted_marks。読み取りがレポートの 10 章で知らせる）。段落記号の w:vanish
+          （スタイル区切り）は削除ではないので、つながない。
+  隠し文字で扱わないもの: 数式の中のラン（m:r）の w:vanish（数式は全体を出す）、表スタイル（w:tblStylePr など）・番号の書式
+          （w:lvl/w:rPr）の w:vanish、段落記号の w:vanish、リンクスタイル（w:link）の特別な扱い、テーマ・互換性の設定。
+          つないだ段落の後ろの段落の隠し文字は、その段落自身の段落スタイルで決める。
+  変更履歴で削除された表の行（w:trPr/w:del）のうち、文字がすべて削除されているものは、読み取りが行ごと読み飛ばす
+  （docx_reader.Reader.read_table）。行の段落の文字は空なので、検証は何もしなくても同じ結果になる。
 """
 from __future__ import annotations
 
@@ -180,28 +194,185 @@ def sym_char(sym_el) -> str:
     return chr(n)
 
 
-def run_hidden(r) -> bool:
-    rpr = r.find(w("rPr"))
-    if rpr is None:
-        return False
-    return on_off(rpr.find(w("vanish"))) or on_off(rpr.find(w("specVanish")))
+class HiddenRule:
+    """隠し文字（w:vanish）の判定。読み取り・検証・ルート2 の 3 か所が同じ規則を使う（どれも word/styles.xml から作る）。
+
+    修正計画（docs/FIX_PLAN.md の G）の規則。スタイルと既定の書式の w:vanish は、ECMA-376 の切り替えの性質（toggle property。
+    スタイルで真なら、それまでの状態を反転させ、偽なら変えない）として扱い、ランの直接の指定はその値そのものにする。
+    style_value(sid): スタイル sid から w:basedOn をたどり、w:rPr/w:vanish を最初に指定しているスタイル（いちばん派生した側）の
+      値（どれも指定していなければ None。循環は打ち切る）。派生の連鎖の中では反転させない。
+    para_state(p): 段落 p の状態。既定の書式（w:docDefaults/w:rPrDefault）の値を、段落スタイル（w:pPr/w:pStyle。なければ既定の
+      段落スタイル）の値が真なら反転したもの（XOR）。styles.xml にないスタイルの ID は、値の指定がないものとして扱う。
+    run_hidden(r, ps): ラン r が隠れているか（ps は段落の状態）。上から順に、最初に当たったもの:
+      1. ランの直接の w:vanish があれば、その値（w:val="0" なら表示）
+      2. 直接の w:specVanish があれば隠す（ECMA-376 では、常に隠れているようにふるまう）
+      3. w:rStyle の文字スタイルの値が真なら、段落の状態を反転（偽か指定がなければ段落の状態のまま。XOR）
+      4. どれもなければ段落の状態
+    styles_root が None なら（NO_RULE）、ランの直接の指定だけを見る。
+    LibreOffice（24.2）で承諾・表示した結果とは、次の形で違う（暫定。Word では未確認。docs/DESIGN.md の 4.1・7 章）: 偽を指定した派生の
+    文字スタイルを、隠す段落スタイルの段落で使ったラン（LibreOffice は表示）、既定の書式に w:vanish があり、段落スタイルにも
+    w:vanish の指定があるとき（LibreOffice は段落スタイルの値をそのまま使う）、w:specVanish だけのラン（LibreOffice は表示）。
+    """
+
+    def __init__(self, styles_root=None):
+        self.styles = {}            # スタイルの ID -> w:style
+        self.default_p = ""         # 既定の段落スタイルの ID
+        self.dd = False             # 既定の書式の w:vanish
+        self._cache = {}
+        if styles_root is None:
+            return
+        for st in styles_root.findall(w("style")):
+            sid = st.get(w("styleId"))
+            if sid is None:
+                continue
+            self.styles[sid] = st
+            if not self.default_p and st.get(w("type")) == "paragraph" and st.get(w("default")) in ("1", "true"):
+                self.default_p = sid
+        dd = styles_root.find(f"{w('docDefaults')}/{w('rPrDefault')}/{w('rPr')}/{w('vanish')}")
+        self.dd = on_off(dd)
+
+    def style_value(self, sid):
+        if sid in self._cache:
+            return self._cache[sid]
+        seen, cur, val = set(), sid, None
+        while cur and cur in self.styles and cur not in seen:
+            seen.add(cur)
+            st = self.styles[cur]
+            v = st.find(f"{w('rPr')}/{w('vanish')}")
+            if v is not None:
+                val = on_off(v)
+                break
+            cur = wval(st.find(w("basedOn")))
+        self._cache[sid] = val
+        return val
+
+    def para_state(self, p) -> bool:
+        ppr = p.find(w("pPr"))
+        sid = wval(ppr.find(w("pStyle"))) if ppr is not None else None
+        return self.dd ^ (self.style_value(sid or self.default_p) is True)
+
+    def run_hidden(self, r, ps: bool) -> bool:
+        rpr = r.find(w("rPr"))
+        if rpr is None:
+            return ps
+        direct = rpr.find(w("vanish"))
+        if direct is not None:
+            return on_off(direct)
+        if on_off(rpr.find(w("specVanish"))):
+            return True
+        rs = wval(rpr.find(w("rStyle")))
+        if rs and self.style_value(rs) is True:
+            return not ps
+        return ps
+
+
+NO_RULE = HiddenRule(None)      # styles.xml がないとき（ランの直接の指定だけを見る）
+
+# 段落記号が削除された段落を次の段落とつなぐとき、間にあっても飛ばす要素（中身のない目印）
+JOIN_SKIP = {w(t) for t in ("bookmarkStart", "bookmarkEnd", "proofErr", "permStart", "permEnd", "commentRangeStart",
+                            "commentRangeEnd", "moveFromRangeStart", "moveFromRangeEnd", "moveToRangeStart",
+                            "moveToRangeEnd", "customXmlInsRangeStart", "customXmlInsRangeEnd", "customXmlDelRangeStart",
+                            "customXmlDelRangeEnd", "customXmlMoveFromRangeStart", "customXmlMoveFromRangeEnd",
+                            "customXmlMoveToRangeStart", "customXmlMoveToRangeEnd")}
+# つなげない理由（unjoined_deleted_marks）: 親の最後の段落のとき（親の要素ごと）と、次の要素が段落でないとき（次の要素ごと）
+END_REASONS = {w("body"): "本文の最後の段落", w("tc"): "表のセルの最後の段落", w("txbxContent"): "テキストボックスの最後の段落",
+               w("footnote"): "注の最後の段落", w("endnote"): "注の最後の段落",
+               w("sdtContent"): "コンテンツコントロールの最後の段落", w("customXml"): "カスタム XML の最後の段落"}
+NEXT_REASONS = {w("tbl"): "次が表", w("sdt"): "次がコンテンツコントロール", w("customXml"): "次がカスタム XML"}
+
+
+def paragraph_mark_deleted(p) -> bool:
+    """段落記号が変更履歴で削除（w:pPr/w:rPr の w:del か w:moveFrom）されているか。段落記号の w:vanish（スタイル区切り）・
+    w:ins は見ない（つながない）。"""
+    rpr = p.find(f"{w('pPr')}/{w('rPr')}")
+    return rpr is not None and (rpr.find(w("del")) is not None or rpr.find(w("moveFrom")) is not None)
+
+
+def _join_target(p) -> tuple:
+    """段落記号が削除された段落 p をつなぐ先: (次の w:p, "") か、つなげなければ (None, 理由)。
+
+    同じ親の中だけを見る（親を越えて、コンテンツコントロールの中から外へ、セルの最後から次のセルへ、などはつながない）。
+    間の中身のない目印（JOIN_SKIP）・コメント・処理命令は飛ばす。
+    """
+    nxt = p.getnext()
+    while nxt is not None and (not isinstance(nxt.tag, str) or nxt.tag in JOIN_SKIP):
+        nxt = nxt.getnext()
+    if nxt is not None and nxt.tag == w("p"):
+        return nxt, ""
+    if nxt is None or nxt.tag == w("sectPr"):
+        parent = p.getparent()
+        return None, END_REASONS.get(parent.tag if parent is not None else "", "段落の並びの最後の段落")
+    return None, NEXT_REASONS.get(nxt.tag, "次が段落でない")
+
+
+def joined_paragraphs(root) -> dict:
+    """段落記号が削除された段落の連鎖 {連鎖の最初の w:p: [w:p, w:p, ...]}（2 段落以上のものだけ。文書の順）。
+
+    読み取り・検証・ルート2 が同じ規則でつなぐ。前処理した木（mc:AlternateContent を mc:Choice に置き換えたもの。
+    DocxPackage.xml）に対して呼ぶ（前処理しない木では mc:Fallback の中の写しもつないでしまう）。
+    """
+    link = {}
+    for p in root.iter(w("p")):
+        if paragraph_mark_deleted(p):
+            nxt, _ = _join_target(p)
+            if nxt is not None:
+                link[p] = nxt
+    later = set(link.values())
+    chains = {}
+    for p in link:
+        if p in later:
+            continue
+        chain = [p]
+        while chain[-1] in link:
+            chain.append(link[chain[-1]])
+        chains[p] = chain
+    return chains
+
+
+def unjoined_deleted_marks(root) -> list:
+    """段落記号が削除されているのに、つなぐ先のない段落 [(w:p, 理由)]（文書の順）。"""
+    out = []
+    for p in root.iter(w("p")):
+        if paragraph_mark_deleted(p):
+            nxt, why = _join_target(p)
+            if nxt is None:
+                out.append((p, why))
+    return out
+
+
+def canonical_texts(root, prefix: str, hidden=None) -> dict:
+    """部品（root）のすべての段落の文字 {段落 ID: 文字}（検証用。fidelity.source_texts）。
+
+    段落 ID は paragraph_ids と同じ番号。段落記号の削除でつないだ連鎖（joined_paragraphs）は、最初の段落の ID に、連鎖の段落
+    ごとの canonical_text を順に連結した文字を入れ、後ろの段落の ID は入れない（欠番）。hidden は隠し文字の判定（HiddenRule）。
+    """
+    chains = joined_paragraphs(root)
+    later = {q for c in chains.values() for q in c[1:]}
+    out = {}
+    for p, pid in paragraph_ids(root, prefix).items():
+        if p not in later:
+            out[pid] = "".join(canonical_text(q, hidden) for q in chains.get(p, [p]))
+    return out
 
 
 BR_TEXT_TYPES = (None, "textWrapping")
 
 
-def canonical_text(p) -> str:
+def canonical_text(p, hidden=None) -> str:
     """段落（w:p）の文字列を文字ポリシーに従って取り出す（検証用の独立実装）。
 
-    数式（m:t）も含む。テキストボックス内の段落は含めない（別段落として数える）。
+    数式（m:t）も含む。テキストボックス内の段落は含めない（別段落として数える）。hidden は隠し文字の判定（HiddenRule。
+    None なら NO_RULE）。段落記号の削除によるつながりは見ない（canonical_texts がつなぐ）。
     """
     out = []
     field_stack = []   # True = コード部（結果ではない）
+    rule = hidden or NO_RULE
+    ps = rule.para_state(p)
 
     def in_code():
         return any(field_stack)
 
-    def walk(el, hidden=False, deleted=False):
+    def walk(el, hid=False, deleted=False):
         for ch in el:
             tag = ch.tag
             if not isinstance(tag, str):
@@ -209,10 +380,10 @@ def canonical_text(p) -> str:
             if tag == w("p") or tag == w("txbxContent") or tag == w("rt"):
                 continue
             if tag in (w("del"), w("moveFrom")):
-                walk(ch, hidden, True)
+                walk(ch, hid, True)
                 continue
             if tag == w("r"):
-                walk(ch, hidden or run_hidden(ch), deleted)
+                walk(ch, hid or rule.run_hidden(ch, ps), deleted)
                 continue
             if tag == w("fldChar"):
                 t = ch.get(w("fldCharType"))
@@ -226,11 +397,11 @@ def canonical_text(p) -> str:
             if tag in (w("rPr"), w("pPr"), m("rPr"), w("instrText"), w("delText"),
                        w("footnoteReference"), w("endnoteReference"), m("ctrlPr")):
                 continue
-            if deleted or hidden or in_code():
+            if deleted or hid or in_code():
                 if tag == m("r"):
-                    walk(ch, hidden, deleted)
+                    walk(ch, hid, deleted)
                 elif len(ch):
-                    walk(ch, hidden, deleted)
+                    walk(ch, hid, deleted)
                 continue
             if tag == w("t") or tag == m("t"):
                 out.append(ch.text or "")
@@ -248,7 +419,7 @@ def canonical_text(p) -> str:
             elif tag == w("sym"):
                 out.append(sym_char(ch))
             elif len(ch):
-                walk(ch, hidden, deleted)
+                walk(ch, hid, deleted)
 
     walk(p)
     return "".join(out)

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .ai_assist import PROVIDERS
+from .docx_reader import table_where
 from .linker import body_paragraphs, linked_ids
 from .model import note_key, note_label
 from .package import article_dir
@@ -1002,6 +1003,48 @@ def _note_overlap_action(r):
              "docx でどちらかの書き方にそろえて変換し直すこと"))
 
 
+NEWLINE_SAMPLES = 5     # 改行の要確認に並べる段落の数（全件はレポートの 10 章）
+JOINED_SHOWN = 10       # 6 章の、つないだ段落・読み飛ばした表の行の一覧に並べる数（それより多ければ「ほか」）
+
+
+def _deleted_row_where(r):
+    """読み飛ばした削除行（model.DeletedRow）の表を、利用者が Word で探す手がかりにする関数（docx_reader.table_where）。
+    表に文字が残っていない（すべての行を読み飛ばした）表は、表のキャプションの冒頭（キャプションがあれば）。"""
+    caps = {t.table.tid: t.caption for t in r.plan.tables if t.table is not None and t.caption is not None}
+
+    def where(d):
+        cap = caps[d.tid].text_only().strip() if not d.head and d.tid in caps else ""
+        return f"キャプション「{cap[:20]}{'…' if len(cap) > 20 else ''}」の表" if cap else table_where(d.head)
+    return where
+
+
+def _newline_action(r):
+    """題目・副題・著者名・所属・引用文献の段落の中の改行（Word の Shift+Enter。builder の BuildInfo.newlines の label）。なければ None。
+
+    これらの文脈は <break/> を置けないので（J-STAGE の修飾タグ許容一覧でも ×）、XML では改行の文字のまま出力している。
+    決定事項 13(2) のとおり要確認として知らせる（終了コードは 0）。本文・見出し・表のセルの改行は 10 章の警告だけ。
+    """
+    rows = [x for x in r.newlines if x.label and not x.cell]
+    if not rows:
+        return None
+    n = sum(x.count for x in rows)
+    paras = r.plan.paras
+    samples = ("、".join(f"{x.src}「{esc(paras[x.src].text_only().strip(), 15)}」（{x.label}）" if x.src in paras
+                        else f"{x.src}（{x.label}）" for x in rows[:NEWLINE_SAMPLES])
+               + ("、ほか" if len(rows) > NEWLINE_SAMPLES else ""))
+    what = f"題目・著者・所属・引用文献の段落の中に、改行（Shift+Enter）が {n} か所あります"
+    shown = ("XML では改行の文字のまま出力しています。J-STAGE の画面では、改行の位置が空白になるか、前後の文字が詰まって"
+             "表示されることがあります。")
+    how = "改行が要らなければ、Word でその改行を消して（英文なら空白に置き換えて）、変換し直してください。"
+    return Action(
+        TO_CHECK, "newline",
+        top=f"> **要確認: {what}（10 章）。** {shown}{how}対象の段落: {samples}",
+        checklist=f"- [ ] **題目・著者・所属・引用文献の中の改行**（{n} か所。10 章）: 要らなければ Word で改行を消して変換し直す",
+        box_title="題目・著者・所属・引用文献の中に改行があります（要確認）",
+        box_detail=f"{what}。{shown}{how}（レポートの冒頭と 10 章）\n対象の段落: {samples}",
+        cli=f"要確認: {what}（レポートの冒頭と 10 章）。要らなければ docx で改行を消して変換し直すこと")
+
+
 def pdf_fallback(r) -> bool:
     """ルート2 で出版版 PDF の文字を読めず、docx を直さずに変換した（pipeline.Result.pdf_fallback と同じ。M4）。"""
     return r.route == "pdf" and r.docx_fix is None and r.pdf_check is not None
@@ -1188,7 +1231,7 @@ def actions(r) -> list:
     head = [f(r) for f in (_fidelity_action, _dtd_action, _upload_action, _ai_error_action, _ai_pending_action,
                            _partial_action, _forced_action, figure_body_action, _textbox_undecided_action,
                            _textbox_place_action, _textbox_figure_text_action, images_action, lost_action,
-                           _abstract_ja_action, _app_after_refs_action, _note_overlap_action)]
+                           _abstract_ja_action, _app_after_refs_action, _note_overlap_action, _newline_action)]
     return [a for a in head if a is not None] + pdf_actions(r)
 
 
@@ -1392,6 +1435,17 @@ def render(r) -> str:
                      "出力していません。")
     if r.tracked_changes:
         other.append(f"変更履歴が {r.tracked_changes} 箇所あります。挿入は反映し、削除は出力していません（Word で表示される最終版と同じ）。")
+    if r.joined:
+        shown = "、".join("＋".join(srcs) for _, srcs in r.joined[:JOINED_SHOWN])
+        more = f"、ほか {len(r.joined) - JOINED_SHOWN} か所" if len(r.joined) > JOINED_SHOWN else ""
+        other.append(f"変更履歴で段落記号（段落の区切り）が削除された段落を、次の段落とつないで 1 段落として出力しました"
+                     f"（{len(r.joined)} か所: {shown}{more}。Word で変更をすべて承諾した状態に合わせています）。")
+    if r.deleted_rows:
+        where = _deleted_row_where(r)
+        rows = "、".join(f"{where(d)}の {d.row} 行目" for d in r.deleted_rows[:JOINED_SHOWN])
+        more = f"、ほか {len(r.deleted_rows) - JOINED_SHOWN} 行" if len(r.deleted_rows) > JOINED_SHOWN else ""
+        other.append(f"変更履歴で削除された表の行 {len(r.deleted_rows)} 行は、行の文字がすべて削除されていたので、Word で変更を"
+                     f"承諾した状態と同じく出力していません: {esc(rows)}{more}")
     if r.comments:
         other.append(f"コメントが {r.comments} 件ありました（コメントは本文ではないため出力していません）。")
     other.append("ヘッダー・フッター（柱・ページ番号）は対象外です。")

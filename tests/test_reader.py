@@ -1,11 +1,22 @@
-"""docx の読み取り: 中間表現の文字列が、独立に取り出した docx の文字列と一致すること。"""
-import pytest
+"""docx の読み取り: 中間表現の文字列が、独立に取り出した docx の文字列と一致すること。
 
+読み取りの文字ポリシー（修正計画の G）: 段落記号の削除でつながる段落（ooxml.joined_paragraphs）、スタイル・既定の書式の隠し文字
+（ooxml.HiddenRule）、変更履歴で削除された表の行（docx_reader.Reader.read_table）も、ここで確かめる（sample_reader.docx と、
+XML の文字列で作る小さな例）。
+"""
+import pytest
+from lxml import etree
+
+import make_fixtures as mf
 from conftest import ALL_DOCS, EDGE, FLOAT, FLOAT_TEXT, FULL, PLACE, READER
 from jasme_jats.docx_reader import read_docx
 from jasme_jats.fidelity import source_texts
 from jasme_jats.model import Para, Table
 from jasme_jats.omml import math_plain, omml_to_mathml
+from jasme_jats.ooxml import (NO_RULE, DocxPackage, HiddenRule, W_NS, canonical_text, canonical_texts, joined_paragraphs,
+                              paragraph_ids, paragraph_mark_deleted, unjoined_deleted_marks, w)
+
+PARTS = (("word/document.xml", "d"), ("word/footnotes.xml", "f"), ("word/endnotes.xml", "e"))
 
 
 def atoms_text(p):
@@ -29,8 +40,19 @@ def read_paragraphs(doc):
 @pytest.mark.parametrize("path", ALL_DOCS + [FLOAT, FLOAT_TEXT, PLACE], ids=lambda p: p.name)
 def test_reader_matches_canonical(path):
     doc = read_docx(path)
-    # 検証側（不変性チェック）と同じく、本文・脚注・文末脚注のすべての w:p を数える
-    canon = source_texts(path)
+    # 検証側（不変性チェック）と同じく、本文・脚注・文末脚注のすべての w:p を数える。段落記号の削除でつないだ段落は、連鎖の
+    # 最初の段落の ID に連鎖の文字を連結したもの（ooxml.canonical_texts。後ろの段落の ID は欠番）
+    pkg = DocxPackage(path)
+    rule = HiddenRule(pkg.xml("word/styles.xml"))
+    canon, later = {}, set()
+    for part, prefix in PARTS:
+        root = pkg.xml(part)
+        if root is None:
+            continue
+        canon.update(canonical_texts(root, prefix, rule))
+        ids = paragraph_ids(root, prefix)
+        later |= {ids[q] for c in joined_paragraphs(root).values() for q in c[1:]}
+    assert canon == source_texts(path)          # 不変性チェックの docx 側の文字と同じ
     paras = list(read_paragraphs(doc))
     assert paras
     for p in paras:
@@ -40,6 +62,10 @@ def test_reader_matches_canonical(path):
     read = set(srcs)
     assert len(srcs) == len(read), sorted(s for s in read if srcs.count(s) > 1)
     assert [(pid, text) for pid, text in canon.items() if text and pid not in read] == []
+    # つないだ段落の後ろの段落の ID は、読み取りの段落にも、検証の文字にもない
+    assert not later & read and not later & set(canon)
+    if path == READER:
+        assert later and {s for _, srcs in doc.joined for s in srcs[1:]} == later
 
 
 def table_with(doc, text):
@@ -193,3 +219,331 @@ def test_textboxes_are_recorded(tmp_path):
     assert t.textbox_id == paras["セルの文字"].textbox_id == paras["表の後ろ"].textbox_id != ""
     assert paras["表。"].textbox_id == "" and paras["浮動配置。"].textbox_id == ""
     assert [tb.xid for tb in doc.textboxes] == [f"x{k}" for k in range(1, 9)]
+
+
+# ----------------------------------------------------------------------------- 読み取りの文字ポリシー（修正計画の G）
+def wp_ids(path, part="word/document.xml", prefix="d"):
+    """docx の w:p ごとの文字（つながずに w:p ごと。ooxml.canonical_text）→ 段落 ID（文字が同じ w:p は最初のもの）。"""
+    pkg = DocxPackage(path)
+    rule = HiddenRule(pkg.xml("word/styles.xml"))
+    out = {}
+    for p, pid in paragraph_ids(pkg.xml(part), prefix).items():
+        out.setdefault(canonical_text(p, rule), pid)
+    return out
+
+
+@pytest.mark.parametrize("text, parts, style", [
+    # 本文＋本文
+    ("段落記号を削除した前半の文と，次の段落の後半の文がつながる。", ["段落記号を削除した前半の文と，", "次の段落の後半の文がつながる。"],
+     mf.S["body"]),
+    # 文字ごと削除した節見出し＋本文: 前の段落が空なので、後ろの段落の書式（本文）。ID は前の段落のもの
+    ("見出しを削除した後ろの本文である。", [None, "見出しを削除した後ろの本文である。"], mf.S["body"]),
+    # 節見出し＋本文: 前の段落の書式（節見出し）。本文＋節見出し: 前の段落の書式（本文）
+    ("（2）見出しの前半と続いた本文の後半", ["（2）見出しの前半と", "続いた本文の後半"], mf.S["sec2"]),
+    ("本文の後ろに（3）続いた見出し", ["本文の後ろに", "（3）続いた見出し"], mf.S["body"]),
+    # 3 段落の連鎖、段落記号の移動（w:moveFrom）、段落の間のしおり（w:bookmarkStart・End は飛ばす）
+    ("連鎖の一つ目，連鎖の二つ目，連鎖の三つ目。", ["連鎖の一つ目，", "連鎖の二つ目，", "連鎖の三つ目。"], mf.S["body"]),
+    ("移動の印の前半，移動の印の後半。", ["移動の印の前半，", "移動の印の後半。"], mf.S["body"]),
+    ("しおりをはさむ前半，しおりをはさむ後半。", ["しおりをはさむ前半，", "しおりをはさむ後半。"], mf.S["body"]),
+    # 表のセルの中、テキストボックスの中（キャプションの 2 段落）
+    ("セルの前半とセルの後半。", ["セルの前半と", "セルの後半。"], mf.S["body"]),
+    ("図3　テキストボックスの中でつないだ表題", ["図3　テキストボックスの中で", "つないだ表題"], mf.S["fig_cap"]),
+], ids=["body-body", "deleted-heading", "heading-body", "body-heading", "chain3", "moveFrom", "bookmark", "cell", "textbox"])
+def test_deleted_paragraph_marks_join_paragraphs(text, parts, style):
+    """段落記号が変更履歴で削除された段落は、Word で承諾した状態と同じく、次の段落とつないで 1 段落として読む（修正計画の D5）。
+    ID は連鎖の最初の段落のもので、後ろの段落の ID は欠番。書式は、前の段落が空なら後ろの段落、そうでなければ前の段落のもの。"""
+    doc = read_docx(READER)
+    paras = list(read_paragraphs(doc))
+    found = [p for p in paras if p.text_only() == text]
+    assert len(found) == 1
+    p = found[0]
+    ids = wp_ids(READER)
+    later = [ids[t] for t in parts[1:]]
+    first = ids[parts[0]] if parts[0] is not None else f"d{int(later[0][1:]) - 1}"
+    assert p.src == first and (first, [first] + later) in doc.joined
+    assert not {q.src for q in paras} & set(later)
+    assert p.style_id == style
+    assert not any(q.text_only() in parts[1:] for q in paras if q is not p)       # 後ろの段落だけの段落はない
+
+
+def test_unjoinable_deleted_marks_are_warned():
+    """つなげない段落記号の削除（次が表・コンテンツコントロール・カスタム XML、コンテンツコントロール・セル・テキストボックスの
+    最後）は、段落を分けたまま読み、10 章の警告に段落の ID と理由を出す（連鎖の最後の段落なら、ID は連鎖の最初の段落のもの）。
+    文字のない段落と、段落記号の隠し文字（スタイル区切り）は警告しない。"""
+    doc = read_docx(READER)
+    texts = [p.text_only() for p in read_paragraphs(doc)]
+    ids = wp_ids(READER)
+    warned = {x.split(":", 1)[0]: x for x in doc.warnings if "段落の区切り（段落記号）が削除" in x}
+    want = {"次がコンテンツコントロールの段落。": "次がコンテンツコントロールなので",
+            "次がカスタムXMLの段落。": "次がカスタム XML なので",
+            "コンテンツコントロールの最後の段落。": "コンテンツコントロールの最後の段落なので",
+            "表6　段落記号を削除した表題": "次が表なので",
+            "セルの最後の段落。": "表のセルの最後の段落なので",
+            "図3　テキストボックスの中で": "テキストボックスの最後の段落なので"}
+    for t, why in want.items():
+        assert why in warned[ids[t]] and "Word で変更をすべて承諾して保存してから変換し直す" in warned[ids[t]], t
+    assert len(warned) == len(want)
+    for t in ("次がコンテンツコントロールの段落。", "コンテンツコントロールの中の段落。", "次がカスタムXMLの段落。",
+              "カスタムXMLの中の段落。", "コンテンツコントロールの最後の段落。", "コンテンツコントロールの後の段落。",
+              "表6　段落記号を削除した表題", "セルの一つ目。", "セルの最後の段落。",
+              "スタイル区切りの前の段落。", "スタイル区切りの後の段落。"):
+        assert t in texts, t
+    # 文字のない段落（変更履歴で削除された表の行のセルの段落）の、つなげない段落記号の削除は警告しない
+    pkg = DocxPackage(READER)
+    rule = HiddenRule(pkg.xml("word/styles.xml"))
+    root = pkg.xml("word/document.xml")
+    pid = paragraph_ids(root, "d")
+    empty = [pid[p] for p, _ in unjoined_deleted_marks(root) if canonical_text(p, rule) == ""]
+    assert empty and not set(empty) & set(warned)
+
+
+def test_joined_numbered_paragraphs_count_once():
+    """自動番号の段落の連鎖は、番号を 1 回だけ数える（文字ごと削除した項目が次の項目とつながり、次の項目は「2.」）。"""
+    doc = read_docx(READER)
+    nums = {p.text_only(): p.autonum for p in read_paragraphs(doc) if p.text_only().startswith("番号の")}
+    assert nums == {"番号の一つ目の項目。": "1.", "番号の三つ目の項目。": "2.", "番号の四つ目の項目。": "3."}
+
+
+def test_joined_paragraph_shapes_and_notes():
+    """後ろの段落に結び付いた図形のアンカーは、つないだ段落（最初の段落の ID）。テキストボックスの中の連鎖は 1 つの段落で、
+    テキストボックスの段落としても 1 回だけ読む。脚注の 1 段落目の段落記号の削除で、脚注は 1 段落になる。"""
+    doc = read_docx(READER)
+    paras = {p.text_only(): p for p in read_paragraphs(doc)}
+    anchor = paras["図2は段落記号を削除した段落に，続く段落に結び付いた図である。"]
+    assert anchor.src == wp_ids(READER)["図2は段落記号を削除した段落に，"]
+    cap = paras["図2　つないだ段落に結び付いた図"]
+    fl = next(f for f in doc.floats if f.fid == cap.float_id)
+    tb = next(t for t in doc.textboxes if t.xid == cap.textbox_id)
+    assert fl.anchor_src == tb.anchor_src == anchor.src
+    cap3 = paras["図3　テキストボックスの中でつないだ表題"]
+    assert cap3.in_textbox and cap3.textbox_id and "つないだ表題" not in paras
+    assert [p.text_only() for p in doc.footnotes["31"]] == ["脚注の前半と脚注の後半。"]
+    # スタイルの違う段落をつないだ連鎖（structure が判断の一覧に記録する）
+    S = mf.S
+    assert sorted((tuple(j.style_ids), j.used) for j in doc.joins) == sorted([
+        ((S["sec2"], S["body"]), S["body"]), ((S["sec2"], S["body"]), S["sec2"]), ((S["body"], S["sec2"]), S["body"])])
+
+
+def test_hidden_text_from_styles():
+    """文字スタイル・段落スタイル（w:basedOn の派生も）の隠し文字も、Word と同じく隠す（修正計画の U8）。隠した文字は 6 章の
+    隠し文字の一覧（Document.hidden_text）に載る。ランの中の改行・記号・改行なしハイフンも一覧に載る。"""
+    doc = read_docx(READER)
+    texts = [p.text_only() for p in read_paragraphs(doc)]
+    assert not any("〔" in t for t in texts)
+    for t in ("文字スタイルで隠した文字。", "派生の文字スタイルで隠した文字。", "直接の指定で隠した文字。",
+              "文字スタイルを直接の指定で打ち消して見える文字。", "段落と文字のスタイルの反転で見える文字。",
+              "表示を指定した派生の文字スタイルの見える文字。", "直接の指定で見える後半。", "隠した改行と記号の後の文字。"):
+        assert t in texts, t
+    hidden = [t for _, t in doc.hidden_text]
+    for t in ("〔文字スタイルで隠す〕", "〔派生の文字スタイルで隠す〕", "〔直接の指定で隠す〕", "〔段落スタイルで隠した段落〕",
+              "〔派生の段落スタイルで隠した段落〕", "〔段落スタイルで隠れる文字〕", "〔段落スタイルで隠れる前半〕",
+              "〔表示を指定した派生の文字スタイルでも隠れる文字〕"):
+        assert t in hidden, t
+    src = next(p.src for p in read_paragraphs(doc) if p.text_only() == "隠した改行と記号の後の文字。")
+    assert [t for s, t in doc.hidden_text if s == src] == ["〔隠Ａ〕", "\n", "α", chr(0x2011), "〔隠Ｂ〕"]
+
+
+def test_deleted_table_rows():
+    """変更履歴で削除された表の行（w:trPr/w:del）のうち、文字がすべて削除されている行は読み飛ばして記録する（修正計画の N8）。
+    削除の印だけで文字の残る行と、削除されたセル（w:tcPr/w:cellDel）は出力し、10 章の警告に出す。"""
+    doc = read_docx(READER)
+    t = table_with(doc, "最後の内容")
+    assert cell_texts(t) == [["区分", "内容"], ["印だけの行", "文字は残る"], ["残るセル", ""], ["最後の行", "最後の内容"]]
+    assert [(d.tid, d.row, d.head) for d in doc.deleted_rows] == [(t.tid, 2, "区分"), (t.tid, 4, "区分")]
+    assert sum("「区分」で始まる表の 3 行目: 変更履歴で削除された行ですが" in x for x in doc.warnings) == 1
+    assert sum("「区分」で始まる表の 5 行目に、変更履歴で削除されたセルがあります" in x for x in doc.warnings) == 1
+
+
+def test_deleted_row_with_shape_is_kept(tmp_path):
+    """削除された行でも、図形（隠し文字の中の画像も）を読んだ行は読み飛ばさない（図形のアンカーが出力しない段落を指さないように）。"""
+    S = mf.S
+
+    def parts(b):
+        img = b.add_image("del_row.png", mf.png_bytes("Row", size=(200, 120)))
+        hidden_img = mf.drawing(img, 900000, 540000, 961).replace("<w:r>", "<w:r><w:rPr><w:vanish/></w:rPr>", 1)
+        return [mf.para(S["sec1"], "１．はじめに"),
+                mf.table_of_rows([mf.tr("区分", "内容"),
+                                  "<w:tr><w:trPr><w:del w:id=\"962\" w:author=\"x\"/></w:trPr>"
+                                  + mf.cell(mf.para(S["body"], mf.deleted(mf.run("削除した行")), hidden_img))
+                                  + mf.cell(mf.para(S["body"], mf.deleted(mf.run("削除した内容")))) + "</w:tr>"], 2)]
+    path = tmp_path / "row.docx"
+    mf.make_article(path, "削除された行の検証用文書", parts)
+    doc = read_docx(path)
+    t = table_with(doc, "内容")
+    assert len(t.rows) == 2 and doc.deleted_rows == [] and doc.images[0].hidden
+    assert any("「区分」で始まる表の 2 行目: 変更履歴で削除された行ですが" in x for x in doc.warnings)
+
+
+def test_deleted_row_numbering_and_hidden_text(tmp_path):
+    """読み飛ばした削除の行の中の自動番号は数えない（Word で承諾すると行ごと消え、後ろの番号が詰まる）。行の中の隠し文字も、隠し文字の
+    一覧に載せない（行ごと、読み飛ばした行として記録する）。"""
+    S = mf.S
+
+    def parts(b):
+        b.styles_extra.append(mf.READER_STYLES)
+        row = ("<w:tr><w:trPr><w:del w:id=\"964\" w:author=\"x\"/></w:trPr>"
+               + mf.cell(mf.list_item(S["body"], mf.deleted(mf.run("削除した番号の行")), num_id=7))
+               + mf.cell(mf.para(S["body"], mf.deleted(mf.run("削除した内容")),
+                                 mf.run_styled("〔削除した行の中の隠し文字〕", rstyle="gHid")))
+               + "</w:tr>")
+        return [mf.para(S["sec1"], "１．はじめに"),
+                mf.table_of_rows([mf.tr("区分", "内容"), row, mf.tr("最後", "最後の内容")], 2),
+                mf.list_item(S["body"], "表の後の番号の一つ目。", num_id=7),
+                mf.list_item(S["body"], "表の後の番号の二つ目。", num_id=7)]
+    path = tmp_path / "rownum.docx"
+    mf.make_article(path, "削除された行の検証用文書", parts)
+    doc = read_docx(path)
+    nums = {p.text_only(): p.autonum for p in read_paragraphs(doc) if p.text_only().startswith("表の後の番号")}
+    assert nums == {"表の後の番号の一つ目。": "1.", "表の後の番号の二つ目。": "2."}
+    assert not any("削除した行の中の隠し文字" in t for _, t in doc.hidden_text)
+    assert [(d.row, d.head) for d in doc.deleted_rows] == [(2, "区分")]
+    t = table_with(doc, "最後の内容")
+    assert cell_texts(t) == [["区分", "内容"], ["最後", "最後の内容"]] and t.skipped_rows == 1
+
+
+def test_deleted_row_with_joined_cell_paragraphs(tmp_path):
+    """読み飛ばした削除の行の中でつないだ段落（Word で行を削除したときの、段落記号も削除されたセルの段落）は、出力した段落として
+    記録しない（6 章の「つないで 1 段落として出力しました」に載せない。行は読み飛ばした行として記録する）。"""
+    S = mf.S
+    two = [mf.para_mark_deleted(S["body"], mf.deleted(mf.run("セルの一つ目"))),
+           mf.para_mark_deleted(S["body"], mf.deleted(mf.run("セルの二つ目")))]
+
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"),
+                mf.table_of_rows([mf.tr("区分", "内容"),
+                                  "<w:tr><w:trPr><w:del w:id=\"963\" w:author=\"x\"/></w:trPr>" + mf.cell(two)
+                                  + mf.cell(mf.para(S["body"], mf.deleted(mf.run("削除した内容")))) + "</w:tr>",
+                                  mf.tr("最後", "最後の内容")], 2)]
+    path = tmp_path / "rowjoin.docx"
+    mf.make_article(path, "削除された行の検証用文書", parts)
+    doc = read_docx(path)
+    assert cell_texts(table_with(doc, "最後の内容")) == [["区分", "内容"], ["最後", "最後の内容"]]
+    assert [(d.row, d.head) for d in doc.deleted_rows] == [(2, "区分")] and doc.joined == [] and doc.joins == []
+    assert not any("段落の区切り（段落記号）" in x for x in doc.warnings)
+
+
+# ooxml の規則の単体テスト（XML の文字列で作る）
+STYLES_U8 = (   # 文字スタイル・派生・段落スタイル・派生（LibreOffice と比べた 21 通りの実験と同じ形。styleId は架空）
+    '<w:style w:type="character" w:styleId="H"><w:name w:val="H"/><w:rPr><w:vanish/></w:rPr></w:style>'
+    '<w:style w:type="character" w:styleId="HD"><w:name w:val="HD"/><w:basedOn w:val="H"/><w:rPr><w:b/></w:rPr></w:style>'
+    '<w:style w:type="character" w:styleId="HD0"><w:name w:val="HD0"/><w:basedOn w:val="H"/><w:rPr><w:vanish w:val="0"/></w:rPr>'
+    '</w:style>'
+    '<w:style w:type="character" w:styleId="HD1"><w:name w:val="HD1"/><w:basedOn w:val="H"/><w:rPr><w:vanish/></w:rPr></w:style>'
+    '<w:style w:type="character" w:styleId="HDD"><w:name w:val="HDD"/><w:basedOn w:val="HD"/><w:rPr><w:i/></w:rPr></w:style>'
+    '<w:style w:type="paragraph" w:styleId="P"><w:name w:val="P"/><w:basedOn w:val="body"/><w:rPr><w:vanish/></w:rPr></w:style>'
+    '<w:style w:type="paragraph" w:styleId="PD"><w:name w:val="PD"/><w:basedOn w:val="P"/><w:rPr><w:b/></w:rPr></w:style>'
+    '<w:style w:type="paragraph" w:styleId="PD0"><w:name w:val="PD0"/><w:basedOn w:val="P"/><w:rPr><w:vanish w:val="0"/></w:rPr>'
+    '</w:style>'
+    '<w:style w:type="paragraph" w:styleId="PD1"><w:name w:val="PD1"/><w:basedOn w:val="P"/><w:rPr><w:vanish/></w:rPr></w:style>')
+
+
+def styles_root(extra=STYLES_U8, doc_defaults=False, default_vanish=False):
+    dd = '<w:docDefaults><w:rPrDefault><w:rPr><w:vanish/></w:rPr></w:rPrDefault></w:docDefaults>' if doc_defaults else ""
+    normal = "<w:rPr><w:vanish/></w:rPr>" if default_vanish else ""
+    return etree.fromstring(f'<w:styles xmlns:w="{W_NS}">{dd}<w:style w:type="paragraph" w:default="1" w:styleId="a">'
+                            f'<w:name w:val="Normal"/>{normal}</w:style><w:style w:type="paragraph" w:styleId="body">'
+                            f'<w:name w:val="Body Text"/><w:basedOn w:val="a"/></w:style>{extra}</w:styles>')
+
+
+def hidden_para(pstyle, rstyle=None, vanish=None, spec=False):
+    """段落 pstyle（None なら pStyle なし）の中の「TEST」のラン。"""
+    ppr = f'<w:pPr><w:pStyle w:val="{pstyle}"/></w:pPr>' if pstyle else ""
+    run = mf.run_styled("TEST", rstyle=rstyle, vanish=vanish, spec=spec)
+    return etree.fromstring(f'<w:p xmlns:w="{W_NS}">{ppr}{run}</w:p>')
+
+
+# (段落スタイル, ランの指定, 隠れるか, docDefaults にも vanish があるとき隠れるか)。修正計画の G の規則（ECMA-376 の切り替え: スタイルと
+# 既定の書式の vanish は、真ならそれまでの状態を反転し、偽なら変えない。ランの直接の指定はその値）の期待。LibreOffice（24.2）で承諾・
+# 表示した結果と違うのは、u15（偽を指定した派生の文字スタイル）・u19（specVanish だけのラン）で LibreOffice は表示するところと、
+# docDefaults の版の u03・u05〜u08・u10・u16・u18・u21（LibreOffice は、段落スタイルに vanish の指定があればその値をそのまま使う）。
+# どれも暫定（Word では未確認。docs/DESIGN.md の 4.1）
+U8_CASES = [
+    ("u01", "body", {"rstyle": "H"}, True, False),
+    ("u02", "body", {"rstyle": "HD"}, True, False),
+    ("u03", "body", {"rstyle": "HD0"}, False, True),
+    ("u04", "body", {"rstyle": "HD1"}, True, False),
+    ("u05", "P", {}, True, False),
+    ("u06", "PD", {}, True, False),
+    ("u07", "PD0", {}, False, True),
+    ("u08", "PD1", {}, True, False),
+    ("u09", "body", {"rstyle": "H", "vanish": False}, False, False),
+    ("u10", "P", {"rstyle": "H"}, False, True),
+    ("u11", "P", {"rstyle": "H", "vanish": False}, False, False),
+    ("u12", "P", {"vanish": False}, False, False),
+    ("u13", "body", {"vanish": True}, True, True),
+    ("u14", "P", {"vanish": True}, True, True),
+    ("u15", "P", {"rstyle": "HD0"}, True, False),
+    ("u16", "P", {"rstyle": "HD"}, False, True),
+    ("u17", "body", {"rstyle": "HDD"}, True, False),
+    ("u18", "PD", {"rstyle": "HD"}, False, True),
+    ("u19", "body", {"spec": True}, True, True),
+    ("u20", "body", {"vanish": False, "spec": True}, False, False),
+    ("u21", "PD1", {"rstyle": "HD1"}, False, True),
+    ("plain", "body", {}, False, True),
+]
+
+
+@pytest.mark.parametrize("pstyle, run_kw, hidden, hidden_dd", [c[1:] for c in U8_CASES], ids=[c[0] for c in U8_CASES])
+def test_hidden_rule(pstyle, run_kw, hidden, hidden_dd):
+    """隠し文字の判定（ooxml.HiddenRule）: 直接の指定・文字スタイル・段落スタイル（派生も）・既定の書式（docDefaults）。"""
+    p = hidden_para(pstyle, **run_kw)
+    assert canonical_text(p, HiddenRule(styles_root())) == ("" if hidden else "TEST")
+    assert canonical_text(p, HiddenRule(styles_root(doc_defaults=True))) == ("" if hidden_dd else "TEST")
+
+
+def test_hidden_rule_details():
+    """派生のスタイルの値（いちばん派生した側。連鎖の中で反転しない）、既定の段落スタイル、既定の書式との打ち消し、basedOn の循環、
+    styles.xml がないとき。"""
+    rule = HiddenRule(styles_root())
+    assert (rule.style_value("H"), rule.style_value("HD"), rule.style_value("HD0"), rule.style_value("HD1")) == (True, True, False, True)
+    assert rule.style_value("body") is None and rule.style_value("ない") is None
+    # pStyle のない段落は既定の段落スタイル（Normal）の値
+    assert canonical_text(hidden_para(None), HiddenRule(styles_root(default_vanish=True))) == ""
+    assert canonical_text(hidden_para(None), rule) == "TEST"
+    # 既定の書式と既定の段落スタイルの両方に vanish があると、打ち消し合って見える（XOR。どちらか一方なら隠れる）
+    both = HiddenRule(styles_root(doc_defaults=True, default_vanish=True))
+    assert canonical_text(hidden_para(None), both) == "TEST" and both.para_state(hidden_para(None)) is False
+    assert canonical_text(hidden_para("body", rstyle="H"), both) == ""
+    # basedOn の循環は打ち切る
+    loop = HiddenRule(styles_root('<w:style w:type="character" w:styleId="X"><w:basedOn w:val="Y"/></w:style>'
+                                  '<w:style w:type="character" w:styleId="Y"><w:basedOn w:val="X"/></w:style>'))
+    assert loop.style_value("X") is None and canonical_text(hidden_para("body", rstyle="X"), loop) == "TEST"
+    # styles.xml がなければ直接の指定だけ（文字スタイルの指定は見ない）
+    assert canonical_text(hidden_para("body", rstyle="H"), NO_RULE) == "TEST"
+    assert canonical_text(hidden_para("body", vanish=True), None) == ""
+
+
+def _body(xml):
+    return etree.fromstring(f'<w:document xmlns:w="{W_NS}"><w:body>{xml}<w:sectPr/></w:body></w:document>')
+
+
+def _p(text, mark="del"):
+    """段落。mark が del・moveFrom なら段落記号の削除、vanish なら段落記号の隠し文字（スタイル区切り）、ins なら段落記号の挿入。"""
+    rpr = {"del": '<w:del w:id="1" w:author="x"/>', "moveFrom": '<w:moveFrom w:id="2" w:author="x"/>',
+           "vanish": "<w:vanish/><w:specVanish/>", "ins": '<w:ins w:id="3" w:author="x"/>'}.get(mark, "")
+    ppr = f"<w:pPr><w:rPr>{rpr}</w:rPr></w:pPr>" if rpr else ""
+    return f"<w:p>{ppr}<w:r><w:t>{text}</w:t></w:r></w:p>"
+
+
+def test_joined_paragraphs_rules():
+    """段落記号の削除でつなぐ規則（ooxml.joined_paragraphs・unjoined_deleted_marks・canonical_texts）: 同じ親の中で、次の兄弟が
+    w:p のときだけ（中身のない目印は飛ばす）。次が表・ブロックの w:ins、本文の最後（w:sectPr の前）ではつながない。段落記号の
+    隠し文字・挿入はつながない。"""
+    root = _body(_p("a") + '<w:commentRangeStart w:id="5"/><w:proofErr w:type="spellStart"/>' + _p("b", None)
+                 + _p("c") + _p("d") + "<w:tbl/>" + _p("e", "moveFrom") + '<w:ins w:id="6" w:author="x">' + _p("f", None)
+                 + "</w:ins>" + _p("g", "vanish") + _p("h", "ins") + _p("i", None) + _p("j"))
+    chains = joined_paragraphs(root)
+    assert [[canonical_text(q) for q in c] for c in chains.values()] == [["a", "b"], ["c", "d"]]
+    assert [(canonical_text(q), why) for q, why in unjoined_deleted_marks(root)] == [
+        ("d", "次が表"), ("e", "次が段落でない"), ("j", "本文の最後の段落")]
+    assert [paragraph_mark_deleted(q) for q in root.iter(w("p"))] == [True, False, True, True, True, False, False, False, False,
+                                                                       True]
+    assert canonical_texts(root, "d") == {"d1": "ab", "d3": "cd", "d5": "e", "d6": "f", "d7": "g", "d8": "h", "d9": "i",
+                                          "d10": "j"}
+    # 親の最後の段落（表のセル・テキストボックス・注・コンテンツコントロール）はつながない
+    cell = etree.fromstring(f'<w:tc xmlns:w="{W_NS}">{_p("k")}</w:tc>')
+    assert [why for _, why in unjoined_deleted_marks(cell)] == ["表のセルの最後の段落"]
+    sdt = etree.fromstring(f'<w:body xmlns:w="{W_NS}"><w:sdt><w:sdtContent>{_p("l")}</w:sdtContent></w:sdt>{_p("m", None)}'
+                           '</w:body>')
+    assert joined_paragraphs(sdt) == {} and [why for _, why in unjoined_deleted_marks(sdt)] == [
+        "コンテンツコントロールの最後の段落"]

@@ -16,21 +16,21 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
 
 | ファイル | 役割 |
 |---|---|
-| `ooxml.py` | docx の低水準処理。**文字ポリシー**（何を docx の文字とみなすか）と、検証用の独立した文字列取り出し `canonical_text()` |
-| `docx_reader.py` | docx → 中間表現（`model.py` の `Document` / `Para` / `Atom`）。コンテンツコントロール（`w:sdt`）・`w:customXml` に包まれた表の行・セル、テキストボックスの段落・表も、文書の順にたどって読む（`_children()`）。テキストボックスごとに `model.TextBox`（ID・アンカー段落・行内か・VML の位置指定・グループの中か・幅と高さ）を記録し、中の段落・表に `textbox_id` を付ける（入れ子の内側は外側の ID）。Word の脚注・文末脚注は、種類と ID の組の注の鍵（`model.note_key`。「footnote:5」。人が読む表記は `model.note_label`）で区別する（番号・リンク・PDF との照合・レポートのどれも、この鍵で注を引く）。削除の変更履歴の中の脚注・文末脚注の参照は、参照にせず `Document.deleted_note_refs` に記録する |
+| `ooxml.py` | docx の低水準処理。**文字ポリシー**（何を docx の文字とみなすか）と、検証用の独立した文字列取り出し `canonical_text()`・`canonical_texts()`。読み取り・検証・ルート2 が共有する規則: 段落記号の削除でつなぐ段落（`joined_paragraphs()`。つなげないものは `unjoined_deleted_marks()`）と、隠し文字の判定（`HiddenRule`。直接の指定・文字スタイル・段落スタイル・既定の書式の `w:vanish`） |
+| `docx_reader.py` | docx → 中間表現（`model.py` の `Document` / `Para` / `Atom`）。コンテンツコントロール（`w:sdt`）・`w:customXml` に包まれた表の行・セル、テキストボックスの段落・表も、文書の順にたどって読む（`_children()`）。テキストボックスごとに `model.TextBox`（ID・アンカー段落・行内か・VML の位置指定・グループの中か・幅と高さ）を記録し、中の段落・表に `textbox_id` を付ける（入れ子の内側は外側の ID）。Word の脚注・文末脚注は、種類と ID の組の注の鍵（`model.note_key`。「footnote:5」。人が読む表記は `model.note_label`）で区別する（番号・リンク・PDF との照合・レポートのどれも、この鍵で注を引く）。削除の変更履歴の中の脚注・文末脚注の参照は、参照にせず `Document.deleted_note_refs` に記録する。段落記号が削除された段落は、次の段落とつないで連鎖の最初の段落の ID の 1 つの段落として読み（`Document.joined`。スタイルの違うものは `Document.joins`）、つなげないものは 10 章の警告にする。変更履歴で削除された、文字のない表の行は読み飛ばす（`Document.deleted_rows`） |
 | `numbering.py` | Word の自動段落番号を表示どおりの文字列にする |
 | `omml.py` | Word の数式（OMML）→ MathML 2.0 |
 | `structure.py` | 段落の役割の決定と論文の構造（`ArticlePlan`）の組み立て。出力しない段落の記録（`ArticlePlan.exclude()`、空白だけの段落は `exclude_blank()`）。浮動配置の図表の配置（`Classifier.place_floats`。位置を決められない図表の仮の位置は `provisional_target`）と、図の本体の組み方（表のセルの画像とキャプション `cell_figures`、画像のない図キャプションの隣の表 `table_for_figure`）。文字だけのテキストボックス（囲み・図に重ねた注記・決められないもの。`Classifier.place_boxes`。囲みは `BoxNode` → `<boxed-text>`。`docs/DESIGN.md` の 6.2）。本文の外（引用文献・注・英文の部分）の段落に結び付いた図形は、その領域の段落にせず本文の最後に回す（`classify` が組み立てを 2 回行う。`Classifier.outside`。6.1）。Word の脚注・文末脚注を、本文で最初に参照される順の通し番号の注にする（`Classifier.attach_word_notes`。参照のない注は理由付きで除外。参照が XML に出力しない段落と、題目・引用文献など注の番号をリンクにしない段落〈`ArticlePlan.no_link_paras`。builder の `xref=False` の文脈をなぞる〉の中にだけある注は、本文からのリンクのない注）。英文要旨の後ろの資料の見出し（`appendix_heading`〈形は `RE_APPENDIX`。文の形の段落〈`appendix_sentence`〉は除き、判断の一覧に記録する〉、見出しのスタイル。`Classifier.build_front_en`）と、英文要旨の中の和文の段落・引用文献などの後ろの資料の見出し・手で書いた注と番号が重なる Word の注の知らせ（`ArticlePlan.abstract_ja`・`app_after_refs`・`note_overlap`・`warnings`） |
 | `linker.py` | 図・表・数式・注・URL・DOI の機械的リンク、アトムにリンクを付ける共通関数 `apply_span()` |
 | `refparse.py` | 引用文献の解析と著者・年方式の引用の抽出・照合（先行ツール「文献チェック」refcheck.py から移植） |
 | `ai_assist.py` | AI 補完（依頼文の作成、API 呼び出し（Claude・ChatGPT・Gemini・Sakana AI）、回答の検証と適用。途中で切れた回答から、最後まで書かれた図表の位置の指定だけを読む `parse_cut_response()`）。図表の位置の指定と同じ `placements` で、文字だけのテキストボックスの種類（kind box・label）も指定させる（`_box_placement_problem`）。set_role の可否は `set_role_problem()` の 1 か所で決め、回答の検証（`role_overrides`）と依頼文の「出力から除外」の一覧の案内（`set_role_hint`）の両方で使う |
-| `emit.py` / `builder.py` | XML の組み立て（文字は必ず `jx:span` の中に書く。囲みは `<boxed-text>`。本文の最上位では `<p>` で包む） |
+| `emit.py` / `builder.py` | XML の組み立て（文字は必ず `jx:span` の中に書く。囲みは `<boxed-text>`。本文の最上位では `<p>` で包む）。表のセルの段落の中の改行の前に `<break/>` を補い（`emit.Ctx.breaks`）、改行のある段落を `BuildInfo.newlines` に記録して 10 章の警告にする |
 | `tracking.py` | 変換途中の目印の定義 |
 | `fidelity.py` | 文字の不変性チェック（出力した段落が除外にも記録されていないか、空白だけとした除外が本当に空白だけか、も確かめる） |
 | `validate.py` | DTD 検証（`dtd/` に J-STAGE 指定 DTD を同梱） |
 | `floats.py` | 浮動配置の図形（テキストボックス・グループ図形）の位置: 機械的に配置できるかの判定、AI に渡す位置の説明と行数の推定。文字だけのテキストボックスが囲みか図の注記か決められないかの判定（`textbox_kind`。しきい値は `BOX_CHARS` などの定数）と行数の推定（`box_lines`） |
 | `pdfmatch.py` | 出版版 PDF との照合（段落ごとの対応付けと、全角・半角の違い・それ以外の違い・Word が付ける番号の違いの一覧）。PDF のページ番号・誌名の行・柱・投稿受付日など（組版で入る文字）と、docx にない図・表の中の文字は照合に使わず、段落の途中にあったものを一覧にする（`pdf_stream()`、`PdfCheck.ignored_lines`）。ページの途中の数字だけの行（引用文献の「pp.11-」の後の「16」のような前の行の続きを除く）・何ページにも出る行は、照合する列から除き、行全体でしか docx の文字と一致させない（`PdfStream.line_only`）。段落ごとの PDF の窓は、全段落を docx の順につないでまとめて照合して決める（`_joint`。0.21.0。PDF の中で表・図・ほかの段落に分断された段落も照合する）。docx に足すか・docx の文字を消すか決められない違いは、理由付きで直さない（`TextDiff.why`。`EDGE_WHY`・`UNSURE_WHY`・`WHOLE_WHY`・`LONG_WHY`・`DISPLACED_WHY`・`HEAD_WHY`・`MATH_WHY`〈文字として取り出せない数式の位置。`PdfStream.formula`〉）。docx のダッシュ（en dash・em dash など）と同じ位置の PDF の行末の「-」は、PDF に合わせて「-」に直す（`DASHES`。docx のハイフンの仲間〈`HYPHENS`。「‐」、Word の改行なしハイフン「‑」など〉と、PDF の行末の docx と違う「-」「‐」も、行の途中と同じく PDF に合わせる） |
-| `pdfdocx.py` | ルート2: 出版版 PDF に合わせて直した docx（Word の変更履歴つき）を作る。書き込んだ後に文字列と構造を確かめる |
+| `pdfdocx.py` | ルート2: 出版版 PDF に合わせて直した docx（Word の変更履歴つき）を作る。書き込んだ後に文字列と構造を確かめる。段落の文字（`paragraph_units()`）と段落のつながり（`_chains()`）は、読み取りと同じ規則（`ooxml.HiddenRule`・`joined_paragraphs`）で決める |
 | `jstage_rules.py` | J-STAGE のアップロード時チェック（記事アップロードメッセージ一覧）のうち XML だけで判定できるものの再現 |
 | `images.py` / `package.py` / `report.py` | 画像の書き出し（変換できなかった EMF/WMF の元の画像は、出力フォルダの直下の `要変換/`）、ZIP、レポート。アップロード用の ZIP に入れるものは `package.upload_entries()` だけで決め（今回の XML・今回指定した PDF・出力できた画像）、作った ZIP は `package.zip_problems()` で読み直して確かめる（`Result.zip_issues`）。記事フォルダにあるのに ZIP に入れなかったファイルは `package.unzipped_files()`（`Result.not_zipped`。レポートの 10 章）。利用者への知らせ（要対応・要確認）は `report.actions()` の 1 か所で `report.Action` の一覧にする（レポートの冒頭・14 章、Colab の赤い枠、コマンドラインの標準エラーと終了コードはこれだけで決まる。`docs/DESIGN.md` の 3 章） |
 | `pipeline.py` / `cli.py` | 全体の流れ（画像の出力漏れの検出 `lost_images()` を含む）とコマンドライン。`Result.needs_action`（要対応があるか）・`Result.pdf_fallback`（ルート2 で PDF の文字を読めなかった）。コマンドラインの終了コードは、0 が要対応なし、1 が要対応あり（要対応の一覧は標準エラー）、2 が中止 |
@@ -48,8 +48,10 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
    不変性チェックは文字しか見ないので、画像は、変換の後に `pipeline.lost_images()` が、docx の画像のうち XML に出力しなかったもの
    （引用文献など画像を出力できない段落や、除外した段落の中の画像）を調べ、要対応として知らせる（隠し文字の中の画像を除く）。
 4. 構造の区切りとして空白を落とす場合は `Emitter.drop()` を使う（空白以外は落とせない）。
-5. 新しい種類の docx の要素に対応するときは、`ooxml.canonical_text()`（検証側）と `docx_reader.py`（変換側）の両方を同じ文字ポリシーで直し、
-   その要素を含む docx を `tests/make_fixtures.py` に加えてテストする。
+5. 新しい種類の docx の要素に対応するときは、`ooxml.canonical_text()`（検証側）と `docx_reader.py`（変換側）、ルート2 の
+   `pdfdocx.paragraph_units()`・`raw_paragraph_ids()` の 3 か所を同じ文字ポリシーで直し、その要素を含む docx を `tests/make_fixtures.py` に
+   加えてテストする。段落のつながり（`ooxml.joined_paragraphs()`）と隠し文字の判定（`ooxml.HiddenRule`）は 3 か所で共有する（規則は
+   `ooxml.py` の 1 か所に置き、文字の取り出しは別々の実装のまま。規則そのものの誤りは不変性チェックで見つからないので、単体テストで確かめる）。
 6. 出版版 PDF に合わせるときは、XML ではなく docx を直す（ルート2。`pdfdocx.py`、`docs/DESIGN.md` の 4.4）。直した docx は Word の
    変更履歴つきで利用者が確かめられ、それを変換する処理はルート1 と同じなので、1.〜5. はそのまま当てはまる。`pdfdocx.py` を直すときは、
    書き込んだ後の確かめ（読み直した文字列と、段落の役割・リンク・注の区切り）を外さないこと。PDF の組版で入る文字（ページ番号・
@@ -78,14 +80,31 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
   その場で作るのにも使う（`tests/test_floats.py`・`tests/test_pipeline.py`・`tests/test_lost_images.py`・`tests/test_pdfmatch.py`・
   `tests/test_notes.py`・`tests/test_structure.py`・`tests/test_ai.py`。Word の文末脚注は `endnote()`・`endnote_ref()`、脚注は
   `footnote()`・`footnote_ref()`〈記号を自分で付けた参照は `mark`〉、削除の変更履歴は `deleted()`、引用文献の段落は `refs`、英文要旨の
-  段落は `abstract`、英文要旨の後ろの資料は `appendix` で足せる）。
-- `tests/test_reader.py`: 読み取った段落の文字が、検証側（`ooxml.canonical_text()`）と一致すること。逆向きに、文字のある段落
+  段落は `abstract`、英文要旨の後ろの資料は `appendix` で足せる。段落記号の削除は `para_mark_deleted()`〈`kind="move"` で `w:moveFrom`〉、
+  段落記号の隠し文字〈スタイル区切り〉は `para_mark_hidden()`、文字スタイル・直接の隠し文字のランは `run_styled()`、段落の中の改行は `br()`・
+  `run_with_break()`〈題目などの lxml の段落には `add_break()`〉、変更履歴で削除された表の行・セルは `deleted_row()`・`cell_deleted()`、
+  スタイルの定義は `Builder.styles_extra`〈`READER_STYLES`〉で足せる）。
+- `tests/test_reader.py`: 読み取った段落の文字が、検証側（`ooxml.canonical_texts()`。段落記号の削除でつないだ段落は連鎖の最初の段落の ID に
+  連結した文字で、後ろの段落の ID は欠番）と一致すること。逆向きに、文字のある段落
   （本文・表・テキストボックス・Word の脚注・文末脚注）がすべて 1 回だけ読まれていること。`sample_reader.docx` の、コンテンツコントロール
   （`w:sdt`）や `w:customXml` に包まれた表の行・セル、テキストボックスの段落と表も。テキストボックスの記録（`model.TextBox`。浮動配置・
   行内・VML の pt の大きさと position:absolute・pt 以外の単位は読めないこと・グループの拡大率・入れ子の内側が外側の ID を継ぐこと・
-  中の表とセルの段落の `textbox_id`。`test_textboxes_are_recorded`）も。
+  中の表とセルの段落の `textbox_id`。`test_textboxes_are_recorded`）も。読み取りの文字ポリシー（修正計画の G。`sample_reader.docx` の
+  節「段落記号の削除」「スタイルの隠し文字」「削除された表の行」と、XML の文字列で作る小さな例）: 段落記号の削除でつなぐ段落（本文・
+  文字ごと削除した見出し＋本文〈後ろの書式〉・見出し＋本文〈前の書式〉・3 段落の連鎖・`w:moveFrom`・しおりをはさむもの・セルの中・
+  テキストボックスの中）の文字・スタイル・ID の欠番、つなげない場所（次が表・コンテンツコントロール・カスタム XML、コンテンツ
+  コントロール・セル・テキストボックスの最後）の 10 章の警告（文字のない段落と段落記号の隠し文字は警告しない）、番号付きの連鎖の
+  番号の数え方、後ろの段落に結び付いた図形のアンカー、脚注の 1 段落目の段落記号の削除、スタイルの違う連鎖の記録（`Document.joins`）。
+  スタイルの隠し文字（`ooxml.HiddenRule` の 21 通りと、既定の書式にも `w:vanish` を置いた版〈`U8_CASES`。修正計画の規則〈ECMA-376 の
+  切り替え〉の期待で、LibreOffice の結果と違うものはコメントに挙げた〉、派生のスタイルの値・既定の段落スタイル・既定の書式との打ち消し・
+  basedOn の循環・styles.xml がないとき）と、隠し文字の一覧に改行・記号・改行なしハイフンが載ること。変更履歴で削除された
+  表の行（文字のない行は読み飛ばして記録、文字の残る行と削除されたセルは出力して警告、図形を読んだ行は読み飛ばさない、読み飛ばした行の
+  中の自動番号は数えず、行の中の隠し文字は隠し文字の一覧に載せない）。
+  `ooxml.joined_paragraphs`・`unjoined_deleted_marks`・`canonical_texts` の規則（同じ親の中だけ、目印は飛ばす、ブロックの `w:ins`・表・
+  本文の最後ではつながない）。
 - `tests/test_fidelity.py`: 不変性チェックがわざと壊した XML を確実に検出することのテスト（出力と除外の重なり、文字のある
-  空白だけの除外も）。チェックの処理を変えたら必ず通すこと。
+  空白だけの除外も）。検証の docx 側の文字も、読み取りと同じく段落記号の削除でつなぎ、スタイルの隠し文字を隠すこと（欠番の ID の文字や、
+  隠した文字を出力すると不合格になること）。チェックの処理を変えたら必ず通すこと。
 - `tests/test_ai.py`: AI の回答の検証と適用（実際の API は呼ばない。`tests/data/ai_response_sample_full.json` が模擬回答。
   Claude・ChatGPT・Gemini・Sakana AI の呼び出しは、それぞれ偽のクライアントに置き換えて確かめる）。回答の書式で `placements` を
   最初に書かせること（見本・項目の説明・依頼文・スキーマ）、途中で切れた回答（`ai_response_sample_float.json` から、`placements` を
@@ -285,7 +304,21 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
   行）を黙って捨てずに直さない違い（`EDGE_WHY`）として 13 章に出すこと（見出しの後ろの行や、段落の最後の行のすぐ後ろでない
   行は、文の続きとみなさないこと）、13 章で docx の数式を「〓」で示し、ルート2 の 13.2 で PDF にだけある文字の行の docx の欄に
   足す位置の前後の文字を出すこと、表に「〓」があるときは docx の欄と PDF の欄での意味の違いを表の前に添えること（Colab の
-  赤い枠も同じ。`tests/test_colab.py`）。
+  赤い枠も同じ。`tests/test_colab.py`）。段落記号の削除で 2 つの `w:p` に分けた段落（`make_fixtures.make_pdfcheck(split=True)` でテストの中で作る。
+  PDF は今の `sample_pdfcheck.pdf`）を、どちらのルートでも 1 つの段落として照合し、ルート2 で 1 つの段落として直すこと（直した docx の `w:p` の
+  数と段落記号の削除はそのまま）、段落記号の削除をまたぐ直しが前と後ろの `w:p` の `w:t` に分かれて入ること（境目に足す文字は前の `w:p`）、
+  `paragraph_units()` に隠し文字の規則を渡し、つないだ段落の単位を連結した文字が、`sample_reader.docx` のすべての段落で読み取りと同じこと
+  （読み取り・検証・ルート2 の 3 か所が同じ文字ポリシー。修正計画の G）、直す段落の途中に文字スタイルで隠した文字のある docx
+  （`make_pdfcheck(hidden=True)`。`split=True` とも組み合わせる。テストの中で作る）でも、隠し文字のない docx と同じ箇所をすべて直し、
+  隠した文字は直した docx に残って XML に出ないこと（`write_fixed_docx()` が規則を `paragraph_units()` に渡していること）。
+- 段落の中の改行と、読み取りの文字ポリシーの出力（修正計画の G）: `tests/test_pipeline.py` で、段落記号の削除でつないだ段落が 1 つの `<p>`
+  （見出し＋本文は `<title>`、文字ごと削除した見出し＋本文は `<p>`）になること、`sample_reader.docx` の節「セルの改行」で、表のセル
+  （見出し行の `<th>` も）の改行の前に `<break/>` が入り、改行の文字はその後ろに残ること（太字の中の改行は書式の要素をいったん閉じる、
+  リンクの中には入れない、段落の最後の改行の後ろに段落の間の `<break/>` が続いても DTD に合う）、本文・題目・引用文献には入れないこと、
+  `emit.Emitter.span` の単体のふるまい、レポートの 6 章（つないだ段落・読み飛ばした行・隠し文字の改行）・10 章（改行の一覧）・4 章
+  （スタイルの違う段落をつないだ判断）、題目・引用文献の改行の要確認（冒頭・14 章・Colab の枠・コマンドラインの標準エラー。終了コード 0）、
+  本文の段落の改行（`sample_edge.docx`）は 10 章の一覧だけで要確認にしないこと。すべての行が変更履歴で削除された表は、キャプションと空の表を
+  出力して 10 章の警告に出し、6 章の読み飛ばした行の一覧ではキャプションで示すこと（`test_table_with_all_rows_deleted`）。
 - 要対応・要確認の知らせ（`report.actions()`。修正計画の D）: `tests/test_pipeline.py` で、J-STAGE のアップロード時チェックの問題
   （受付日が受理日より後）が要対応としてレポートの冒頭・14 章とコマンドライン（終了コード 1・標準エラーのメッセージ ID）に出ること、
   `--meta` がないとき（EMSGM230E）・画像が足りないとき・手動モードで回答をまだ指定していないときも 1 で、画像を渡すと 0 になること、
@@ -437,4 +470,5 @@ Claude Code の環境の作り方）を読む。
 | AI 依頼文の set_role（0.24.0） | 修正計画の E（N6・D3）で、set_role の可否を `ai_assist.set_role_problem` の 1 か所にまとめ、依頼文で必ず捨てられる set_role を勧めないようにした。資料の見出しの役割 `app_heading` と、資料の見出しへの `abstract`（英文要旨に戻す）・`p`（資料の中の段落にする。前に資料がなければ見出しのない資料。`abstract` で戻した後ろの、見出しでない段落への `p` は英文要旨のまま）も足した。どれも模擬回答でのみ確かめていて、実際の AI（少なくとも Claude）ではまだ試していない。試験運用で一度確かめる |
 | アップロード用 ZIP の中身 | 修正計画（`docs/FIX_PLAN.md`）の C で、ZIP に入れるものを今回の XML・今回指定した PDF・出力できた画像だけにし（要変換/ は出力フォルダの直下）、作った ZIP を読み直して確かめる（`package.zip_problems`。メッセージ ID は記事アップロードメッセージ一覧から。`docs/JSTAGE_NOTES.md`）ようにした。新しい形の ZIP（要変換/ や前の変換の残りが入らないもの）が J-STAGE で受け付けられることは、試験運用で一度確かめる。Colab の「変換結果」の ZIP（出力フォルダ全体）には、記事フォルダに残った前の変換の残りが入りうる（手順 6 で変換し直したとき。実害は小さい） |
 | 要対応・要確認の知らせ（0.23.1） | 修正計画（`docs/FIX_PLAN.md`）の D で、知らせを `report.actions()` の 1 か所にまとめた。コマンドラインの終了コードの意味が変わった（`--meta` がない・画像が足りない・手動モードで回答をまだ指定していない・図の本体が見つからない、なども 1。指定したファイル・フォルダがない、`--images` の画像を読めない、は 2）。手動モードの最初の実行（依頼文を作る段階）も決定事項 5(c) のとおり 1 にした（README に「失敗ではない」と明記）。スクリプトから呼ぶ人に紛らわしければ、コマンドラインだけ 0 にするかを利用者に相談する。別の記事の PDF の疑い（段落の半分以上が見つからない）は、出版社の実際の PDF でまだ試していないので要確認にとどめている。照合に使わなかった PDF の文字の要確認は、実際の出版版 PDF ではほぼ毎回出る（投稿受付日の行など）ので、試験運用で多すぎないかを確かめる |
+| 読み取りの文字ポリシー（0.26.0） | 修正計画（`docs/FIX_PLAN.md`）の G で、段落記号の削除を承諾した状態として次の段落とつなぎ（D5）、文字スタイル・段落スタイル・既定の書式の隠し文字も隠し（U8）、表のセルの段落の中の改行の前に `<break/>` を補い（U3。題目・著者・所属・引用文献の改行は要確認で知らせる）、変更履歴で削除された文字のない表の行を読み飛ばす（N8）ようにした（`docs/DESIGN.md` の 4.1）。規則は LibreOffice で承諾・表示した結果と比べて決めた暫定のもので、Word での確認を待っている: (1) `tests/fixtures/sample_reader.docx` を Word で開いて「すべての変更を反映」した後の段落のつながりとスタイル（特に、LibreOffice と違うコンテンツコントロール・カスタム XML の境目、段落記号の `w:moveFrom`、脚注の参照のある段落。書式の元の段落〈前の段落が空なら後ろ。画像だけの段落〉と番号の数え方）、(2) スタイルの隠し文字の表示（特に、修正計画の規則〈ECMA-376 の切り替え〉と LibreOffice の表示が違う 3 つの形: 偽を指定した派生の文字スタイルを隠す段落スタイルの段落で使ったラン〈本ツールは隠す。`sample_reader.docx` の節「スタイルの隠し文字」の「〔表示を指定した派生の文字スタイルでも隠れる文字〕」〉、既定の書式と段落スタイルの両方の `w:vanish`〈本ツールは打ち消し合って見える〉、`w:specVanish` だけのラン〈本ツールは隠す〉）、(3) 変更履歴で削除されたセル（`w:cellDel`）を承諾した後の表の形（LibreOffice は列ごと消す。本ツールはセルを出力して警告）。J-STAGE の試験登載で、表のセルの `<break/>`（改行の位置と、セルの中の段落の間。全文 XML 作成マニュアルの td・th の文字修飾の一覧にない）の表示と、アップロードのときのエラーの有無を確かめる（`docs/JSTAGE_NOTES.md`）。手元のテストデータ1〜3 には段落記号の削除・隠し文字・削除された行はなく、出力が変わるのはテストデータ3 のセルの `<break/>` と題目の改行の要確認だけ |
 | 正式リリース | 試験運用で問題がなければ、版を 1.0.0 にする |

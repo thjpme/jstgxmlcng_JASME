@@ -872,3 +872,171 @@ def test_manual_mode_before_answer_is_needs_action(journal, meta, tmp_path, caps
     assert main([str(FULL), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "b"), "--ai", "manual",
                  "--no-metafile-conversion"]) == 1
     assert "--ai-response で指定し" in capsys.readouterr().err
+
+
+# ----------------------------------------------------------------------------- 読み取りの文字ポリシー（修正計画の G）
+def text(el):
+    return "".join(el.itertext())
+
+
+def chapter(report, n):
+    """レポートの n 章の本文（次の章の見出しの前まで）。"""
+    return report.split(f"\n## {n}.", 1)[1].split("\n## ", 1)[0]
+
+
+def parts_of(el):
+    """要素の中身の並び（文字は str、子の要素は (タグ, 中身の並び)。属性は見ない）。"""
+    out = [el.text] if el.text else []
+    for ch in el:
+        out.append((ch.tag, parts_of(ch)))
+        if ch.tail:
+            out.append(ch.tail)
+    return out
+
+
+def test_deleted_paragraph_mark_joins_paragraphs(journal, meta, tmp_path):
+    """段落記号が削除された変更履歴（2 段落を 1 つにつなぐ変更）は、Word で変更を承諾した状態と同じく 1 つの段落にする
+    （docs/fix_plan_repro_tests.py にあった test_PROBLEM_deleted_paragraph_mark_keeps_two_paragraphs の逆。修正計画の D5）。
+    節見出し＋本文は見出し（前の段落の書式）のまま、文字ごと削除した節見出し＋本文は本文（後ろの段落の書式）になる。"""
+    S = mf.S
+
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"),
+                ('<w:p><w:pPr><w:pStyle w:val="af5"/><w:rPr><w:del w:id="9" w:author="x"/></w:rPr></w:pPr>'
+                 '<w:r><w:t>前半の文と</w:t></w:r></w:p>'),
+                mf.para(S["body"], "後半の文。"),
+                mf.para_mark_deleted(S["sec2"], "（1）見出しの前半と"), mf.para(S["body"], "本文の後半"),
+                mf.para_mark_deleted(S["sec2"], mf.deleted(mf.run("（2）削除した見出し"))),
+                mf.para(S["body"], "見出しを消した本文。")]
+    path = tmp_path / "pmark.docx"
+    mf.make_article(path, "段落記号の削除の検証用文書", parts)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    root = load(res)
+    ps = [text(p) for p in root.iter("p")]
+    assert "前半の文と後半の文。" in ps and "前半の文と" not in ps and "後半の文。" not in ps
+    titles = [text(t) for t in root.iter("title")]
+    assert "（1）見出しの前半と本文の後半" in titles and "本文の後半" not in ps
+    assert "見出しを消した本文。" in ps and not any("（2）" in t for t in titles)
+
+
+def test_table_with_all_rows_deleted(journal, meta, tmp_path):
+    """変更履歴ですべての行が削除された表（修正計画の N8）は、キャプション（docx の文字）と空の表を出力し、10 章の警告で知らせる。
+    6 章の読み飛ばした行の一覧では、文字の残らない表をキャプションで示す。"""
+    S = mf.S
+
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "表1はすべての行を削除した表である。"),
+                mf.para(S["tab_cap"], "表1　すべての行を削除した表"),
+                mf.table_of_rows([mf.deleted_row("全一", "全二"), mf.deleted_row("全三", "全四")], 2)]
+    path = tmp_path / "allrows.docx"
+    mf.make_article(path, "削除された行の検証用文書", parts)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    tw = load(res).find(".//table-wrap")
+    assert "".join(tw.find("caption").itertext()) == "表1　すべての行を削除した表"
+    assert [etree.QName(el).localname for el in tw.find("table").iter()] == ["table", "tbody", "tr", "td"]
+    report = res.report_path.read_text(encoding="utf-8")
+    assert ("キャプション「表1　すべての行を削除した表」の表の 1 行目、キャプション「表1　すべての行を削除した表」の表の 2 行目"
+            in chapter(report, 6))
+    assert (f"表 {tw.get('id')}（キャプション「表1　すべての行を削除した表」）: 変更履歴で表のすべての行が削除されています"
+            in chapter(report, 10))
+
+
+def test_line_breaks_in_cells(journal, meta, tmp_path):
+    """表のセルの段落の中の改行（w:br）の前に <break/> を補う（改行の文字は <break/> の後ろに残す。書式の要素はいったん閉じる。
+    リンクの中には入れない。修正計画の U3・決定事項 13(1)）。本文・題目・引用文献の改行は文字のまま。"""
+    from conftest import READER
+    res = convert(READER, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    fid = res.fidelity
+    assert fid.ok and fid.final_ok and res.dtd_valid and res.jstage_issues == []
+    assert all(reason == "姓と名の間の空白" for _, _, reason in fid.drops)
+    root = load(res)
+    tw = next(t for t in root.iter("table-wrap") if text(t.find("caption")) == "表7　改行のあるセル")
+    cells = [parts_of(c) for c in tw.iter("th", "td")]
+    br = ("break", [])
+    assert tw.find(".//th").getparent().getparent().tag == "thead"
+    assert cells == [["見出しの", br, "\n一行目"], ["内容"],
+                     ["普通の文字の", br, "\n改行"], [("bold", ["太字の前"]), br, "\n", ("bold", ["太字の後"])],
+                     [("bold", ["太字の一つ目"]), br, "\n", ("bold", ["太字の二つ目"])], [("uri", ["リンクの\n中の改行"])],
+                     ["段落の最後で改行", br, "\n", br, "次の段落"], ["最後のセル"]]
+    # 本文の段落・題目・引用文献には <break/> を入れない（改行の文字のまま）
+    for tag, want in (("p", "本文の段落の\n改行の後。"), ("article-title", "読み取りの検証用文書\n（改行の後の題目）"),
+                      ("mixed-citation", "「改行のある文献」．\n『架空誌』")):
+        el = next(e for e in root.iter(tag) if want in text(e))
+        assert el.find(".//break") is None, tag
+
+
+def test_cell_breaks_in_emitter():
+    """emit.Emitter.span: 表のセル（CELL）では、書き込み先が jx:span そのもののときだけ、改行の前に <break/> を入れる（空の部分には
+    書式の要素を作らない）。本文（BODY）は今までどおり。改行の数と <break/> の数を記録する。"""
+    from jasme_jats.emit import BODY, CELL, Emitter
+    from jasme_jats.model import Atom, Para
+    p = Para(src="d1", atoms=[Atom(kind="text", text="\n前", fmt=frozenset({"bold"})), Atom(kind="text", text="後\n")])
+    em = Emitter(lambda img: "x.png")
+    sp = em.span(etree.Element("td"), p, CELL)
+    assert parts_of(sp) == [("break", []), "\n", ("bold", ["前"]), "後", ("break", []), "\n"]
+    assert em.breaks == 2 and [(n.src, n.count, n.breaks, n.cell, n.label) for n in em.newlines] == [("d1", 2, 2, True, "")]
+    sp = em.span(etree.Element("p"), p, BODY)
+    assert parts_of(sp) == [("bold", ["\n前"]), "後\n"]
+    assert em.breaks == 2 and [(n.count, n.breaks, n.cell) for n in em.newlines[1:]] == [(2, 0, False)]
+
+
+def test_reader_report_and_notices(journal, meta, tmp_path, capsys):
+    """sample_reader のレポート: 6 章につないだ段落と読み飛ばした表の行、隠し文字の改行・記号、10 章に改行の一覧、4 章にスタイルの
+    違う段落をつないだ判断。題目・引用文献の改行は要確認（冒頭・14 章・Colab の枠・コマンドライン。終了コード 0）。"""
+    from conftest import META_EXAMPLE, READER
+
+    from jasme_jats.cli import main
+    from jasme_jats.colab import result_boxes
+    from jasme_jats.report import TO_CHECK, actions
+    res = convert(READER, meta, journal, Options(out_dir=tmp_path / "a", convert_metafiles=False))
+    report = res.report_path.read_text(encoding="utf-8")
+    ch6, ch10, ch4 = chapter(report, 6), chapter(report, 10), chapter(report, 4)
+    assert "変更履歴で段落記号（段落の区切り）が削除された段落を、次の段落とつないで 1 段落として出力しました（12 か所:" in ch6
+    _, srcs = res.joined[0]
+    assert f"{'＋'.join(srcs)}、" in ch6
+    assert ("変更履歴で削除された表の行 2 行は、行の文字がすべて削除されていたので、Word で変更を承諾した状態と同じく出力して"
+            "いません: 「区分」で始まる表の 2 行目、「区分」で始まる表の 4 行目") in ch6
+    assert "〔隠Ａ〕、" in ch6 and "］⏎、" in ch6 and "］α、" in ch6
+    assert ("表のセルの段落の中の改行（Shift+Enter）6 か所のうち 5 か所の位置に、XML の改行の要素（`<break/>`）を入れました"
+            "（改行の文字も残しています。リンクの中の 1 か所は、改行の文字のまま）: ") in ch10
+    assert "題目・著者・所属・引用文献の段落の中に、改行（Shift+Enter）が 2 か所あります" in ch10
+    assert "（題目・副題）" in ch10 and "（引用文献）" in ch10
+    assert "本文などの段落の中の改行（Shift+Enter）1 か所は、XML では改行の文字のまま出力しました" in ch10
+    assert ch4.count("変更履歴で段落記号が削除された") == 3 and "のスタイル「節見出し」にした" in ch4
+    acts = {a.key: a for a in actions(res)}
+    assert list(acts) == ["newline"] and acts["newline"].level == TO_CHECK and not res.needs_action
+    head = report.split("## 2.")[0]
+    assert "要確認: 題目・著者・所属・引用文献の段落の中に、改行（Shift+Enter）が 2 か所あります（10 章）" in head
+    assert "（題目・副題）、" in head and "（引用文献）" in head
+    assert "**題目・著者・所属・引用文献の中の改行**（2 か所。10 章）" in report.split("## 14.")[1]
+    assert "題目・著者・所属・引用文献の中に改行があります（要確認）" in result_boxes(res)
+    assert main([str(READER), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "b"), "--no-metafile-conversion"]) == 0
+    assert "要確認: 題目・著者・所属・引用文献の段落の中に、改行（Shift+Enter）が 2 か所あります" in capsys.readouterr().err
+
+
+def test_newline_action_lists_samples():
+    """題目・引用文献などの改行の要確認（report._newline_action）は、対象の段落を NEWLINE_SAMPLES 件まで並べ、それより多ければ「、ほか」を
+    付ける。表のセルの改行（<break/> を入れたもの）は数えない。"""
+    from types import SimpleNamespace
+
+    from jasme_jats.model import Newline
+    from jasme_jats.report import NEWLINE_SAMPLES, _newline_action
+    rows = [Newline(src=f"d{k}", count=1, breaks=0, label="引用文献") for k in range(NEWLINE_SAMPLES + 1)]
+    rows.append(Newline(src="d99", count=3, breaks=3, cell=True))
+    act = _newline_action(SimpleNamespace(newlines=rows, plan=SimpleNamespace(paras={})))
+    assert f"改行（Shift+Enter）が {NEWLINE_SAMPLES + 1} か所あります" in act.top
+    assert act.top.endswith(f"d{NEWLINE_SAMPLES - 1}（引用文献）、ほか") and "d99" not in act.top
+
+
+def test_body_line_break_is_only_listed(journal, meta, tmp_path):
+    """本文の段落の中の改行（sample_edge）は、10 章の一覧に出すだけ（要確認にしない）。XML は文字のまま。"""
+    from conftest import EDGE
+
+    from jasme_jats.report import actions
+    res = convert(EDGE, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    ch10 = chapter(res.report_path.read_text(encoding="utf-8"), 10)
+    assert "本文などの段落の中の改行（Shift+Enter）1 か所は、XML では改行の文字のまま出力しました" in ch10
+    assert "newline" not in {a.key for a in actions(res)}
+    assert load(res).find(".//body//break") is None
