@@ -146,13 +146,21 @@ def test_api_mode_with_fake_client(journal, meta, tmp_path, monkeypatch):
 
 
 def test_default_model_is_written_once(tmp_path):
-    """既定の AI モデル名は ai_assist.DEFAULT_MODEL の 1 か所にだけ書く（修正計画の U5）。pipeline.Options の既定もこれで、
-    ノートブックの生成スクリプト（tools/make_notebook.py）は ai_assist.py から読む（tests/test_notebook.py）。"""
+    """既定の AI モデル名は ai_assist.DEFAULT_MODEL の 1 か所にだけ書き、表示名・料金・提供終了の予定は DEFAULT_MODEL_INFO の
+    1 か所にだけ書く（修正計画の U5）。pipeline.Options の既定もこれで、ノートブックの生成スクリプト（tools/make_notebook.py）は
+    ai_assist.py から読む（tests/test_notebook.py）。ほかの src のファイルと make_notebook.py に、同じ値の直書きがないことを数える。"""
+    from jasme_jats.ai_assist import DEFAULT_MODEL_INFO
     assert Options(out_dir=tmp_path).ai_model == DEFAULT_MODEL
+    info = DEFAULT_MODEL_INFO
+    y, m, d = (int(x) for x in info["not_before"].split("-"))
+    literals = [f'"{DEFAULT_MODEL}"', info["name"], info["not_before"], f"{y} 年 {m} 月 {d} 日",
+                f"あたり {info['input_usd']} ドル", f"あたり {info['output_usd']} ドル"]
     root = Path(pipeline.__file__).resolve().parent
     for path in sorted(root.glob("*.py")) + [root.parent.parent / "tools" / "make_notebook.py"]:
-        n = path.read_text(encoding="utf-8").count(f'"{DEFAULT_MODEL}"')
-        assert n == (1 if path.name == "ai_assist.py" else 0), path
+        body = path.read_text(encoding="utf-8")
+        for lit in literals:
+            want = 1 if path.name == "ai_assist.py" and lit in (f'"{DEFAULT_MODEL}"', info["name"], info["not_before"]) else 0
+            assert body.count(lit) == want, (path, lit)
 
 
 def test_response_schema_is_strict():
@@ -1252,26 +1260,46 @@ def test_unsplit_names_come_from_build_info(journal, meta, tmp_path):
 
 def test_build_request_lists_unsplit_names_with_language(journal):
     """build_request は (段落の ID, 氏名, 言語) の組を受け取り、英文の氏名も載せる（利用者の決定事項 17: 英文 1 語の氏名も、
-    今までどおり AI 依頼文に載せる）。"""
+    今までどおり AI 依頼文に載せる）。split_name は和文の氏名にしか使えない（apply_ops）ので、英文の行には提案しないことを添える
+    （10 章の警告の「AI による補完では、英文の著者名は分けられません」と同じ言い分）。"""
     from jasme_jats.ai_assist import build_request
     _, plan, linker = _mechanical(FULL, journal)
     req, _ = build_request(plan, linker, (), [("d11", "研究次郎", "ja"), ("d12", "KENKYU", "en")])
     assert "- [d11] 姓と名の区切りがない氏名: 「研究次郎」" in req
-    assert "- [d12] 姓と名の区切りがない氏名: 「KENKYU」" in req
+    assert ("- [d12] 姓と名の区切りがない氏名（英文の氏名。split_name は和文の氏名にだけ使えるので、提案しない）: 「KENKYU」"
+            in req)
+
+
+def test_build_request_shows_newline_in_unsplit_name(journal):
+    """氏名の中の改行（著者名の後ろの Shift+Enter など）は、依頼文では「⏎」で示し、1 件を 1 行に書く（氏名の文字は変えない。
+    BuildInfo.unsplit_names には改行の文字のまま入る）。"""
+    from jasme_jats.ai_assist import build_request
+    _, plan, linker = _mechanical(FULL, journal)
+    req, _ = build_request(plan, linker, (), [("d11", "研究次郎\n", "ja")])
+    [line] = [ln for ln in req.splitlines() if "姓と名の区切りがない氏名" in ln]
+    assert line == "- [d11] 姓と名の区切りがない氏名: 「研究次郎⏎」"
 
 
 def test_english_one_word_name_is_listed_and_warned(journal, meta, tmp_path):
-    """英文 1 語の著者名は、全体を姓として出力し、4 章の記録（今までどおり）・AI 依頼文（決定事項 17）・10 章の警告（決定事項 17
-    の後半）に出す。要対応・要確認は増えない。和文の「研究　次郎」は分けられるので載せない。"""
+    """英文 1 語の著者名は、全体を姓として出力し、4 章の記録（今までどおり）・AI 依頼文（決定事項 17。split_name を提案しないことを
+    添える）・10 章の警告（決定事項 17 の後半）に出す。要対応・要確認は増えない。和文の「研究　次郎」は分けられるので載せない。"""
     path = names_article(tmp_path / "en.docx", ["研究\u3000次郎"], ["KENKYU"])
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     [warn] = [w for w in res.warnings if "英文の著者名" in w]
     assert "「KENKYU」" in warn and "姓（surname）" in warn and "Word で" in warn
     assert any(d.category == "name" and "「KENKYU」" in d.message for d in res.build_notes)
-    names = [ln for ln in res.prompt_path.read_text(encoding="utf-8").splitlines() if "姓と名の区切りがない氏名: " in ln]
-    assert len(names) == 1 and names[0].endswith("「KENKYU」")
+    names = [ln for ln in res.prompt_path.read_text(encoding="utf-8").splitlines() if "姓と名の区切りがない氏名" in ln]
+    assert len(names) == 1 and names[0].endswith("「KENKYU」") and "split_name は和文の氏名にだけ使える" in names[0]
     assert [a.key for a in actions(res)] == ["ai_pending"]
     root = load(res)
     [en] = [n for n in root.iter("name") if n.get("name-style") == "western"]
     assert [(x.tag, x.text) for x in en] == [("surname", "KENKYU")]
+    # AI が英文の氏名に split_name を提案しても採用しない（依頼文の添え書きと 10 章の警告のとおり。XML も変わらない）
+    src = names[0].split("]", 1)[0].removeprefix("- [")
+    op = {"op": "split_name", "src": src, "text": "", "occurrence": 1, "target": "", "role": "", "image": "", "mathml": "",
+          "surname": "KEN", "given": "KYU", "reason": "試しの分割", "confidence": "低"}
+    res2 = convert(path, meta, journal, Options(out_dir=tmp_path / "out2", ai_mode="manual", convert_metafiles=False,
+                                                ai_response=json.dumps({"operations": [op]}, ensure_ascii=False)))
+    assert [why for _, why in res2.ai.rejected] == ["英文氏名は空白の位置で姓と名を分けるため、分割の指定は和文氏名だけに使える"]
+    assert res2.ai.accepted == [] and res2.xml_path.read_bytes() == res.xml_path.read_bytes()

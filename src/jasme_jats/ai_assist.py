@@ -267,8 +267,9 @@ def build_request(plan: ArticlePlan, linker, build_exclusions=(), unsplit_names=
 
     build_exclusions は書き出しの段階で出力しないと決めた段落（builder.BuildInfo.exclusions）、unsplit_names は姓と名を分けられ
     なかった氏名 [(段落の ID, 氏名, 言語 ja / en)]（builder.BuildInfo.unsplit_names）。英文の氏名も「姓と名の区切りがない氏名」に
-    載せる（AI の split_name は和文の氏名にしか使えないが、利用者の決定事項 17 で今までどおり載せる。英文の氏名は builder が
-    10 章の警告でも知らせる）。
+    載せる（利用者の決定事項 17 で今までどおり載せる）が、AI の split_name は和文の氏名にしか使えない（apply_ops）ので、英文の行には
+    split_name を提案しないことを添える（builder の 10 章の警告の「AI による補完では、英文の著者名は分けられません」と同じ言い分）。
+    氏名の中の改行は「⏎」で示す（1 件を 1 行に書くため。氏名の文字は変えない）。
     """
     lines = []
     lines.append("# 論文の段落一覧")
@@ -330,8 +331,11 @@ def build_request(plan: ArticlePlan, linker, build_exclusions=(), unsplit_names=
             p = plan.paras.get(e.src)
             hint = set_role_hint(p, plan) if p is not None else ""
             lines.append(f"- [{e.src}] 出力から除外: {e.reason}: 「{e.text[:60]}」{hint}")
-    for src, text, _lang in unsplit_names:
-        lines.append(f"- [{src}] 姓と名の区切りがない氏名: 「{text}」")
+    for src, text, lang in unsplit_names:
+        note = "（英文の氏名。split_name は和文の氏名にだけ使えるので、提案しない）" if lang == "en" else ""
+        # 氏名の中の改行（Word の Shift+Enter。10 章と要確認で別に知らせる）は、行が分かれないよう「⏎」で示す（レポートの表と同じ）
+        shown = text.replace("\n", "⏎")
+        lines.append(f"- [{src}] 姓と名の区切りがない氏名{note}: 「{shown}」")
     images = []
     for f in plan.figures:
         for ip in f.image_paras:

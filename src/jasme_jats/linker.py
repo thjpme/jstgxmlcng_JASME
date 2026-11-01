@@ -1,7 +1,7 @@
 """機械的なリンク付け（生成 AI は使わない）。
 
-  図・表   : 本文中の「図1」「表2」「Figure 1」などを <xref ref-type="fig|table">。直前が漢字（前掲・乃至・及を除く）なら、
-             語の一部（地図1・付表1・発表1回目）とみなしてリンクしない
+  図・表   : 本文中の「図1」「表2」「Figure 1」などを <xref ref-type="fig|table">。「図」「表」の直前が漢字（前掲・乃至・及を
+             除く）なら、語の一部（地図1・付表1・発表1回目）とみなしてリンクしない
   数式     : 「式(1)」「(1)式」を <xref ref-type="disp-formula">
   注       : 上付きの「1)」「注1」などを <xref ref-type="fn">。数字だけの上付きは、論文の注番号の書き方（Linker.bare_notes）と、
              指数・単位の形（cm²・x²・s⁻¹）かどうかで決める
@@ -30,7 +30,6 @@ NUM = r"[0-9０-９]+"
 RE_FIGREF = re.compile(rf"(図|Figure|Figs?\.)[\s\u3000]?({NUM})((?:[\s\u3000]*(?:[,，、・]|～|〜|-|－|–|と|及び|および|and)[\s\u3000]*(?:図)?{NUM})*)")
 RE_TABREF = re.compile(rf"(表|Tables?)[\s\u3000]?({NUM})((?:[\s\u3000]*(?:[,，、・]|～|〜|-|－|–|と|及び|および|and)[\s\u3000]*(?:表)?{NUM})*)")
 RE_EQREF = re.compile(rf"式[\s\u3000]?([(（][\s\u3000]*{NUM}(?:[.．\-－]{NUM})?[\s\u3000]*[)）])|([(（][\s\u3000]*{NUM}(?:[.．\-－]{NUM})?[\s\u3000]*[)）])[\s\u3000]?式")
-RE_FN_MARK = re.compile(rf"^[\s\u3000]*(?:注[\s\u3000]*)?[(（]?[\s\u3000]*({NUM})[\s\u3000]*[)）]?[\s\u3000]*$")
 # 上付きでない注番号。「注」の字と閉じ括弧があるもの（「（注1）」「［注1］」「注1)」）だけ。「(1)」は箇条の番号などと区別できない
 RE_FN_PLAIN = re.compile(rf"[(（\[［〔][\s\u3000]*[注註][\s\u3000]*({NUM})[\s\u3000]*[)）\]］〕]"
                          rf"|(?<![\u3400-\u9fff々])[注註][\s\u3000]*({NUM})[\s\u3000]*[)）]")
@@ -42,8 +41,14 @@ RE_SUP_LIST = re.compile(rf"[\s\u3000]*(?:[注註][\s\u3000]*)?[(（]?[\s\u3000]
 RE_NUM_END = re.compile(rf"{NUM}[\s\u3000]*$")      # 上付きの続きが数字（と空白）で終わる
 # 上付きの続きの先頭がこれなら指数（m s⁻¹ を Word で「s」＋上付きの「−1」と書いたもの。注番号は符号で始まらない）
 SUP_SIGNS = "-−－‐‑–+＋±⁻⁺"
-OPERATORS = "+-−－＋±×÷=＝<>＜＞≦≧≤≥^*/／"   # 上付きの続きの直前・直後がこれなら指数（x+²・(a)²+b）
-RE_EXP_BEFORE = re.compile(r"[A-Za-zＡ-Ｚａ-ｚ0-9０-９α-ωΑ-Ω]")   # 直前がこれなら指数・単位（cm²・x²・10³・π²）
+# 上付きの続きの直前・直後がこれなら指数（10−³ の「−」を本文の大きさで書いたもの・(a+b)²+c）。四則などの演算の記号
+OPERATORS = "+-−－＋±×÷^*/／"
+# 上付きの続きの直後だけで指数とみなす比較の記号（x²＜4・x²=1）。直前には使わない（比較の記号の直後に指数は来ず、全角の「＜」「＞」は
+# 「＜用語＞¹」のように日本語の括弧としても使うため）
+COMPARISONS = "=＝<>＜＞≦≧≤≥"
+# 直前がこれなら指数・単位（cm²・x²・10³・π²）。英字・数字（全角も）・ギリシャ文字と、単位の記号（µ〈マイクロ記号〉・Å・′〈プライム〉、
+# 全角の単位の記号 U+3380〜U+33DF の ㎝・㎜・㎞・㎏ など。12㎝²・x′²）
+RE_EXP_BEFORE = re.compile(r"[A-Za-zＡ-Ｚａ-ｚ0-9０-９α-ωΑ-Ωµ\u00c5\u212b\u2032\u3380-\u33df]")
 # 「図1」「表1」の直前に来てよい漢字（前掲図1・乃至図2・及表1）。ほかの漢字の直後は語の一部（地図1・付表1・発表1回目）
 FLOAT_REF_OK_BEFORE = "掲至及"
 RE_KANJI = re.compile(r"[\u3400-\u9fff々]")    # RE_FN_PLAIN の「注」の前の漢字と同じ範囲
@@ -301,30 +306,34 @@ class Linker:
     def float_refs(self, p: Para, regex, ids, ref_type, word):
         """「図1」「表1、2」などを図・表へのリンクにする（regex は RE_FIGREF・RE_TABREF）。
 
-        直前の文字が漢字で FLOAT_REF_OK_BEFORE（前掲・乃至・及）に入らなければ、語の一部（地図1・付表1・発表1回目・図表1）とみなして
-        リンクせず、先頭の番号の直後から探し直す（並びの「、2」なども含めて飛ばすと、「図表1と表1」の後ろの「表1」まで落ちるため）。
-        語の一部とみなした参照は、先頭の番号の図・表があるときだけ判断の一覧に記録する（applied=False。並びの番号は記録せず、
-        図・表がなくても「見つからない」に出さない）。
+        「図」「表」の直前の文字が漢字で FLOAT_REF_OK_BEFORE（前掲・乃至・及）に入らなければ、語の一部（地図1・付表1・発表1回目・
+        図表1）とみなしてリンクせず、先頭の番号の直後から探し直す（並びの「、2」なども含めて飛ばすと、「図表1と表1」の後ろの「表1」
+        まで落ちるため）。英語の参照（Figure・Fig.・Table）は日本語の語の一部にならないので、直前の文字を見ない（「実験結果Fig. 1」も
+        リンクする）。語の一部とみなした参照は、先頭の番号の図・表があるときだけ判断の一覧に記録する（applied=False。並びの番号は記録
+        せず、図・表がなくても「見つからない」に出さない）。
+        番号の数字が途中から上付きの文字になるとき（「図1」の直後に上付きの注番号「1)」が続くと、plain() では「図11)」になる）は、
+        参照を上付きの手前で切る（上付きの数字は fn_marks で注番号として扱う。番号が上付きの文字で始まるときは切らない）。
         """
         plain = p.plain()
+        sup = _sup_chars(p)
         pos = 0
         while (m := regex.search(plain, pos)) is not None:
-            n = fw_int(m.group(2))
-            s, e = m.start(1), m.end(2)
+            end = _before_sup(sup, m.start(2), m.end())      # 参照の終わり（上付きの手前で切ったもの）
+            s, e = m.start(1), min(m.end(2), end)
+            n = fw_int(plain[m.start(2):e])
             prev = plain[s - 1] if s > 0 else ""
-            if prev and RE_KANJI.match(prev) and prev not in FLOAT_REF_OK_BEFORE:
+            if m.group(1) in ("図", "表") and prev and RE_KANJI.match(prev) and prev not in FLOAT_REF_OK_BEFORE:
                 if n in ids:
                     self._word_part(p, plain, s, e, prev, n, ids[n], ref_type, word)
                 pos = e
                 continue
-            self._link_num(p, s, e, n, ids, ref_type, word, m.group(0))
-            tail = m.group(3)
-            if tail:
-                base = m.start(3)
-                for t in re.finditer(NUM, tail):
+            self._link_num(p, s, e, n, ids, ref_type, word, plain[s:end])
+            if m.group(3):
+                base = m.start(3)       # 先頭の番号の途中で切ったときは plain[base:end] が空になり、並びの番号はリンクしない
+                for t in re.finditer(NUM, plain[base:end]):
                     self._link_num(p, base + t.start(), base + t.end(), fw_int(t.group(0)), ids, ref_type, word,
-                                   m.group(0))
-            pos = m.end()
+                                   plain[s:end])
+            pos = end
 
     def _word_part(self, p, plain, s, e, prev, n, rid, ref_type, word):
         """語の一部とみなしてリンクしなかった図・表の参照（plain[s:e]。「図1」）を、判断の一覧に記録する。"""
@@ -332,8 +341,8 @@ class Linker:
         op = "link_figure" if ref_type == "fig" else "link_table"
         self.note("figure" if ref_type == "fig" else "table", p.src,
                   f"「{text}」は、直前の「{prev}」と続く語の一部（地図1・付表1 など）とみなし、{word} {rid} にリンクしなかった。"
-                  f"{word}{n} への参照なら、AI による補完の {op}（text「{text}」、occurrence {occurrence_at(p, s, text)}）か、"
-                  "XML の中で手作業でリンク（xref）を足す", applied=False)
+                  f"{word}{n} への参照なら、AI による補完の {op}（text「{text}」、occurrence {occurrence_at(p, s, text)}）で"
+                  "リンクできる", applied=False)
 
     def _link_num(self, p, s, e, n, ids, ref_type, word, context):
         rid = ids.get(n)
@@ -358,15 +367,16 @@ class Linker:
         """論文の注番号の書き方（bare_notes）: 番号だけの上付きの数字を注番号とみなすか。
 
         注番号を探す段落（引用文献・注の一覧の段落を除く。囲み・表のセル・キャプション・見出し・要旨・付記なども）の上付きの続きに、
-        番号の形がはっきりした注番号（「注1」「1)」、上付きの「1」＋本文の「)」で指数の形でないもの。_sup_marks の strong）が
-        1 つでもあれば偽（「1)」の書き方の論文）、なければ真（番号だけの論文）。直前が「注」の上付きの数字（after_note）と、
-        指数・単位の形のもの（exponent）は数えない。"""
+        上付きの文字だけで番号の形がはっきりした注番号（「注1」「註1」「1)」。_sup_marks の shaped）が 1 つでもあれば偽（「1)」の
+        書き方の論文）、なければ真（番号だけの論文）。上付きの「1」＋本文の「)」（strong だが shaped は偽）は数えない（番号だけの
+        論文の「（…である³）」のように、本文の閉じ括弧は文の括弧のこともあるため。暫定）。直前が「注」の上付きの数字（after_note）と、
+        指数・単位の形のもの（exponent）も数えない。"""
         for p, where in paras:
             if where in ("ref", "fn"):
                 continue
             plain = p.plain()
             for s, e, text in _sup_runs(p):
-                if any(mk.kind == "strong" for mk in _sup_marks(plain, s, e, text)):
+                if any(mk.shaped for mk in _sup_marks(plain, s, e, text)):
                     return False
         return True
 
@@ -384,7 +394,7 @@ class Linker:
             return
         plain = p.plain()
         records = []        # (段落の中の位置, 文面)。段落の中の順に記録する
-        exps = []           # 指数・単位の形の数字 (位置, 数字, 回目)。段落ごとに 1 件にまとめて記録する
+        exps = []           # 指数・単位の形の数字 (位置, 数字, 回目, 注の ID)。段落ごとに 1 件にまとめて記録する
         for s, e, text in _sup_runs(p):
             for mk in _sup_marks(plain, s, e, text):
                 rid = fn_ids.get(mk.num)
@@ -400,20 +410,24 @@ class Linker:
                 digit = plain[mk.digit_start:mk.digit_end]
                 k = occurrence_at(p, mk.digit_start, digit)
                 if mk.kind == "exponent":
-                    exps.append((mk.digit_start, digit, k))
+                    exps.append((mk.digit_start, digit, k, rid))
                     continue
-                records.append((mk.digit_start,
-                                (f"上付きの数字「{digit}」（段落の中で {k} 回目の「{digit}」）は、番号だけの形なので注 {rid} に"
-                                 "リンクしなかった（この論文の注番号は「1)」「注1」のように書かれている）。注番号なら、AI による"
-                                 f"補完の link_note（text「{digit}」、occurrence {k}）か、XML の中で手作業でリンク（xref）を足す")))
+                msg = (f"上付きの「{digit}」は、番号だけの形なので注 {rid} にリンクしなかった（この論文の注番号は「1)」「注1」の"
+                       f"形）。注番号なら、AI による補完の link_note（text「{digit}」、occurrence {k}）でリンクできる")
+                records.append((mk.digit_start, msg))
         if exps:
-            _, d0, k0 = exps[0]
-            how = (f"text「{d0}」、occurrence {k0}" if len(exps) == 1 else
-                   f"数字ごとに、text はその数字、occurrence はその回目。最初のものなら text「{d0}」、occurrence {k0}")
-            records.append((exps[0][0],
-                            (f"上付きの数字{'・'.join(f'「{d}」（{k} 回目）' for _, d, k in exps)}は、指数・単位（cm²・x² などの形）と"
-                             "みなし、注にリンクしなかった（回目は、段落の中でその数字が現れる順）。注番号なら、AI による補完の"
-                             f" link_note（{how}）か、XML の中で手作業でリンク（xref）を足す")))
+            # 利用者向けの前半は短くし（同じ数字は 1 回だけ書いて件数を添える。x²+y² は「「2」（2 か所）」）、AI 向けの text と
+            # occurrence は数字ごとに書く（occurrence は段落の中の同じ文字の何回目かで、上付きの何番目かではないので、利用者向けの
+            # 文には出さない）
+            seen = {}
+            for _, d, _, _ in exps:
+                seen[d] = seen.get(d, 0) + 1
+            nums = "".join(f"「{d}」" + (f"（{c} か所）" if c > 1 else "") for d, c in seen.items())
+            rids = "・".join(dict.fromkeys(r for _, _, _, r in exps))
+            ops = "／".join(f"text「{d}」、occurrence {k}" for _, d, k, _ in exps)
+            msg = (f"上付きの{nums}は、指数・単位（cm²・x² などの形）とみなし、注 {rids} にリンクしなかった。注番号なら、"
+                   f"AI による補完の link_note（{ops}）でリンクできる")
+            records.append((exps[0][0], msg))
         for _, msg in sorted(records, key=lambda r: r[0]):
             self.note("note", p.src, msg, applied=False)
 
@@ -456,6 +470,7 @@ class SupMark(NamedTuple):
     end: int
     num: int            # 番号
     kind: str           # strong / after_note / exponent / bare（_sup_marks）
+    shaped: bool        # 上付きの文字だけで番号の形がはっきりしている（_strong_mark）。論文の書き方の判定（note_style）に使う
     digit_start: int    # 番号の数字の範囲（記録の text と occurrence に使う）
     digit_end: int
 
@@ -477,6 +492,22 @@ def _sup_runs(p: Para) -> list:
     return out
 
 
+def _sup_chars(p: Para) -> set:
+    """段落の plain() の上で、上付きの文字のアトムにある位置の集まり（リンクの有無は問わない）。"""
+    out = set()
+    for a, (a0, a1) in zip(p.atoms, atom_offsets(p)):
+        if a.kind == "text" and "sup" in a.fmt:
+            out.update(range(a0, a1))
+    return out
+
+
+def _before_sup(sup: set, s: int, e: int) -> int:
+    """plain[s:e]（図・表の参照の番号から後ろ）が途中から上付きの文字になるなら、その位置。ならない、または s から上付きなら e。"""
+    if s in sup:
+        return e
+    return next((k for k in range(s + 1, e) if k in sup), e)
+
+
 def _sign_first(text: str) -> bool:
     """上付きの続きが符号で始まるか（前の空白を除く。s⁻¹ の「−1」）。"""
     t = text.lstrip()
@@ -486,16 +517,17 @@ def _sign_first(text: str) -> bool:
 def _exponent_like(plain: str, s: int, e: int, text: str) -> bool:
     """上付きの続き plain[s:e]（文字は text）が指数・単位の形か。
 
-    続きの先頭が符号（s⁻¹）、直前の 1 文字が英字・数字・ギリシャ文字（cm²・x²・10³・π²）か演算の記号、直後の 1 文字が演算の記号
-    （(a)²+b）なら真。前後の空白は飛ばさない（「3 cm」＋² の直前は m）。直前が漢字・かな・句読点・閉じ括弧・数式などなら、
-    指数とみなさない（「（試験, 2024）²」は注番号の形）。"""
+    続きの先頭が符号（s⁻¹）、直前の 1 文字が英字・数字・ギリシャ文字・単位の記号（cm²・x²・10³・π²・12㎝²。RE_EXP_BEFORE）か
+    演算の記号（OPERATORS）、直後の 1 文字が演算の記号か比較の記号（(a+b)²+c・x²＜4。COMPARISONS）なら真。前後の空白は飛ばさない
+    （「3 cm」＋² の直前は m）。直前が漢字・かな・句読点・括弧（「＜用語＞¹」の「＞」も）・数式などなら、指数とみなさない
+    （「（試験, 2024）²」は注番号の形）。"""
     if _sign_first(text):
         return True
     before = plain[s - 1] if s > 0 else ""
     after = plain[e] if e < len(plain) else ""
     if before and (RE_EXP_BEFORE.match(before) or before in OPERATORS):
         return True
-    return bool(after) and after in OPERATORS
+    return bool(after) and (after in OPERATORS or after in COMPARISONS)
 
 
 def _strong_mark(g: str) -> bool:
@@ -508,8 +540,9 @@ def _sup_marks(plain: str, s: int, e: int, text: str) -> list:
     """上付きの続き plain[s:e]（文字は text）の中の注番号の候補（RE_SUP_FN の一致。空白だけのものを除く）: [SupMark]。
 
     種類（kind）:
-      strong     : 番号の形がはっきりした注番号（_strong_mark）。続きが数字で終わり、直後の本文の文字が閉じ括弧で、指数・単位の形で
-                   ないときの、最後の数字だけの一致も（上付きの「1」＋本文の「)」。上付きの外の文字で補う）
+      strong     : 番号の形がはっきりした注番号（_strong_mark。shaped が真）。続きが数字で終わり、直後の本文の文字が閉じ括弧で、
+                   指数・単位の形でないときの、最後の数字だけの一致も（上付きの「1」＋本文の「)」。上付きの外の文字で補う。リンクは
+                   するが、本文の閉じ括弧は文の括弧〈「（…である³）」〉のこともあるので shaped は偽で、論文の書き方の判定には使わない）
       after_note : 続きの直前が「注」「註」（本文の「注」＋上付きの「1」）。リンクするが、論文の書き方の判定（note_style）には使わない
       exponent   : 指数・単位の形（_exponent_like）。符号で始まる続きは、「−1)」のように閉じ括弧で終わっても、すべてこれ
       bare       : 番号だけ（論文の書き方が番号だけのときだけリンクする）
@@ -525,23 +558,26 @@ def _sup_marks(plain: str, s: int, e: int, text: str) -> list:
     note_before = plain[:s].rstrip().endswith(("注", "註"))
 
     def kind(g, last):
+        """(種類, shaped)"""
         if sign:
-            return "exponent"
-        if _strong_mark(g) or (last and tail_close):
-            return "strong"
+            return "exponent", False
+        if _strong_mark(g):
+            return "strong", True
+        if last and tail_close:
+            return "strong", False
         if note_before:
-            return "after_note"
-        return "exponent" if exp else "bare"
+            return "after_note", False
+        return ("exponent" if exp else "bare"), False
 
     if RE_SUP_LIST.fullmatch(text):
         kinds = [kind(text, True)] * len(ms)
     else:
         kinds = [kind(m.group(0), i == len(ms) - 1) for i, m in enumerate(ms)]
     out = []
-    for m, k in zip(ms, kinds):
+    for m, (k, shaped) in zip(ms, kinds):
         g = m.group(0)
         out.append(SupMark(s + m.start() + len(g) - len(g.lstrip()), s + m.end() - (len(g) - len(g.rstrip())),
-                           fw_int(m.group(1)), k, s + m.start(1), s + m.end(1)))
+                           fw_int(m.group(1)), k, shaped, s + m.start(1), s + m.end(1)))
     return out
 
 

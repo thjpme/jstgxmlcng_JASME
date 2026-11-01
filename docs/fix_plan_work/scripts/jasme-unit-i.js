@@ -143,7 +143,7 @@ ${extra}`, { label: `review:${l.key}`, phase: opts.phase, schema: FIND_SCHEMA, m
 const PREV = `仕上げの担当の報告:\n${JSON.stringify(fin, null, 1)}\n確かめの担当の報告:\n${JSON.stringify(verify, null, 1)}`
 const reviews = await parallel(LENSES.map(l => () => reviewOf(l, PREV, { phase: 'Review' })))
 const failedFirst = reviews.map((r, i) => r ? null : LENSES[i].key).filter(Boolean)
-let todo = reviews.filter(Boolean).flatMap((r, i) => (r.findings || []).map(f => ({ lens: LENSES[i].key, ...f })))
+let todo = reviews.flatMap((r, i) => r ? (r.findings || []).map(f => ({ lens: LENSES[i].key, ...f })) : [])
 const firstFindings = todo
 log(`指摘: blocking ${todo.filter(f => f.severity === 'blocking').length} / should ${todo.filter(f => f.severity === 'should').length} / nit ${todo.filter(f => f.severity === 'nit').length}${failedFirst.length ? ' / 失敗した観点: ' + failedFirst.join(',') : ''}`)
 
@@ -164,7 +164,7 @@ ${JSON.stringify(todo, null, 1)}
 修正の担当の報告:
 ${JSON.stringify(fix, null, 1)}`, { phase: 'Recheck' })))
   const failedLens = rr.map((r, i) => r ? null : LENSES[i].key).filter(Boolean)
-  todo = rr.filter(Boolean).flatMap((r, i) => (r.findings || []).map(f => ({ lens: LENSES[i].key, ...f })))
+  todo = rr.flatMap((r, i) => r ? (r.findings || []).map(f => ({ lens: LENSES[i].key, ...f })) : [])
   rounds.push({ round, fix, findings: todo, failedLens })
   log(`${round} 回目の点検: blocking ${todo.filter(f => f.severity === 'blocking').length} / should ${todo.filter(f => f.severity === 'should').length}${failedLens.length ? ' / 失敗した観点: ' + failedLens.join(',') : ''}`)
   if (failedLens.length) { incomplete = failedLens; break }
