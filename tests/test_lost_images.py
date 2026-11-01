@@ -211,6 +211,32 @@ def test_hidden_image_is_not_lost(journal, meta, tmp_path):
     assert "XML に出力した画像はありません。" in ch9 and "隠し文字（Word で非表示に設定された文字）の中の画像 1 件（img1）" in ch9
 
 
+@pytest.mark.parametrize("by", ["direct", "style"])
+def test_style_hidden_image_is_noticed(by, journal, meta, tmp_path):
+    # 文字スタイルで隠し文字になっているランの中の画像も、ランに直接付けた隠し文字と同じく出力しない（要対応にはしない）。隠し文字の
+    # 判定（スタイルの w:vanish）は暫定なので、スタイルで隠した画像は要確認で知らせる（ランに直接付けた隠し文字の画像は知らせない）
+    from jasme_jats.report import TO_CHECK, actions
+
+    def parts(b):
+        b.styles_extra.append(mf.READER_STYLES)
+        rid = b.add_image("hidden.png", mf.png_bytes("hidden"))
+        rpr = "<w:vanish/>" if by == "direct" else '<w:rStyle w:val="gHid"/>'
+        hidden = mf.drawing(rid, 1800000, 1000000, 612).replace("<w:r>", f"<w:r><w:rPr>{rpr}</w:rPr>", 1)
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "試験（2024）の本文。", hidden)]
+    mf.make_article(tmp_path / "hidden.docx", "隠し文字の画像の検証用文書", parts)
+    res = convert(tmp_path / "hidden.docx", meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.lost_images == [] and res.hidden_images == ["img1"] and res.images == []
+    acts = {a.key: a for a in actions(res)}
+    if by == "direct":
+        assert res.style_hidden_images == [] and "style_hidden" not in acts
+        return
+    act = acts["style_hidden"]
+    assert res.style_hidden_images == ["img1"] and res.style_hidden == [] and act.level == TO_CHECK
+    assert "既定の書式の設定で隠し文字になっている画像が 1 件あり、XML に出力していません（6 章）" in act.top
+    assert act.top.endswith("対象: 画像 img1")
+    assert "上の隠し文字のうち" in res.report_path.read_text(encoding="utf-8").split("## 6.")[1].split("## 7.")[0]
+
+
 @pytest.mark.parametrize("case", ["full-ai", "float-ai", "float-text", "pdfcheck-route1", "pdfcheck-route2"])
 def test_no_lost_images_in_fixtures(case, journal, meta, tmp_path):
     # 既存の fixture（ALL_DOCS は test_pipeline.test_fidelity_and_dtd で確かめる）では、画像の出力漏れはない

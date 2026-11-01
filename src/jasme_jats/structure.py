@@ -680,7 +680,25 @@ class Classifier:
         self.build_front_en(regions["front_en"])
         self.attach_word_notes()
         self.assign_ids()
+        self.joined_styles()
         return plan
+
+    def joined_styles(self):
+        """段落記号の削除でつないだ段落のうち、段落のスタイルが違うもの（docx_reader の JoinInfo）を判断の一覧に記録する。
+
+        今の判断の番号を変えないように、組み立ての最後に足す（つないだ段落のない原稿では何も足さない）。
+        """
+        def name(sid):
+            st = self.doc.styles.get(sid)
+            return st.name if st is not None else (sid or "スタイルなし")
+        for j in self.doc.joins:
+            names = "」「".join(dict.fromkeys(name(s) for s in j.style_ids))
+            self.plan.decide(
+                "mechanical", "style", j.src,
+                f"変更履歴で段落記号が削除された {'・'.join(j.srcs)} を、1 つの段落 {j.src} につないだ（Word で変更をすべて承諾した"
+                f"状態）。段落のスタイルが違う（「{names}」）ので、文字のある最初の段落（すべて空なら最後の段落）のスタイル"
+                f"「{name(j.used)}」にした（Word で承諾した後のスタイルと同じかは確かめていない。Word で変更をすべて承諾した後の"
+                "この段落のスタイル〈見出しか本文かなど〉を確かめ、違えば、Word で承諾して保存してから変換し直す）")
 
     def table_roles(self, t: Table) -> set:
         return {self.role_of(p) for p in t.paragraphs()}
