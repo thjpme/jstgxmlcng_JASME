@@ -22,6 +22,10 @@ tests/test_structure.py の test_appendix_heading_forms_are_recognized の「資
 （test_PROBLEM_text_only_textbox_is_dropped_from_xml。逆は tests/test_structure.py の test_text_only_textbox_becomes_boxed_text）。
 N7（引用文献などの段落に結び付いた図形）に当たるテストは、このファイルにはもともとない（直した後の振る舞いのテストは
 tests/test_floats.py・tests/test_lost_images.py に足した）。
+単位 G（0.26.0。D5・U8・U3・N8）で取り除いたもの: 段落記号が削除された変更履歴が 2 段落のまま出力される
+（test_PROBLEM_deleted_paragraph_mark_keeps_two_paragraphs。逆は tests/test_pipeline.py の
+test_deleted_paragraph_mark_joins_paragraphs）。U8・U3・N8 に当たるテストは、このファイルにはもともとない（直した後の振る舞いの
+テストは、直すときに tests/test_reader.py・tests/test_pipeline.py・tests/test_pdfmatch.py・tests/test_fidelity.py に足した）。
 
 実行のしかた（tests/conftest.py のフィクスチャ journal・meta を使うため、tests/ に一時的に写して実行し、終わったら消す）:
 
@@ -97,18 +101,3 @@ def test_numbering_counter_is_global_across_parts():
     n = Numbering(parse_xml(xml))
     assert [n.label("1", 0) for _ in range(3)] == ["1)", "2)", "3)"]
 
-
-# --------------------------------------------------------------------------- 12. 削除された段落記号
-def test_PROBLEM_deleted_paragraph_mark_keeps_two_paragraphs(journal, meta, tmp_path):
-    """段落記号が削除された変更履歴（2 段落を 1 つにつなぐ変更）は、承諾すると 1 段落になるが、ツールは 2 段落のまま出力する
-    （削除された文字は除くのに、段落の結合は反映されない）。"""
-    def parts(b):
-        return [mf.para(S["sec1"], "１．はじめに"),
-                '<w:p><w:pPr><w:pStyle w:val="af5"/><w:rPr><w:del w:id="9" w:author="x"/></w:rPr></w:pPr>'
-                '<w:r><w:t>前半の文と</w:t></w:r></w:p>',
-                mf.para(S["body"], "後半の文。")]
-    path = make_doc(tmp_path / "pmark.docx", parts)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
-    assert res.fidelity.ok
-    ps = [text(p) for p in load(res).iter("p")]
-    assert "前半の文と" in ps and "後半の文。" in ps and "前半の文と後半の文。" not in ps
