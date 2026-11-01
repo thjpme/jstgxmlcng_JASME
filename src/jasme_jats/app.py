@@ -455,10 +455,48 @@ def _in_colab() -> bool:
     return True
 
 
-def launch(inline: bool = True):
-    """Colab の出力欄に画面を開く。share は必ず False（未公開の原稿を Gradio の中継サーバーに通さない）。"""
+def _free_port() -> int:
+    import socket
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def colab_proxy_url(port: int) -> str:
+    """Colab の中継（利用者のブラウザからランタイムのポートを開く URL。Google アカウントで認証され、本人しか開けない）。"""
+    from google.colab import output
+    return output.eval_js(f"google.colab.kernel.proxyPort({port})")
+
+
+def open_link_html(url: str) -> str:
+    """「画面を開く」のリンク（別のタブで開く）。Colab の出力欄は暗い配色のこともあるので、色を明示する。"""
+    import html
+    return ("<div style='border:3px solid #2563eb;border-radius:8px;padding:12px 16px;margin:12px 0;background:#eff6ff;"
+            "color:#1f2937;font-size:15px;line-height:1.7'>"
+            f"<a href='{html.escape(url)}' target='_blank' style='font-size:18px;font-weight:bold;color:#1d4ed8'>"
+            "画面を開く（新しいタブ）</a><br>"
+            "このノートブックのタブは閉じないでください（閉じると画面も止まります）。"
+            "画面を閉じてしまったら、このリンクをもう一度押します。</div>")
+
+
+def launch(inline: bool = False):
+    """画面を開く。share は必ず False（未公開の原稿を Gradio の中継サーバーに通さない）。
+
+    Colab では、出力欄に埋め込まず（小さな窓になって使いにくい）、Colab の中継の URL を別のタブで開くリンクを出す。
+    ファイルのリンク（ダウンロードなど）も中継を通るように、root_path にその URL を渡す（埋め込みでは、Gradio がランタイムの
+    内部のホスト名でファイルの URL を作り、ブラウザから開けなかった）。Colab でなければ、ローカルのサーバーをブラウザで開く。
+    """
     colab = _in_colab()
     state = AppState(Path("/content/jasme_work") if colab else None)
     demo = build_app(state, ColabIO() if colab else IO())
-    demo.launch(inline=inline, share=False, quiet=True, allowed_paths=[str(state.work)])
+    common = dict(share=False, quiet=True, allowed_paths=[str(state.work)])
+    if colab and not inline:
+        port = _free_port()
+        url = colab_proxy_url(port)
+        demo.launch(server_port=port, root_path=url.split("?")[0].rstrip("/"), inline=False, prevent_thread_lock=True,
+                    **common)
+        from IPython.display import HTML, display
+        display(HTML(open_link_html(url)))
+    else:
+        demo.launch(inline=inline, **common)
     return demo

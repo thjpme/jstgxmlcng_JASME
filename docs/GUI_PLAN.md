@@ -287,3 +287,14 @@ Colab で利用者に確かめてもらうこと（5 章の S1〜S4 の読み替
   main に反映するときは `--branch` なしで作り直す。
 - main から入れたときは `colab` の extra がなく `markdown` が入らないが、`report_details` はそのままの文字で出す（警告だけ）。
 
+### 2026-11-02: Colab での試作の結果（利用者）と、別のタブで開く形への変更（0.26.3）
+
+- 利用者の Colab での確認: 準備・アップロード・変換・API モードは動いた。ダウンロードは、リンクはできるが「not found」。
+  リンクの URL はランタイムの内部のホスト名（`…codatalab-user-runtimes.internal:8007/gradio_api/file=…`）で、ブラウザから届かない
+  （出力欄に埋め込んだ iframe では、Gradio がファイルの URL を内部のホスト名で作る）。
+- 出力欄の中の小さな窓は使いにくい（利用者）。改善案 2 つ（別のタブで開く／パソコンで動かす）のうち、別のタブで開く形にした。
+- 変更（`app.launch`）: Colab では、空いているポートで起動し、Colab の中継の URL（`google.colab.kernel.proxyPort`。Google アカウントで
+  認証され本人しか開けない）を `root_path` に渡して、ファイルのリンクも中継を通るようにし、出力欄にはそのリンク（新しいタブで開く）だけを出す。
+  share は変わらず False。Colab でなければローカルのサーバーをブラウザで開く。
+- 確かめること: 新しいタブで画面が開くか、ダウンロードが通るか（通らなければ Colab 自身のダウンロード `google.colab.files.download` に切り替える）。
+
