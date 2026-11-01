@@ -18,6 +18,10 @@ tests/test_lost_images.py に足した）。
 逆は tests/test_structure.py の test_appendix_with_paren_is_not_in_abstract）とその比較（test_appendix_with_space_is_recognized。
 tests/test_structure.py の test_appendix_heading_forms_are_recognized の「資料　授業プリント」）、Word の文末脚注が XML に出ない
 （test_PROBLEM_endnotes_are_excluded。逆は tests/test_notes.py の test_endnotes_are_output_as_notes）。
+単位 F（0.25.0。D1・N7）で取り除いたもの: 文字だけのテキストボックス（囲み）の文字が XML から消え、AI の set_role でも戻せない
+（test_PROBLEM_text_only_textbox_is_dropped_from_xml。逆は tests/test_structure.py の test_text_only_textbox_becomes_boxed_text）。
+N7（引用文献などの段落に結び付いた図形）に当たるテストは、このファイルにはもともとない（直した後の振る舞いのテストは
+tests/test_floats.py・tests/test_lost_images.py に足した）。
 
 実行のしかた（tests/conftest.py のフィクスチャ journal・meta を使うため、tests/ に一時的に写して実行し、終わったら消す）:
 
@@ -25,7 +29,6 @@ tests/test_structure.py の test_appendix_heading_forms_are_recognized の「資
     python -m pytest -q tests/test_zz_fix_plan_repro.py
     rm tests/test_zz_fix_plan_repro.py
 """
-import json
 import sys
 from pathlib import Path
 
@@ -33,7 +36,7 @@ from lxml import etree
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))   # tests/ に写して実行する
 import make_fixtures as mf  # noqa: E402
-from jasme_jats.pipeline import Options, _mechanical, convert  # noqa: E402
+from jasme_jats.pipeline import Options, convert  # noqa: E402
 
 S = mf.S
 
@@ -56,34 +59,6 @@ def make_doc(path, body_parts, abstract=("Abstract text."), appendix=None, extra
     body += mf.tail(b, appendix=appendix)
     b.save(path, body)
     return path
-
-
-# --------------------------------------------------------------------------- 2. 文字だけのテキストボックスが XML から消える
-def test_PROBLEM_text_only_textbox_is_dropped_from_xml(journal, meta, tmp_path):
-    """囲み（テキストボックス）に入れた問題文など、画像・表・キャプションを含まないテキストボックスの文字は
-    XML に出力されない（レポート 6 章に載るだけ）。AI の set_role でも復活できない。"""
-    def parts(b):
-        return [mf.para(S["sec1"], "１．はじめに"),
-                mf.para(S["body"], "次の問題を扱う。", mf.textbox(
-                    mf.para(S["body"], "問1　次の二次方程式を解きなさい。")
-                    + mf.para(S["body"], "ヒント: 因数分解を使う。"), 401, cx=5000000, cy=800000)),
-                mf.para(S["body"], "以上が問題である。")]
-    path = make_doc(tmp_path / "box.docx", parts)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
-    assert res.fidelity.ok and res.dtd_valid
-    xml_text = text(load(res))
-    assert "次の二次方程式を解きなさい" not in xml_text
-    assert any("テキストボックス内の文字" in reason for _, reason, _ in res.fidelity.excluded)
-    # AI で役割を指定しても採用されない
-    _, plan, _ = _mechanical(path, journal)
-    src = next(s for s, p in plan.paras.items() if "二次方程式" in p.plain())
-    resp = {"operations": [{"op": "set_role", "src": src, "text": "", "occurrence": 1, "target": "", "role": "p",
-                            "image": "", "mathml": "", "surname": "", "given": "", "reason": "x", "confidence": "高"}],
-            "placements": [], "notes": []}
-    res2 = convert(path, meta, journal, Options(out_dir=tmp_path / "ai", ai_mode="manual", convert_metafiles=False,
-                                                ai_response=json.dumps(resp, ensure_ascii=False)))
-    assert res2.ai.rejected and "placements" in res2.ai.rejected[0][1]
-    assert "次の二次方程式を解きなさい" not in text(load(res2))
 
 
 # --------------------------------------------------------------------------- 3. 上付きの数字が注にリンクされる

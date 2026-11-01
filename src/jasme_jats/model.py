@@ -122,8 +122,11 @@ class Para:
     autonum: str = ""           # 自動番号のラベル（表示される文字列）
     align: str = ""
     section_break: bool = False  # この段落でセクション（段組みなど）が終わる
-    in_textbox: bool = False
+    in_textbox: bool = False    # テキストボックス（w:txbxContent）の直下の段落（テキストボックスの中の表のセルの段落は False）
     float_id: str = ""          # 浮動配置の図形（Float）の中の段落なら、その図形の ID
+    # テキストボックスの中の段落なら、そのテキストボックス（TextBox）の ID（x1, x2, …。テキストボックスの中の表のセルの段落にも
+    # 付く。入れ子の内側のテキストボックスの段落は、外側の ID）
+    textbox_id: str = ""
     role: str = ""              # structure.py が決める役割
     role_origin: str = ""       # "style" / "heuristic" / "ai" / "position"
     note: str = ""
@@ -170,6 +173,7 @@ class Table:
     role: str = ""
     float_id: str = ""          # 浮動配置の図形（Float）の中の表なら、その図形の ID
     in_textbox: bool = False    # テキストボックスの中の表（浮動配置でない VML・行内の図形の中の表は、float_id が空でも True）
+    textbox_id: str = ""        # テキストボックスの中の表なら、そのテキストボックス（TextBox）の ID
 
     def paragraphs(self):
         for r in self.rows:
@@ -200,6 +204,27 @@ class Float:
     height_cm: float = 0.0
     wrap: str = ""                  # wrapTopAndBottom / wrapSquare / wrapTight / wrapNone など
     group: bool = False             # グループ図形
+
+
+@dataclass(eq=False)
+class TextBox:
+    """テキストボックス（w:txbxContent）1 つ。中の段落・表は textbox_id でこのテキストボックスを指す（入れ子の内側は外側の ID）。
+
+    幅・高さは cm。DrawingML は wp:extent（グループ図形・描画キャンバスの中なら wps:spPr の a:ext に、グループの拡大率
+    〈wp:extent / a:chExt〉を掛ける）、VML は v:shape などの style の width・height（pt のときだけ。ほかの単位は読めないとして
+    None）。位置（縦・横のずれと基準）は、浮動配置（wp:anchor）なら同じ図形の Float にある（float_id で引く）。VML の位置
+    （margin-top など）は読まない（位置は推定として扱う。structure.Classifier.place_boxes）。
+    本文（word/document.xml）のテキストボックスだけを記録する（脚注・文末脚注の中のものは記録しない）。
+    """
+    xid: str                         # x1, x2, ...（出現順）
+    anchor_src: str                  # 結び付いている段落（アンカー段落。行内なら、その段落）
+    source: str = ""                 # "wps"（DrawingML）/ "vml"
+    inline: bool = False             # 行内（wp:inline、または position:absolute のない VML）
+    absolute: bool = False           # VML の position:absolute（位置を指定した浮動配置）
+    group: bool = False              # グループ図形・描画キャンバスの中（wpg:wgp / wpc:wpc / v:group）
+    float_id: str = ""               # 浮動配置の図形（Float）の中なら、その ID（wp:anchor のテキストボックス自身の Float も）
+    width_cm: float | None = None
+    height_cm: float | None = None
 
 
 @dataclass
@@ -266,11 +291,11 @@ class Document:
     warnings: list = field(default_factory=list)
     hidden_text: list = field(default_factory=list)   # [(src, text)]
     deleted_note_refs: set = field(default_factory=set)   # 変更履歴で削除された脚注・文末脚注の参照の note_key（docx_reader）
-    textbox_excluded: list = field(default_factory=list)
     tracked_changes: int = 0
     comments: int = 0
     images: list = field(default_factory=list)         # ImageRef（出現順）
     floats: list = field(default_factory=list)         # Float（出現順）
+    textboxes: list = field(default_factory=list)      # TextBox（出現順。本文のテキストボックス）
     layout: Optional[Layout] = None
 
     def all_paragraphs(self):

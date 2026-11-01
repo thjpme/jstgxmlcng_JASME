@@ -168,3 +168,23 @@ def test_result_boxes_before_answer_in_manual_mode(journal, meta, tmp_path):
     assert result_boxes(res, skip=("ai_pending",)) == ""
     html = result_boxes(res, level="要対応")
     assert "AI の回答をまだ反映していません（手動モード）" in html and "手順 6" in html
+
+
+def test_result_boxes_show_textbox_notices(journal, meta, tmp_path):
+    """文字だけのテキストボックスの知らせ（囲みか図の注記か決められなかったもの・位置を推定した囲み。どちらも要確認）も、
+    report.actions に足しただけで手順 5・6・8 の赤い枠に出る（表示の仕組みは変えない。修正計画の F）。手動モードで回答を
+    貼り戻す前は、決められないテキストボックスを AI の回答で判断することを、回答待ちの枠にも書く。"""
+    from conftest import STRUCTURE
+
+    from jasme_jats.colab import result_boxes
+    from jasme_jats.pipeline import Options, convert
+    res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "n", convert_metafiles=False))
+    html = result_boxes(res, level="要確認")
+    assert "囲みか図の注記か決められなかったテキストボックスが 3 件あります（要確認）" in html
+    assert "手順 5 で AI による補完" in html and "位置を推定して置いた囲みが 1 件あります（要確認）" in html
+    assert result_boxes(res, level="要対応") == ""
+    res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "m", ai_mode="manual", convert_metafiles=False))
+    html = result_boxes(res)
+    assert "手順 6 で AI の回答を貼り付けて変換し直すと、AI が囲みか注記かを判断します" in html
+    assert "囲みか図の注記か決められなかったテキストボックス（3 章）は、AI の回答を反映するまで XML に出力していません。" in html
+    assert "囲みか図の注記か決められなかったテキストボックス（3 章）は、AI の回答を反映するまで" in res.output_note

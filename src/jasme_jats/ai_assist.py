@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 
 from lxml import etree
 
-from .floats import describe, estimate_top_left
+from .floats import column_cm, describe, estimate_top_left
 from .model import OBJ, LinkSpec, Para, note_label
 from .omml import MML_NS, OmmlConverter, math_display_text
 from .structure import AFTER_BODY_REGIONS, ArticlePlan, _para_text, float_caption
@@ -84,12 +84,18 @@ OP_SCHEMA = {
 PLACEMENT_SCHEMA = {
     "type": "object",
     "properties": {
-        "float": {"type": "string", "description": "図形の ID（s1 など。「位置を決められなかった図表」に挙げたもの）"},
-        "after": {"type": "string", "description": "図表を置く位置: Word で表示したときに図の左上の直上にある本文の文章を含む段落の ID"},
-        "items": {"type": "array", "description": "図形の中身を、図・表ごとに組にしたもの", "items": {
+        "float": {"type": "string", "description": "図形の ID（s1 など）、またはテキストボックスの ID（x1 など）。「位置を決められ"
+                                                   "なかった図表」「囲みか図の注記か決められなかったテキストボックス」「位置を推定した"
+                                                   "囲み」に挙げたもの"},
+        "after": {"type": "string", "description": "図表・囲みを置く位置: Word で表示したときに図の左上の直上にある本文の文章を含む"
+                                                   "段落の ID。テキストボックスで kind が label のときは空文字"},
+        "items": {"type": "array", "description": "図形の中身を、図・表ごとに組にしたもの（テキストボックスでは kind の組 1 つ）", "items": {
             "type": "object",
             "properties": {
-                "kind": {"type": "string", "enum": ["fig", "table"]},
+                "kind": {"type": "string", "enum": ["fig", "table", "box", "label"],
+                         "description": "fig（図）・table（表）は図形（s1 など）の中身の組。box（本文の囲み）・label（図に重ねた"
+                                        "注記。本文に出さない）はテキストボックス（x1 など）に 1 つだけ書き、caption と body は"
+                                        "空の一覧 []"},
                 "caption": {"type": "array", "items": {"type": "string"},
                             "description": "キャプションの段落 ID（出典などの続きの段落も順に）"},
                 "body": {"type": "array", "items": {"type": "string"},
@@ -110,8 +116,8 @@ RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
         "placements": {"type": "array", "items": PLACEMENT_SCHEMA,
-                       "description": "位置を決められなかった図表（テキストボックス・グループ図形）の位置と組み合わせ。"
-                                      "回答の最初に書く"},
+                       "description": "位置を決められなかった図表（テキストボックス・グループ図形）の位置と組み合わせと、"
+                                      "囲みか図の注記か決められなかったテキストボックスの種類（box・label）。回答の最初に書く"},
         "operations": {"type": "array", "items": OP_SCHEMA},
         "notes": {"type": "array", "items": {"type": "string"},
                   "description": "操作にはできないが、人が確認すべきと考えたこと（日本語）"},
@@ -156,7 +162,15 @@ Python のプログラムがすでに機械的な変換を済ませています�
      問題文などを表で組んだ図は、kind を fig、body をその表にします。1 つの図形に図が 2 つ並んでいる（表の中に画像とキャプションが並んでいる）
      場合は、画像とキャプションのセルの段落を図ごとに組にして、items を 2 つにします。表は kind を table、body をその表 1 つにします。
    - 「# 位置を機械的に決めた図表（変更不可）」に挙げた図形は、位置も組み合わせも確定しています。placements に書かないでください（書いても採用されません）。
-   - テキストボックス・グループ図形の中の段落の役割は、set_role ではなく placements で指定してください。
+   - 「# 囲みか図の注記か決められなかったテキストボックス」に挙げたもの（x1 など）は、1 つ残らず placements に 1 件ずつ指定してください。
+     float にテキストボックスの ID、items に {"kind": "box" か "label", "caption": [], "body": []} を 1 つだけ書きます。
+     box は本文の囲み（問題文・ヒント・まとめなど、本文として読まれる文章）で、after の段落の直後に枠で囲んだ段落として置きます。
+     label は図に重ねた注記（矢印・点・辺の名前など、図の一部の短い文字）で、本文に出しません（after は空文字）。
+     「# 位置を推定した囲み」に挙げたものは、置いた位置が違うときだけ、kind box で正しい after を指定してください。
+     「# 扱いを機械的に決めたテキストボックス（変更不可）」に挙げたものは placements に書かないでください。
+   - 浮動配置の図形（s1 など）の中の段落の役割は、set_role ではなく placements で指定してください。浮動配置でないテキストボックスの
+     段落に set_role で指定できるのは fig_caption・table_caption・exclude だけです（囲みか図の注記かは placements の kind box・label で
+     指定します）。
 
 回答の JSON は、placements、operations、notes の順に書いてください（placements を最初に。回答が長すぎて途中で切れても、
 図表の位置の指定が残るようにするためです）。
@@ -252,8 +266,12 @@ def build_request(plan: ArticlePlan, linker, build_exclusions=(), unsplit_names=
             continue
         role = p.role or region
         loc = plan.locations.get(src, "")
-        if p.float_id:
+        if p.textbox_id and p.textbox_id in plan.textboxes:
+            loc = f"テキストボックス {p.textbox_id} の中"      # 文字だけのテキストボックス（placements では x1 などで指定する）
+        elif p.float_id:
             loc = f"図形 {p.float_id} の中"
+        elif p.textbox_id:
+            loc = f"テキストボックス {p.textbox_id} の中"
         text = para_view_with_links(p)
         if not text.strip():
             continue
@@ -280,7 +298,7 @@ def build_request(plan: ArticlePlan, linker, build_exclusions=(), unsplit_names=
         cat, src, raw, detail = item[:4]
         lines.append(f"- [{src}] {cat}: 「{raw}」 … {detail}")
     for d in plan.decisions:
-        if d.category in ("style", "formula", "figure", "table", "note"):
+        if d.category in ("style", "formula", "figure", "table", "note", "box"):
             lines.append(f"- [{d.src}] 推定: {d.message}")
     for fn in plan.fns:
         if not fn.word_note and fn.number is None:
@@ -311,10 +329,11 @@ def build_request(plan: ArticlePlan, linker, build_exclusions=(), unsplit_names=
 
 
 def float_section(plan: ArticlePlan, images: list) -> list:
-    """依頼文の「位置を決められなかった図表」と「位置を機械的に決めた図表（変更不可）」の節。images に添付する画像を足す。"""
-    if not plan.floats:
-        return []
+    """依頼文の「位置を決められなかった図表」と「位置を機械的に決めた図表（変更不可）」の節と、文字だけのテキストボックスの
+    節（textbox_section）。images に添付する画像を足す。"""
     lines = []
+    if not plan.floats:
+        return textbox_section(plan)
     unplaced = [info for info in plan.floats.values() if info.mode == "unplaced"]
     fixed = [info for info in plan.floats.values() if info.mode != "unplaced"]
     lay = plan.layout
@@ -371,6 +390,88 @@ def float_section(plan: ArticlePlan, images: list) -> list:
                 what = "（キャプションなし）"
             how = (f"段落 [{fl.anchor_src}] の前に配置済み" if info.mode == "mechanical" else "AI の指定で配置済み")
             lines.append(f"[{fl.fid}] {what}: {how}")
+    return lines + textbox_section(plan)
+
+
+def _box_size(plan: ArticlePlan, info) -> str:
+    """文字だけのテキストボックスの大きさと位置の説明（依頼文）。"""
+    tb, lay = info.box, plan.layout
+    if info.float is not None:
+        return f"docx に記録された大きさと位置: {describe(info.float, lay)}"
+    col = column_cm(lay)
+    if tb.width_cm is None:
+        size = "幅は読めない"
+    else:
+        size = f"幅 {tb.width_cm:.1f} cm" + (f"（1 段の幅の {tb.width_cm / col:.2f} 倍）" if col else "")
+    if tb.height_cm is not None:
+        size += f"・高さ {tb.height_cm:.1f} cm"
+    if tb.group:
+        where = "グループ図形の中"
+    elif tb.absolute:
+        where = "VML の position:absolute の位置指定（位置の値は読み取っていない）"
+    else:
+        where = "行内（アンカー段落の行の中）"
+    return f"大きさ: {size}。位置: {where}"
+
+
+def _box_at(info) -> str:
+    """囲みを置いた位置（依頼文。段落 ID で示す）。"""
+    if info.where == "end":
+        return "本文の最後"
+    if info.where == "before":
+        return f"段落 [{info.after_src}] の前"
+    return f"段落 [{info.after_src}] の後ろ" if info.after_src else "本文の最初"
+
+
+def _box_contents(info) -> list:
+    return [f"    段落 [{q.src}]（スタイル: {q.style_name}）{para_view(q)[:80]}" for q in info.paras if not q.is_blank]
+
+
+def textbox_section(plan: ArticlePlan) -> list:
+    """依頼文の、文字だけのテキストボックス（structure.Classifier.place_boxes）の節: 「囲みか図の注記か決められなかった
+    テキストボックス」（placements の kind box・label の指定が必要）、「位置を推定した囲み」（位置が違うときだけ指定）、
+    「扱いを機械的に決めたテキストボックス（変更不可）」。該当がなければ、その節は出さない。"""
+    from .structure import OUTSIDE_JA
+    boxes = plan.textboxes
+    undecided = [x for x, info in boxes.items() if info.kind == "undecided"]
+    estimated = [x for x, info in boxes.items() if info.kind == "box" and info.estimated]
+    fixed = [x for x, info in boxes.items() if info.kind in ("box", "label") and x not in estimated]
+    lines = []
+
+    def anchor(info):
+        a = plan.paras.get(info.box.anchor_src)
+        where = f"（本文の外〈{OUTSIDE_JA.get(info.outside, info.outside)}〉の段落）" if info.outside else ""
+        return f"アンカー段落: [{info.box.anchor_src}]「{_para_text(a)[:30] if a else ''}」{where}"
+    if undecided:
+        lines.append("\n# 囲みか図の注記か決められなかったテキストボックス")
+        lines.append("以下のすべてについて、placements に kind（box か label）を必ず指定してください（box なら after も）。")
+        for x in undecided:
+            info = boxes[x]
+            lines.append(f"\n[{x}] {anchor(info)}")
+            lines.append(f"  {_box_size(plan, info)}")
+            lines.append(f"  画像の近く: {'はい' if info.near else 'いいえ'}")
+            lines.append(f"  判定できなかった理由: {info.why}")
+            lines.append("  中身:")
+            lines += _box_contents(info)
+    if estimated:
+        lines.append("\n# 位置を推定した囲み（位置が違うときだけ placements で kind box と after を指定）")
+        for x in estimated:
+            info = boxes[x]
+            lines.append(f"\n[{x}] {_box_at(info)}に置いた（推定の理由: {info.place_why}）。{anchor(info)}")
+            lines.append(f"  {_box_size(plan, info)}")
+            lines.append("  中身:")
+            lines += _box_contents(info)
+    if fixed:
+        lines.append("\n# 扱いを機械的に決めたテキストボックス（変更不可。placements に書かないこと）")
+        labels = {}
+        for x in fixed:
+            info = boxes[x]
+            if info.kind == "label":
+                labels.setdefault(info.box.anchor_src, []).append(x)
+            else:
+                lines.append(f"[{x}] 囲み: {_box_at(info)}に配置済み")
+        for src, xids in labels.items():
+            lines.append(f"[{'・'.join(xids)}] 図の注記（段落 [{src}] の図）として除外済み")
     return lines
 
 
@@ -716,7 +817,9 @@ MANUAL_EXAMPLE = """```json
 {
   "placements": [
     {"float": "s1", "after": "d47", "items": [{"kind": "fig", "caption": ["d52", "d53"], "body": ["t3"]}],
-     "reason": "図の上端はアンカー段落 d48 の上端から約 1.8 行下で、推定では直上の本文は d47。図1 の初出（d46）より後", "confidence": "中"}
+     "reason": "図の上端はアンカー段落 d48 の上端から約 1.8 行下で、推定では直上の本文は d47。図1 の初出（d46）より後", "confidence": "中"},
+    {"float": "x2", "after": "d30", "items": [{"kind": "box", "caption": [], "body": []}],
+     "reason": "問題文とヒントの囲みで、図の注記ではない。本文で「次の問題」と述べた段落 d30 の直後", "confidence": "中"}
   ],
   "operations": [
     {"op": "link_citation", "src": "d18", "text": "2001", "occurrence": 1, "target": "B2", "role": "", "image": "",
@@ -730,10 +833,14 @@ MANUAL_EXAMPLE = """```json
 
 FIELD_GUIDE = """回答は placements、operations、notes の順に書く（placements を最初に）。
 
-placements（位置を決められなかった図表ごとに 1 件。依頼文に「# 位置を決められなかった図表」がなければ []）の各項目:
-- float: 図形の ID（s1 など）
-- after: 図表を置く位置（Word で表示したときに図の左上の直上にある本文の文章を含む段落の ID。その段落の直後に置く）
-- items: 図・表ごとの組。kind（fig / table）、caption（キャプションの段落 ID の一覧）、body（表 ID・画像 ID・画像だけの段落 ID の一覧）
+placements（「# 位置を決められなかった図表」と「# 囲みか図の注記か決められなかったテキストボックス」に挙げたものごとに 1 件。
+どちらもなければ []）の各項目:
+- float: 図形の ID（s1 など）か、テキストボックスの ID（x1 など）
+- after: 図表を置く位置（Word で表示したときに図の左上の直上にある本文の文章を含む段落の ID。その段落の直後に置く）。
+  テキストボックスを label にするときは ""
+- items: 図・表ごとの組。kind（fig / table）、caption（キャプションの段落 ID の一覧）、body（表 ID・画像 ID・画像だけの段落 ID の一覧）。
+  テキストボックス（x1 など）では、kind を box（本文の囲み。問題文・ヒントなど）か label（図に重ねた注記。矢印のラベルなど）に
+  した組を 1 つだけ書き、caption と body は []
 - reason, confidence: 下の operations と同じ
 
 operations の各項目の意味（すべての操作に 12 項目すべてを書き、使わない項目は空文字 "" にする。occurrence は数値）:
@@ -771,6 +878,8 @@ def manual_prompt(request_text, images) -> str:
             "図表の位置の指定が残るようにするためです）。\n"
             "- 「# 位置を決められなかった図表」に挙げた図形は、すべて placements に書いてください（省略できません）。"
             "なければ \"placements\": [] としてください。\n"
+            "- 「# 囲みか図の注記か決められなかったテキストボックス」に挙げたもの（x1 など）も、すべて placements に書いてください"
+            "（kind は box か label）。\n"
             "- 提案する操作がなければ \"operations\": [] とし、気づいたことだけを notes に書いてください。\n\n"
             "回答の見本（形式の見本です。内容はこの論文とは関係ありません）:\n"
             f"{MANUAL_EXAMPLE}\n\n"
@@ -959,12 +1068,17 @@ def set_role_problem(p, plan: ArticlePlan, role: str) -> str:
 
     回答の検証（role_overrides）と、依頼文の除外の一覧の案内（set_role_hint）の両方で使う（指定しても必ず捨てられる操作を
     AI に勧めないように、判定を 1 か所にまとめる。修正計画の N6）。上から順に見て、最初に当たった理由を返す。
-    文字だけのテキストボックスの段落（float_id のないもの）の規則は、修正計画の F で足す。
+    浮動配置の図形（float_id）の段落は、すべて placements で指定させる。浮動配置でないテキストボックス（行内・VML）の段落には
+    fig_caption・table_caption・exclude だけを受け付け（VML のキャプションへの fig_caption は今までどおり効く）、ほかの役割は
+    囲みか図の注記かを placements の kind box・label で指定させる（修正計画の F の (1)）。
     """
     if role not in ROLES:
         return f"役割「{role}」は指定できない"
     if p.float_id:
         return "テキストボックス・グループ図形の中の段落の役割は placements で指定する"
+    if p.textbox_id and role not in ("fig_caption", "table_caption", "exclude"):
+        return ("浮動配置でないテキストボックスの段落に指定できる役割は fig_caption・table_caption・exclude だけ"
+                "（囲みか図の注記かは placements の kind box・label で指定する）")
     if p.src in plan.note_of:
         # 参照のない注も含めて、Word の脚注・文末脚注の段落すべて（構造の組み立てで役割を見ないので、指定しても何も変わらない）
         return "Word の脚注・文末脚注の段落の役割は変えられない（注の区切りは Word のとおりにする）"
@@ -982,7 +1096,15 @@ def set_role_problem(p, plan: ArticlePlan, role: str) -> str:
 
 
 def set_role_hint(p, plan: ArticlePlan) -> str:
-    """依頼文の除外の一覧で、段落 p に添える set_role の案内（set_role_problem で指定できる役割だけを勧める）。"""
+    """依頼文の除外の一覧で、段落 p に添える set_role の案内（set_role_problem で指定できる役割だけを勧める）。
+
+    囲みか図の注記か決められなかったテキストボックスの段落には、placements の kind box・label を案内する（set_role では
+    囲みにできない）。扱いを機械的に決めたテキストボックスの段落は、ほかの段落と同じく set_role で指定できる役割だけを示す
+    （placements の指定は採用されないので勧めない）。
+    """
+    box = plan.textboxes.get(p.textbox_id) if p.textbox_id else None
+    if box is not None and box.kind == "undecided":
+        return "（囲みなら placements の kind box、図の注記なら label で指定）"
     if not set_role_problem(p, plan, "p"):
         return "（本文の一部なら set_role を提案）"
     ok = [r for r in ROLES if r != "exclude" and not set_role_problem(p, plan, r)]
@@ -1041,8 +1163,11 @@ def float_placements(data, plan: ArticlePlan, outcome: AIOutcome) -> dict:
                 ends[fid] = ({"where": "end", "after": after, "op": op}, len(outcome.rejected))
             outcome.rejected.append((op, why))
             continue
-        out[pl["float"]] = {"after": pl["after"], "items": pl["items"], "reason": op["reason"],
-                            "confidence": op["confidence"] if op["confidence"] in ("高", "中", "低") else "低", "op": op}
+        spec = {"after": pl["after"], "items": pl["items"], "reason": op["reason"],
+                "confidence": op["confidence"] if op["confidence"] in ("高", "中", "低") else "低", "op": op}
+        if pl["float"] in plan.textboxes:
+            spec["kind"] = pl["items"][0]["kind"]       # 文字だけのテキストボックス: box（囲み）か label（図の注記）
+        out[pl["float"]] = spec
     for fid, (spec, k) in ends.items():
         if fid in out:
             continue                    # 同じ図形の、後ろの正しい指定を採用した
@@ -1056,9 +1181,13 @@ def _placement_problem(pl, plan: ArticlePlan, body: set, done: dict) -> str:
     if not isinstance(pl, dict):
         return "指定の形式が正しくない"
     fid, after, items = pl.get("float"), pl.get("after"), pl.get("items")
-    info = plan.floats.get(fid)
+    box = plan.textboxes.get(fid) if isinstance(fid, str) else None
+    if box is not None:
+        return _box_placement_problem(fid, box, after, items, body, done)
+    info = plan.floats.get(fid) if isinstance(fid, str) else None
     if info is None:
-        return f"図形 {fid} は「位置を決められなかった図表」にない"
+        return (f"{fid} は「位置を決められなかった図表」「囲みか図の注記か決められなかったテキストボックス」"
+                "「位置を推定した囲み」にない")
     if info.mode != "unplaced":
         return f"図形 {fid} は位置を機械的に決めた図表なので、位置も組み合わせも変更できない"
     if fid in done:
@@ -1114,6 +1243,28 @@ def _placement_problem(pl, plan: ArticlePlan, body: set, done: dict) -> str:
             used.add(x)
     if whole & split:
         return f"表 {', '.join(sorted(whole & split))} を、表全体と、セルの段落の両方で使っている"
+    return ""
+
+
+def _box_placement_problem(xid, box, after, items, body: set, done: dict) -> str:
+    """文字だけのテキストボックスの指定（placements の kind box・label）を採用しない理由（採用できれば ''）。
+
+    指定できるのは、囲みか図の注記か決められなかったもの（box か label）と、位置を推定した囲み（box で位置だけ）。box の after は
+    本文の段落だけ。label の after は使わない。
+    """
+    if not (box.kind == "undecided" or (box.kind == "box" and box.estimated)):
+        return f"テキストボックス {xid} は扱いを機械的に決めたので、変更できない"
+    if xid in done:
+        return f"テキストボックス {xid} の指定が 2 回ある（最初の指定を採用）"
+    if (not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], dict)
+            or items[0].get("kind") not in ("box", "label")):
+        return "テキストボックスの items は、kind が box か label の組を 1 つだけ書く"
+    if items[0].get("caption") or items[0].get("body"):
+        return "テキストボックスの指定では caption と body は空の一覧 [] にする"
+    if items[0]["kind"] == "label" and box.kind == "box":
+        return "位置を推定した囲みには box だけを指定できる"
+    if items[0]["kind"] == "box" and (not isinstance(after, str) or after not in body):
+        return f"置く位置の段落 {after} は本文の段落ではない（図形の中の段落・表のセル・本文以外は指定できない）"
     return ""
 
 

@@ -42,6 +42,15 @@
 - 査読の有無（ガイドライン 3.1.30）: `<history>` に、査読ありなら `<date date-type="approved">`（最終査読日。不明なら年月日を空に）、査読なしなら `<date date-type="accepted as received">`（年月日を空に）。どちらもなければ資料の設定が引き継がれる。年・月・日は、1 つでも入れるならすべて入れる。
 - 文字数の上限: 抄録・翻訳抄録 4000（p の合計）、記事表題 2000、引用文献（mixed-citation）4000。
 - `<label>` の自動付番は行われない。番号を表示したい場合は label か本文に書く。
+- コラム（`<boxed-text>`。全文 XML 作成マニュアル 3.5.4 の (1)「本文・章節」と (12)「コラム」。2026-11-01 に確認）: `<body>` の子要素構成は
+  `<p>?,<sec>?` で、`<boxed-text>` は `<body>` の直下に置けない（`<sec>` と `<p>` の子要素には含まれる）。`<boxed-text>` の子要素構成は
+  `<label>?,<title>?` の後に `boxed-text`・`fig`・`fig-group`・`graphic`・`media`・`table-wrap`・`table-wrap-group`・`disp-formula`・
+  `disp-formula-group`・`p`・`list`・`tex-math`・`mml:math`・`disp-quote` の繰り返し。属性（id など）の記載はない。中の `<p>` には
+  「※タグによっては表示が崩れる恐れがあります。」とある。同梱の DTD（JATS 1.1）は `<body>` の直下の `<boxed-text>` も認める。
+  → 本ツールは、文字だけのテキストボックスの囲み（`docs/DESIGN.md` の 6.2）を `<boxed-text>` にし、id は付けない。中身は `<p>`・
+  `<list>`・`<disp-quote>`・`<disp-formula>` だけにする。本文の最上位（最初の章見出しの前）に置く囲みは `<p>` で包む。J-STAGE の画面で
+  枠がどう表示されるか、中の `<list>`・`<disp-formula>` が崩れないかは、試験登載で確かめる（まだ確かめていない）。
+  なお、最初の章見出しの前の図・表などは今も `<body>` の直下に出している（DTD には合う。マニュアルの子要素構成とは違う）。
 - 注（`<fn-group><fn>`）の子要素は `<p>` だけ（マニュアルの階層図、FULL-J サンプル）。`<fn><label>` は表示されないので、注の番号は `<p>` の先頭に書く（2026-10 の試験登載で、label に入れた番号が表示されないことを確認）。
   注の番号から本文の参照位置へ戻るリンクは書けない（`<xref>` の属性は ref-type と rid だけで、参照位置に目印を付けられない）。
 - `<mixed-citation>` の中の文字・空白・句読点はそのまま表示される。引用文献原文は「label + 半角空白 + mixed-citation の文字」で登録される。

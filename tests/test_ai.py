@@ -883,8 +883,231 @@ def test_request_hints_follow_set_role_problem(journal, tmp_path):
                                                                mf.para(S["body"], "囲みを付けた本文。", vml)])
     lines, plan = hints(path)
     box = next(s for s, p in plan.paras.items() if p.plain() == "囲みの中の架空の問題文。")
-    assert lines[box].endswith("（本文の一部なら set_role を提案）")
+    # 囲みか図の注記か決められなかったテキストボックス（浮動配置でない VML）の段落には、placements の kind box・label を勧める
+    # （set_role p は採用されないので勧めない。修正計画の F）
+    assert lines[box].endswith("（囲みなら placements の kind box、図の注記なら label で指定）")
     # 依頼文の役割の一覧と説明に、資料の見出し（app_heading）がある
     assert "app_heading（資料の見出し（英文要旨の後ろの、資料・付録の始まり））" in system_prompt()
     assert "資料の見出しの段落を app_heading にしてください" in system_prompt() and "app_heading" in ROLES
     assert "見出しではなく資料の中の文のときは p にしてください（前の資料の続きになります。前に資料がなければ" in system_prompt()
+
+
+# ----------------------------------------------------------------------------- 文字だけのテキストボックス（修正計画の D1）
+def _boxes_by_text(journal):
+    """sample_structure の、1 回目の組み立ての plan と、文字だけのテキストボックスの最初の段落の文字 -> ID。"""
+    _, plan, _ = _mechanical(STRUCTURE, journal)
+    return plan, {next((q.plain() for q in bi.paras if not q.is_blank), ""): x for x, bi in plan.textboxes.items()}
+
+
+def _src(plan, head):
+    return next(s for s, p in plan.paras.items() if p.plain().startswith(head))
+
+
+def _box_pl(xid, after, kind="box", **kw):
+    item = {"kind": kind, "caption": [], "body": []}
+    item.update(kw)
+    return {"float": xid, "after": after, "items": [item], "reason": "試験の回答", "confidence": "中"}
+
+
+def _manual_pl(path, placements, meta, journal, out, ops=()):
+    resp = json.dumps({"placements": placements, "operations": list(ops), "notes": []}, ensure_ascii=False)
+    return convert(path, meta, journal, Options(out_dir=out, ai_mode="manual", ai_response=resp, convert_metafiles=False))
+
+
+def test_ai_kind_box_and_label_for_undecided_textboxes(journal, meta, tmp_path):
+    # 囲みか図の注記か決められなかったテキストボックスは、AI の placements（kind box・label）で決める。box は指定の段落の直後の
+    # boxed-text（ずらさない）、label は AI の判断の理由で除外する。どちらも 2 章の採用の一覧に place_float として載る
+    plan, ids = _boxes_by_text(journal)
+    hint, note = ids["（ヒント）"], ids["注"]
+    assert plan.textboxes[hint].kind == plan.textboxes[note].kind == "undecided"
+    res = _manual_pl(STRUCTURE, [_box_pl(hint, _src(plan, "囲みの後の段落である。")), _box_pl(note, "", kind="label")],
+                     meta, journal, tmp_path)
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
+    root = load(res)
+    bt = next(bt for bt in root.iter("boxed-text") if _text(bt) == "（ヒント）")
+    assert _text(bt.getprevious()) == "囲みの後の段落である。" and _text(bt.getnext()) == "ヒントを付けた。"
+    accepted = {op["src"]: d for op, d in res.ai.accepted if op["op"] == "place_float"}
+    assert set(accepted) == {hint, note} and accepted[hint] is res.plan.float_decisions[hint]
+    assert accepted[hint].category == "box" and "囲み（boxed-text）として段落「囲みの後の段落である。」の後に置いた" in accepted[hint].message
+    reasons = {t: why for _, why, t in res.fidelity.excluded}
+    assert reasons["注"] == "テキストボックス内の文字（AI による補完で図に重ねた注記と判断し、本文から除外）"
+    assert (res.plan.textboxes[hint].kind, res.plan.textboxes[hint].mode, res.plan.textboxes[hint].where) == ("box", "ai", "ai")
+    # 残った 1 件（Area model）だけが、要確認として残る（AI の回答を反映した後の文面）
+    act = next(a for a in actions(res) if a.key == "textbox_undecided")
+    assert "1 件" in act.box_title and "採用されませんでした" in act.box_detail
+    report = res.report_path.read_text(encoding="utf-8")
+    assert "| 囲み・図の注記（テキストボックス） |" in report.split("## 2.")[1].split("## 3.")[0]
+
+
+@pytest.mark.parametrize("make, why", [
+    (lambda p, ids: _box_pl(ids["（ヒント）"], _src(p, "問1　架空の三角形")), "本文の段落ではない"),     # 囲みの中の段落
+    (lambda p, ids: _box_pl(ids["（ヒント）"], _src(p, "試験七郎（2025）")), "本文の段落ではない"),        # 引用文献の段落
+    (lambda p, ids: _box_pl(ids["（ヒント）"], _src(p, "試験　七郎")), "本文の段落ではない"),             # 著者表のセル
+    (lambda p, ids: _box_pl(ids["問1　架空の三角形の面積を求めよ。底辺と高さは図に示す。"], _src(p, "囲みの後の段落")),
+     "扱いを機械的に決めたので、変更できない"),
+    (lambda p, ids: _box_pl(ids["A 点"], "", kind="label"), "扱いを機械的に決めたので、変更できない"),
+    (lambda p, ids: _box_pl(ids["問3　架空の数の列の規則を説明せよ。"], "", kind="label"), "box だけを指定できる"),
+    (lambda p, ids: _box_pl(ids["（ヒント）"], _src(p, "囲みの後の段落"), caption=[_src(p, "（ヒント）")]), "空の一覧 [] にする"),
+    (lambda p, ids: {**_box_pl(ids["（ヒント）"], _src(p, "囲みの後の段落")),
+                     "items": [{"kind": "box", "caption": [], "body": []}] * 2}, "1 つだけ書く"),
+    (lambda p, ids: _box_pl(ids["（ヒント）"], _src(p, "囲みの後の段落"), kind="fig"), "1 つだけ書く"),
+    (lambda p, ids: _box_pl("x99", _src(p, "囲みの後の段落")), "にない"),
+])
+def test_ai_textbox_placements_are_validated(journal, make, why):
+    from jasme_jats.ai_assist import AIOutcome, float_placements
+    plan, ids = _boxes_by_text(journal)
+    out = AIOutcome()
+    got = float_placements({"placements": [make(plan, ids)]}, plan, out)
+    assert got == {} and len(out.rejected) == 1 and why in out.rejected[0][1]
+
+
+def test_ai_textbox_placement_twice_and_estimated_box(journal, meta, tmp_path):
+    # 同じテキストボックスの 2 回目の指定は採用しない。位置を推定した囲みは、kind box で位置だけを指定し直せる（要確認は消える）
+    from jasme_jats.ai_assist import AIOutcome, float_placements
+    plan, ids = _boxes_by_text(journal)
+    hint, est = ids["（ヒント）"], ids["問3　架空の数の列の規則を説明せよ。"]
+    out = AIOutcome()
+    got = float_placements({"placements": [_box_pl(hint, "", kind="label"), _box_pl(hint, _src(plan, "囲みの後の段落"))]},
+                           plan, out)
+    assert got[hint]["kind"] == "label" and "2 回ある" in out.rejected[0][1]
+    assert plan.estimated_boxes == [est]
+    res = _manual_pl(STRUCTURE, [_box_pl(est, _src(plan, "空の囲みを置いた。"))], meta, journal, tmp_path)
+    assert res.fidelity.ok and res.dtd_valid and res.plan.estimated_boxes == []
+    bt = next(bt for bt in load(res).iter("boxed-text") if _text(bt).startswith("問3"))
+    assert _text(bt.getprevious()) == "空の囲みを置いた。"
+    assert "textbox_place" not in [a.key for a in actions(res)]
+    # 浮動配置の図形（位置を決められなかった図表）に kind box を書いたものは採用しない
+    _, fplan, _ = _mechanical(FLOAT, journal)
+    out = AIOutcome()
+    assert float_placements({"placements": [_box_pl("s1", "d13")]}, fplan, out) == {}
+    assert "items の kind は fig か table" in out.rejected[0][1]
+
+
+def test_set_role_on_textbox_paragraphs(journal, meta, tmp_path):
+    # 浮動配置でないテキストボックス（VML・行内）の段落に set_role で指定できるのは fig_caption・table_caption・exclude だけ
+    # （ほかは placements の kind box・label を案内して採用しない。修正計画の F の (1)）。浮動配置の図形の段落は今までどおり
+    # すべて placements で指定させる。VML のキャプションへの fig_caption は今までどおり採用し、図のキャプションになる
+    from jasme_jats.ai_assist import set_role_problem
+    _, plan, _ = _mechanical(STRUCTURE, journal)
+    vml = next(p for p in plan.paras.values() if p.plain().startswith("問3　架空の数の列"))
+    floating = next(p for p in plan.paras.values() if p.plain() == "（ヒント）")
+    assert vml.textbox_id and not vml.float_id and floating.float_id
+    for role in ("p", "quote", "sec2"):
+        assert "placements の kind box・label で指定する" in set_role_problem(vml, plan, role)
+    assert set_role_problem(vml, plan, "exclude") == "" and set_role_problem(vml, plan, "fig_caption") == ""
+    assert "placements で指定する" in set_role_problem(floating, plan, "exclude")
+    res = _manual(STRUCTURE, [_set_role(vml.src, "p"), _set_role(vml.src, "exclude")], meta, journal, tmp_path / "s")
+    [(op, why)] = [(op, w) for op, w in res.ai.rejected if op["src"] == vml.src]
+    assert op["role"] == "p" and "placements" in why
+    assert {t: w for _, w, t in res.fidelity.excluded}[vml.plain()].startswith("AI 補完で、論文の本文ではない")
+    assert res.fidelity.ok and res.dtd_valid
+
+    def parts(b):
+        rid = b.add_image("vmlcap.png", mf.png_bytes("Figure"))
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "試験（2024）の図を示す。"),
+                mf.para(S["body"], mf.drawing(rid, 1800000, 1080000, 3101)),
+                mf.para(S["body"], mf.vml_textbox(mf.para(S["body"], "図1　架空の図形の説明である。"), width="200pt", height="20pt")),
+                mf.para(S["body"], "以上が図1である。")]
+    path = tmp_path / "vmlcap.docx"
+    mf.make_article(path, "VML のキャプションの検証用文書", parts)
+    _, p2, _ = _mechanical(path, journal)
+    cap = next(s for s, p in p2.paras.items() if p.plain().startswith("図1　架空の図形"))
+    assert cap in {e.src for e in p2.exclusions}            # 「。」で終わるのでキャプションの形でなく、文字だけのテキストボックス
+    res = _manual(path, [_set_role(cap, "fig_caption"), _set_role(cap, "p")], meta, journal, tmp_path / "v")
+    assert [op["role"] for op, _ in res.ai.accepted] == ["fig_caption"]
+    assert [op["role"] for op, w in res.ai.rejected if "placements" in w] == ["p"]
+    fig = load(res).find(".//fig")
+    assert fig.get("id") == "F1" and _text(fig.find("caption")) == "図1　架空の図形の説明である。"
+    assert fig.find("graphic") is not None and res.fidelity.ok and res.dtd_valid
+
+
+def test_textbox_placement_unused_after_set_role_is_rejected(journal, meta, tmp_path):
+    # 同じ回答で、決められない（浮動配置でない）テキストボックスの段落を set_role で図キャプションにし、そのテキストボックスに
+    # placements の kind label も指定したとき: 組み直した後は文字だけのテキストボックスでないので、kind の指定は使えない。
+    # 黙って捨てずに不採用（2 章）として示す（set_role は採用）
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "試験（2024）の札。", mf.vml_textbox(mf.para(S["body"], "（ヒント）"))),
+                mf.para(S["body"], "札の後の段落。")]
+    path = tmp_path / "vmlhint.docx"
+    mf.make_article(path, "札の検証用文書", parts)
+    _, plan, _ = _mechanical(path, journal)
+    [xid] = plan.undecided_boxes
+    src = plan.textboxes[xid].paras[0].src
+    res = _manual_pl(path, [_box_pl(xid, "", kind="label")], meta, journal, tmp_path / "out", ops=[_set_role(src, "fig_caption")])
+    assert [op["role"] for op, _ in res.ai.accepted] == ["fig_caption"] and res.plan.paras[src].role == "fig_caption"
+    [(op, why)] = [(op, w) for op, w in res.ai.rejected if op["op"] == "place_float"]
+    assert op["src"] == xid and why.startswith(f"テキストボックス {xid} は、AI の役割の指定（set_role）を反映して組み直した後に")
+    assert res.plan.undecided_boxes == [] and res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    # set_role がなければ、kind label を採用する（今までどおり）
+    res = _manual_pl(path, [_box_pl(xid, "", kind="label")], meta, journal, tmp_path / "label")
+    assert [op["op"] for op, _ in res.ai.accepted] == ["place_float"] and res.ai.rejected == []
+
+
+def test_request_lists_textboxes(journal):
+    # 依頼文: 囲みか図の注記か決められなかったもの（placements の指定が必要）、位置を推定した囲み（違うときだけ指定）、扱いを
+    # 機械的に決めたもの（変更不可）の節。テキストボックスの段落の場所は「テキストボックス x… の中」
+    from jasme_jats.ai_assist import build_request
+    _, plan, linker = _mechanical(STRUCTURE, journal)
+    _, ids = _boxes_by_text(journal)
+    req, _ = build_request(plan, linker)
+    undecided = req.split("# 囲みか図の注記か決められなかったテキストボックス\n", 1)[1].split("\n# ", 1)[0]
+    assert all(f"[{ids[t]}]" in undecided for t in ("（ヒント）", "注", "Area model"))
+    assert "判定できなかった理由: 文字 5 字" in undecided and "画像の近く: いいえ" in undecided
+    est = req.split("# 位置を推定した囲み", 1)[1].split("\n# ", 1)[0]
+    assert f"[{ids['問3　架空の数の列の規則を説明せよ。']}]" in est and "position:absolute" in est
+    fixed = req.split("# 扱いを機械的に決めたテキストボックス（変更不可。placements に書かないこと）", 1)[1]
+    a, c, b = ids["問1　架空の三角形の面積を求めよ。底辺と高さは図に示す。"], ids["問2　架空の問いを二つの式で考えよ。"], ids["A 点"]
+    assert f"[{a}] 囲み: 段落 [" in fixed and "] の前に配置済み" in fixed and f"[{c}] 囲み:" in fixed
+    assert f"[{b}] 図の注記（段落 [" in fixed
+    hint_src = next(s for s, p in plan.paras.items() if p.plain() == "（ヒント）")
+    assert f"[{hint_src}]（body / テキストボックス {ids['（ヒント）']} の中 /" in req
+    # テキストボックスのない原稿の依頼文には、これらの節を出さない
+    _, fplan, flinker = _mechanical(FULL, journal)
+    assert "テキストボックス" not in build_request(fplan, flinker)[0].split("---", 1)[-1].split("# 論文の段落一覧")[-1]
+
+
+def test_prompts_explain_box_and_label():
+    a = ai_assist
+    assert a.PLACEMENT_SCHEMA["properties"]["items"]["items"]["properties"]["kind"]["enum"] == ["fig", "table", "box", "label"]
+    assert "テキストボックスの ID（x1 など）" in a.PLACEMENT_SCHEMA["properties"]["float"]["description"]
+    assert "囲みか図の注記か決められなかったテキストボックス" in a.RESPONSE_SCHEMA["properties"]["placements"]["description"]
+    sp = a.system_prompt()
+    assert "「# 囲みか図の注記か決められなかったテキストボックス」に挙げたもの（x1 など）は、1 つ残らず" in sp
+    assert '{"kind": "box" か "label", "caption": [], "body": []}' in sp
+    assert "浮動配置でないテキストボックスの\n     段落に set_role で指定できるのは fig_caption・table_caption・exclude だけ" in sp
+    assert "kind を box（本文の囲み。問題文・ヒントなど）か label（図に重ねた注記。矢印のラベルなど）" in a.FIELD_GUIDE
+    assert "- float: 図形の ID（s1 など）か、テキストボックスの ID（x1 など）" in a.FIELD_GUIDE
+    example = parse_response(a.MANUAL_EXAMPLE)
+    assert example["placements"][1]["float"] == "x2" and example["placements"][1]["items"][0]["kind"] == "box"
+    assert "（kind は box か label）" in a.manual_prompt("依頼文", [])
+
+
+def test_fullwidth_space_paragraphs_in_textboxes_keep_fidelity(journal, meta, tmp_path):
+    # 囲み・図の注記・決められないもの・位置を決められない図形（手動モードで回答前）の中の全角空白だけの段落も、空白の除外として
+    # 記録し、不変性チェックに合格する
+    def parts(b):
+        rid = b.add_image("fw.png", mf.png_bytes("Figure"))
+        rid2 = b.add_image("fw2.png", mf.png_bytes("Float"))
+        cm = 360000
+        return [mf.para(S["sec1"], "１．はじめに"),
+                mf.para(S["body"], "試験（2024）の囲みである。", mf.textbox(
+                    mf.para(S["body"], "問1　架空の囲みの問題文である。答えを書け。") + mf.para(S["body"], "　"), 911,
+                    cx=12 * cm, cy=2 * cm)),
+                mf.para(S["body"], "囲みの後の段落。"),
+                mf.para(S["body"], "ヒントの札。", mf.textbox(mf.para(S["body"], "（ヒント）") + mf.para(S["body"], "　"), 912,
+                                                         cx=10 * cm, cy=cm)),
+                mf.para(S["body"], "札の後の段落。"), mf.para(S["body"], "図の前の段落。"),
+                mf.para(S["body"], mf.drawing(rid, 1800000, 1080000, 913)), mf.para(S["fig_cap"], "図1　架空の図"),
+                mf.para(S["body"], "図1の注記。", mf.textbox(mf.para(S["body"], "A点") + mf.para(S["body"], "　"), 914,
+                                                      cx=cm, cy=cm, v=("paragraph", -cm))),
+                mf.para(S["body"], "図2の段落。", mf.textbox(
+                    mf.para(S["body"], mf.drawing(rid2, 1440000, 960000, 916)) + mf.para(S["body"], "　")
+                    + mf.para(S["fig_cap"], "図2　位置を決められない図"), 915, cx=8 * cm, cy=4 * cm, v=("paragraph", 2 * cm)))]
+    path = tmp_path / "fw.docx"
+    mf.make_article(path, "全角空白の検証用文書", parts)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False))
+    fid = res.fidelity
+    assert fid.ok and fid.final_ok and res.dtd_valid and fid.bad_excluded == [], (fid.missing, fid.bad_excluded)
+    kinds = sorted(bi.kind for bi in res.plan.textboxes.values())
+    assert kinds == ["box", "label", "undecided"] and res.plan.unplaced_floats == ["s4"]
+    assert sum(1 for _, why, t in fid.excluded if why == "空白のみの段落" and t == "　") == 4
