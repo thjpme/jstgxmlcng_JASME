@@ -132,3 +132,37 @@ def test_conflicts_and_bad_exclusions_are_reported(journal, meta, tmp_path, monk
     assert "XML に出力したのに、出力しない段落としても記録されている段落（変換ツールの不具合）" in sec5
     assert "空白だけの段落として出力しなかったのに、docx では空白以外の文字がある段落（変換ツールの不具合）" in sec5
     assert "すべての段落で一致しました" not in sec5
+
+
+def _tracked_reader(journal, meta):
+    from conftest import READER
+    doc = read_docx(READER)
+    plan = classify(doc, journal)
+    link(plan)
+    root, info = build(plan, meta, journal)
+    return READER, doc, root, plan.exclusions + info.exclusions
+
+
+def test_joined_and_hidden_text_follow_the_same_policy(journal, meta):
+    """検証の docx 側の文字（source_texts）も、読み取りと同じく段落記号の削除でつなぎ（後ろの段落の ID は欠番）、スタイルの
+    隠し文字を隠す（修正計画の G）。欠番の ID の文字を出力したり、隠した文字を出力したりすると不合格になる。"""
+    path, doc, root, excl = _tracked_reader(journal, meta)
+    src = source_texts(path)
+    first, srcs = doc.joined[0]
+    assert srcs[1] not in src and src[first].endswith("次の段落の後半の文がつながる。")
+    assert not any("〔" in t for t in src.values())
+    assert verify(path, root, excl).ok
+    # 欠番の ID の目印は、docx にない段落（unknown）として不合格
+    bad = copy.deepcopy(root)
+    sp = next(e for e in bad.iter(SPAN) if e.get("src") == first)
+    extra = copy.deepcopy(sp)
+    extra.set("src", srcs[1])
+    sp.addnext(extra)
+    res = verify(path, bad, excl)
+    assert not res.ok and srcs[1] in res.unknown
+    # スタイルで隠した文字を出力すると、文字の不一致
+    bad = copy.deepcopy(root)
+    sp = next(e for e in bad.iter(SPAN) if (e.text or "").startswith("文字スタイルで"))
+    sp.text = sp.text.replace("文字スタイルで", "文字スタイルで〔文字スタイルで隠す〕")
+    res = verify(path, bad, excl)
+    assert not res.ok and [m.src for m in res.mismatches] == [sp.get("src")]

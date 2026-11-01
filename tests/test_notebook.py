@@ -14,8 +14,24 @@ spec.loader.exec_module(mk)
 
 
 def test_notebook_is_up_to_date():
-    # ノートブックを直したら python tools/make_notebook.py を実行すること
-    assert mk.OUT.read_text(encoding="utf-8") == mk.render()
+    # ノートブックを直したら python tools/make_notebook.py を実行すること（開発中の版のノートブックは --branch で作る）
+    text = mk.OUT.read_text(encoding="utf-8")
+    assert text == mk.render(mk.notebook_branch(text))
+
+
+def test_notebook_branch_and_version_check():
+    # main のノートブックは main から入れる。--branch で作ると手順 1 の既定のブランチだけが変わる
+    main_nb, dev_nb = mk.render(), mk.render("docs/gui-plan")
+    assert mk.notebook_branch(main_nb) == "main" and mk.notebook_branch(dev_nb) == "docs/gui-plan"
+    step1_main, step1_dev = ("".join(json.loads(nb)["cells"][1]["source"]) for nb in (main_nb, dev_nb))
+    assert 'BRANCH = "main"' in step1_main and 'BRANCH = "docs/gui-plan"' in step1_dev
+    assert step1_main.replace('BRANCH = "main"', 'BRANCH = "docs/gui-plan"') == step1_dev
+    assert [c for c in json.loads(main_nb)["cells"][2:]] == [c for c in json.loads(dev_nb)["cells"][2:]]
+    # 入ったツールの版がノートブックの版と違うとき、main のノートブックは手順 1 で止めて開き直してもらう（後の手順で
+    # ツールにない機能を呼んで止まるのを防ぐ）。開発版のノートブックは知らせるだけ
+    step1 = cell_source("#@title 1. 準備")
+    assert f'ver.startswith("{__version__}")' in step1
+    assert "main から開き直して" in step1 and "手順の説明や画面が合わないことがあります" in step1
 
 
 def test_notebook_shows_version_and_cells_compile():
@@ -28,7 +44,9 @@ def test_notebook_shows_version_and_cells_compile():
 
 def test_gradio_notebook_is_up_to_date_and_cells_compile():
     """試作の Gradio のノートブック（準備と画面を開く）も、生成と一致し、セルが構文として正しく、Gradio を入れて share なしで開く。"""
-    assert mk.OUT_GRADIO.read_text(encoding="utf-8") == mk.render_gradio()
+    text = mk.OUT_GRADIO.read_text(encoding="utf-8")
+    assert text == mk.render_gradio(mk.notebook_branch(text))      # --branch で作ったものも、同じ置き換えが効く
+    assert 'BRANCH = "docs/gui-plan"' in "".join(json.loads(mk.render_gradio("docs/gui-plan"))["cells"][1]["source"])
     nb = json.loads(mk.render_gradio())
     sources = ["".join(c["source"]) for c in nb["cells"]]
     assert f"ツールの版: {__version__}" in sources[0] and "試作版" in sources[0] and "ZIP をダウンロードできるか" in sources[0]

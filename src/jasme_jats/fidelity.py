@@ -1,7 +1,8 @@
 """文字の不変性チェック。
 
-docx の各段落の文字列を ooxml.canonical_text() で独立に取り出し、変換後の XML の
-<jx:span src=...> に書き出された文字列と 1 文字ずつ比較する。
+docx の各段落の文字列を ooxml.canonical_texts()（段落ごとの ooxml.canonical_text()）で独立に取り出し、変換後の XML の
+<jx:span src=...> に書き出された文字列と 1 文字ずつ比較する。段落記号の削除でつないだ段落（ooxml.joined_paragraphs）と
+隠し文字の判定（ooxml.HiddenRule）は、読み取り（docx_reader）と同じ規則を使う（規則そのものの誤りはここでは見つからない）。
 
   ・docx のすべての段落が、XML のどこかに過不足なく出力されているか
     （出力しない段落は Exclusion としてレポートに全文を載せる）
@@ -20,7 +21,7 @@ from dataclasses import dataclass, field
 
 from lxml import etree
 
-from .ooxml import DocxPackage, canonical_text, is_ws, paragraph_ids
+from .ooxml import DocxPackage, HiddenRule, canonical_texts, is_ws
 from .omml import MML_NS, math_plain
 from .tracking import AI, GEN, JX_NS, SPAN
 
@@ -68,14 +69,15 @@ class FidelityResult:
 
 
 def source_texts(docx_path) -> dict:
+    """docx の段落 ID → 文字（本文・Word の脚注・文末脚注）。段落記号の削除でつないだ段落の後ろの段落の ID は入らない（欠番）。"""
     pkg = DocxPackage(docx_path)
+    rule = HiddenRule(pkg.xml("word/styles.xml"))
     out = {}
     for part, prefix in (("word/document.xml", "d"), ("word/footnotes.xml", "f"), ("word/endnotes.xml", "e")):
         root = pkg.xml(part)
         if root is None:
             continue
-        for p, pid in paragraph_ids(root, prefix).items():
-            out[pid] = canonical_text(p)
+        out.update(canonical_texts(root, prefix, rule))
     return out
 
 

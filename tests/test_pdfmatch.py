@@ -16,7 +16,7 @@ from lxml import etree
 
 import make_fixtures as mf
 from conftest import PDFCHECK, PDFCHECK_PDF
-from jasme_jats.ooxml import parse_xml, w
+from jasme_jats.ooxml import paragraph_mark_deleted, parse_xml, w
 from jasme_jats.pdfdocx import (AUTHOR, Fix, _apply_paragraph, _Writer, expected_text, paragraph_units, plan_fixes,
                                  tracked_counts)
 from jasme_jats.pdfmatch import LINE_MARK, PdfCheck, TextDiff, compare, is_width_pair
@@ -3451,3 +3451,131 @@ def test_route2_fully_fixed_has_no_action(journal, meta, tmp_path):
     report = res.report_path.read_text(encoding="utf-8")
     assert "出版版 PDF に合わせて docx を直してから変換しました" in report.split("## 2.")[0]
     assert "Word で開き、変更履歴を確認する" in report.split("## 14.")[1]
+
+
+# ----------------------------------------------------------------------------- 段落記号の削除と隠し文字（修正計画の G）
+def test_split_paragraph_is_matched_as_one(journal, meta, tmp_path):
+    """段落記号の削除で 2 つの w:p に分けた段落（Word で承諾すると 1 段落）は、どちらのルートでも 1 つの段落として PDF と照合し、
+    ルート2 では 1 つの段落として直す（修正計画の D5）。PDF は今の sample_pdfcheck.pdf（分けていない docx から作ったもの）。"""
+    pytest.importorskip("pypdfium2")
+    path = tmp_path / "split.docx"
+    mf.make_pdfcheck(path, split=True)
+    joined = ORIGINAL["d13"]
+    # ルート1: XML は docx の文字のまま 1 つの <p>。違いは d13 の 1 か所（後ろの w:p の ID d14 は欠番）
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "r1", pdf_path=PDFCHECK_PDF, convert_metafiles=False))
+    assert res.fidelity.ok and res.dtd_valid and res.joined == [("d13", ["d13", "d14"])]
+    out = texts(load(res))
+    assert joined in out and "授業は2回行った。" not in out
+    assert [(d.src, d.docx, d.pdf) for d in res.pdf_check.diffs] == [("d13", "資料", "付録")]
+    # ルート2: 1 つの段落として「資料」→「付録」と「2」→「２」を直し、XML は 1 つの <p>
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "r2", pdf_path=PDFCHECK_PDF, route="pdf",
+                                               convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    fx = res.docx_fix
+    assert fx.skipped == [] and fx.unmatched == [] and res.pdf_check.diffs == []
+    assert [(f.old, f.new) for f in fx.applied if f.src == "d13"] == [("資料", "付録"), ("2", "２")]
+    out = texts(load(res))
+    assert PUBLISHED["d13"] in out and "授業は２回行った。" not in out
+    # 直した docx: w:p の数と、前の w:p の段落記号の削除はそのまま。直しは文字のある w:p に入り、2 つをつなぐと PDF の文字
+    ps = paragraphs(fx.path)
+    assert len(ps) == len(paragraphs(path))
+    k = ps.index("詳しくは付録の学習指導案を参照されたい。")
+    assert ps[k + 1] == "授業は２回行った。"
+    root = parse_xml(zipfile.ZipFile(fx.path).read("word/document.xml"))
+    first = next(p for p in root.iter(w("p")) if "".join(t.text or "" for t in p.iter(w("delText"))) == "資料")
+    assert paragraph_mark_deleted(first)
+    assert paragraphs(fx.path, reject=True) == paragraphs(path)
+
+
+def test_fix_across_deleted_paragraph_mark():
+    """段落記号の削除をまたぐ直し（前の w:p の最後と後ろの w:p の最初にかかる直し）は、文字のある w:p の w:t に分かれて入る。
+    つないだ段落の境目に足す文字は、前の w:p の最後の文字の後ろに入る（修正計画の付録の D5）。"""
+    ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    mark = '<w:pPr><w:rPr><w:del w:id="1" w:author="x"/></w:rPr></w:pPr>'
+    body = etree.fromstring(f'<w:body xmlns:w="{ns}"><w:p>{mark}<w:r><w:t>授業は2</w:t></w:r></w:p>'
+                            '<w:p><w:r><w:t>回行った</w:t></w:r></w:p></w:body>')
+    p1, p2 = body.findall(w("p"))
+    units = paragraph_units(p1) + paragraph_units(p2)
+    text = "".join(c for c, _, _ in units)
+    assert text == "授業は2回行った"
+    fixes = [Fix("d1", 3, 5, "二度", "text", "2回"), Fix("d1", 8, 8, "。", "text", "")]
+    _apply_paragraph(units, fixes, _Writer("2026-01-01T00:00:00Z"))
+    assert all(f.applied for f in fixes)
+    got = ["".join(c for c, _, _ in paragraph_units(p)) for p in (p1, p2)]
+    assert got == ["授業は", "二度行った。"] and "".join(got) == expected_text(text, fixes)
+    assert paragraph_mark_deleted(p1)
+    # 境目に足す文字は、前の w:p の最後の文字の後ろ
+    body = etree.fromstring(f'<w:body xmlns:w="{ns}"><w:p>{mark}<w:r><w:t>参照されたい</w:t></w:r></w:p>'
+                            '<w:p><w:r><w:t>授業は</w:t></w:r></w:p></w:body>')
+    p1, p2 = body.findall(w("p"))
+    units = paragraph_units(p1) + paragraph_units(p2)
+    _apply_paragraph(units, [Fix("d1", 6, 6, "。", "text", "")], _Writer("2026-01-01T00:00:00Z"))
+    assert ["".join(c for c, _, _ in paragraph_units(p)) for p in (p1, p2)] == ["参照されたい。", "授業は"]
+
+
+def test_paragraph_units_match_reader():
+    """ルート2 の段落の文字（paragraph_units。隠し文字の規則を渡し、つないだ段落は w:p ごとの単位を連結）が、読み取りの段落の文字と
+    同じ（読み取り・検証・ルート2 の 3 か所が同じ文字ポリシー。sample_reader の段落記号の削除・スタイルの隠し文字を含む）。
+    読み取りの段落がない段落（つないだ段落の後ろ・読み飛ばした削除の行の段落・区切りの脚注）の文字は空。"""
+    from conftest import READER
+
+    from jasme_jats.docx_reader import read_docx
+    from jasme_jats.ooxml import HiddenRule, preprocess
+    from jasme_jats.pdfdocx import _chains, _Complex, raw_paragraph_ids
+    doc = read_docx(READER)
+    paras = {p.src: p for p in doc.all_paragraphs()} | {p.src: p for ps in doc.footnotes.values() for p in ps}
+    n = 0
+    with zipfile.ZipFile(READER) as z:
+        rule = HiddenRule(preprocess(parse_xml(z.read("word/styles.xml"))))
+        for part, prefix in (("word/document.xml", "d"), ("word/footnotes.xml", "f")):
+            root = parse_xml(z.read(part))
+            raw, chains = raw_paragraph_ids(root, prefix), _chains(root, prefix)
+            assert chains
+            later = {s for c in chains.values() for s in c[1:]}
+            for src in raw:
+                if src in later:
+                    assert src not in paras
+                    continue
+                try:
+                    got = "".join(c for s in chains.get(src, [src]) for c, _, _ in paragraph_units(raw[s], rule))
+                except _Complex:
+                    continue
+                assert got == (paras[src].plain() if src in paras else ""), src
+                n += src in paras
+    assert n > 100
+
+
+@pytest.mark.parametrize("split", [False, True], ids=["one", "split"])
+def test_route2_fixes_paragraphs_with_style_hidden_text(split, journal, meta, tmp_path):
+    """ルート2 で docx を直すときも、読み取りと同じ隠し文字の規則（ooxml.HiddenRule。write_fixed_docx が styles.xml から作って
+    paragraph_units に渡す）で段落の文字を組み立てる（修正計画の G）。直す段落の途中（直す文字の前。split なら、段落記号の削除で
+    つながる後ろの段落にも）に文字スタイルで隠した文字があっても、隠し文字のない docx と同じ箇所をすべて直す（規則を渡さないと、
+    隠した文字の分だけ段落の文字が読み取りと合わず、その段落を直さない）。隠した文字は直した docx にそのまま残り、XML には出ない。"""
+    pytest.importorskip("pypdfium2")
+
+    def route2(name, hidden):
+        path = tmp_path / f"{name}.docx"
+        mf.make_pdfcheck(path, split=split, hidden=hidden)
+        res = convert(path, meta, journal, Options(out_dir=tmp_path / name, pdf_path=PDFCHECK_PDF, route="pdf",
+                                                   convert_metafiles=False))
+        assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+        return path, res
+
+    _, plain = route2("plain", False)
+    path, res = route2("hidden", True)
+    fx = res.docx_fix
+    applied = [(f.src, f.start, f.end, f.old, f.new) for f in fx.applied]
+    assert applied == [(f.src, f.start, f.end, f.old, f.new) for f in plain.docx_fix.applied] and len(applied) == 44
+    assert fx.skipped == [] and fx.unmatched == [] and res.pdf_check.diffs == []
+    assert {s for s, _ in res.hidden_text} == {"d12", "d13"} and len(res.hidden_text) == (3 if split else 2)
+    out = texts(load(res))
+    assert not any("〔隠した注記〕" in t for t in out)
+    assert PUBLISHED["d12"] in out and PUBLISHED["d13"] in out
+    # 直した docx: 隠した文字はそのまま残り（直しの変更履歴の中にない）、却下すると元の docx の文字に戻る
+    ps = paragraphs(fx.path)
+    assert sum(p.count("〔隠した注記〕") for p in ps) == (3 if split else 2)
+    shown = [p.replace("〔隠した注記〕", "") for p in ps]
+    want = ["詳しくは付録の学習指導案を参照されたい。", "授業は２回行った。"] if split else [PUBLISHED["d13"]]
+    k = shown.index(want[0])
+    assert PUBLISHED["d12"] in shown and shown[k:k + len(want)] == want
+    assert paragraphs(fx.path, reject=True) == paragraphs(path)

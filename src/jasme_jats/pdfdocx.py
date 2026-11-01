@@ -17,6 +17,11 @@ docx の段落と PDF の照合（pdfmatch.py）の結果から、段落ごと�
 できた docx は Word で開いて、変更を 1 つずつ承諾・却下できる。本ツールの読み取りは、挿入を残し削除を除いた文字
 （すべて承諾した状態）を読むので、この docx をルート1 と同じ処理で変換すると、PDF に合わせた文字の XML になる。
 書き込んだ後に docx を読み直し、段落の文字列が直した結果と一致することを確かめる（一致しない段落は直さずに作り直す）。
+
+段落の対応と文字は、読み取り・検証と同じ規則（ooxml の文字ポリシー）で決める。段落記号の削除でつながる段落
+（ooxml.joined_paragraphs）は、連鎖の最初の段落の ID の 1 つの段落として照合・直し、直す文字のある w:p の w:t に書き込む
+（段落記号の削除をまたぐ直しは、前と後ろの w:p に分かれて入る。段落記号の削除そのものには触らない）。隠し文字の判定は
+ooxml.HiddenRule（word/styles.xml から作る）。
 """
 from __future__ import annotations
 
@@ -30,7 +35,8 @@ from pathlib import Path
 from lxml import etree
 
 from .model import OBJ
-from .ooxml import BR_TEXT_TYPES, MC_NS, M_NS, parse_xml, run_hidden, sym_char, w
+from .ooxml import (BR_TEXT_TYPES, MC_NS, M_NS, NO_RULE, HiddenRule, joined_paragraphs, paragraph_ids,
+                    paragraph_mark_deleted, parse_xml, preprocess, sym_char, w)
 
 XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
 AUTHOR = "jasme-jats（出版版 PDF に合わせた変更）"
@@ -165,15 +171,31 @@ def _dropped_by_preprocess(el) -> bool:
     return False
 
 
-def paragraph_units(p) -> list:
+def _chains(root, prefix: str) -> dict:
+    """段落記号の削除でつなぐ段落の連鎖 {最初の段落 ID: [段落 ID, …]}（読み取り・検証と同じ規則 ooxml.joined_paragraphs）。
+
+    root は前処理していない XML。どの段落をつなぐかは前処理した木で決める（mc:Fallback の中の写しをつながない）ので、写しを
+    前処理して段落 ID で引く（ID の番号は raw_paragraph_ids と同じ）。部品に段落記号の削除がひとつもなければ写しを作らない。
+    """
+    if not any(paragraph_mark_deleted(p) for p in root.iter(w("p"))):
+        return {}
+    pre = preprocess(copy.deepcopy(root))
+    ids = paragraph_ids(pre, prefix)
+    return {ids[c[0]]: [ids[q] for q in c] for c in joined_paragraphs(pre).values()}
+
+
+def paragraph_units(p, hidden=None) -> list:
     """段落の文字を [(文字, w:t 要素または None, w:t の中の位置)] で返す。読み取り（docx_reader）の文字ポリシーと同じ。
 
     直せるのは w:t の文字と、Word の改行なしハイフン（w:noBreakHyphen。要素そのものと位置 0。要素ごと変更履歴の削除にして、
     PDF の「-」を足せる）だけ（タブ・改行・記号・フィールドの結果・数式・脚注番号などは None）。
-    図形・ルビを含む段落は _Complex。
+    図形・ルビを含む段落は _Complex。hidden は隠し文字の判定（ooxml.HiddenRule。None なら NO_RULE）。段落記号の削除による
+    つながりは見ない（write_fixed_docx が、連鎖の段落ごとの単位を連結する）。
     """
     out = []
     fields = []          # [code_mode]
+    rule = hidden or NO_RULE
+    ps = rule.para_state(p)
 
     def in_code():
         return any(fields)
@@ -191,7 +213,7 @@ def paragraph_units(p) -> list:
             elif tag in (w("hyperlink"), w("fldSimple")):
                 walk(ch, deleted, hidden)
             elif tag == w("r"):
-                run(ch, deleted, hidden or run_hidden(ch))
+                run(ch, deleted, hidden or rule.run_hidden(ch, ps))
             elif tag in (f"{{{M_NS}}}oMathPara", f"{{{M_NS}}}oMath"):
                 if not (deleted or hidden or in_code()):
                     out.append((OBJ, None, 0))
@@ -378,7 +400,11 @@ def _apply_paragraph(units, fixes, writer: _Writer):
 
 
 def write_fixed_docx(src_path, dst_path, plan, fixes, skip=frozenset(), date=None):
-    """直す箇所を変更履歴として書き込んだ docx を dst_path に作る。skip の段落は直さない。"""
+    """直す箇所を変更履歴として書き込んだ docx を dst_path に作る。skip の段落は直さない。
+
+    段落記号の削除でつながる段落（_chains）は、連鎖の最初の段落の ID で、連鎖の w:p ごとの単位（paragraph_units）を連結して
+    直す。連鎖の後ろの段落の ID には直す箇所がない（読み取りの段落がない）。
+    """
     date = date or _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     writer = _Writer(date)
     by_src = {}
@@ -389,8 +415,16 @@ def write_fixed_docx(src_path, dst_path, plan, fixes, skip=frozenset(), date=Non
         ids_used = [int(v) for root in roots.values() for el in root.iter() if isinstance(el.tag, str)
                     for v in [el.get(w("id"))] if v and v.lstrip("-").isdigit()]
         writer.next_id = max(ids_used + [0]) + 1000
+        # 隠し文字の判定は読み取りと同じ規則（styles.xml は読み取りと同じく前処理してから使う）
+        rule = (HiddenRule(preprocess(parse_xml(zin.read("word/styles.xml"))))
+                if "word/styles.xml" in zin.namelist() else NO_RULE)
         for part, root in roots.items():
-            for src, p_el in raw_paragraph_ids(root, PARTS[part]).items():
+            raw = raw_paragraph_ids(root, PARTS[part])
+            chains = _chains(root, PARTS[part])
+            later = {s for c in chains.values() for s in c[1:]}
+            for src in raw:
+                if src in later:        # 連鎖の後ろの段落は、最初の段落といっしょに直す
+                    continue
                 pf = [f for f in by_src.get(src, []) if not f.reason]
                 if not pf:
                     continue
@@ -399,7 +433,7 @@ def write_fixed_docx(src_path, dst_path, plan, fixes, skip=frozenset(), date=Non
                         f.reason = "書き込んだ後に読み直した文字列が合わなかった"
                     continue
                 try:
-                    units = paragraph_units(p_el)
+                    units = [u for s in chains.get(src, [src]) for u in paragraph_units(raw[s], rule)]
                 except _Complex:
                     units = None
                 if units is None or "".join(c for c, _, _ in units) != plan.paras[src].plain():
