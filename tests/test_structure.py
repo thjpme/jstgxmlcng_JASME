@@ -763,7 +763,7 @@ def _figure_textbox(floating):
 def test_text_in_figure_textbox_is_notified(journal, meta, tmp_path):
     """図表の入ったテキストボックスの中の、キャプションでも図の本体でもない文字（出典など）は、今までどおり図の一部とみなして
     出力しないが、要確認で知らせる（点検の指摘。0.24.1 では暫定の知らせが数えていたが、0.25.0 の最初の実装では 6 章に載るだけ
-    だった）。AI の set_role・placements では戻せない（どちらも採用せず、理由で placements を案内しない）。"""
+    だった）。AI の placements では戻せず、set_role も fig_caption・table_caption・exclude 以外は採用しない（理由で placements を案内しない）。"""
     from jasme_jats.structure import TEXTBOX_TEXT_EXCLUDED
     path = tmp_path / "figtb.docx"
     mf.make_article(path, "図のテキストボックスの検証用文書", _figure_textbox(False))

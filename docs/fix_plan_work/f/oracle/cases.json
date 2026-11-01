@@ -1,0 +1,976 @@
+[
+ {
+  "id": "B01_box_at_anchor",
+  "title": "幅の広い囲み（286 文字。左上がアンカー段落の左上）",
+  "mode": "none",
+  "resp": null,
+  "checks": [
+   {
+    "check": "box",
+    "level": "exact",
+    "text": "問題Ｋ　ある架空の島",
+    "where": "before",
+    "ref": "この段落に問題Ｋの囲み"
+   },
+   {
+    "check": "box_contains_all",
+    "level": "exact",
+    "text": "問題Ｋ　ある架空の島",
+    "parts": [
+     "問題Ｋ　ある架空の島には",
+     "（１）案内所を北から二つ",
+     "（２）距離の合計が最も小",
+     "手がかり　案内所を一つ南"
+    ]
+   },
+   {
+    "check": "notice",
+    "level": "exact",
+    "present": false,
+    "keys": [
+     "問題Ｋ"
+    ],
+    "why": "機械的に位置が決まる囲み。決められないもの・位置を推定したものだけが要確認（F の節）"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "B02_box_inline_end",
+  "title": "段落の末尾の inline の囲み（280 文字）",
+  "mode": "none",
+  "resp": null,
+  "checks": [
+   {
+    "check": "box",
+    "level": "exact",
+    "text": "課題Ｍ　架空の文具店",
+    "where": "after",
+    "ref": "次の課題Ｍを考える。"
+   },
+   {
+    "check": "box_contains_all",
+    "level": "exact",
+    "text": "課題Ｍ　架空の文具店",
+    "parts": [
+     "課題Ｍ　架空の文具店では",
+     "さらに，八本以上ならどの",
+     "補足　袋の種類を四本と七"
+    ]
+   },
+   {
+    "check": "notice",
+    "level": "either",
+    "keys": [
+     "課題Ｍ"
+    ],
+    "alts": [
+     true,
+     false
+    ],
+    "why": "行内なので位置は決まる。知らせるかは実装しだい"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "B03_label_near_image",
+  "title": "画像の近くの v が負の小さな注記（Ａ点。全角空白の段落つき）",
+  "mode": "none",
+  "resp": null,
+  "checks": [
+   {
+    "check": "not_in_body_p",
+    "level": "exact",
+    "text": "Ａ点",
+    "exact_text": true,
+    "why": "注記は本文に混ぜない（決定事項 9 の推奨の理由）"
+   },
+   {
+    "check": "no_box",
+    "level": "exact",
+    "text": "Ａ点"
+   },
+   {
+    "check": "excluded",
+    "level": "exact",
+    "text": "Ａ点",
+    "reason_has": "注記",
+    "why": "付録 D1 (b): 理由が「図に重ねた注記」"
+   },
+   {
+    "check": "fig",
+    "level": "exact",
+    "caption": "図1　架空の地図",
+    "graphic": true,
+    "where": "body"
+   },
+   {
+    "check": "notice",
+    "level": "either",
+    "keys": [
+     "Ａ点",
+     "注記"
+    ],
+    "alts": [
+     true,
+     false
+    ],
+    "why": "(b) は「警告が出る」。要確認の Action かは書かれていない"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "B04_hint_undecided",
+  "title": "幅が広く短い「（ヒント）」（決められない。全角空白の段落つき）",
+  "mode": "none",
+  "resp": null,
+  "checks": [
+   {
+    "check": "no_raise",
+    "level": "exact",
+    "why": "決定事項 9(2): 除外して要確認にする（AI を必須にしない）"
+   },
+   {
+    "check": "no_box",
+    "level": "exact",
+    "text": "（ヒント）"
+   },
+   {
+    "check": "excluded",
+    "level": "exact",
+    "text": "（ヒント）"
+   },
+   {
+    "check": "notice",
+    "level": "exact",
+    "present": true,
+    "keys": [
+     "ヒント"
+    ],
+    "why": "付録 D1 (d): 冒頭とチェックリストに要確認"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "B05_vml_abs_box",
+  "title": "VML だけの囲み（position:absolute。259 文字）",
+  "mode": "none",
+  "resp": null,
+  "checks": [
+   {
+    "check": "box",
+    "level": "exact",
+    "text": "練習Ｔ　架空の水そう",
+    "where": "after",
+    "ref": "この段落に練習Ｔの囲み",
+    "why": "付録 D1 (e)"
+   },
+   {
+    "check": "notice",
+    "level": "exact",
+    "present": true,
+    "keys": [
+     "練習Ｔ"
+    ],
+    "why": "付録 D1 (e): 3 章に要確認（位置を推定）"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "B06_vml_cm_width_short",
+  "title": "VML の width が cm の短い「（ヒント）」（幅を読めない）",
+  "mode": "none",
+  "resp": null,
+  "checks": [
+   {
+    "check": "excluded_reason_not",
+    "level": "exact",
+    "text": "（ヒント）",
+    "reason_not": "注記",
+    "why": "付録 D1: VML の width が pt 以外のとき、label に倒れない"
+   },
+   {
+    "check": "box_or_excluded",
+    "level": "either",
+    "text": "（ヒント）",
+    "alts": [
+     "box",
+     "excluded"
+    ],
+    "why": "幅の条件を使わないので、文字数などで囲みか決められないかのどちらか"
+   },
+   {
+    "check": "notice",
+    "level": "exact",
+    "present": true,
+    "keys": [
+     "ヒント"
+    ],
+    "why": "囲みなら位置を推定（position:absolute）、決められないなら要確認。どちらでも知らせる"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "B07_vml_pct_width_long",
+  "title": "VML の width が % の長い囲み（246 文字）",
+  "mode": "none",
+  "resp": null,
+  "checks": [
+   {
+    "check": "box_or_excluded",
+    "level": "either",
+    "text": "演習Ｒ　架空の学級",
+    "alts": [
+     "box",
+     "excluded"
+    ],
+    "why": "幅を読めないので幅の条件を使わない。文字数だけで囲みにするか、決められないにするかはしきい値しだい"
+   },
+   {
+    "check": "excluded_reason_not",
+    "level": "exact",
+    "text": "演習Ｒ　架空の学級",
+    "reason_not": "注記",
+    "why": "幅を読めないことで label に倒れない"
+   },
+   {
+    "check": "notice",
+    "level": "exact",
+    "present": true,
+    "keys": [
+     "演習Ｒ"
+    ],
+    "why": "どちらでも位置の推定か決められないかで要確認"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "B08_caption_textbox_image",
+  "title": "画像と図キャプションを含むテキストボックス（今の扱いのまま）",
+  "mode": "none",
+  "resp": null,
+  "checks": [
+   {
+    "check": "fig",
+    "level": "exact",
+    "caption": "図1　架空のグラフ",
+    "graphic": true,
+    "where": "body",
+    "before": "この段落に図1のテキストボックス"
+   },
+   {
+    "check": "no_box_any",
+    "level": "exact"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "B09_caption_only_textbox",
+  "title": "図キャプションだけのテキストボックス（今の扱いのまま）",
+  "mode": "none",
+  "resp": null,
+  "checks": [
+   {
+    "check": "fig",
+    "level": "exact",
+    "caption": "図1　架空の棒グラフ",
+    "where": "body"
+   },
+   {
+    "check": "no_box_any",
+    "level": "exact"
+   },
+   {
+    "check": "same_as_base",
+    "level": "exact",
+    "why": "F の前と同じ扱い（付録 D1 (f)）。base の結果を基準にする"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "B10_blank_textbox",
+  "title": "空白だけのテキストボックス",
+  "mode": "none",
+  "resp": null,
+  "checks": [
+   {
+    "check": "no_box_any",
+    "level": "exact",
+    "why": "(5) 中身が空白だけのテキストボックスは囲みにも要確認にもしない"
+   },
+   {
+    "check": "notice",
+    "level": "exact",
+    "present": false,
+    "keys": [
+     "空の囲み",
+     "テキストボックス",
+     "囲み"
+    ],
+    "why": "(5)"
+   },
+   {
+    "check": "blank_excluded_only",
+    "level": "exact",
+    "why": "(5) 空白だけの段落は exclude_blank（理由「空白のみの段落」）"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "B11_box_formula",
+  "title": "囲みの中の別行数式「(1)」と本文の「式(1)」",
+  "mode": "none",
+  "resp": null,
+  "checks": [
+   {
+    "check": "box",
+    "level": "exact",
+    "text": "例題Ｑ　架空の長方形",
+    "where": "before",
+    "ref": "この段落に例題Ｑの囲み"
+   },
+   {
+    "check": "formula_in_box",
+    "level": "exact",
+    "fid": "FD1",
+    "label": true,
+    "why": "付録 D1 点検: disp-formula に id FD1 と label"
+   },
+   {
+    "check": "xref",
+    "level": "exact",
+    "text": "式(1)",
+    "rid": "FD1",
+    "why": "本文の「式(1)」がリンクになる"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "B12_box_blank_para",
+  "title": "囲みの中に全角空白だけの段落",
+  "mode": "none",
+  "resp": null,
+  "checks": [
+   {
+    "check": "box",
+    "level": "exact",
+    "text": "演習Ｒ　架空の学級",
+    "where": "before",
+    "ref": "この段落に演習Ｒの囲み"
+   },
+   {
+    "check": "box_contains_all",
+    "level": "exact",
+    "text": "演習Ｒ　架空の学級",
+    "parts": [
+     "演習Ｒ　架空の学級で，一",
+     "次に，土曜日の補習に出か",
+     "注意　平均を求めるときは"
+    ]
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "B13_nested_textbox",
+  "title": "入れ子のテキストボックス（内側は外側の囲みを継ぐ）",
+  "mode": "none",
+  "resp": null,
+  "checks": [
+   {
+    "check": "box",
+    "level": "exact",
+    "text": "課題Ｍ　架空の文具店",
+    "where": "before",
+    "ref": "この段落に入れ子の囲み"
+   },
+   {
+    "check": "same_box",
+    "level": "exact",
+    "text": "課題Ｍ　架空の文具店",
+    "other": "内側の札：答えは",
+    "why": "入れ子の内側は外側の textbox_id を継ぐ"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "B14_group_label",
+  "title": "グループ図形の中の注記「Ｐ点」（範囲外。手動モードで回答前）",
+  "mode": "manual",
+  "resp": null,
+  "checks": [
+   {
+    "check": "no_box_any",
+    "level": "exact",
+    "why": "(9) グループ図形の中の注記は今の扱い（図の後に p）のまま"
+   },
+   {
+    "check": "same_as_base",
+    "level": "exact",
+    "why": "(9) F の前と同じ扱い"
+   }
+  ],
+  "note": "AI なしでは、グループ図形の中身（キャプション・注記・画像）の組み合わせを決められず、今も止まる"
+ },
+ {
+  "id": "B17_inline_group_labels",
+  "title": "行内のグループ図形（画像なし）の中の短い注記（td3 の形。範囲外）",
+  "mode": "none",
+  "resp": null,
+  "checks": [
+   {
+    "check": "no_box_any",
+    "level": "exact",
+    "why": "(9) グループ図形の中の注記は範囲外"
+   },
+   {
+    "check": "same_as_base",
+    "level": "exact",
+    "why": "(9) F の前と同じ扱い"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "B15_box_region_styles",
+  "title": "囲みの中の「英文要旨」スタイルの段落と「注」だけの段落",
+  "mode": "none",
+  "resp": null,
+  "checks": [
+   {
+    "check": "box",
+    "level": "exact",
+    "text": "問題Ｋ　ある架空の島",
+    "where": "before",
+    "ref": "この段落に問題Ｋの囲み"
+   },
+   {
+    "check": "counts",
+    "level": "exact",
+    "sec": 2,
+    "trans_abstract_p": 1,
+    "fn_group": false,
+    "why": "付録 D1 点検: sec の数、trans-abstract の段落数、fn-group の有無が変わらない"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "B18_box_body_start",
+  "title": "本文の冒頭（最初の章見出しの前）の囲み",
+  "mode": "none",
+  "resp": null,
+  "checks": [
+   {
+    "check": "box",
+    "level": "exact",
+    "text": "課題Ｍ　架空の文具店",
+    "where": "before",
+    "ref": "この段落に本文の冒頭の囲み"
+   },
+   {
+    "check": "box_parent",
+    "level": "either",
+    "text": "課題Ｍ　架空の文具店",
+    "parent": "p",
+    "why": "本文の冒頭では <p> で包む（DTD は全体の dtd_valid で見る）",
+    "alts": [
+     "p",
+     "sec",
+     "body"
+    ]
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "B16_undecided_manual_noresp",
+  "title": "決められない「（ヒント）」、手動モードで回答を貼る前",
+  "mode": "manual",
+  "resp": null,
+  "checks": [
+   {
+    "check": "no_box",
+    "level": "exact",
+    "text": "（ヒント）"
+   },
+   {
+    "check": "excluded",
+    "level": "exact",
+    "text": "（ヒント）"
+   },
+   {
+    "check": "notice",
+    "level": "exact",
+    "present": true,
+    "keys": [
+     "ヒント"
+    ]
+   },
+   {
+    "check": "prompt",
+    "level": "exact",
+    "must": [
+     "box",
+     "label",
+     "（ヒント）"
+    ],
+    "why": "(8) FIELD_GUIDE と manual_prompt に box・label。決められない囲みを依頼文に載せる"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "A01_ai_box",
+  "title": "決められない「（ヒント）」に kind box を指定",
+  "mode": "manual",
+  "resp": {
+   "placements": [
+    {
+     "float_of": "（ヒント）",
+     "after_of": "札を置くべき位置はこの段落の後",
+     "kind": "box"
+    }
+   ]
+  },
+  "checks": [
+   {
+    "check": "box",
+    "level": "exact",
+    "text": "（ヒント）",
+    "where": "after",
+    "ref": "札を置くべき位置はこの段落の後",
+    "why": "指定の段落の後の boxed-text"
+   },
+   {
+    "check": "ai_accepted",
+    "level": "exact",
+    "op": "place_float",
+    "src_of": "（ヒント）",
+    "why": "ai.accepted に place_float として載る"
+   },
+   {
+    "check": "notice",
+    "level": "either",
+    "present": false,
+    "keys": [
+     "ヒント"
+    ],
+    "why": "AI が位置を指定したので要確認は残らない（はず）",
+    "alts": [
+     false,
+     true
+    ]
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "A02_ai_label",
+  "title": "決められない「（ヒント）」に kind label を指定",
+  "mode": "manual",
+  "resp": {
+   "placements": [
+    {
+     "float_of": "（ヒント）",
+     "after_of": "この段落にヒントの札",
+     "kind": "label"
+    }
+   ]
+  },
+  "checks": [
+   {
+    "check": "no_box",
+    "level": "exact",
+    "text": "（ヒント）"
+   },
+   {
+    "check": "excluded",
+    "level": "exact",
+    "text": "（ヒント）"
+   },
+   {
+    "check": "ai_accepted",
+    "level": "exact",
+    "op": "place_float",
+    "src_of": "（ヒント）"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "A03_ai_after_in_shape",
+  "title": "kind box の after に図形（囲み）の中の段落を指定 → 不採用",
+  "mode": "manual",
+  "resp": {
+   "placements": [
+    {
+     "float_of": "（ヒント）",
+     "after_of": "（１）案内所を北から",
+     "kind": "box"
+    }
+   ]
+  },
+  "checks": [
+   {
+    "check": "ai_rejected",
+    "level": "exact",
+    "src_of": "（ヒント）",
+    "why": "after が図形の中の段落は不採用"
+   },
+   {
+    "check": "no_box",
+    "level": "exact",
+    "text": "（ヒント）"
+   },
+   {
+    "check": "excluded",
+    "level": "exact",
+    "text": "（ヒント）"
+   },
+   {
+    "check": "notice",
+    "level": "exact",
+    "present": true,
+    "keys": [
+     "ヒント"
+    ],
+    "why": "指定なしに戻るので要確認が残る"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "A04_vml_caption_set_role_fig_caption",
+  "title": "VML の「図1　…。」に set_role fig_caption → 採用",
+  "mode": "manual",
+  "resp": {
+   "set_role": [
+    {
+     "src_of": "図1　架空の図形の説明",
+     "role": "fig_caption"
+    }
+   ]
+  },
+  "checks": [
+   {
+    "check": "ai_accepted",
+    "level": "exact",
+    "op": "set_role",
+    "src_of": "図1　架空の図形の説明"
+   },
+   {
+    "check": "fig",
+    "level": "exact",
+    "caption": "図1　架空の図形の説明",
+    "graphic": true,
+    "where": "body",
+    "fid": "F1"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "A05_vml_caption_set_role_p",
+  "title": "同じ段落に set_role p → placements を案内して拒否",
+  "mode": "manual",
+  "resp": {
+   "set_role": [
+    {
+     "src_of": "図1　架空の図形の説明",
+     "role": "p"
+    }
+   ]
+  },
+  "checks": [
+   {
+    "check": "ai_rejected",
+    "level": "exact",
+    "src_of": "図1　架空の図形の説明",
+    "reason_has": "placements"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "A06_textbox_set_role_p",
+  "title": "文字だけのテキストボックスの段落に set_role p → 拒否",
+  "mode": "manual",
+  "resp": {
+   "set_role": [
+    {
+     "src_of": "（ヒント）",
+     "role": "p"
+    }
+   ]
+  },
+  "checks": [
+   {
+    "check": "ai_rejected",
+    "level": "exact",
+    "src_of": "（ヒント）",
+    "reason_has": "placements",
+    "why": "(1) float_id のない段落では fig_caption・table_caption・exclude だけ"
+   },
+   {
+    "check": "no_box",
+    "level": "exact",
+    "text": "（ヒント）"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "A07_textbox_set_role_exclude",
+  "title": "文字だけのテキストボックスの段落に set_role exclude → 採用",
+  "mode": "manual",
+  "resp": {
+   "set_role": [
+    {
+     "src_of": "（ヒント）",
+     "role": "exclude"
+    }
+   ]
+  },
+  "checks": [
+   {
+    "check": "ai_accepted",
+    "level": "exact",
+    "op": "set_role",
+    "src_of": "（ヒント）",
+    "why": "(1) exclude は受け付ける"
+   },
+   {
+    "check": "excluded",
+    "level": "exact",
+    "text": "（ヒント）"
+   },
+   {
+    "check": "no_box",
+    "level": "exact",
+    "text": "（ヒント）"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "N01_refs_fig_none",
+  "title": "引用文献の段落に結び付いた画像とキャプション（AI なし）",
+  "mode": "none",
+  "resp": null,
+  "checks": [
+   {
+    "check": "raises_ai_required",
+    "level": "exact",
+    "why": "決定事項 10: AI を使わない設定では止める"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "N02_refs_fig_manual",
+  "title": "引用文献の段落に結び付いた画像とキャプション（手動モード、回答前）",
+  "mode": "manual",
+  "resp": null,
+  "checks": [
+   {
+    "check": "fig",
+    "level": "exact",
+    "caption": "図1　引用文献に結び付いた図",
+    "graphic": true,
+    "where": "body",
+    "body_end": true,
+    "why": "決定事項 21: アンカー段落が本文でなければ本文の最後に仮に置く"
+   },
+   {
+    "check": "not_in_tags",
+    "level": "exact",
+    "text": "図1　引用文献に結び付いた図",
+    "tags": [
+     "ref-list",
+     "mixed-citation",
+     "back"
+    ]
+   },
+   {
+    "check": "lost_none",
+    "level": "exact"
+   },
+   {
+    "check": "needs_action",
+    "level": "exact",
+    "value": true,
+    "why": "位置を決められない図表の仮置きは要対応"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "N03_refs_fig_ai_place",
+  "title": "引用文献の段落に結び付いた図形に placements で位置を指定",
+  "mode": "manual",
+  "resp": {
+   "placements": [
+    {
+     "float_of": "図1　引用文献に結び付いた図",
+     "after_of": "図を置くべき位置はこの段落の後",
+     "kind": "fig",
+     "caption_of": "図1　引用文献に結び付いた図",
+     "body_image": true
+    }
+   ]
+  },
+  "checks": [
+   {
+    "check": "fig",
+    "level": "exact",
+    "caption": "図1　引用文献に結び付いた図",
+    "graphic": true,
+    "where": "body",
+    "after": "図を置くべき位置はこの段落の後"
+   },
+   {
+    "check": "ai_accepted",
+    "level": "exact",
+    "op": "place_float",
+    "src_of": "図1　引用文献に結び付いた図"
+   },
+   {
+    "check": "lost_none",
+    "level": "exact"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "N04_notes_text_shape",
+  "title": "注の段落に結び付いた文字だけの図形",
+  "mode": "none",
+  "resp": null,
+  "checks": [
+   {
+    "check": "not_in_tags",
+    "level": "exact",
+    "text": "演習Ｒ　架空の学級",
+    "tags": [
+     "fn",
+     "fn-group",
+     "ref-list"
+    ],
+    "why": "N7: その領域の段落として扱わない"
+   },
+   {
+    "check": "box_or_excluded",
+    "level": "either",
+    "text": "演習Ｒ　架空の学級",
+    "alts": [
+     "box",
+     "excluded"
+    ],
+    "why": "D1 の place_boxes で判定。置き場所が本文でないので決められないとして除外もありうる"
+   },
+   {
+    "check": "notice",
+    "level": "exact",
+    "present": true,
+    "keys": [
+     "演習Ｒ"
+    ],
+    "why": "本文の外に結び付いた囲みは位置を決められない（要確認）"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "N05_refs_text_shape",
+  "title": "引用文献の段落に結び付いた文字だけの図形",
+  "mode": "none",
+  "resp": null,
+  "checks": [
+   {
+    "check": "not_in_tags",
+    "level": "exact",
+    "text": "練習Ｔ　架空の水そう",
+    "tags": [
+     "mixed-citation",
+     "ref-list",
+     "ref"
+    ]
+   },
+   {
+    "check": "box_or_excluded",
+    "level": "either",
+    "text": "練習Ｔ　架空の水そう",
+    "alts": [
+     "box",
+     "excluded"
+    ]
+   },
+   {
+    "check": "notice",
+    "level": "exact",
+    "present": true,
+    "keys": [
+     "練習Ｔ"
+    ]
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "N06_app_fig",
+  "title": "資料（app）の中の図形（今の扱いのまま）",
+  "mode": "none",
+  "resp": null,
+  "checks": [
+   {
+    "check": "fig_graphic_in",
+    "level": "exact",
+    "where": "app",
+    "why": "資料の中の図形は資料の中に出す"
+   },
+   {
+    "check": "in_region",
+    "level": "exact",
+    "text": "図2　資料の図",
+    "region": "app"
+   },
+   {
+    "check": "same_as_base",
+    "level": "exact",
+    "why": "今の扱いを保つ"
+   }
+  ],
+  "note": ""
+ },
+ {
+  "id": "N07_refs_inline_image",
+  "title": "引用文献の段落そのものにある画像",
+  "mode": "none",
+  "resp": null,
+  "checks": [
+   {
+    "check": "lost_has",
+    "level": "exact",
+    "why": "A の N1 で要対応として知らせ続ける"
+   },
+   {
+    "check": "needs_action",
+    "level": "exact",
+    "value": true
+   }
+  ],
+  "note": ""
+ }
+]

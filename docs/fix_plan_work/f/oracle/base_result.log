@@ -1,0 +1,124 @@
+[FAIL] B01_box_at_anchor  幅の広い囲み（286 文字。左上がアンカー段落の左上）  (終了コード 0)
+    NG exact  box: boxed-text がない（除外: ['テキストボックス内の文字（図の一部とみなして本文から除外）']）
+    NG exact  box_contains_all: 囲みの段落が揃っていない（除外: ['テキストボックス内の文字（図の一部とみなして本文から除外）']）
+    NG exact  notice: 知らせ あり: 要確認: テキストボックスの中の文字 4 段落を、XML に出力していません（レポートの冒頭と 6 章）。今の版では、図・表を含まないテキストボックス（囲み）の文字は、図の一部とみなして本文から除いています。問題文などの囲みで本文に必要な文
+[FAIL] B02_box_inline_end  段落の末尾の inline の囲み（280 文字）  (終了コード 0)
+    NG exact  box: boxed-text がない（除外: ['テキストボックス内の文字（図の一部とみなして本文から除外）']）
+    NG exact  box_contains_all: 囲みの段落が揃っていない（除外: ['テキストボックス内の文字（図の一部とみなして本文から除外）']）
+    ok either notice: 知らせ あり: 要確認: テキストボックスの中の文字 3 段落を、XML に出力していません（レポートの冒頭と 6 章）。今の版では、図・表を含まないテキストボックス（囲み）の文字は、図の一部とみなして本文から除いています。問題文などの囲みで本文に必要な文
+[FAIL] B03_label_near_image  画像の近くの v が負の小さな注記（Ａ点。全角空白の段落つき）  (終了コード 0)
+    ok exact  not_in_body_p: 
+    ok exact  no_box: 
+    NG exact  excluded: 除外: ['テキストボックス内の文字（図の一部とみなして本文から除外）']
+    ok exact  fig: 図 F1 祖先 sec/body/article
+    ok either notice: 知らせ あり: 要確認: テキストボックスの中の文字 1 段落を、XML に出力していません（レポートの冒頭と 6 章）。今の版では、図・表を含まないテキストボックス（囲み）の文字は、図の一部とみなして本文から除いています。問題文などの囲みで本文に必要な文
+[OK] B04_hint_undecided  幅が広く短い「（ヒント）」（決められない。全角空白の段落つき）  (終了コード 0)
+    ok exact  no_raise: 
+    ok exact  no_box: 
+    ok exact  excluded: 除外: ['テキストボックス内の文字（図の一部とみなして本文から除外）']
+    ok exact  notice: 知らせ あり: 要確認: テキストボックスの中の文字 1 段落を、XML に出力していません（レポートの冒頭と 6 章）。今の版では、図・表を含まないテキストボックス（囲み）の文字は、図の一部とみなして本文から除いています。問題文などの囲みで本文に必要な文
+[FAIL] B05_vml_abs_box  VML だけの囲み（position:absolute。259 文字）  (終了コード 0)
+    NG exact  box: boxed-text がない（除外: ['テキストボックス内の文字（図の一部とみなして本文から除外）']）
+    ok exact  notice: 知らせ あり: 要確認: テキストボックスの中の文字 2 段落を、XML に出力していません（レポートの冒頭と 6 章）。今の版では、図・表を含まないテキストボックス（囲み）の文字は、図の一部とみなして本文から除いています。問題文などの囲みで本文に必要な文
+[OK] B06_vml_cm_width_short  VML の width が cm の短い「（ヒント）」（幅を読めない）  (終了コード 0)
+    ok exact  excluded_reason_not: 除外の理由: ['テキストボックス内の文字（図の一部とみなして本文から除外）']
+    ok either box_or_excluded: 結果: excluded（理由 ['テキストボックス内の文字（図の一部とみなして本文から除外）']）
+    ok exact  notice: 知らせ あり: 要確認: テキストボックスの中の文字 1 段落を、XML に出力していません（レポートの冒頭と 6 章）。今の版では、図・表を含まないテキストボックス（囲み）の文字は、図の一部とみなして本文から除いています。問題文などの囲みで本文に必要な文
+[OK] B07_vml_pct_width_long  VML の width が % の長い囲み（246 文字）  (終了コード 0)
+    ok either box_or_excluded: 結果: excluded（理由 ['テキストボックス内の文字（図の一部とみなして本文から除外）']）
+    ok exact  excluded_reason_not: 除外の理由: ['テキストボックス内の文字（図の一部とみなして本文から除外）']
+    ok exact  notice: 知らせ あり: 要確認: テキストボックスの中の文字 3 段落を、XML に出力していません（レポートの冒頭と 6 章）。今の版では、図・表を含まないテキストボックス（囲み）の文字は、図の一部とみなして本文から除いています。問題文などの囲みで本文に必要な文
+[OK] B08_caption_textbox_image  画像と図キャプションを含むテキストボックス（今の扱いのまま）  (終了コード 0)
+    ok exact  fig: 図 F1 祖先 sec/body/article
+    ok exact  no_box_any: 
+[OK] B09_caption_only_textbox  図キャプションだけのテキストボックス（今の扱いのまま）  (終了コード 0)
+    ok exact  fig: 図 F1 祖先 sec/body/article
+    ok exact  no_box_any: 
+    ok exact  same_as_base: 
+[OK] B10_blank_textbox  空白だけのテキストボックス  (終了コード 0)
+    ok exact  no_box_any: 
+    ok exact  notice: 知らせ なし
+    ok exact  blank_excluded_only: 
+[FAIL] B11_box_formula  囲みの中の別行数式「(1)」と本文の「式(1)」  (終了コード 0)
+    NG exact  box: boxed-text がない（除外: ['テキストボックス内の文字（図の一部とみなして本文から除外）']）
+    NG exact  formula_in_box: 数式: []
+    NG exact  xref: リンク: 数式へのリンクなし
+[FAIL] B12_box_blank_para  囲みの中に全角空白だけの段落  (終了コード 0)
+    NG exact  box: boxed-text がない（除外: ['テキストボックス内の文字（図の一部とみなして本文から除外）']）
+    NG exact  box_contains_all: 囲みの段落が揃っていない（除外: ['テキストボックス内の文字（図の一部とみなして本文から除外）']）
+[FAIL] B13_nested_textbox  入れ子のテキストボックス（内側は外側の囲みを継ぐ）  (終了コード 0)
+    NG exact  box: boxed-text がない（除外: ['テキストボックス内の文字（図の一部とみなして本文から除外）']）
+    NG exact  same_box: 内側の文字が同じ boxed-text にない（除外: ['テキストボックス内の文字（図の一部とみなして本文から除外）']）
+[OK] B14_group_label  グループ図形の中の注記「Ｐ点」（範囲外。手動モードで回答前）  (終了コード 1)
+    ok exact  no_box_any: 
+    ok exact  same_as_base: 
+[OK] B17_inline_group_labels  行内のグループ図形（画像なし）の中の短い注記（td3 の形。範囲外）  (終了コード 1)
+    ok exact  no_box_any: 
+    ok exact  same_as_base: 
+[FAIL] B15_box_region_styles  囲みの中の「英文要旨」スタイルの段落と「注」だけの段落  (終了コード 0)
+    NG exact  box: boxed-text がない（除外: ['テキストボックス内の文字（図の一部とみなして本文から除外）']）
+    ok exact  counts: {'sec': 2, 'trans_abstract_p': 1, 'fn_group': False}
+[FAIL] B18_box_body_start  本文の冒頭（最初の章見出しの前）の囲み  (終了コード 0)
+    NG exact  box: boxed-text がない（除外: ['テキストボックス内の文字（図の一部とみなして本文から除外）']）
+    NG either box_parent: boxed-text の親: None
+[FAIL] B16_undecided_manual_noresp  決められない「（ヒント）」、手動モードで回答を貼る前  (終了コード 1)
+    ok exact  no_box: 
+    ok exact  excluded: 除外: ['テキストボックス内の文字（図の一部とみなして本文から除外）']
+    ok exact  notice: 知らせ あり: 要確認: テキストボックスの中の文字 1 段落を、XML に出力していません（レポートの冒頭と 6 章）。今の版では、図・表を含まないテキストボックス（囲み）の文字は、図の一部とみなして本文から除いています。問題文などの囲みで本文に必要な文
+    NG exact  prompt: 依頼文にない: ['box', 'label']
+[FAIL] A01_ai_box  決められない「（ヒント）」に kind box を指定  (終了コード 0)
+    NG exact  box: boxed-text がない（除外: ['テキストボックス内の文字（図の一部とみなして本文から除外）']）
+    NG exact  ai_accepted: 採用: [] 不採用: [('s1', '図形 s1 は「位置を決められなかった図表」にない')]
+    ok either notice: 知らせ あり: 要確認: テキストボックスの中の文字 5 段落を、XML に出力していません（レポートの冒頭と 6 章）。今の版では、図・表を含まないテキストボックス（囲み）の文字は、図の一部とみなして本文から除いています。問題文などの囲みで本文に必要な文
+[FAIL] A02_ai_label  決められない「（ヒント）」に kind label を指定  (終了コード 0)
+    ok exact  no_box: 
+    ok exact  excluded: 除外: ['テキストボックス内の文字（図の一部とみなして本文から除外）']
+    NG exact  ai_accepted: 採用: [] 不採用: [('s1', '図形 s1 は「位置を決められなかった図表」にない')]
+[OK] A03_ai_after_in_shape  kind box の after に図形（囲み）の中の段落を指定 → 不採用  (終了コード 0)
+    ok exact  ai_rejected: 不採用: [('s1', '図形 s1 は「位置を決められなかった図表」にない')] 採用: []
+    ok exact  no_box: 
+    ok exact  excluded: 除外: ['テキストボックス内の文字（図の一部とみなして本文から除外）']
+    ok exact  notice: 知らせ あり: 要確認: テキストボックスの中の文字 5 段落を、XML に出力していません（レポートの冒頭と 6 章）。今の版では、図・表を含まないテキストボックス（囲み）の文字は、図の一部とみなして本文から除いています。問題文などの囲みで本文に必要な文
+[OK] A04_vml_caption_set_role_fig_caption  VML の「図1　…。」に set_role fig_caption → 採用  (終了コード 0)
+    ok exact  ai_accepted: 採用: [['set_role', 'd15']] 不採用: []
+    ok exact  fig: 図 F1 祖先 sec/body/article
+[FAIL] A05_vml_caption_set_role_p  同じ段落に set_role p → placements を案内して拒否  (終了コード 0)
+    NG exact  ai_rejected: 不採用: [] 採用: [['set_role', 'd15']]
+[OK] A06_textbox_set_role_p  文字だけのテキストボックスの段落に set_role p → 拒否  (終了コード 0)
+    ok exact  ai_rejected: 不採用: [('d14', 'テキストボックス・グループ図形の中の段落の役割は placements で指定する')] 採用: []
+    ok exact  no_box: 
+[FAIL] A07_textbox_set_role_exclude  文字だけのテキストボックスの段落に set_role exclude → 採用  (終了コード 0)
+    NG exact  ai_accepted: 採用: [] 不採用: [('d14', 'テキストボックス・グループ図形の中の段落の役割は placements で指定する')]
+    ok exact  excluded: 除外: ['テキストボックス内の文字（図の一部とみなして本文から除外）']
+    ok exact  no_box: 
+[FAIL] N01_refs_fig_none  引用文献の段落に結び付いた画像とキャプション（AI なし）  (終了コード 1)
+    NG exact  raises_ai_required: 止まらなかった（終了コード 1）
+    NG exact  lost_none(全体): ["LostImage(image_id='img1', src='d19', location='引用文献 3件目', reason='引用文献の段落の中にある（引用文献には画像を出力できない）。テキストボックス・グループ図形 s1 の中の画像で、図形は段落 d18「試験次郎（2023）．「最後の図」．『架」に結び付いている', text='', source='word/media/n_refs.png')"]
+[FAIL] N02_refs_fig_manual  引用文献の段落に結び付いた画像とキャプション（手動モード、回答前）  (終了コード 1)
+    NG exact  fig: 図がない（XML の場所: ['back/ref-list/ref/mixed-citation']）
+    NG exact  not_in_tags: 場所: ['back/ref-list/ref/mixed-citation']
+    NG exact  lost_none: lost_images: ["LostImage(image_id='img1', src='d19', location='引用文献 3件目', reason='引用文献の段落の中にある（引用文献には画像を出力できない）。テキストボックス・グループ図形 s1 の中の画像で、図形は段落 d18「試験次郎（2023）．「最後の図」．『架」に結び付いている', text='', source='word/media/n_refs.png')"]
+    ok exact  needs_action: needs_action=True 終了コード 1
+    NG exact  lost_none(全体): ["LostImage(image_id='img1', src='d19', location='引用文献 3件目', reason='引用文献の段落の中にある（引用文献には画像を出力できない）。テキストボックス・グループ図形 s1 の中の画像で、図形は段落 d18「試験次郎（2023）．「最後の図」．『架」に結び付いている', text='', source='word/media/n_refs.png')"]
+[FAIL] N03_refs_fig_ai_place  引用文献の段落に結び付いた図形に placements で位置を指定  (終了コード 1)
+    NG exact  fig: 図がない
+    NG exact  ai_accepted: 採用: [] 不採用: [('s1', '図形 s1 は「位置を決められなかった図表」にない')]
+    NG exact  lost_none: lost_images: ["LostImage(image_id='img1', src='d19', location='引用文献 3件目', reason='引用文献の段落の中にある（引用文献には画像を出力できない）。テキストボックス・グループ図形 s1 の中の画像で、図形は段落 d18「試験次郎（2023）．「最後の図」．『架」に結び付いている', text='', source='word/media/n_refs.png')"]
+    NG exact  lost_none(全体): ["LostImage(image_id='img1', src='d19', location='引用文献 3件目', reason='引用文献の段落の中にある（引用文献には画像を出力できない）。テキストボックス・グループ図形 s1 の中の画像で、図形は段落 d18「試験次郎（2023）．「最後の図」．『架」に結び付いている', text='', source='word/media/n_refs.png')"]
+[FAIL] N04_notes_text_shape  注の段落に結び付いた文字だけの図形  (終了コード 0)
+    NG exact  not_in_tags: 場所: ['back/fn-group/fn/p']
+    NG either box_or_excluded: 結果: other（XML の場所: ['back/fn-group/fn/p']）
+    NG exact  notice: 知らせ なし
+[FAIL] N05_refs_text_shape  引用文献の段落に結び付いた文字だけの図形  (終了コード 0)
+    NG exact  not_in_tags: 場所: ['back/ref-list/ref/mixed-citation']
+    NG either box_or_excluded: 結果: other（XML の場所: ['back/ref-list/ref/mixed-citation']）
+    NG exact  notice: 知らせ なし
+[OK] N06_app_fig  資料（app）の中の図形（今の扱いのまま）  (終了コード 0)
+    ok exact  fig_graphic_in: 図: [(None, ['app', 'app-group'])]
+    ok exact  in_region: 場所: ['back/app-group/app/p']
+    ok exact  same_as_base: 
+[OK] N07_refs_inline_image  引用文献の段落そのものにある画像  (終了コード 1)
+    ok exact  lost_has: lost_images: ["LostImage(image_id='img1', src='d18', location='引用文献 2件目', reason='引用文献の段落の中にある（引用文献には画像を出力できない）', text='試験四郎（2021）．「画像のある文献」', source='word/media/n_refimg.png')"]
+    ok exact  needs_action: needs_action=True 終了コード 1
+
+合計: OK 13 / FAIL 19（/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/f/oracle/out/base/summary.json）

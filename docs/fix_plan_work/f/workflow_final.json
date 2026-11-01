@@ -1,0 +1,968 @@
+{
+  "summary": "単位 F（0.25.0）: 文字だけのテキストボックス（囲み）と、本文の外に結び付いた図形（D1・N7）。設計と独立の反例 → 実装 → 確かめ → 仕上げ → 3 観点の点検 → 修正と再点検（最大 3 回）",
+  "agentCount": 12,
+  "logs": [
+    "design: ok / oracle: ok",
+    "指摘: blocking 0 / should 4 / nit 12",
+    "1 回目の点検: blocking 0 / should 0"
+  ],
+  "result": {
+    "design": {
+      "design_doc": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/f/DESIGN_F.md",
+      "decisions": "【実測で分かったこと（設計書 1 章。数値だけ記録）】td1・td2 に文字だけのテキストボックスはない。決定事項 9(3)・作業指示の「td1・td2 の 276〜402 文字の 2 件ずつは囲み」は、図・表キャプションと表（1 行 1 列の表に問題文 211・389 字、または表そのもの）を入れた浮動配置の図形（td1 s1/s7、td2 s1/s3）で、B3 の図表として扱われている（F で変わらない）。td3 の 31 件は、行内のグループ図形（画像のない Word の図形の図 2 つ）の中の 28 件（0〜11 字、幅 0.4〜3.18 cm＝段の 0.05〜0.37、1 段落）と、資料の表のセルに結び付いた 3 件（197〜210 字、12.8〜12.95 cm＝段の 1.47〜1.49、3〜6 段落、推定 6〜7 行。表のセルの中に今も出ているので範囲外）。\n\n【D1 しきい値（floats.textbox_kind。利用者了承の「20 字・段の 6 割、15 字・4 割」を採用）】上から順に: 文字 0（空白以外なし）→ blank／グループ図形・描画キャンバスの中 → 15 字以下 label、それ以上 undecided（幅は使わない）／15 字以下・画像の近く・幅が段の 0.4 以下か不明 → label／20 字以上・幅が段の 0.6 以上か不明・（画像から遠いか推定 2 行以上）→ box／それ以外 undecided。画像の近く＝グループの中、またはアンカー段落の前後 2 段落（図形の外の最上位）に画像（行内・浮動配置 inline=False・Word の図形。隠し文字は除く）か図キャプションか図の入った Float がある。幅は EMU（グループの子は拡大率を掛ける）か VML の pt、ほかは None で幅の条件を使わない。余裕: 囲み 197〜389 字・1.0〜2.07 段、注記 0〜11 字・0.37 段以下。境界の表（「（ヒント）」は undecided、画像の近くの 1 行は undecided、2 行以上なら box、幅不明の短い文字は label に倒れない、15/20 字・0.4/0.6 の上下）を単体テストにする。\n\n【boxed-text】BoxNode(xid, children=PNode/ListNode/QuoteNode/FormulaNode) → <boxed-text>（id なし）。本文の最上位（最初の章の前）では <p> で包む。根拠: 同梱 DTD は body 直下も合格だが、J-STAGE マニュアル 3.5.4(1) で body の子は p と sec だけ、boxed-text は sec・p の子に置ける（中の p は表示が崩れる恐れ）。中の別行数式は assign_ids で FD の ID。囲みの中の見出しスタイルは p。\n\n【place_boxes の置き場所】place_floats とは別のパスで doc.textboxes を回し、元の items の位置で inserts に足す: wp:anchor で at_anchor → アンカー段落の前／wp:anchor でそれ以外 → 後ろ（run_end でずらす。要確認）／wp:inline・位置指定のない VML → 後ろ（run_end）／VML position:absolute → 後ろ（要確認）／アンカーが本文の外（N7）→ 本文の最後（要確認）／アンカーが items にない（冒頭の最後のセクション区切り）→ 最初の段落の位置（要確認）／AI の box → 指定の段落の後ろ（ずらさない）。estimate_top_left は使わない（B3 と同じ考え）。body_seq と run_end の skip から textbox_id の段落を除く。空白だけの段落はどの経路でも exclude_blank、空のテキストボックスは判断も知らせも出さない。\n\n【AI の kind box/label】placements の items.kind に box・label。テキストボックスは float に xid（x1…）、items は kind box か label の組 1 つ（caption・body は []）、label の after は \"\"。指定できるのは undecided（必須。box か label）と位置を推定した囲み（任意。box だけ）。機械的に決めたものは「変更できない」。box の after は本文の段落だけ。Decision（stage ai、category box）は plan.float_decisions[xid] に入れ、pipeline の既存のループで accepted に載る。組み直した後に after が本文でなければ指定なしに戻す。SYSTEM_PROMPT・FIELD_GUIDE・MANUAL_EXAMPLE（x2 の box の例）・manual_prompt・PLACEMENT_SCHEMA・RESPONSE_SCHEMA を合わせる。依頼文に「囲みか図の注記か決められなかったテキストボックス」「位置を推定した囲み」「扱いを機械的に決めたテキストボックス（変更不可）」の節を足す。\n\n【set_role の規則】set_role_problem の float_id の判定の直後に「textbox_id があり role が fig_caption・table_caption・exclude 以外 → 拒否（囲みか図の注記かは placements の kind box・label で指定する）」。浮動配置の図形の段落は今までどおり「placements で指定」。VML キャプションへの fig_caption は採用のまま。set_role_hint は「（囲みなら placements の kind box、図の注記なら label で指定）」。\n\n【N7 の行き先】アンカーが本文の外（引用文献・注・付記・謝辞・後付け・資料が始まる前の英文の部分）の図形は、その領域の段落にしない。資料が始まったかは build_front_en の中でしか分からないので、classify で組み立てを 2 回行う（1 回目に build_back・build_front_en が本文の外の Float と文字だけのテキストボックスを状態を変えずに飛ばして記録。なければ 1 回目を返す＝0.24.1 と同じ判断の番号。あれば段落の role・role_origin・note を戻し、2 回目の split_regions でそれらを body の最後に回す）。図表の入った Float → place_floats で unplaced（at_anchor は見ない。理由「図形が本文の外（注）の段落に結び付いている」。provisional_target で本文の最後、AI なしは AIRequiredError で中止＝決定事項 10。グループ画像はアンカー段落から集めて moved_images）。文字だけ → place_boxes（本文の最後・要確認）。資料の中の図形・表のセル・和文の冒頭・行内や VML のキャプション付きテキストボックスは今のまま。引用文献などの段落そのものの画像は N1 の lost_images のまま。\n\n【知らせ（Action を足すだけ）】textbox_undecided（要確認。対象 5 件まで。AI による補完を強く勧め、使わないなら Word でテキストボックスの外に出す）と textbox_place（要確認。PDF と見比べ、違えば XML の boxed-text を移す）。label は Action なし（6 章の理由と 10 章のアンカー段落ごとの警告 1 行）。3 章に「囲み・図の注記」（UNRES_JA box）の行、1 章に「テキストボックスの文字」の行、CAT_JA box。A の暫定の知らせ（PROVISIONAL・provisional_exclusions・_provisional_actions と late/14 章の参照、TEXTBOX_TEXT_EXCLUDED の import）を削除。除外の理由は「テキストボックス内の文字（図に重ねた注記とみなして本文から除外）」「…（囲みか図の注記か決められないため本文から除外。要確認）」「…（AI による補完で図に重ねた注記と判断し、本文から除外）」。\n\n【暫定の判断（利用者に未確認。設計書 13.1）】推定位置の囲みは止めず置いて要確認／undecided・推定位置はどちらも要確認（終了コード 0）、label は知らせない／FIX_PLAN (9) の範囲外は FloatInfo の中のグループに当て、td3 のような行内グループの注記は判定の対象（15 字以下 label）／囲みの段落は PDF 照合で文脈 cell（照合しない・ルート2 で直さない）／2 回の組み立て／boxed-text に id なし／知らせの文言。まとめ役の暫定（画面は既存の形に Action を足すだけ）に従う。\n\n【却下した案】組み立て順の入れ替え（全原稿の判断番号が変わる）、build_front_en の試し実行（plan.authors・_en_count の副作用）、build_front_en の状態機械の切り出し（E の規則の大きな組み替え）、本文を組んだ後の差し込み（after の扱いが 2 通り）、estimate_top_left の機械的な使用、「。」で終わる 20 字未満の囲み規則、ルート2 での囲みの照合、本文最上位のほかの図表も p で包むこと（範囲外）。",
+      "changes": "model.py: TextBox（xid・anchor_src・source・inline・absolute・group・float_id・width_cm・height_cm）を追加。Para.textbox_id・Table.textbox_id・Document.textboxes を追加し、Document.textbox_excluded を削除。\ndocx_reader.py: Reader.__init__（textboxes・_textbox。textbox_excluded を削除）、read（Document に textboxes）、read_paragraph・read_table（textbox_id）、_graphic（holder・inline・group を _textboxes に渡す）、_textboxes（document.xml の最上位の txbxContent ごとに TextBox を作り、読む間だけ _textbox を立てる。入れ子は外側の ID）、_new_textbox（新規。wp:extent／グループの子の a:ext×拡大率／VML の pt、position:absolute）。文字の読み方は変えない（canonical_text・paragraph_units・raw_paragraph_ids も変えない）。\nfloats.py: BOX_CHARS=20・BOX_WIDTH=0.6・LABEL_CHARS=15・LABEL_WIDTH=0.4・NEAR_PARAS=2、box_lines、textbox_kind（新規）。\nstructure.py: BoxNode・BoxInfo・OUTSIDE_JA・除外の理由 3 つ（TEXTBOX_TEXT_EXCLUDED は図表の中の文字に残し、暫定の知らせのコメントを消す）、ArticlePlan.textboxes・undecided_boxes・estimated_boxes、Classifier.__init__(outside=None)、run（box_members・_top・_top_index）、split_regions（outside の図形を body の最後へ）、build_body（place_floats の後に元の items で place_boxes を呼び、inserts に足し taken を除く）、place_floats（body_seq から textbox_id を除く、本文の外の Float を unplaced に、グループ画像をアンカー段落から集める）、place_boxes・box_children・text_only・near_image（新規）、run_end（skip に textbox_id）、node_paras・assign_ids（BoxNode）、build_back・build_front_en（資料の前の本文の外の図形を飛ばして self.outside に記録）、classify（段落の書き込みを控え、outside があれば戻して 2 回目）。\nbuilder.py: nodes に BoxNode（top なら <p> で包む）、boxed_text（新規）。\nlinker.py: body_paragraphs に BoxNode（文脈 cell、数式は formula）。\nai_assist.py: PLACEMENT_SCHEMA（kind に box・label、float・after の説明）、RESPONSE_SCHEMA の説明、SYSTEM_PROMPT（6 の placements にテキストボックス、最後の set_role の箇条）、MANUAL_EXAMPLE（x2 の box）、FIELD_GUIDE、manual_prompt（回答の書き方に 1 行）、build_request（場所「テキストボックス x… の中」、推定の category に box）、float_section（3 つの節）、set_role_problem（テキストボックスの規則、docstring）、set_role_hint、_placement_problem（テキストボックスの分岐と ID がないときの文）、float_placements（box・label の spec。テキストボックスには where end を付けない）。\npipeline.py: 3 章の box の行（undecided・推定位置）、手動モードの説明に 1 文。\nreport.py: provisional_exclusions・PROVISIONAL・_provisional_actions と late／14 章の PROVISIONAL の参照、TEXTBOX_TEXT_EXCLUDED の import を削除。UNRES_JA・CAT_JA に box、1 章の行、_textbox_undecided_action・_textbox_place_action を actions の head（figure_body_action の後ろ）に、_ai_pending_action の box_detail に 1 文。\n版: src/jasme_jats/__init__.py と pyproject.toml を 0.25.0、ノートブックは python tools/make_notebook.py で作り直す。\n変えない: pdfmatch.py・pdfdocx.py・ooxml.py・fidelity.py・emit.py・colab.py・cli.py・tools/make_notebook.py・images.py・package.py。\n文書: DESIGN.md（4.3・5・6.1 の書き換えと 6.2 の追加・7）、JSTAGE_NOTES.md（boxed-text の置き場所の根拠）、DEVELOPMENT.md（テスト・残っている課題・構成の表）、FIX_PLAN.md の F の節（実装・実測・暫定）、fix_plan_repro_tests.py（test 2 を取り除く）、README.md。関数ごとの詳細は設計書 2〜8 章。",
+      "tests": "fixture（tests/make_fixtures.py）: 部品 textbox_inline（wp:inline の wps）・vml_textbox（width・height・absolute を選べる）。make_structure の STRUCTURE_SECTIONS に「囲みと図の注記」（structure_textboxes）を足し、(a) at_anchor の幅広の囲み（問1／番号付きの段落／ヒント／全角空白の段落／「(1)」付きの別行数式。本文に「式(1)」）、(b) 画像・図キャプションの次の段落に v 負の小さな「A 点」、(c) 段落末尾の行内の囲み、(d) 画像から離れた幅広の短い「（ヒント）」、(e) VML だけの position:absolute の囲み（pt）、(f) 図キャプション入りのテキストボックス、空・全角空白だけのテキストボックス。関数だけを呼んで sample_structure.docx を作り直し、git diff --stat tests/fixtures で確かめる。N7 は新規 sample_outside.docx（make_outside。ALL_DOCS に入れず conftest に OUTSIDE、__main__ の一覧にも追加）: 引用文献に結び付いた図の Float、引用文献に結び付いた文字だけの囲み、注に結び付いた表の Float、英文要旨に結び付いた囲み、資料の中の囲み、引用文献の段落の行内の画像。既存の make_b3_place(outside=True) も N7 の例に使う。\n新しいテスト: test_reader（TextBox の記録: anchor・inline・VML pt・pt 以外は None・グループの拡大率・入れ子の継承・表のセルの textbox_id・textbox_excluded がない）、test_floats（textbox_kind の境界の表すべて、box_lines、N7: AI なしで AIRequiredError〈理由に本文の外〉、手動で本文の最後・forced、AI の after 本文は採用・注は不採用で本文の最後、sample_outside の refs の件数・lost_images が行内画像 1 件だけ・囲みは本文最後の boxed-text で textbox_place・資料の囲みは app、2 回の組み立てで判断の重複なし・classify を 2 回呼んで同じ・本文の外がなければ 1 回だけ）、test_structure（(a) 前・中の list と FD1・「式(1)」のリンク・全角空白は空白の除外、(c) 後ろ、(b) 注記の理由と 10 章の警告・Action なし、(d) 除外と textbox_undecided〈冒頭・14 章・3 章、needs_action 偽〉、(e) 後ろと textbox_place、(f) 今のまま、空のテキストボックスは何も出ない、本文最上位は p で包む、PROBLEM テストを逆にした test_text_only_textbox_becomes_boxed_text）、test_ai（(d) に box→指定の後ろ・accepted に place_float、label→AI の理由で除外、after が図形の中・セル・引用文献なら不採用、(a) への指定は変更不可、(e) に box 採用・label 不採用、caption/body 非空・items 2 つ・kind fig は不採用、s1 に box は不採用、(e) の段落に set_role p は不採用〈placements の案内〉、VML キャプションへの fig_caption は採用〈回帰〉、依頼文の 3 つの節と場所、SYSTEM_PROMPT 等に box・label、囲み・label・undecided・未配置に全角空白でも不変性合格）、test_lost_images（暫定の知らせのテストを、囲みは boxed-text・暫定の知らせなし・undecided の要確認が冒頭/14 章/CLI で終了コード 0 に書き直す）、test_colab（result_boxes に textbox_undecided の枠）。\n既存テストの修正: test_floats.test_float_anchored_outside_body_is_kept_as_before（逆にする）、test_lost_images.test_image_in_reference_is_reported の textbox-on-ref（N7 のテストに移す）、test_provisional_notices_for_textbox・test_cli_shows_provisional_notices（書き直し）、test_ai.test_request_hints_follow_set_role_problem の VML の囲みの案内。test_pipeline.test_blank_paragraphs_in_textbox_and_endnote_are_excluded は理由の接頭辞「テキストボックス内の文字」を保つので今のまま通る。docs/fix_plan_repro_tests.py から test_PROBLEM_text_only_textbox_is_dropped_from_xml を取り除く。新しいテストは 0.24.1 の src で失敗することを pytest_src.sh で確かめる。",
+      "acceptance": "pytest（3.13 と 3.10）がすべて合格、ruff の件数が HEAD を超えない。golden 23 件: 違ってよいのは、手動・AI のすべての prompt（SYSTEM_PROMPT・FIELD_GUIDE・MANUAL_EXAMPLE・manual_prompt の書式）と、sample_structure_manual/split の xml・report・prompt（(a)〜(f) の追加と、N2 の「注」「Area model」が undecided の除外・要確認になること）だけ。ほかの原稿の xml・report と pdfcheck のルート1・2 は同じ（試作で、ほかの fixture に文字だけのテキストボックスがないことを確かめた）。td1〜3（--route docx --ai manual、0.24.1 と比べる）: td1・td2 は XML・レポートとも版の行のほかは同じ（文字だけのテキストボックスがない）。td3 は XML が同じ（注記は今も除外、資料の表の中の囲みは今も表のセルの中）、レポートは注記 27 段落の除外の理由が「図に重ねた注記とみなして」になり、10 章に警告 2 行（d67・d167）、1 章に「テキストボックスの文字」の行、A の暫定の知らせがなくなるだけ。3 本とも本文の文字は同じで、不変性・最終・DTD・J-STAGE のチェックに合格し、XML に入らなかった画像は 0 件のまま。sample_structure・sample_outside は DTD に合格し、body の直下に boxed-text がない。なお、作業指示の合格の条件「td1・td2 の囲みが boxed-text で出る」は実測と合わない（td1・td2 の囲みは表で組んだ図で、B3 のとおり fig の中の table-wrap のまま出る）ので、上のとおりに直した。",
+      "risks": "(1) 本文に結び付いた文字だけの囲みの実例が td1〜3 にない。しきい値は td3 の行内グループの注記・資料の表の中の囲み・td1/td2 の表で組んだ問題文の数値で確かめただけで、20 字未満の本文の囲みは undecided になり要確認が増える。(2) 2 回の組み立て: 1 回目が段落に書き込むもの（role・role_origin・note）を戻すので、今後ほかの属性を書き換えると 2 回目が変わりうる（classify を 2 回呼んで同じことのテストで守る）。2 回目で新しく本文の外の図形が見つかると出力にも除外にもならないが、不変性チェックの出力漏れで不合格になり黙っては消えない。(3) 囲みの段落は PDF 照合で文脈 cell にするので、ルート2 で囲みの文字を PDF に合わせて直さず、ルート1 の 13 章にも違いが出ない（0.24.1 と同じ）。(4) J-STAGE の boxed-text の表示は未確認（試験登載が必要。マニュアルに中の p は表示が崩れる恐れとある）。(5) 既存の builder は最初の章の前の fig・table-wrap・list・disp-formula・disp-quote を body の直下に出しており、J-STAGE マニュアル（body の子は p と sec）と違う。F では直さない（DTD には合い、テストもこの形を確かめている）。(6) run_end の skip に textbox_id の段落を足すので、テキストボックスの段落をはさむ箇条書きの途中に結び付いた位置を決められない図表の仮の位置が、まれに箇条書きの終わりへずれる（意図した変更）。(7) body_seq からテキストボックスの段落を除くので、AI の after・行数の推定にそれらを使えなくなる（もともと出力しない段落）。(8) 浮動配置でない（行内・VML）キャプション付きテキストボックスが本文の外に結び付いた場合は今のまま（範囲外）。(9) 依頼文の書式が変わるので、実際の AI（Claude）で box・label の回答の形を一度確かめる必要がある。(10) 文書とコードの食い違いの一覧は設計書 13.3: FIX_PLAN 決定事項 9(3) と作業指示の td1・td2 の「囲み」の数え方（実際は表で組んだ図）、FIX_PLAN F (9) の「今の扱い（図の後に p）」は行内グループには当たらない（今は除外）、「本文の冒頭では <p> で包む」の根拠は DTD ではなく J-STAGE マニュアル、builder の body 直下の図表、DESIGN.md 4.3・5・6.1・7 と set_role_problem の docstring・structure.py のコメント・report.provisional_exclusions の「F で」、FIX_PLAN の古い行番号、Builder.nodes の未使用の引数 top、Para.in_textbox にコメントがない（表のセルの段落は False）。どれも直していない（コードは変えていない）。F の実装で直すものは設計書 12・13.3 に書いた。"
+    },
+    "oracle": {
+      "dir": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/f/oracle/（生成器 gen_f.py、架空の docx 32 件の cases/*.docx、期待の cases.json、比べる道具 run_f.py、0.24.1 での結果 out/base/*.json と summary.json、ログ base_result.log、文字の重なりを調べる overlap.py、td1〜3 の数値だけを出す tdstats.py）。docx は make_fixtures.py の部品（Builder・para・textbox・anchored・drawing・png_bytes・front_ja/front_en/tail）を import して作り、make_fixtures.py は変えていない。足りない部品（wp:inline のテキストボックス、VML の position:absolute と幅・高さ、画像・キャプション・注記をまとめたグループ図形、画像のない行内グループ図形）は gen_f.py に書いた。",
+      "cases": "期待の書き方: exact はどの実装でも同じになるべき結果、either は許される結果を並べたもの（alts）。止まらないケースにはすべて、ほかに exact で fidelity_ok・final_ok・dtd_valid・jstage_issues==[]・lost_images==[]（N07 を除く）を確かめる。「知らせ」は CLI の標準エラーのうち、ケースのキーの語か「テキストボックス／囲み／注記」を含む行。\n[D1・AI なし]\nB01 幅の広い囲み（286 文字、cx 8.6cm、左上がアンカー段落の左上）: exact = アンカー段落の直前に boxed-text が 1 つ（4 段落すべて入る）、知らせなし（機械的に置けるので）。\nB02 段落の末尾にある inline の囲み（280 文字）: exact = アンカー段落の直後に boxed-text、全段落が入る。知らせは either。\nB03 画像の段落・図キャプションの次の段落に付いた注記「Ａ点」（0.9×0.5cm、v=-3cm、全角空白の段落つき）: exact = boxed-text にも本文の p にもならない、除外の理由に「注記」を含む、図 F1（graphic あり）はそのまま。知らせは either（付録の (b) は「警告」とだけ書いている）。\nB04 幅が広く短い「（ヒント）」（8.6×0.8cm、v=1.5cm、全角空白つき）: exact = 止まらない（決定事項 9(2)）、boxed-text なし、除外される、要確認の知らせあり。\nB05 VML だけの囲み（position:absolute、margin-top 30pt、240pt 幅、259 文字）: exact = アンカー段落の直後に boxed-text、要確認の知らせあり（付録 (e)）。\nB06 VML の width:14cm（pt 以外）の短い「（ヒント）」: exact = 除外の理由に「注記」を含まない（label にしない）、知らせあり。either = boxed-text か除外か。\nB07 VML の width:60% の長い囲み（246 文字）: either = boxed-text か除外か。exact = 理由に「注記」を含まない、知らせあり。\nB08 画像と図キャプションのテキストボックス（左上がアンカー段落）: exact = アンカー段落の前に図 F1（graphic あり）、boxed-text なし（今のまま）。\nB09 本文の画像の下に、図キャプションだけのテキストボックス: exact = 本文に図ができる、boxed-text なし、0.24.1 と並びが同じ（same_as_base）。\nB10 空白だけのテキストボックス（全角空白・空・半角空白）: exact = boxed-text なし、知らせなし、空白の除外の理由は「空白」（(5)）。\nB11 囲みの中の別行数式「…(1)」と、本文の「式(1)」: exact = boxed-text がアンカー段落の前、boxed-text の中の disp-formula の id が FD1 で label がある、本文の「式(1)」が FD1 へのリンク。\nB12 囲みの中に全角空白だけの段落が 2 つ: exact = boxed-text がアンカー段落の前、空白でない 3 段落がすべて入る（不変性チェックに合格）。\nB13 入れ子のテキストボックス（外側が囲み、内側は短い札）: exact = 外側の boxed-text がアンカー段落の前、内側の文字も同じ boxed-text に入る。\nB14 グループ図形（画像 + キャプション + 注記「Ｐ点」。手動モードで回答前。AI なしでは今も止まる）: exact = boxed-text なし、0.24.1 と並びが同じ（(9) の範囲外）。\nB15 囲みの中に「英文要旨」スタイルの英語の段落と「注」だけの段落: exact = boxed-text がアンカー段落の前、sec 2・trans-abstract の p 1・fn-group なし。\nB16 B04 と同じ docx を手動モードで、回答を貼る前に変換: exact = boxed-text なし、除外される、知らせあり、AI依頼文に「box」「label」「（ヒント）」がある（(8)）。\nB17 画像のない行内のグループ図形の中の短い注記（td3 と同じ形）: exact = boxed-text なし、0.24.1 と並びが同じ。\nB18 本文の冒頭（最初の章見出しの前）の段落に結び付いた囲み: exact = アンカー段落の前に boxed-text、DTD に合う。either = boxed-text の親が p・sec・body のどれか。\n[AI（手動モードの回答）]\nA01 「（ヒント）」に placements の kind box、after は別の本文の段落: exact = その段落の直後に boxed-text、ai.accepted に place_float（図形の ID）がある。知らせは either。\nA02 同じものに kind label: exact = boxed-text なし、除外される、place_float が採用される。\nA03 kind box の after が別の囲みの中の段落: exact = 不採用、boxed-text なし、除外のまま、要確認の知らせが残る。\nA04 本文の画像の下にある VML（浮動でない）の「図1　…。」に set_role fig_caption: exact = 採用、図 F1 のキャプションになる（graphic あり）。\nA05 同じ段落に set_role p: exact = 不採用で、理由に「placements」がある。\nA06 文字だけのテキストボックスの段落に set_role p: exact = 不採用（理由に「placements」）、boxed-text なし。\nA07 同じ段落に set_role exclude: exact = 採用、除外される、boxed-text なし（(1)）。\n[N7]\nN01 引用文献の段落に結び付いた画像 + 全角空白 + 図キャプションの図形（v=2cm、AI なし）: exact = AIRequiredError で止まる（決定事項 10）。\nN02 同じ docx を手動モードで、回答前に変換: exact = 本文に図（graphic あり）、図の後ろに本文の要素がない（決定事項 21: 本文の最後）、キャプションが ref-list・mixed-citation・back にない、lost_images なし、needs_action が真。\nN03 同じ docx に placements（kind fig、after は本文の段落、caption と画像の段落）: exact = 指定の段落の直後に図、place_float が採用される、lost_images なし。\nN04 注「1) …」の段落に結び付いた、文字だけの図形（246 文字）: exact = fn・fn-group・ref-list に入らない、知らせあり。either = boxed-text か除外か。\nN05 引用文献の段落に結び付いた、文字だけの図形（259 文字）: exact = mixed-citation・ref・ref-list に入らない、知らせあり。either = boxed-text か除外か。\nN06 資料（英文要旨の後ろの「資料（授業プリント）」）の段落に結び付いた、画像 + 図キャプションの図形: exact = app の中に graphic のある図、キャプションの文字も app の中、0.24.1 と並びが同じ。\nN07 引用文献の段落そのものにある行内の画像: exact = lost_images がある、needs_action が真。",
+      "runner": "cd /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/f/oracle\npython gen_f.py                       # docx と cases.json を作り直す（作ってあるので、変えたときだけでよい）\npython run_f.py --src <src のディレクトリ（jasme_jats を含むもの）> --label <名前> --base base [--python <python>] [--only B01_box_at_anchor,...] [--box-form items|items_body|top] [--keep]\n例: python run_f.py --src /home/user/jstgxmlcng_JASME/src --label f1 --base base\n- ケースごとに、子のプロセス（PYTHONPATH=<src>、PYTHONDONTWRITEBYTECODE=1）で pipeline.convert（Options）を呼び、Result の欄（xml_path・fidelity・dtd_valid・jstage_issues・lost_images・needs_action・ai.accepted/rejected・plan.paras・prompt_path）だけを読む。そのあと python -m jasme_jats を同じ指定で動かし、標準エラーと終了コードを取る。結果は out/<label>/<ID>.json と summary.json に残り、ケースごとに [OK]/[FAIL] と、確かめた項目ごとに ok/NG と理由を出す。XML などの出力は消す（--keep で残す）。\n- same_as_base は、--base に指定した label（0.24.1 での結果は base）の out/base/*.json と XML の並び（tokens）を比べる。\n- 回答があるケースは、まず回答なしで変換して段落の ID と図形の ID（段落の textbox_id、なければ float_id）を調べ、それから回答を組み立てる。kind box・label の placements の書き方は FIX_PLAN に書かれていないので仮に決めた。既定の --box-form items は {\"float\": 図形の ID, \"after\": 段落, \"items\": [{\"kind\": \"box\"|\"label\", \"caption\": [], \"body\": []}]}、items_body は body に図形の中の段落の ID をすべて入れる、top は kind を placement の最上位に置き、items を空にする。実装の形が違うときはこの指定で合わせる（期待そのものは変えない）。\n- overlap.py は、gen_f.py の文字列リテラルと生成した docx の段落（テンプレートから来た段落を除く）を、tests/private の docx の 12 文字の並びと比べ、一致した件数だけを出す（文字は出さない）。",
+      "base_result": "作業ツリーの今の src（0.24.1。git diff src は空）での結果は OK 13 / FAIL 19 件（/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/f/oracle/out/base/summary.json と base_result.log）。止まらなかったケースでは、すべて不変性・最終・DTD・J-STAGE のチェックに合格した。lost_images は N01・N02・N03（N7 の画像）と N07 だけ。\nFAIL 19 件（F で直すもの）:\n- B01・B02・B05・B11・B12・B13・B15・B18: boxed-text が出ない。囲みの全段落が「テキストボックス内の文字（図の一部とみなして本文から除外）」で除外される。B11 は disp-formula も FD1 へのリンクもない。B01 は、A の暫定の要確認（「テキストボックスの中の文字 N 段落を、XML に出力していません」）が出るので「知らせなし」も NG。\n- B03: 除外の理由が「注記」でない（テキストボックス内の文字の理由のまま）。\n- B16: AI依頼文に box・label がない（「kind は fig（図）か table（表）」だけ）。\n- A01・A02: placements が「図形 s1 は『位置を決められなかった図表』にない」で不採用になる。\n- A05: VML のキャプションへの set_role p が採用される（d15）。\n- A07: 文字だけのテキストボックスの段落への set_role exclude が「…placements で指定する」で不採用になる。\n- N01: AI なしでも止まらない（終了コード 1）。画像は lost_images になる（「引用文献の段落の中にある…図形 s1 の中の画像」）。\n- N02: 図が XML にない。キャプションは back/ref-list/ref/mixed-citation に入り、画像が lost_images になる。\n- N03: 同じ理由で placements（kind fig）が不採用になる。図は出ず、画像は lost_images になる。\n- N04: 図形の文字が back/fn-group/fn/p（注の続き）に入り、知らせもない。\n- N05: 図形の文字が mixed-citation に入り、知らせもない。\nOK 13 件（F でも保つもの）: B04・B06・B07・B08・B09・B10・B14・B17・A03・A04・A06・N06・N07。ただし B04・B06・B07・B16 の「知らせあり」が通るのは、A の暫定の知らせのおかげ。F でこの知らせを消した後は、F の Action（決められない・位置を推定した）で出る必要がある。A03 が不採用になる理由は、0.24.1 では「位置を決められなかった図表にない」で、F で期待する理由とは違う。A06 は 0.24.1 でも理由に「placements」がある。\ndocx は 0.24.1 で回帰の比較にも使う。作り直しても same_as_base が 0.24.1 の base と一致することを確かめた。--box-form top の動きも A01・A02 で試した（0.24.1 ではどちらも同じ理由で不採用）。",
+      "notes": "見なかったもの: 担当のとおり、DESIGN_F.md・structure.place_floats/textbox_caption・floats.py・ai_assist.float_placements/role_overrides は読んでいない。src で読んだのは cli.py の引数と出力、pipeline.Options/Result、AIOutcome・fidelity の欄、report.Action/NEEDS_ACTION と同梱の DTD（boxed-text は block-display.class で、sec の para-level に入る）だけ。\n\n架空の文字の確認: overlap.py で、gen_f.py の文字列リテラル 697 個と、生成した docx の段落（テンプレートから来た段落を除く）を、tests/private の docx 3 本（1223 段落）の 12 文字の並びと比べた。一致は 0 件。\n\ntd1〜3 の数値（tdstats.py。文字は記録していない。しきい値の参考に）:\n- 段組み: どれも A4、左右の余白 822 twip、2 段（段の間 420 twip）。1 段の幅は約 8.68cm、全幅は約 18.1cm。\n- td1 の囲み 2 件: 274 文字（cx 8.65cm、cy 8.83cm、v=+5.59cm、9 段落。近くの段落に画像がある）と、299 文字（cx 8.60cm、cy 12.64cm、h=段の 9.47cm、v≈0、68 段落）。\n- td2 の囲み 2 件: 402 文字（cx 18.0cm、v=+1.01cm、4 段落）と、275 文字（cx 18.04cm、v=+18.13cm、70 段落）。\n- 4 件中 3 件はアンカー段落の上端から 1cm 以上離れている（at_anchor ではない）。F の方針では「位置を推定した」要確認になる見込み。\n- td3 の文字だけのテキストボックス 31 件の内訳: 28 件は、画像のない行内のグループ図形（wp:inline の wpg。cx 6.73cm または 7.70cm）の中の注記で 0〜11 文字。残りの 3 件は wp:anchor の 197〜214 文字（cx 約 12.9cm、v 0.08〜0.23cm、3〜6 段落）で、英文要旨（aff0）の後ろにある表のセルの空の段落に結び付いている。\n- このため、決定事項 9(3) の「td3 の 31 件は 0〜数文字の注記」は数え方が合わない。注記 28 件はどれもグループ図形の中にあり、F の (9) では範囲外になる。グループの外にある「図の近くの短い注記」の実例は td1〜3 にない。B03 は架空のものだけで確かめている。\n- 3 件の約 200 文字は、本文の外（英文の部分の表）に結び付いているので、N7 と、表のセルに結び付いた図形の扱いに当たる。\n\n文書と 0.24.1 の動きの食い違い（見つけたもの。どれも直していない）:\n(1) FIX_PLAN F の (9)「グループ図形の中の注記は、今の扱い（図の後に p）のまま」と、0.24.1 の動きが合わない。\n  - B14（画像・キャプション・注記のグループ図形）は、AI なしでは「中身の組み合わせを機械的に決められない」で止まる。手動モードで回答を貼る前は、注記「Ｐ点」が「テキストボックス内の文字」として除外される。\n  - B17（画像のない行内のグループ図形。td3 の形）では、注記が同じ理由で除外され、図は「画像ファイルを用意できなかった図」（要対応）になる。\n  - どちらの注記の除外も、今は A の暫定の知らせ（要確認）で知らされている。F で暫定の知らせを消すと、td3 の 28 件などのグループ図形の注記は知らせなしの除外になる。そうしてよいかは、まとめ役か実装担当が決める必要がある。\n  - 期待は same_as_base（XML の並びが 0.24.1 と同じ）にとどめた。知らせの有無は期待に入れていない。\n(2) FIX_PLAN にも付録 D1 にも、placements の kind box・label の JSON の形（items の中か最上位か、caption・body をどうするか、label のときの after）が書かれていない。run_f.py では --box-form で切り替えられるようにした。\n(3) DESIGN.md の 4.3 と 7 章は、A の暫定の知らせ（report.provisional_exclusions）と「本文の外に結び付いた図形はその領域の段落として扱う」を今の動きとして書いている。F で直す予定のもので、0.24.1 の動きとは合っている。\n(4) 付録 D1 の「(b) は除外され、理由が『図に重ねた注記』で、警告が出る」の「警告」が、Action（要確認）なのか BuildInfo の warnings なのか、決まっていない。B03 の知らせは either にした。\n\n期待で迷ったところ:\n- B01 の「知らせなし」は exact にした。F の節の「決められないもの・位置を推定したもの」だけを要確認にする、という文に従った。実装が囲みをすべて知らせる方針なら、ここだけが FAIL になる。\n- 0.24.1 の A04・A05 の VML（position なし）は、図形の中の段落としては扱われていない（set_role p が採用される）。F で A05 を拒否するには、浮動でない VML の段落にも (1) の規則（textbox_id）を当てる必要がある。\n\n片付けと厳守事項:\n- tests/__pycache__ は消した（gen_f.py は sys.dont_write_bytecode にした）。git status は docs/FIX_PLAN.md だけ（まとめ役の変更）。\n- 大きな出力（XML・ZIP・画像）は消した。残したのは、照合の材料の docx（cases/ 1.2MB。gen_f.py で作り直せる）と JSON・ログ・スクリプト。\n- ディスクの空きは 23GB。\n- 2 回続けて失敗した手順はない。"
+    },
+    "impl": {
+      "changed_files": [
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/model.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/docx_reader.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/floats.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/structure.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/builder.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/linker.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/ai_assist.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/pipeline.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/report.py",
+        "/home/user/jstgxmlcng_JASME/tests/make_fixtures.py",
+        "/home/user/jstgxmlcng_JASME/tests/conftest.py",
+        "/home/user/jstgxmlcng_JASME/tests/fixtures/sample_structure.docx",
+        "/home/user/jstgxmlcng_JASME/tests/fixtures/sample_outside.docx",
+        "/home/user/jstgxmlcng_JASME/tests/test_reader.py",
+        "/home/user/jstgxmlcng_JASME/tests/test_floats.py",
+        "/home/user/jstgxmlcng_JASME/tests/test_structure.py",
+        "/home/user/jstgxmlcng_JASME/tests/test_ai.py",
+        "/home/user/jstgxmlcng_JASME/tests/test_lost_images.py",
+        "/home/user/jstgxmlcng_JASME/tests/test_colab.py",
+        "/home/user/jstgxmlcng_JASME/docs/DESIGN.md",
+        "/home/user/jstgxmlcng_JASME/docs/DEVELOPMENT.md",
+        "/home/user/jstgxmlcng_JASME/docs/JSTAGE_NOTES.md",
+        "/home/user/jstgxmlcng_JASME/docs/STYLE_MAPPING.md",
+        "/home/user/jstgxmlcng_JASME/docs/fix_plan_repro_tests.py"
+      ],
+      "summary": "単位 F（0.25.0。D1・N7）を DESIGN_F.md のとおり作業ツリーに実装した。コミットはしていない。HEAD は 3157349（0.24.1）のまま。\n\n【D1: 文字だけのテキストボックス】\n- 読み取り（docx_reader・model）: テキストボックスごとに model.TextBox を記録し、Para.textbox_id と Table.textbox_id を付ける。\n  - ID は x1…。入れ子の内側は外側の ID を継ぐ。\n  - 幅は EMU、またはグループの a:ext×拡大率、または VML の pt から読む。読めなければ None。\n- 判定（floats）: textbox_kind で 4 つに分ける。しきい値は利用者が了承した 20 字・0.6 段、15 字・0.4 段、近さは前後 2 段落。\n  - 分け方は box / label / undecided / blank。\n  - 行数の推定は box_lines。\n- 組み立て（structure.Classifier.place_boxes）: place_floats とは別のパスで、次のように扱う。\n  - 囲み: BoxNode にして <boxed-text> を出す。本文の最上位では <p> で包む。\n  - 置き場所: at_anchor はアンカー段落の前、行内はアンカー段落の後ろ。それ以外の浮動配置と VML の absolute は、位置を推定してアンカー段落の後ろ（要確認）。アンカーが本文の外なら本文の最後。AI の指定があれば指定の段落の直後。\n  - 図の注記と決められないもの: 理由を付けて plan.exclude する。空白だけの段落は exclude_blank。\n  - そのほかの変更: 判断の一覧は category \"box\"。文字だけのテキストボックスの段落は body_seq から除き、run_end では飛ばす。\n- XML（builder・linker）: 囲みの中は p・list・disp-quote・disp-formula。linker では文脈 cell にするので、PDF とは照合しない（0.24.1 と同じ）。\n- AI（ai_assist）:\n  - placements の items に kind box・label を足した。検証は _box_placement_problem。\n  - 浮動配置でないテキストボックスの段落への set_role は、fig_caption・table_caption・exclude だけを受け付ける。\n  - 依頼文にテキストボックスの 3 節を足し、プロンプト・見本・スキーマを更新した。\n- 知らせ（report）: report.actions に textbox_undecided と textbox_place（どちらも要確認）を足しただけ。\n  - 0.19.0 からの暫定の知らせ（PROVISIONAL）は削除した。\n  - 1 章に「テキストボックスの文字」の行、3 章に「囲み・図の注記」、10 章にアンカーごとの注記の警告を出す。\n  - 画面（colab・cli・make_notebook）は変えていない。\n\n【N7: 本文の外の段落に結び付いた図形】\n- 1 回目の組み立てで、build_back と build_front_en（資料の前）が本文の外の図形の中身を飛ばし、Classifier.outside に記録する。\n- 記録があれば役割を戻して 2 回目を組み立て、split_regions がその中身を本文の最後に回す。\n- 図表は位置を決められない図表にする。AI を使わない設定では AIRequiredError。AI の指定がなければ本文の最後に仮に置く。\n- 文字だけのテキストボックスは D1 の判定で扱う。\n\n【点検で足したもの】\n- 同じ回答の set_role で文字だけのテキストボックスでなくなったものへの kind の指定は、2 章の不採用に出すようにした（pipeline。黙って捨てない）。\n\n【テストと文書】\n- tests: 新しい fixture sample_outside.docx（make_outside）を作った。sample_structure.docx は make_structure の関数だけで作り直した（git diff --stat tests/fixtures はこの 1 件だけ）。\n- docs/fix_plan_repro_tests.py: 文字だけのテキストボックスの PROBLEM テストを取り除いた。逆向きのテスト（test_text_only_textbox_becomes_boxed_text）は tests/test_structure.py に入れ、ヘッダーに F を書いた。残りの 4 件は合格。\n- 文書: DESIGN.md（3・4.3・5・6.1・新しい 6.2・7 章）、DEVELOPMENT.md（コードの構成・テスト・残っている課題）、JSTAGE_NOTES.md（マニュアル 3.5.4 の (1)・(12) で boxed-text を確かめた）、STYLE_MAPPING.md を実装に合わせた。\n\n【片付け】\n- 作業ツリー headwt を git worktree remove し、prune した。\n- tests/__pycache__ と、scratchpad の大きな出力（docx・xml・zip・td の出力フォルダ・golden の本体）を消した。JSON・ログ・スクリプトは残してある。\n- df は 23GB 空き。\n- docs/FIX_PLAN.md の差分は、まとめ役による決定事項 9・10 の記録で、私は触っていない。",
+      "tests_added": [
+        "tests/test_reader.py::test_textboxes_are_recorded",
+        "tests/test_floats.py::test_float_anchored_outside_body_becomes_unplaced（test_float_anchored_outside_body_is_kept_as_before の置き換え）",
+        "tests/test_floats.py::test_shapes_outside_body",
+        "tests/test_floats.py::test_classify_twice_for_shapes_outside_body",
+        "tests/test_floats.py::test_textbox_kind_boundaries（23 通り）",
+        "tests/test_floats.py::test_box_lines",
+        "tests/test_floats.py::test_unplaced_float_does_not_split_list_or_quote[list_box]（variant を追加）",
+        "tests/test_structure.py::test_box_at_anchor_becomes_boxed_text",
+        "tests/test_structure.py::test_label_and_undecided_textboxes_are_excluded（CLI の終了コード 0 も確かめる）",
+        "tests/test_structure.py::test_vml_absolute_box_and_caption_textbox",
+        "tests/test_structure.py::test_box_at_body_top_is_wrapped_in_p",
+        "tests/test_structure.py::test_text_only_textbox_becomes_boxed_text（docs/fix_plan_repro_tests.py の test_PROBLEM_text_only_textbox_is_dropped_from_xml の逆）",
+        "tests/test_ai.py::test_ai_kind_box_and_label_for_undecided_textboxes",
+        "tests/test_ai.py::test_ai_textbox_placements_are_validated（10 通り）",
+        "tests/test_ai.py::test_ai_textbox_placement_twice_and_estimated_box",
+        "tests/test_ai.py::test_set_role_on_textbox_paragraphs",
+        "tests/test_ai.py::test_textbox_placement_unused_after_set_role_is_rejected",
+        "tests/test_ai.py::test_request_lists_textboxes",
+        "tests/test_ai.py::test_prompts_explain_box_and_label",
+        "tests/test_ai.py::test_fullwidth_space_paragraphs_in_textboxes_keep_fidelity",
+        "tests/test_lost_images.py::test_figure_on_reference_becomes_unplaced（test_image_in_reference_is_reported の textbox-on-ref の場合を移したもの）",
+        "tests/test_lost_images.py::test_textbox_notices_replace_provisional_ones（test_provisional_notices_for_textbox の置き換え）",
+        "tests/test_lost_images.py::test_cli_shows_textbox_notices（test_cli_shows_provisional_notices の置き換え）",
+        "tests/test_colab.py::test_result_boxes_show_textbox_notices",
+        "書き換え: tests/test_ai.py::test_request_hints_follow_set_role_problem（VML の段落の案内が placements になる）、tests/test_structure.py::test_textbox_paragraphs_do_not_switch_regions（fixture の章の番号）"
+      ],
+      "pytest_result": "- Python 3.13.17（python -m pytest -q -p no:cacheprovider）: 871 passed。\n- Python 3.10.20（PYTHONPATH=src scratchpad/venv310/bin/python -m pytest -q -p no:cacheprovider）: 871 passed。\n- 新しいテスト（書き換えたテストを含む 67 件）を 0.24.1 の src で実行した（pytest_src.sh base_parent。WHICH 0.24.1 を確認）。\n  - 結果は 56 failed・11 passed。\n  - 合格した 11 件は、既存の run_end の variant 10 件と test_textbox_paragraphs_do_not_switch_regions。新しい variant の list_box は失敗する。\n- ruff check src tests tools: 201 件（HEAD は 202 件）。減ったのは report.py の ISC004 の 1 件（PROVISIONAL を削除したため）で、増えたものはない。\n- ruff check .: 223 件（HEAD は 224 件）。\n- docs/fix_plan_repro_tests.py を tests/ に写して実行した: 4 passed（写したファイルは消した）。",
+      "measures": "最後のコード変更の後に、golden・td・oracle をすべて流し直した。\n\n【golden】\n23 件。scratchpad/f/impl/golden_f3/manifest.json を scratchpad/f/golden_base/manifest.json と比べた。\n- 23 件とも、不変性・最終・DTD が合格、J-STAGE のチェックは 0 件（0.24.1 と同じ）。\n- xml・report が違うのは sample_structure_manual と sample_structure_split だけ。fixture に節「囲みと図の注記」の (a)〜(f) を足し、N2 の「注」「Area model」が決められないものになったため。\n  - XML の違いは、boxed-text 3 つ（中の list・FD1 の disp-formula を含む）が増えたことだけ。\n  - レポートの違いは、囲み・注記の判断、知らせ、除外の理由。\n- prompt は手動・AI の 13 件すべてで変わったが、変わったのはテンプレートの部分（SYSTEM_PROMPT・FIELD_GUIDE・MANUAL_EXAMPLE・manual_prompt）だけ。「---」より後ろの依頼の部分は sample_structure_manual を除いて同じ。\n- ほかの原稿の xml と report は 0.24.1 と同じ（pdfcheck のルート1・2、sample_full_ai、sample_float_ai・manual を含む）。\n- 最後のコード変更（pipeline の不採用の追加）の前後の golden は、23 件すべて同じ。\n\n【td1〜3】\nコマンドラインの --route docx --ai manual で、0.24.1 の src と比べた。\n- 終了コードはどちらの版も 1（手動モードで回答の前）。XML は 3 本とも 0.24.1 と同じ。\n- td1・td2: レポートは作成日時とツールの行のほかは同じで、標準エラーも同じ。テキストボックスは 7 件と 3 件あるが、どれも図表の入った図形で、文字だけのものはない。\n- td3: XML は同じ。レポートは 91 行が違い、内訳は次のとおり。\n  - 1 章: 「テキストボックスの文字（3 章・6 章）| 図の注記として除外 27 件」の行が増えた。警告は 2 件から 4 件になった。冒頭の暫定の知らせがなくなった。\n  - 4 章: 注記の判断 27 件（M-001〜M-027。種類は「囲み・図の注記（テキストボックス）」）が増え、既存の判断は M-028 に繰り下がった。\n  - 6 章: 27 段落の除外の理由が「図の一部とみなして」から「図に重ねた注記とみなして」になった。\n  - 10 章: 警告が 2 行増えた（d67 の x1〜x6、d167 の 21 件〈x7〜x28 の一部〉）。\n  - 14 章: 暫定の項目がなくなった。\n  - 標準エラー: 暫定の要確認の行がなくなった。標準出力の要約（不変性・最終・DTD・J-STAGE は合格、XML に入らなかった画像は 0 件）は同じ。\n- 数（文字は記録していない）:\n  - td3 のテキストボックス 31 件のうち、判定したのは本文の行内のグループ図形の中の 28 件（注記 27 件・空白だけ 1 件）。\n  - 資料の表のセルに結び付いた 3 件は範囲外で、今までどおり表のセルの中に出る。\n  - 本文の外の図形は、td1〜3 のどれにも 0 件。\n- 実際の論文の文字の 12 文字の並びが、差分の足した 1900 行に入っていないことを確かめた（0 件）。\n\n【独立の反例】\nscratchpad/f/oracle/run_f.py --label f3 --base base の結果は OK 29 / FAIL 3（0.24.1 は OK 13 / FAIL 19）。FAIL の 3 件は f2 と同じで、期待の側の問題と判断した。理由は deviations に書いた。",
+      "deviations": "【設計（DESIGN_F.md）と違えたこと・足したこと】\n1. pipeline.convert: placements の kind の指定のうち、組み直した後に使えなくなったものを 2 章の不採用に出すようにした（設計にはない）。\n   - 使えなくなるのは、同じ回答の set_role で中の段落を図表キャプションや除外にして文字だけのテキストボックスでなくなったもの、または kind box の after が本文の段落でなくなったもの。\n   - 理由: 今までは採用にも不採用にも出ず、黙って捨てられていた。テストと文書（DESIGN 5 章・DEVELOPMENT）も足した。\n2. docs/STYLE_MAPPING.md も直した（作業の指示の文書には入っていない）。「文字だけのテキストボックスは図の一部とみなして出力しない」がコードと食い違っていたため（CLAUDE.md のとおり文書をコードに合わせた）。\n3. 冒頭での並び: テキストボックスの要確認は actions の前半（figure_body の後ろ、images の前）に置いたので、レポートの冒頭ではルート2 の固定の案内と PDF の知らせより前に出る。0.24.1 の暫定の知らせは、PDF の知らせと同じく後ろに出ていた。\n4. 判断の一覧の種類の名前（CAT_JA[\"box\"]）を「囲み・図の注記（テキストボックス）」にした。続かない長い ID の並びは「N 件（xA〜xB の一部）」と書く。\n\n【独立の反例の FAIL のうち直さなかったもの（どれも FIX_PLAN と照らして、期待の側の問題と判断した）】\n- B06_vml_cm_width_short:\n  - 期待 excluded_reason_not「注記」は、部分一致で落ちる。決められないものの除外の理由「…囲みか図の注記か決められないため本文から除外。要確認」に「注記」という文字が含まれるため。\n  - 実際には注記（label）と判断していない。決められないものとして要確認で知らせており、box_or_excluded と notice の期待は OK なので、意図は満たしている。\n- A07_textbox_set_role_exclude:\n  - 反例のテキストボックスは wp:anchor（float_id あり）。\n  - FIX_PLAN F の (1) が fig_caption・table_caption・exclude を受け付けるのは「float_id のない段落」だけで、浮動配置の図形の段落は今までどおり「placements で指定する」として不採用（DESIGN 5 章も同じ）。期待が FIX_PLAN と違う。\n  - placements の label でも同じ除外になる。\n- N03_refs_fig_ai_place:\n  - 反例は、図の図形の ID を textbox_id を先に取って x1 とした。依頼文では図は「位置を決められなかった図表」の s1 として載る。\n  - ID の決め方は FIX_PLAN にない。s1 で指定すれば合格する（scratchpad/f/impl/chk_n03.py: place_float s1 を採用、図は指定の段落の後ろ、lost_images は空）。\n\n【見つけた文書とコードの食い違い（直さなかったもの）】\n- docs/FIX_PLAN.md の決定事項 9(3)（作業ツリーにある、まとめ役の追記）は実測と違う。\n  - 書かれていること: 「td1 に 2 件〈276・299 文字の囲み〉、td2 に 2 件〈275・402 文字〉、td3 に 31 件〈0〜数文字の、図に重ねた注記〉」。\n  - 実測: td1・td2 の 4 件は、図・表キャプションと表を入れた浮動配置の図形（B3 の図表）で、文字だけのテキストボックスではない。td3 の 31 件は、行内のグループ図形の中の 28 件（0〜11 字）と、資料の表のセルの 3 件（197〜210 字。範囲外）。\n  - FIX_PLAN は仕上げの担当なので直していない。\n- README.md の 148〜149 行（要確認「テキストボックスの中の文字」は暫定の知らせ）と 244〜246 行（図・表を含まないテキストボックスの文字は XML に出力できない）は古い。README は仕上げの担当。\n- FIX_PLAN F の (9)「グループ図形の中の注記は今の扱い（図の後に p）」は 0.24.1 のコードとも違っていた。行内のグループ図形（td3）の文字は除外だった。\n  - F では設計 13.1 の 3 のとおり判定の対象にし、図表の入った浮動配置の図形の中だけを範囲外とした。FIX_PLAN の文は仕上げの担当が直す。\n  - FIX_PLAN の行番号（structure.py:570 など）も古い。\n- 既存の食い違い: 最初の章見出しの前の fig・table-wrap・list・disp-formula・disp-quote は、今も <body> の直下に出る。\n  - J-STAGE のマニュアルでは body の子は p と sec だけ。DTD は合格する。\n  - F の範囲外として直さず、DESIGN 7 章・DEVELOPMENT・JSTAGE_NOTES に書いた。\n- ワークフローの検証の指示にある「td1・td2 の囲みが boxed-text に出ること」は、実測・設計と違う。td1・td2 には文字だけのテキストボックスがないので、XML は変わらないのが正しい。\n\n【見つけて直した食い違い】\n- DESIGN.md: 4.3 の暫定の知らせの箇条、5 章の「F で足す」、6.1 の N7 の扱い、7 章の「F で直す」。\n- structure.provisional_target の docstring: 「今の place_floats は本文にアンカーのある図形だけを扱うので起きない」と書かれていた。\n- TEXTBOX_TEXT_EXCLUDED の前のコメント。\n- DEVELOPMENT.md:\n  - 残っている課題の 2 行（暫定の知らせ、「本文の外の段落に結び付いた図形は修正計画の F で扱う」）。\n  - test_lost_images の説明（引用文献の段落に結び付いたテキストボックスの画像を出力漏れとしていた）。\n  - 並びの説明の「暫定の知らせは test_lost_images」。\n- STYLE_MAPPING.md の文字だけのテキストボックスの規則。\n- Builder.nodes の引数 top が使われていなかった（F で、囲みを p で包むのに使った）。\n- model.Para.in_textbox のコメントがなかった。\n- set_role_problem の docstring。",
+      "open_issues": "1. 仕上げの担当がすること（私はしていない）:\n   - 版を 0.25.0 にする（出力の形が変わるので 2 桁目。__init__.py と pyproject.toml）。\n   - python tools/make_notebook.py でノートブックを作り直す（ノートブックのスクリプトは変えていない）。\n   - FIX_PLAN の F の節を書く: 実装したこと、td の実測、決定事項 9(3) の数の訂正、暫定の判断。\n   - README を直す: 囲みは boxed-text になること、3 章「囲み・図の注記」、2 つの要確認、暫定の知らせの文を消す。\n2. 暫定の判断（利用者に未確認。DESIGN 6.2 の最後にまとめた）:\n   - 位置を推定した囲みは、止めずにアンカー段落の後ろ（本文の外なら本文の最後）に置いて要確認にする。\n   - 決められないものと位置を推定した囲みは要確認（終了コード 0）にし、図の注記は知らせない（10 章の警告と 6 章だけ）。\n   - グループ図形・描画キャンバスの中の文字だけのテキストボックスも判定の対象にする。\n   - 囲みの文字は出版版 PDF と照合しない（ルート2 で直さず、ルート1 の 13 章にも違いを出さない）。\n   - 本文の外の図形があるときは、組み立てを 2 回行う。\n   - boxed-text に id を付けない。\n   - 知らせの文言。\n   - 画面は既存の形のまま（まとめ役の暫定の判断）。\n3. J-STAGE の画面での <boxed-text> の表示は試験登載で確かめる必要がある。枠で囲まれるか、中の list・disp-formula が崩れないか（マニュアルには、中の p について「タグによっては表示が崩れる恐れ」とある）。\n4. 本文に結び付いた文字だけの囲みの実例が手元にない。\n   - 20 字未満の短い問題文の囲みは決められないものになり、要確認が増えるおそれがある。試験運用で件数と AI の判断を確かめる。\n   - placements の kind box・label は模擬回答でしか確かめていない。実際の AI（少なくとも Claude）で一度確かめる。\n5. td3 では、4 章の判断の一覧に図の注記 27 件が 1 件ずつ並ぶ（AI 依頼文の「扱いを機械的に決めたテキストボックス」も同じ）。長すぎると言われたら、アンカー段落ごとにまとめることを考える。\n6. 最初の章見出しの前の図・表などが <body> の直下に出る（既存）。J-STAGE で弾かれるかは確かめていない。\n7. 既存の不具合（B3 から。F では直していない）: ai_assist._placement_problem の浮動配置の図形の処理で、after がハッシュできない値（リストなど）だと `after not in body` で TypeError になる。テキストボックスの処理は防いでいる。\n8. 範囲外として残したもの:\n   - 本文の外に結び付いた、浮動配置でない（行内・VML の）テキストボックスで、キャプション・画像・表を含むもの。今までどおりその領域の段落になり、画像は出力漏れの要対応になる。\n   - 図表の入った浮動配置の図形の中の注記。今までどおり、AI の指定がなければ除外する。"
+    },
+    "verify": {
+      "passed_all": false,
+      "measures": "作業ツリーのファイルは変更していない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/f/verify/ の下で行った。結果の JSON・ログ・スクリプトは py/・cx/・golden_wt/manifest.json に残し、大きな出力（docx・pdf・xml・zip・画像）は消した。td の標準出力・標準エラーは実際の論文の文字を含むので消した。tests/__pycache__ も消した。worktree の headwt は remove・prune 済み。df は 23GB 空き。\n\n【pytest】\n- Python 3.13（python -m pytest -q -p no:cacheprovider）: 871 passed。\n- Python 3.10（venv310）: 871 passed。\n- docs/fix_plan_repro_tests.py を tests/ に一時的に写して実行: 4 passed（写したファイルは消した）。\n\n【ruff】\n- ruff check src tests tools: 作業ツリー 201 件、HEAD の worktree 202 件。\n- 規則とファイルごとに比べると、減ったのは report.py の ISC004 の 1 件だけで、増えたものはない。\n\n【golden】\n- 23 件の名前は golden_base（0.24.1）と同じ。23 件とも、不変性・最終・DTD は合格、J-STAGE のチェックは 0 件。\n- xml と report が違うのは sample_structure_manual と sample_structure_split だけで、本体を diff して確かめた。\n  - XML の違いは、新しい節「３．囲みと図の注記」が増えたこと（章番号は 1 つずつ後ろにずれた）。中身は次のとおり。\n    - boxed-text 3 つ（x3: list 2 項目・FD1 の disp-formula を含む。x4: 行内。x6: VML の absolute）\n    - fig 2 つ\n    - 本文の「式(1)」の xref\n  - レポートの違いは、1 章の「テキストボックスの文字」の行、冒頭の要確認 2 つ（決められない x1・x2・x5、位置を推定した x6）、3 章の 4 行、4 章の判断、6 章の除外の理由、10 章の警告、14 章の項目。\n    - A の暫定の知らせは消えた。\n    - AI を使わない設定（split）の冒頭の文言は「AI による補完を使うと…（強く勧めます）」で、決定事項 9(2) に合う。\n- prompt は手動・AI の 13 件で変わったが、どれも差分は同じ 27 行で、テンプレート（SYSTEM_PROMPT・FIELD_GUIDE・MANUAL_EXAMPLE・manual_prompt）の部分だけ。\n\n【td1〜3】\nコマンドラインの --route docx --ai manual で、0.24.1 と比べた。\n- 0.24.1 の側は PYTHONPATH を scratchpad/f/impl/base_parent にして実行した。指示にあった base0241_src はパッケージのフォルダそのもので、PYTHONPATH に入れると jasme_jats が見つからず、editable install の作業ツリーが黙って動く（最初はそれで両方とも同じになった）。\n- 終了コードはどの版・どの原稿も 1。XML は 3 本とも 0.24.1 とバイト単位で同じ（本文の文字も同じ）。不変性・最終・DTD・J-STAGE のチェックは合格、XML に入らなかった画像は 0 件で、増えていない。\n- td1・td2: レポートも標準エラーも、パス以外は同じ。依頼文の差分はテンプレートの 27 行だけ。\n  - テキストボックスは td1 に 7 件、td2 に 3 件。数値だけを確かめた（tbstats.py）。\n  - どれも図・表キャプションと表または画像を含む浮動配置の図形で、文字だけのものはない。\n  - そのため、boxed-text は出ない（期待「td1・td2 の囲みが boxed-text に出る」は満たさない。problems に書いた）。\n- td3: レポートの差分は 91 行で、実装の担当の報告と一致した。\n  - 28 件はすべて行内のグループ図形の中で、図の注記 27 件（文字 1〜11 字・幅 0.4〜3.2 cm）と空白だけ 1 件。\n  - 標準エラーの違いは、暫定の要確認の行が消えたことだけ。\n\n【独立の反例】\nrun_f.py --label verify --base base の結果は OK 29 / FAIL 3（実装の担当の f3 と同じ）。FAIL の 3 件を確かめ、どれも期待の側の問題と判断した。\n- B06: 期待「除外の理由に『注記』を含まない」が、「囲みか図の注記か決められない」の部分一致で落ちる。実際には決められないもので、要確認も出ている。\n- A07: 浮動配置の段落への set_role exclude。FIX_PLAN の (1) は float_id のない段落だけが対象で、実装は計画どおり。\n- N03: 反例が図の ID を x1 にしていたが、依頼文では s1。\n\n【自分の反例】\n架空の docx を 7 件作った（py/gen_v.py・py/gen_v7.py）。どれも不変性・最終・DTD が合格、J-STAGE のチェックは 0 件、出力漏れの画像は 0 件。\n- V1（しきい値の境界）: 20 字・0.61 段は囲み。19 字・0.61 段、20 字・0.59 段、15 字・画像から遠いものは、決められないので除外し、要確認になる。\n- V2（画像の近く）: 画像の近くの 7 字の問題文「問：面積は何か。」は図の注記として除外され、10 章の警告だけが出る。17 字のものは決められない。26 字で 1 段の 2 倍の幅のものは囲み。\n- V3: VML で幅が cm の短い「（ヒント）」が画像の近くにあると、図の注記になる。\n- V4: 引用文献に結び付いた文字だけの囲みは、本文の最後の boxed-text になり、位置を推定した要確認が出る。AI を使わない設定でも止まらない。\n- V5: 引用文献に結び付いた図は、AI を使わない設定で AIRequiredError（決定事項 10 のとおり）。\n- V6: 次の 3 つの置き場所が正しいことを確かめた。\n  - 見出しに結び付いた行内の囲み: 見出しの後ろ\n  - at_anchor の囲み: アンカー段落の前\n  - 箇条書きの 2 つ目の項目の行内の囲み: 箇条書きの終わりの後ろ\n- V7: 箇条書きの途中の項目の前に置く at_anchor の囲みは、list を 2 つに分ける。Word で囲みがある位置なので、問題にはしなかった。\n\n【手動モードの回答】\n- V1:\n  - x2 を kind box（after は本文の段落）にすると、指定の段落の後ろの boxed-text になり、2 章に place_float として採用が載る。x3 を label にすると除外され、理由は「AI による補完で…」。\n  - 不採用になるものと理由:\n    - after が囲みの中の段落の x4: 「本文の段落ではない」\n    - 機械的に決めた x1 への label: 「扱いを機械的に決めたので、変更できない」\n    - 浮動配置の段落への set_role p: 「placements で指定する」\n  - 残った決められないものの要確認は「AI の回答に…指定がないか…採用されませんでした（2 章）」で、分かる文言。\n- td1（依頼文の ID）: 次の 3 件は、どれも 2 章の不採用に理由付きで出た。利用者にも意味は通じる。\n  - x1 への box: 「x1 は『位置を決められなかった図表』…にない」\n  - s2 への kind box: 「items の kind は fig か table」\n  - x5 への label: x1 と同じ理由\n- V6・V2: 機械的に決めた囲み・注記は、AI では変えられないことを確かめた（problems の 1）。\n\n【ルート2】\nLibreOffice で作った PDF で V1・V4・V6 をルート1・2 で変換した。XML は 2 つのルートで同じで、boxed-text の文字も docx のまま。13.1〜13.6 はどれも「ありません」（囲みの文字を docx に足すことも、直すこともしない）。\n\n【fixture】\nmake_structure と make_outside だけを一時ファイルに作り直し、tests/fixtures の docx と比べた。zip の中身はすべて同じ。git status で変わっているのは sample_structure.docx（変更）と sample_outside.docx（新規）だけ。",
+      "problems": [
+        {
+          "severity": "should",
+          "where": "src/jasme_jats/ai_assist.py（_box_placement_problem・set_role_problem）、src/jasme_jats/structure.py（Classifier.place_boxes の label の枝）、docs/DESIGN.md 6.2",
+          "problem": "機械的に「図に重ねた注記（label）」と判断したテキストボックスは、本文の問題文であっても XML から消え、AI でも戻せない。要確認にもならないので、D1 の題目「XML から消え、AI でも戻せない」が label の経路で残る。",
+          "evidence": "V2_near_image（架空）: 図1 の近くの幅 3.0 cm（1 段の 0.35 倍）のテキストボックスに入れた「問：面積は何か。」（8 字）。\n- textbox_kind が label にし、TEXTBOX_LABEL_EXCLUDED で除外した。\n- 知らせは 10 章の警告と 1 章の件数だけ（Action はない）。\n- 手動モードで次の 2 つを指定すると、どちらも不採用になる。\n  - placements の {float: x1, kind: box, after: d15}: 「テキストボックス x1 は扱いを機械的に決めたので、変更できない」\n  - set_role p（d16）: 「テキストボックス・グループ図形の中の段落の役割は placements で指定する」\n- 依頼文では「# 扱いを機械的に決めたテキストボックス（変更不可）」に「[x1] 図の注記として除外済み」と載り、AI には変えられないものとして示される。\n- 行内の label も、set_role は fig_caption・table_caption・exclude しか受け付けないので戻せない。\n- DESIGN 6.2 では「図の注記は知らせない」を暫定の判断としている。",
+          "fix": "利用者に確かめる暫定の判断として、まとめ役が次のどれかを選ぶ。\n- (a) 機械的な label に AI の placements の kind box を受け付け、依頼文では「変更可」の節に載せる。\n- (b) 「。」などで終わる文の形の label 候補は undecided に倒す。\n- (c) label にした件数を要確認の Action にする。\nどれも選ばないなら、DESIGN 6.2 と FIX_PLAN の F の節に「機械的な注記の判断は AI でも変えられない」と明記する。"
+        },
+        {
+          "severity": "should",
+          "where": "docs/FIX_PLAN.md 決定事項 9(3)（作業ツリーのまとめ役の追記）と docs/DESIGN.md 6.2 のしきい値の根拠の文",
+          "problem": "利用者に示した決定事項 9(3) の「td1 に 2 件〈276・299 文字の囲み〉、td2 に 2 件〈275・402 文字〉」は、文字だけのテキストボックスではない。どれも図・表キャプションと表を入れた浮動配置の図形で、F の後も今までどおり fig・table-wrap になり、boxed-text にはならない。DESIGN 6.2 は「囲みの文章は 197〜389 字・1.0〜2.07 段（…テストデータ1・2 の表で組んだ問題文）で確かめた」と書くが、囲み（box）のしきい値は、範囲内の実例では一度も働いていない。利用者は「しきい値はそれでいこう」と了承したが、td1・td2 の 4 件が boxed-text になると受け取っている可能性がある。",
+          "evidence": "tbstats.py（数値だけ）で確かめた。\n- td1 の x1: wps の浮動配置、s1、幅 8.65 cm、表 1、役割は cell・fig_caption、文字 271\n- td1 の x7: s7、幅 8.6 cm、表 2、役割は table_caption・cell、文字 285\n- td2 の x1: s1、幅 18.0 cm、表 1、fig_caption、文字 397\n- td2 の x3: s3、幅 18.04 cm、表 1、table_caption、文字 263\n- 4 件とも text_only は False。td1・td2 の XML は 0.24.1 とバイト単位で同じで、レポートの違いも 0 行。\n- td3 で判定に使われたのは、グループ図形の規則（2）だけ（label 27・blank 1）。\n- 検証の指示にある「td1・td2 の囲みが boxed-text に出ること」も満たさない（実装の担当も指摘済み）。",
+          "fix": "まとめ役が FIX_PLAN の 9(3) と F の節を実測に合わせて直す。\n- td1・td2 の 4 件は、表で組んだ図・表（B3 の図表）で、boxed-text にはならない。\n- 本文に結び付いた文字だけの囲みの実例は手元になく、囲みの側のしきい値は架空の境界の例でしか確かめていない。\n利用者には、td1・td2 の XML が変わらないことを一言伝えて確かめる。DESIGN 6.2 の根拠の文も「範囲内の実例は注記だけ」と分かるように直す。"
+        },
+        {
+          "severity": "nit",
+          "where": "src/jasme_jats/floats.py textbox_kind（規則 3）と docs/FIX_PLAN.md 付録 D1「VML の width が pt 以外のとき、label に倒れない」",
+          "problem": "幅を読めない（VML の cm・%）と幅の条件を使わないので、画像の近くの 15 字以下は label になる。同じ文字・同じ位置でも、幅を pt で書いて 1 段より広いと undecided（要確認）になり、幅を読めないほうが黙って消える側に倒れる。付録の「label に倒れない」の文と、規則 5 の「迷ったら除外して知らせる」の考え方に合わない。",
+          "evidence": "V3_vml_cm（架空）: 画像の段落の次の段落に結び付けた VML（style width:14cm）の「（ヒント）」。\n- textbox_kind(5, None, 1, near=True) は label になり、除外された（10 章の警告だけ）。\n- テストも tests/test_floats.py:620 の (5, None, 1, True, False, \"label\") で、この振る舞いを固定している。\n- 画像から遠いもの（:619。反例の B06）は undecided。",
+          "fix": "label の規則 3 は、幅を読めないときは満たさない（undecided に倒す）ことを検討する。変えないなら、DESIGN 6.2 と FIX_PLAN 付録 D1 の文を「画像から離れていれば label に倒れない」に直す。"
+        },
+        {
+          "severity": "nit",
+          "where": "src/jasme_jats/ai_assist.py SYSTEM_PROMPT の set_role の案内・build_request の段落一覧・set_role_problem の理由の文",
+          "problem": "依頼文の段落一覧では、文字だけのテキストボックスの段落が、浮動配置かどうかにかかわらず「テキストボックス x2 の中」と書かれる。そのため、AI には SYSTEM_PROMPT の「浮動配置でないテキストボックスの段落に set_role で指定できるのは fig_caption・table_caption・exclude だけ」を当てはめられない。浮動配置の x への set_role exclude が拒否されたときの理由は「placements で指定する」だが、その x を機械的に決めていると placements も拒否されるので、案内が行き止まりになる。",
+          "evidence": "- V1 の依頼文: 浮動配置の x2・x4 の段落も「[d16]（body / テキストボックス x2 の中 …）」と書かれる。\n- 回答の set_role p（d20。x4 の段落）は「テキストボックス・グループ図形の中の段落の役割は placements で指定する」で不採用。\n- V6: 機械的な囲み x2 の段落への set_role exclude は同じ理由で不採用、placements の x2 label は「扱いを機械的に決めたので、変更できない」で不採用。\n- 反例の A07 も、この食い違いで落ちている。",
+          "fix": "次のどちらかにする。\n- 段落一覧の場所を「テキストボックス x2（浮動配置）の中」とする。\n- 文字だけのテキストボックスの段落は、浮動配置でも exclude を受け付ける。\nどちらにしても、機械的に決めたテキストボックスの段落への拒否の理由は「扱いを機械的に決めたので変更できない」とする。"
+        },
+        {
+          "severity": "nit",
+          "where": "README.md 148〜149 行・244〜246 行",
+          "problem": "README に 0.24.1 までの説明が残っている（実装の担当も挙げている）。暫定の要確認「テキストボックスの中の文字」と、「図・表を含まないテキストボックス（囲み）の文字は、今の版では XML に出力できません」。F では囲みは boxed-text になり、暫定の知らせは消えた。",
+          "evidence": "grep の結果: README.md:148「要確認『テキストボックスの中の文字』 — 今の版では XML に出力できない文字です」、README.md:244「図・表を含まないテキストボックス（囲み）の文字は、今の版では XML に出力できません」。",
+          "fix": "仕上げの担当が README を直す: 囲みは boxed-text、3 章の「囲み・図の注記」、2 つの要確認（textbox_undecided・textbox_place）、図の注記は 10 章の警告だけ。"
+        },
+        {
+          "severity": "nit",
+          "where": "docs/FIX_PLAN.md F の (9)・D1 の骨格（「model.TextBox（xid・anchor_src・float_id・inline・offset・大きさ）」）",
+          "problem": "FIX_PLAN の文と実装が食い違う。実装の担当が一部を挙げており、仕上げの担当が直す予定。\n- (9)「グループ図形の中の注記は今の扱い（図の後に p）のまま範囲外」に対し、実装はグループ図形・描画キャンバスの中の文字だけのテキストボックスを判定の対象にした（td3 の 27 件）。範囲外にしたのは、図表の入った浮動配置の図形の中だけ。\n- TextBox に offset の欄はない（位置は Float から引く。VML の位置は読まない）。",
+          "evidence": "src/jasme_jats/model.py の TextBox の欄は xid・anchor_src・source・inline・absolute・group・float_id・width_cm・height_cm。floats.textbox_kind の規則 2（group）。DESIGN 6.2 の最後の「暫定の判断」に (9) の読み替えが書いてある。",
+          "fix": "仕上げの担当が FIX_PLAN の F の節を実装に合わせる（(9) の範囲と、offset は Float から引くこと）。"
+        },
+        {
+          "severity": "nit",
+          "where": "src/jasme_jats/__init__.py・pyproject.toml・notebooks（仕上げの作業）",
+          "problem": "版はまだ 0.24.1 のままで、ノートブックも作り直していない。F の要件は 0.25.0。実装の担当は open_issues で仕上げの担当に回している。",
+          "evidence": "src/jasme_jats/__init__.py:2 は __version__ = \"0.24.1\"。git diff --stat に notebooks・tools/make_notebook.py・pyproject.toml はない。",
+          "fix": "反映の前に、__init__.py と pyproject.toml を 0.25.0 にし、python tools/make_notebook.py を実行し、pytest を流し直す。"
+        }
+      ]
+    },
+    "pre": {
+      "changed_files": [
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/ai_assist.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/floats.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/structure.py",
+        "/home/user/jstgxmlcng_JASME/tests/test_ai.py",
+        "/home/user/jstgxmlcng_JASME/tests/test_floats.py",
+        "/home/user/jstgxmlcng_JASME/tests/test_structure.py",
+        "/home/user/jstgxmlcng_JASME/docs/DESIGN.md",
+        "/home/user/jstgxmlcng_JASME/docs/DEVELOPMENT.md",
+        "/home/user/jstgxmlcng_JASME/docs/FIX_PLAN.md",
+        "/home/user/jstgxmlcng_JASME/docs/STYLE_MAPPING.md"
+      ],
+      "summary": "確かめの問題のうち should 2 件と、コードの nit 2 件（3・4）を作業ツリーで直した。コミットはしていない。HEAD は 3157349 のまま。\n\n【should 1: 機械的に図の注記（label）にしたものが AI でも戻せない】\n(a) を暫定の判断として選んだ（利用者には未確認）。図に重ねた注記と機械的に判断したテキストボックスを、AI が placements の kind box で本文の囲みに戻せるようにした。\n- 検証（ai_assist._box_placement_problem）:\n  - 機械的な label には box だけを受け付ける（after は本文の段落）。\n  - label の指定は「指定できるのは box（本文の囲みに戻す）だけ（図の注記のままなら書かない）」で採用しない。\n  - 囲みとして位置を機械的に決めたもの（at_anchor・行内）と空白だけのものは、今までどおり変更できない。理由の文は「囲み（boxed-text）として扱いと位置を機械的に決めたので、変更できない」。\n- 依頼文:\n  - 変更不可の節から注記を外し、新しい節「# 図に重ねた注記とみなして除外したテキストボックス（本文の文章のときだけ placements で kind box と after を指定）」に、判定の根拠と中身の段落を 1 行ずつ載せる。\n  - 変更不可の節の見出しは「# 囲みとして位置を機械的に決めたテキストボックス」にした。\n  - 除外の一覧で、注記の段落には「（図の注記でなく本文の文章なら、placements の kind box で囲みに指定）」と案内する。\n  - SYSTEM_PROMPT・FIELD_GUIDE・manual_prompt・スキーマの説明も合わせた。\n- 組み立て（structure.place_boxes）:\n  - AI が囲みにした判断の文に、機械的な判定（「機械的には図に重ねた注記と判断していた」など）も書く。\n  - 10 章の注記の警告に「図の注記でなく本文の文字（問題文など）なら、AI による補完で囲みに指定するか、Word で文字をテキストボックスの外に出して変換し直してください」を足した。\n  - Action は足していない（画面の仕組みも変えていない）。\n- (b)・(c) は採らなかった。理由は DESIGN 6.2 と FIX_PLAN の F に書いた。\n\n【should 2: しきい値の根拠の文と決定事項 9(3) が実測と違う】\n- DESIGN 6.2 の根拠の文を数値で直した。判定の対象になった実例は、td3 の図の注記 27 件（1〜11 字・1 段の 0.05〜0.37。グループ図形の規則で決まる）だけ。囲みの側のしきい値は、架空の境界の例でしか確かめていない。\n- td1・td2 の 4 件（263〜397 字・1 段の 0.99〜2.08 倍）は、図表の入った浮動配置の図形で、判定の対象外。XML は 0.24.1 と同じ。\n- floats.py の docstring と DESIGN 7 章・DEVELOPMENT も合わせた。\n- FIX_PLAN:\n  - 決定事項 9(3) の下に「（訂正。F の確かめで実測した。利用者には未確認）」の注記を足した。利用者の回答の文はそのまま残した。\n  - F の節に「F の確かめで分かったこと・直したこと（暫定）」の箇条を足した。\n\n【nit 3】\n- textbox_kind の規則 3（図の注記）は、幅と 1 段の幅を読めるときだけ当てはめるようにした。修正計画の付録 D1「VML の width が pt 以外のとき、label に倒れない」のとおり。\n- 画像の近くの VML（cm・%）の短い文字は、決められないもの（要確認）になる。\n\n【nit 4】\n- 依頼文の段落一覧で、浮動配置のテキストボックスの段落の場所を「テキストボックス x…（浮動配置）の中」と書く。\n- 囲みとして位置を機械的に決めたものの段落への set_role は、placements を案内せず「機械的に決めたので、変更できない」として採用しない。浮動配置でないものへの fig_caption・table_caption・exclude は、今までどおり受け付ける。\n\nnit 5〜7（README、FIX_PLAN F の (9) と offset、版 0.25.0 とノートブック）は、問題の一覧に「仕上げの担当が」とあるので手を付けていない。\n作業ファイルは /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/f/fixv にある。置き換えの定義は edits/、ログと manifest も残した。td の結果は数だけを td_summary.txt に残した。大きな出力は消した。",
+      "tests_added": [
+        "tests/test_ai.py::test_ai_kind_box_restores_mechanical_label（新規。注記を kind box で囲みに戻す・kind label は不採用・判断の文と 10 章の警告の文・依頼文の案内）",
+        "tests/test_ai.py::test_ai_textbox_placements_are_validated（3 通りを追加: 行内の囲みへの label、空白だけのもの、注記への kind box の after が囲みの中。2 通りの期待を変更: 機械的な囲みの理由の文、注記への label）",
+        "tests/test_ai.py::test_set_role_on_textbox_paragraphs（at_anchor・行内の機械的な囲みの段落への set_role の理由を追加）",
+        "tests/test_ai.py::test_request_lists_textboxes（注記の節と中身、変更不可の節に注記がないこと、場所の「（浮動配置）」と行内の場所）",
+        "tests/test_ai.py::test_prompts_explain_box_and_label（新しい文: SYSTEM_PROMPT・FIELD_GUIDE・manual_prompt・スキーマ）",
+        "tests/test_floats.py::test_textbox_kind_boundaries（(5, None, 1, True, False) を undecided に、(5, None, 1, True, True, label) を追加、段組みの設定がないときは undecided）",
+        "tests/test_structure.py::test_vml_width_in_cm_near_image_is_undecided（新規。VML の 14cm・40% は undecided で要確認、20pt は label）",
+        "tests/test_structure.py::test_text_only_textbox_becomes_boxed_text（set_role p を拒否する理由の期待を「機械的に決めたので、変更できない」に変更）"
+      ],
+      "pytest_result": "- Python 3.13.17（PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider）: 877 passed。修正前は 871。\n- Python 3.10.20（PYTHONPATH=src scratchpad/venv310/bin/python -m pytest -q -p no:cacheprovider）: 877 passed。\n- 新しいテストと変えたテストを修正前の src（scratchpad/f/fixv/pre_src。WHICH で確認）で流した（pytest_src.sh）。\n  - 34 failed・9 passed。合格した 9 件は、test_ai_textbox_placements_are_validated の変えていない通り。\n  - test_structure.py 全体では、落ちるのは変えた 2 件だけ。\n- ruff check src tests tools: 201 件（HEAD 202。修正前と同じで、変えたファイルごとの件数も同じ）。ruff check .: 223 件（HEAD 224）。\n- docs/fix_plan_repro_tests.py を tests/ に写して流した: 4 passed（写したファイルは消した）。\n- tests/__pycache__ は消した。",
+      "measures": "【golden】\n23 件。scratchpad/f/fixv/golden_fix/manifest.json を、修正前（golden_pre。実装の担当の golden_f3 と同じ）と 0.24.1（golden_base）の両方と比べた。\n- 23 件とも、不変性・最終・DTD が合格で、J-STAGE のチェックは 0 件。\n- 修正前と比べて:\n  - XML は 23 件とも同じ。\n  - レポートが違うのは sample_structure_manual と sample_structure_split だけ。10 章の d46 の注記の警告 1 行に、対処の文を足した。\n  - prompt は手動・AI の 12 件すべてで変わった。違いはテンプレートの 14 行だけ（SYSTEM_PROMPT の箇条、manual_prompt の 1 行、FIELD_GUIDE）。\n  - 「---」より後ろの依頼の部分は、sample_structure_manual を除いて同じ。sample_structure_manual で変わったのは次の 3 つ。\n    - 浮動配置のテキストボックスの段落の場所に「（浮動配置）」が付いた。\n    - A 点の除外の案内が変わった。\n    - 注記の節が増え、変更不可の節の見出しが変わった。\n- 0.24.1 と比べて: XML が違うのは sample_structure の 2 件だけで、F の boxed-text の分（修正前と同じ）。\n\n【td1〜3】\nコマンドラインの --route docx --ai manual で変換した。0.24.1 は impl/base_parent（base0241_src へのリンク）から動かした。\n- XML: 3 本とも、0.24.1・修正前とバイト単位で同じ。\n- レポート:\n  - td1・td2 は、0.24.1・修正前と同じ。\n  - td3 は修正前と 2 行違う（10 章の注記の警告 2 行に対処の文を足した）。0.24.1 とは 91 行違い、実装の担当の報告と同じ数。\n- 標準エラーは修正前と同じ。終了コードは 3 版とも 1。\n- 不変性・最終・DTD・J-STAGE のチェックは合格。XML に入らなかった画像は 3 本とも 0 件（0.24.1 も 0 件）。\n- td3 の AI 依頼文:\n  - 除外の一覧の案内 27 行が変わった。\n  - 注記の節（見出しと 27 行）が増え、変更不可の節（見出しと 2 行）がなくなった。\n  - td1・td2 の依頼文は同じ。\n- td3 の数（文字は記録していない）:\n  - 注記 27 件は、どれもグループ図形の中で幅を読める。nit 3 の変更は当たらない。\n  - 文の形のものは 0 件。\n\n【独立の反例】\noracle/run_f.py --label fixv --base base の結果は OK 29 / FAIL 3（0.24.1 は OK 13 / FAIL 19）。\n- FAIL は修正前と同じ B06・A07・N03（期待の側の問題）。\n\n【確かめの担当の反例】\ngen_v.py・gen_v7.py で作り直し、run_v.py で修正前と比べた。\n- V2: 手動の回答 {x1 kind box after d15} が採用されるようになり、「図1について問う。」の後ろの boxed-text になった（修正前は不採用）。d16 への set_role p は、今までどおり placements を案内して不採用。\n- V3: VML の 14cm の「（ヒント）」は、決められないもの（要確認の Action と 3 章の行）になった（修正前は黙って注記）。\n- V6: 機械的な囲みの段落への set_role exclude と placements label は、どちらも「…機械的に決めたので、変更できない」になった。修正前は set_role が placements を案内する行き止まりだった。\n- V1・V4・V5・V7: 判断の文と警告の文のほかは同じ。\n\n【追加の確かめ】\n- oracle の B17（行内のグループ図形の中の注記。td3 と同じ形）: 注記への kind box が採用され、boxed-text に出る。不変性と DTD は合格、XML に入らなかった画像は 0 件。\n- git diff HEAD の足した行 2055 行に、tests/private の docx と同じ非 ASCII の 12 文字の並びは 0 件。",
+      "deviations": "【まとめ役の選択を待たずに決めたこと】\n1. should 1 の修正は「まとめ役が (a)〜(c) を選ぶ」となっていた。私が (a) を暫定の判断として実装し、DESIGN 5 章・6.2・7 章、FIX_PLAN の F、docstring に「暫定」と書いた。\n   - (a) にした理由:\n     - Colab の初期値は手動の AI 補完なので、多くの利用者に効く。\n     - 機械的な判定を変えないので、了承済みのしきい値と td3 の結果がそのまま。\n   - (b) を採らなかった理由: しきい値の規則を変える。td3 の文の形の注記は 0 件で影響はないが、規則は変わる。\n   - (c) を採らなかった理由: td3 のように注記の多い原稿で毎回要確認が出る。\n   - 残ること: AI を使わない設定では、注記は今までどおり除外して 10 章の警告だけ（要確認にしない）。DESIGN 7 章にも書いた。\n2. 機械的な注記への kind label（注記のまま）は、採用しない（不採用の理由を 2 章に出す）。DESIGN 6.2・5 章にこの作りで書いた。\n\n【問題の一覧の提案と違えたこと】\n3. should 2 の FIX_PLAN の直し方:\n   - 決定事項 9(3) の利用者の回答の文は書き換えず、下に訂正の注記を足した。\n   - 利用者に「td1・td2 の XML は変わらない」と伝えて確かめることは、私にはできない（open_issues）。\n4. nit 4 は前者の案にした（場所に「（浮動配置）」を付け、機械的な囲みは「変更できない」を返す）。\n   - 浮動配置の文字だけのテキストボックスへの exclude は受け付けていない。FIX_PLAN の F の (1) が exclude を受け付けるのを float_id のない段落に限っているため。\n   - そのため反例の A07 は FAIL のまま。決められないものは placements の label で除外できる。\n5. nit 3 は、付録 D1 を正本としてコードを直した。\n   - CLAUDE.md の「文書をコードに合わせる」は既存のコードの話で、この textbox_kind は F で新しく書いたコードのため。\n   - 結果として、段組みの設定（sectPr）がなく 1 段の幅を読めないときも、注記にせず決められないものにする。test_floats の期待も変えた。\n\n【直さなかった指摘】\n6. nit 5〜7 は、問題の一覧に「仕上げの担当が」とあるので直していない。\n   - README.md の 148〜149 行・244〜246 行\n   - FIX_PLAN F の (9)「グループ図形の中の注記は今の扱いのまま範囲外」と、骨格の「model.TextBox（…offset…）」が実装と違うこと\n   - 版 0.25.0（__init__.py・pyproject.toml）とノートブックの作り直し\n\n【見つけた文書とコードの食い違い（直したもの）】\n- DESIGN 6.2 の数が実測と違っていた。\n  - 「囲みの文章は 197〜389 字・1.0〜2.07 段（…テストデータ1・2 の表で組んだ問題文）」→ 実測は td3 の資料のセルが 197〜210 字・1.47〜1.49 倍、td1・td2 が 263〜397 字・0.99〜2.08 倍で、どちらも判定の対象外。\n  - 「注記は 0〜11 字」→ 1〜11 字。\n- test_floats のコメントの「0〜11 字」も 1〜11 字に直した。\n- floats.py のモジュールの docstring は「囲み・注記の文字数と幅で確かめた」と書いていた。囲みの実例はないので直した。\n- FIX_PLAN の決定事項 9(3) の括弧の中の数（td1 の 276・299 文字、td2 の 275・402 文字の囲み）が実測と違う。訂正の注記を足した。\n- DESIGN 5 章・DEVELOPMENT・STYLE_MAPPING:\n  - 「扱いを機械的に決めたテキストボックス（変更不可）」の節に注記も載ると書いていた。\n  - 「依頼文の 3 つの節」と書いていた。\n  - 機械的な囲みの段落への set_role の案内が行き止まりになる作りのまま書いていた。\n- set_role_problem・set_role_hint・_box_placement_problem・textbox_section・place_boxes の docstring。\n\n【見つけた文書とコードの食い違い（直さなかったもの）】\n- FIX_PLAN の F の (9) と offset、README（上の 6）。\n- FIX_PLAN の付録 D1 の「(e) の段落への set_role は、placements で指定するよう求めて採用されない」。(e) は位置を推定した囲み（変えられるもの）なので、今の作りと合っている。食い違いではない。\n\n【作業で気づいたこと】\n- 作業の指示にある「0.24.1 の src の写し …/f/base0241_src」は、パッケージのフォルダそのもの。PYTHONPATH にそのまま渡すと、入っている作業ツリーの jasme_jats が黙って使われる。\n  - 最初の td の比較で、これを使ってしまった。which.txt で気づき、親のフォルダ（impl/base_parent。jasme_jats へのシンボリックリンク）で流し直した。\n  - golden_base（まとめ役が作ったもの）は 0.24.1 の数と合っている。",
+      "open_issues": "1. 利用者に確かめる暫定の判断（まとめ役から）:\n   - (a)「機械的な注記も AI が kind box で囲みに戻せる。注記への label は不採用」。\n   - AI を使わない設定では、注記は今までどおり 10 章の警告だけ（要確認にしない）。\n   - 10 章の警告に足した対処の文と、AI が囲みにした判断の文の「（機械的には…）」の言い方。\n   - (b)（文の形の注記を決められないものにする）・(c)（注記の件数を要確認にする）を足すかどうか。\n2. 利用者の「しきい値はそれでいこう」は、td1・td2 の 4 件が boxed-text になると受け取ったうえでの了承かもしれない。\n   - 「td1・td2 には文字だけのテキストボックスがなく、XML は 0.24.1 と同じ」「囲みの側のしきい値は架空の例だけで確かめた」と伝えて確かめてほしい。\n   - 決定事項 9(3) に了承そのものはまだ書いていない（訂正の注記だけ）。まとめ役が記録する。\n3. 仕上げの担当がすること:\n   - README の 148〜149 行・244〜246 行を直す。\n   - FIX_PLAN の F の (9) の範囲と offset を実装に合わせる。\n   - 版を 0.25.0（__init__.py・pyproject.toml）にし、python tools/make_notebook.py を実行してから、pytest を流し直す。\n4. td3 の AI 依頼文は、注記の節で 28 行ほど長くなった（27 件を 1 件 1 行）。長すぎると言われたら、アンカー段落ごとにまとめることを考える。\n5. 注記への kind box は、模擬回答でしか確かめていない。実際の AI（少なくとも Claude）で、図の注記を誤って囲みに戻さないかを試験運用で確かめる。\n6. 独立の反例の FAIL 3 件（B06・A07・N03）は、期待の側の問題のまま（実装の担当の報告と同じ判断）。\n   - A07 は、nit 4 で exclude を受け付けない作りを選んだので FAIL のまま。\n7. 作業の指示の base0241_src は、PYTHONPATH には親のフォルダ（impl/base_parent）を渡す必要がある。次の担当への指示を直すとよい。"
+    },
+    "fin": {
+      "changed_files": [
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/__init__.py",
+        "/home/user/jstgxmlcng_JASME/pyproject.toml",
+        "/home/user/jstgxmlcng_JASME/notebooks/JASME_docx_to_JSTAGE_XML.ipynb",
+        "/home/user/jstgxmlcng_JASME/docs/FIX_PLAN.md",
+        "/home/user/jstgxmlcng_JASME/README.md"
+      ],
+      "summary": "仕上げ（finalize）を作業ツリーに積んだ。コミットはしていない。HEAD は 3157349 のまま。\n\n- 版を 0.25.0 にした（`__init__.py` と `pyproject.toml`）。`python tools/make_notebook.py` でノートブックを作り直した。差分は版の表示の 3 行だけ。\n- docs/FIX_PLAN.md\n  - 反映の順序の表の F を「（実装済み）」にした。\n  - 決定事項 9 に、しきい値の実際の値を「（2026-11-01。F で決めた値）」として追記した。囲みは 20 字以上・幅が 1 段の 0.6 以上、注記は 15 字以下・画像の近く・幅が 1 段の 0.4 以下（グループ図形の中は 15 字以下）。根拠の数値も書いた。\n  - 追記には、了承が「td1・td2 の 4 件が囲みになる」という見込みを含んでいた可能性があることと、実測では囲みにならないことを後で伝える、という点も書いた。\n  - まとめ役が書いた決定事項 9(3)・10 の追記は変えていない。\n  - F の節に 5 項目を足した。実装の要点、テスト、確かめた数、暫定の判断 (a)〜(i)、残る限界、文書とコードの食い違いの扱い。\n  - 計画の (9)（グループ図形の注記は範囲外）と offset の欄が実装と違うことは、実装の要点と暫定の判断 (c) に書いた。D1・N7 の項目の本文そのものは書き直していない。\n  - 「同じファイルを触る順」の節に、F で触ったファイルを入れた。\n- README.md\n  - 暫定の要確認「テキストボックスの中の文字」の説明を消した。\n  - 代わりに要確認 2 つを書いた。「囲みか図の注記か決められないテキストボックス」と「位置を推定した囲み」。\n  - 「できないこと・注意点」の「囲みは XML に出力できない」を、次の内容に置き換えた。囲みは `<boxed-text>` で出ること、図に重ねた注記は出ず 6 章と 10 章の警告だけであること、本文の文章なら AI で囲みに戻せること、PDF とは照合しないこと、J-STAGE での表示は試験登載で確かめること。\n  - 本文の外に結び付いた図形の扱いも書いた。\n- 確かめた文書。DESIGN.md・DEVELOPMENT.md・JSTAGE_NOTES.md・STYLE_MAPPING.md・fix_plan_repro_tests.py の冒頭は、実装と確かめの修正の担当がすでに実装に合わせてあった。今回は食い違いを見つけず、変えていない。\n- 点検\n  - git status に一時ファイルはない。新規ファイルは tests/fixtures/sample_outside.docx だけ。\n  - tests/private の docx の文字から作った 12 文字の並び 36291 通りを、`git diff HEAD` の足した行と突き合わせた。一致は 0 件。\n  - tests/__pycache__ は消した。",
+      "tests_added": [],
+      "pytest_result": "Python 3.13 は 877 passed。Python 3.10 は 877 passed。docs/fix_plan_repro_tests.py を tests/ に写して実行すると 4 passed（写したファイルは消した）。ruff check src tests tools は 201 件（HEAD は 202 件で、増えていない）。",
+      "measures": "この担当では、版・ノートブック・文書だけを変えた。コードは変えていないので、golden・td1〜3・独立の反例は流し直していない。値は実装と確かめの修正の担当の報告のままで、FIX_PLAN の F の節に載せた。\n\n- golden: 23 件とも、不変性・最終・DTD が合格。J-STAGE のチェックは 0 件。XML が 0.24.1 と違うのは sample_structure の 2 件だけ。\n- td1〜3: XML は 0.24.1 とバイト単位で同じ。XML に入らなかった画像は 0 件のまま。td3 のレポートは 0.24.1 と 91 行違う。\n- 独立の反例: OK 29 / FAIL 3。0.24.1 は 13 / 19。\n\n版を上げたことの影響は、pytest（3.13・3.10）が 877 件とも通ることで確かめた。",
+      "deviations": "- 計画の D1 の骨格にある offset の欄は、model.TextBox にない（位置は Float から引く）。\n- 計画の F の (9)「グループ図形の中の注記は範囲外」は、実装では判定の対象にした。範囲外にしたのは、図表の入った浮動配置の図形の中だけ。\n- この 2 点は、FIX_PLAN の F の節の新しい項目に書いた。D1 の項目の本文の文は書き換えていない。\n- 直していない食い違い\n  - FIX_PLAN の D1・N7 の項目の本文にある行番号（structure.py:570 など）は古いまま。\n  - rvz_d1.py・rvz_back.py への言及は残る。\n  - どちらも、F の節の新しい項目に「直していない」と書いた。\n- ワークフローの検証の指示にあった「td1・td2 の囲みが boxed-text に出る」は実測と違う。td1・td2 に文字だけのテキストボックスはなく、XML が 0.24.1 と同じなのが正しい。\n- 前の担当の食い違い（PYTHONPATH に base0241_src を直接渡すと作業ツリーの jasme_jats が黙って使われる）は、この担当では扱っていない。FIX_PLAN にも書いていない。",
+      "open_issues": "- 利用者に確かめること\n  - 「しきい値はそれでいこう」の了承が、td1・td2 の 4 件が囲みになる見込みを含んでいた可能性がある。実測では、4 件は図表の入った浮動配置の図形で、XML は変わらない。囲みの側のしきい値は架空の境界の例でしか確かめていない。\n  - FIX_PLAN の F の節の暫定の判断 (a)〜(i)。\n- 残る限界\n  - J-STAGE の画面での boxed-text の表示は、試験登載で確かめる。\n  - 20 字未満の短い問題文は決められないものになり、要確認が増えるおそれがある。\n  - kind box・label は模擬回答でしか確かめていない。実際の AI で一度確かめる。\n  - td3 では、注記 27 件が判断の一覧と AI 依頼文に 1 件ずつ並ぶ。\n  - 最初の章見出しの前の図・表などが `<body>` 直下に出る（既存）。\n  - `_placement_problem` の浮動配置の処理で、after がリストなどハッシュできない値だと TypeError になる（B3 からの既存）。\n- 独立の反例の FAIL 3 件（B06・A07・N03）は、期待の側の問題と判断したまま。\n- ruff は HEAD より増えていない（202 件から 201 件）。\n- src/jasme_jats.egg-info/PKG-INFO に古い README の文が残っている。生成物で、git status には出ない。"
+    },
+    "reviews": [
+      {
+        "checked": "作業ツリーのファイルは変更していない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/f/review/principle/ の下で行った（gen_p.py・run_p.py・mut/mutate.py・r2/r2.py・results_summary.json・pt313.log・pt310.log・golden_wt/manifest.json・out/ と oracle_run/out/ の JSON が残る）。\n- 大きな出力（docx・pdf・xml・zip・画像）、td の出力、変異の src は消した。td の出力は実際の論文の文字を含むので丸ごと消した。\n- git worktree（HEAD の ruff 用）は remove・prune 済み。tests/__pycache__ は消した（他の担当の pytest が作ったもの）。\n- git status は開始時と同じ。df は 23GB 空き。\n- 0.24.1 は scratchpad/f/impl/base_parent で動かした。base0241_src は HEAD の src とファイル単位で同じことを確かめた。どの結果 JSON でも、版の欄が 0.24.1 / 0.25.0 になっていることを確かめた。\n\n【コードを読んだ範囲】\nmodel・docx_reader・floats・structure（place_boxes・text_only・near_image・box_children・outside_key・build_back・build_front_en・split_regions・classify の 2 回の組み立て・run_end・assign_ids・compute_locations・node_paras）、builder.nodes・boxed_text、linker.body_paragraphs、ai_assist（_box_placement_problem・set_role_problem・float_placements・依頼文）、report の Action、pipeline。\n- 文字を書き換えるコードはない。re.sub は文字数を数えるためだけに使っている。\n- boxed-text の中は nodes() を通るので、文字は必ず Emitter.span を通る。\n- 読み取りの文字ポリシーは変わっていない（TextBox は大きさなどの記録だけ）。そのため、canonical_text・pdfdocx を合わせる必要はない。pdfmatch には触れていない。\n- 囲みの段落は文脈 cell なので、照合しない。\n- 2 回目の組み立ての前に戻すのは段落の役割・由来・覚え書き。Table.role と doc.warnings は structure が書き換えないことも確かめた。\n\n【測定】\n- pytest: Python 3.13 で 877 passed、3.10 で 877 passed。docs/fix_plan_repro_tests.py を tests/ に一時的に写して 4 passed（写したファイルは消した）。\n- ruff: HEAD 202 件、作業ツリー 201 件。違いは report.py の ISC004 が 1 件減っただけ。\n- golden: 23 件とも名前は同じで、不変性・最終・DTD が合格、J-STAGE のチェックは 0 件。\n  - XML とレポートが違うのは sample_structure の 2 件だけ。違いは、足した節の boxed-text 3 つ（list・FD1 の disp-formula を含む）、fig 2 つ、xref。\n  - 依頼文は手動の 13 件が違うが、どれも同じテンプレートの 31 行だけ。\n- td1〜3（コマンドラインの --route docx --ai manual）を 0.24.1 と比べた。\n  - XML は 3 本ともバイト単位で同じ。\n  - レポートの違いは td1・td2 が 2 行（版）、td3 が 93 行。td3 は、注記 27 件の除外の理由、判断の一覧、暫定の知らせの削除。標準エラーの違いは td3 の 1 行。\n  - 不変性・最終・DTD・J-STAGE は合格。XML に入らなかった画像は 0 件で、0.24.1 と同じ。\n- 自分の反例（架空の docx 45 件。gen_p.py）。調べた形は次のとおり。\n  - 入れ子、VML の v:group、VML の absolute（引用文献）、行内のグループ図形（引用文献）\n  - 浮動配置のグループ図形（引用文献）: 画像だけ／画像と注記／画像とキャプション／画像・キャプション・注記\n  - 行内の囲み（引用文献・注）、英文要旨の囲み、資料の囲み、表のセルに結び付いた囲み、脚注の中のテキストボックス\n  - 中身に脚注・URL・引用・箇条書き・引用のスタイル・別行数式・見出しのスタイルを含む囲み、冒頭の囲み、空白だけの段落の各形\n  - AI の指定: 機械的な注記を kind box で戻す、アンカー段落を set_role exclude、本文の外の図形の place_float（画像あり・なし）\n  - 結果（どれも 0.24.1 と比べた）\n    - 不変性と最終チェックは全件合格。conflicts・bad_excluded・missing・duplicates も 0。\n    - 独立の確かめも 0 件。docx の段落の文字（空白を除く）が、除外していなければ最終の XML にあり、除外していれば XML にない、を見た。\n    - DTD は全件合格、J-STAGE のチェックも 0 件。\n    - XML に入らなかった画像が出たのは想定どおりのものだけ。引用文献の段落そのものの画像、P05（0.24.1 と同じ）、P26・P30（要対応で知らせる）。\n- oracle の反例 32 件を、AI なし・手動の両方で流した。\n  - 作業ツリーは 60 件が合格、4 件が AIRequiredError。B14 は両方の版で止まり、N01〜N03 の AI なしは決定事項 10 のとおり止まる。\n  - XML に入らなかった画像は N07（引用文献の段落の中の画像）だけ。0.24.1 の N01〜N03 にあった画像の漏れはなくなった。\n- ルート2: LibreOffice で作った PDF で P07・P38・P35・P21 を変換した。XML は 2 つのルートで同じで、13 章の項目は 0 件、囲みの文字は直していない。\n- fixture: make_structure と make_outside だけで作り直すと、zip の中身が同じになる。git の差分は sample_structure（変更）と sample_outside（新規）だけ。\n- 変異（18 個）\n  - 検出されたもの（12 個）: M1（囲みの空白の段落の除外）、M2（taken）、M3（本文の外の中身の振り分け）、M6（冒頭の p）、M7（浮動配置の画像の近さ）、M8・M9（注記・決められないものの除外）、M12、M13、M14、M16。\n  - 877 件が通るもの（5 個）: M5、M10、M15、M17、M18（findings に書いた）。\n  - M4（2 回目の前に役割を戻さない）: 出力の違いは見つからなかった。\n  - M11: 同値の変異。\n- 確かめの担当の指摘の扱い\n  - 機械的な注記は、AI の kind box で戻せる（P17 で、除外が残らないことを確かめた）。\n  - 幅を読めないときは注記にしない（B06 は undecided）。\n  - README・版 0.25.0 は直っている。\n\n【文書とコードの食い違い（すべて。どれも直していない）】\n1. docs/STYLE_MAPPING.md:47 の「（AI 補完で図の後ろの段落に指定できる）」。これができるのは浮動配置の図形だけ（findings 2）。\n2. docs/DESIGN.md:121（4.3）。0.24.1 の暫定の知らせは「文字だけのテキストボックスの文字」だけでなく、理由が「図の一部とみなして」の除外をすべて数えていた（findings 2）。\n3. docs/DESIGN.md:680（6.1 の N7）の「グループ図形の画像は…集めて図に入れる」。これは中身が単純なときか、AI が画像の ID を書いたときだけ。画像だけのグループ図形は N7 の対象外（findings 3）。\n4. docs/DESIGN.md:767（6.2）の「前後 2 段落（図形の外の段落）」。コードは表も 1 つと数える（findings 5）。\n5. 仕上げの担当が挙げた食い違いも残っている。\n   - FIX_PLAN の D1 の骨格にある offset の欄、(9) の範囲、D1・N7 の本文にある古い行番号、rvz_*.py への言及。\n   - offset と (9) は F の節の新しい項目に書かれている。\n6. 確かめの担当の should 2（決定事項 9(3) の数）。FIX_PLAN に訂正が併記されていることを確かめた。",
+        "findings": [
+          {
+            "severity": "should",
+            "file": "src/jasme_jats/structure.py",
+            "line": 912,
+            "problem": "囲み（BoxNode）を本文の要素の列に差し込むと、図表の組み立てで囲みが「隣の要素」として数えられ、0.24.1 では組めていた図・表が組めなくなる。\n- 組み立ては、本文スタイルの図表キャプションの推定、画像とキャプションの組、表とキャプションの組。\n- 図は、画像だけの fig とキャプションのない p（またはキャプションだけの fig）に分かれる。本文の「図1」はリンクされない。\n- 要対応・要確認の知らせは出ない。",
+            "evidence": "架空の docx（scratchpad/f/review/principle/gen_p.py）で、0.24.1 と比べた。\n- P35: 画像の段落に行内の囲み 1 つ。次の段落は本文スタイルの「図1　架空の地図」。\n  - 0.24.1: <fig id=\"F1\">（caption と graphic）と、本文の xref。\n  - 0.25.0: <fig>（id・caption なし）、<boxed-text>、<p>図1　架空の地図</p> になる。本文の「図1」はリンクされず、3 章に「図1 に対応する図が見つからない」と出るだけ。actions は空。\n- P36: 位置を推定した浮動配置の囲みでも同じ。知らせは textbox_place（位置を推定した囲みの要確認）だけ。\n- P37: 本文スタイルの「表1」の段落に行内の囲みがあり、続いて表。0.25.0 は p と、キャプションのない table-wrap になる。\n- P32・P33: キャプションのスタイルでも、画像とキャプションの間に囲みが 2 つあると、画像だけの fig とキャプションだけの fig F1 に分かれる。\n- 囲みが 1 つで、キャプションのスタイルのとき（P01・P02）は組める（assemble_floats は 2 つ前まで見る）。\n- 不変性・DTD は合格し、画像も XML に入る。\n- 原因\n  - build_body が box_inserts を inserts に足す（841 行）。\n  - same_place(flat, self.provisional) では、BoxNode の置き場所が図形の外の要素と同じ \"\" になる（909〜912 行）。\n  - そのため、prv/nxt と、assemble_floats の last_out(k, 2)・ahead(k, 2)（1726 行）が、囲みを隣として数える。",
+            "fix": "囲みを図表の組み立てで透明にする。\n- 例: BoxNode の差し込みに専用の置き場所を与える（self.provisional[id(node)] = \"@box\" など）。same_place・last_out・ahead・table_for_figure が、図形の外の要素の隣として数えないようにする。\n- または、BoxNode を assemble_floats の後に差し込む。\nP35・P37・P32 の形のテストを tests/test_structure.py に足す。確かめる内容は、fig の id・caption・graphic、本文の xref、表キャプション。"
+          },
+          {
+            "severity": "should",
+            "file": "src/jasme_jats/report.py",
+            "line": 1110,
+            "problem": "暫定の知らせ（PROVISIONAL）を消したので、図表の入った「浮動配置でない」テキストボックス（行内・VML）の中の、キャプションでも本体でもない段落が、要確認なしで XML から消えるようになった。\n- 除外の理由は「テキストボックス内の文字（図の一部とみなして本文から除外）」。\n- 0.25.0 では 6 章の表にだけ載る。\n- AI でも戻せない。set_role の不採用の理由は placements の kind box・label を案内するが、その placements も不採用になる（行き止まり）。",
+            "evidence": "- P09（行内のテキストボックスに、画像・図キャプション・「出典：架空の町の資料…」）\n  - 0.24.1: 冒頭・14 章・コマンドラインに「要確認: テキストボックスの中の文字 1 段落を、XML に出力していません」。\n  - 0.25.0: actions が空で、レポートでは 6 章の d15 の行だけ。\n- P41（AI がその段落に set_role p）: 不採用。理由は「浮動配置でないテキストボックスの段落に指定できる役割は fig_caption・table_caption・exclude だけ（囲みか図の注記かは placements の kind box・label で指定する）」（ai_assist.py:1097）。\n- P42（その x1 に placements の kind box）: 不採用。理由は「x1 は…にない」。\n- docs/STYLE_MAPPING.md:47 は「AI 補完で図の後ろの段落に指定できる」と書くが、それができるのは浮動配置の図形だけ（float_from_spec が残りを p に出す）。\n- 0.24.1 の暫定の知らせは、理由が TEXTBOX_TEXT_EXCLUDED の除外をすべて数えていた（structure.py:863 の除外も含む）。DESIGN.md:121 の説明より範囲が広かった。",
+            "fix": "report.actions() に、理由 TEXTBOX_TEXT_EXCLUDED の除外を要確認で知らせる Action を足す（AI の回答待ちのときは除く）。\n- 文言の例: 「図の入ったテキストボックスの中の、キャプションでない文字 N 段落を XML に出力していません。本文の文字なら Word でテキストボックスの外に出して変換し直してください」。\n- 表示の仕組みは変えない。\nset_role_problem は、段落の textbox_id が plan.textboxes にないとき、placements を案内しない理由にする。\nSTYLE_MAPPING.md:47 と DESIGN.md:121 を実装に合わせる。必要なら、暫定の判断として FIX_PLAN の F の節に書く。"
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/structure.py",
+            "line": 979,
+            "problem": "N7 の残り。どれも lost_images の要対応で知らせるので、黙っては消えない。\n- (a) 画像だけの浮動配置のグループ図形が引用文献の段落に結び付いていると、中身の段落がないので Classifier.outside に記録されない（1962 行は段落・表しか見ない）。位置を決められない図表にならない。\n- (b) 本文の外のグループ図形で中身が単純でないとき（画像・図キャプション・注記）、回答前と、AI が画像を書かなかったときは、仮に置いた図に画像が入らない。\n- (c) そのときの要対応「位置を決められなかった図表」は、「XML の本文の最後にある図表の中身」を移すよう案内する。しかし、本文の最後に何もないことがある。",
+            "evidence": "- P05（画像だけのグループ図形が引用文献に結び付く）: 0.24.1・0.25.0 とも図はなく、lost が 1 件（要対応）。\n- P30（手動・回答前）: 本文の最後に、caption だけで graphic のない <fig>。img1 は XML に入らない画像（要対応）。\n- P29（注記なし）・P25（AI が body に img1）: 画像は図に入り、lost は 0 件。\n- P26（AI の body が空で不採用）: forced と lost の要対応が出るが、本文の最後には何もない（注記は除外）。\n- DESIGN.md:680 は「グループ図形の画像は、アンカー段落（本文の外の段落）から集めて図に入れる」と書くが、これは中身が単純なときか、AI が画像の ID を書いたときだけ。",
+            "fix": "DESIGN 6.1 と FIX_PLAN の F の節に、この限界を書く。\n- 画像だけのグループ図形は範囲外で、N1 の要対応のまま。\n- 中身が単純でない仮の配置では、グループ図形の画像は図に入らない。\n直すなら次のようにする。\n- build_back・build_front_en で、アンカー段落が本文の外にある、画像のある浮動配置の図形も outside に記録する。\n- 仮の配置（raw）には、グループ図形の画像をキャプションなしの FigNode として入れる。"
+          },
+          {
+            "severity": "nit",
+            "file": "tests/test_floats.py",
+            "line": 1,
+            "problem": "原則に関わる次の 5 つの分岐は、1 か所変えても 877 件のテストがすべて通る（変異で確かめた）。\n- M5: 本文の外のグループ図形の画像を、アンカー段落から集める処理（structure.py:979）。\n- M17: text_only の「図表の入った浮動配置の図形の中は対象外」（structure.py:1058）。\n- M18: text_only の textbox_caption の判定。\n- M10: body_seq から textbox_id のある段落を除く処理（structure.py:960）。\n- M15: place_boxes の「組み直した後に after が本文の段落でなければ、指定なしに戻す」。",
+            "evidence": "scratchpad/f/review/principle/mut/mutate.py で src を写し、1 か所ずつ変えた。fixB2r4/tools/pytest_src.sh で全テストを流し、WHICH の行で変異の src を使ったことを確かめた。\n- M5: P25・P29 で画像が XML に入らない（lost 1 件）。\n- M17: P25 で不変性チェックが不合格（注記の段落を二重に出す）。\n- M10: P43 で、行内の囲みの中の段落を after にした kind box が採用される（0.25.0 は「本文の段落ではない」で不採用）。\n- M15: after が除外されると KeyError になる経路が、テストで守られていない。\n- M18: 浮動配置でないテキストボックスの、本文スタイルの「図N」だけの段落が、囲み・注記の判定に回る経路が、テストで守られていない。\n- 次の 11 個は失敗で検出された: M1〜M3、M6〜M9、M12〜M14、M16。",
+            "fix": "架空の docx でテストを足す。\n- 引用文献に結び付いたグループ図形（画像と図キャプション）の画像が図に入り、lost_images が空になる。\n- AI の placements で組んだグループ図形の中の注記が、二重に出ない（不変性チェックに合格する）。\n- 浮動配置でないテキストボックスの、本文スタイルの「図2 …」がキャプションになる。\n- 行内の囲みの段落を after にした kind box が不採用になる。\n- after の段落を set_role exclude にした kind box が 2 章の不採用になり、変換が止まらない。"
+          },
+          {
+            "severity": "nit",
+            "file": "docs/DESIGN.md",
+            "line": 767,
+            "problem": "DESIGN 6.2 は「画像の近く」を「アンカー段落とその前後 2 段落（図形の外の段落）」と書く。コードは、図形の外の段落と表の並び（Classifier._top）で前後 2 要素を見るので、表も 1 つと数える。floats.NEAR_PARAS のコメント（段落・表で数える）はコードと合っている。",
+            "evidence": "P45: 画像の段落、表、段落、注記「点Ｔ」（幅 1 cm）のアンカー段落の順に並べた。\n- 段落だけで数えると、画像は 2 段落前。\n- 表を数えると 3 要素前なので「画像の近く」にならず、undecided（要確認）になった。\n- 安全側に倒れるので、害はない。",
+            "fix": "DESIGN 6.2 を「前後 2 つ（図形の外の段落と表で数える）」に直す。"
+          }
+        ]
+      },
+      {
+        "checked": "作業ツリーのファイルは変えていない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/f/review/regression/ の下で行った。スクリプトは py/・mut/、結果は r_wt.json・r_base.json・oracle.log・mut/mut*.log・golden_wt/manifest.json に残した。大きな出力（td の出力、docx、変異した src、golden の本体）は消した。td の標準出力・標準エラーは実際の論文の文字を含むので消した。tests/__pycache__ はない。git status で増えたファイルは tests/fixtures/sample_outside.docx だけ。df は 23GB 空き。\n\n【読んだ差分】\nmodel（TextBox・textbox_id・textbox_excluded の削除）、docx_reader（_textboxes・_new_textbox・_vml_cm・グループの拡大率）、floats（textbox_kind・box_lines・column_cm）、structure（BoxNode・BoxInfo・text_only・near_image・place_boxes・box_children・outside_key・split_regions・2 回の classify・body_seq・run_end・node_paras・assign_ids）、builder・linker、ai_assist、report・pipeline を読んだ。読んだ範囲には、F の節と付録の D1 の (1)〜(9) に対応する実装がある。ほかに N7（build_back・build_front_en・place_floats の outside）の実装もある。\n\n【pytest・ruff】\n- pytest は Python 3.13・3.10 とも 877 passed。\n- 作業ツリーのテストを 0.24.1 のコードで流すと 63 failed。F で足したテスト関数のうち 0.24.1 でも通るのは 1 つだけ。test_image_in_reference_is_reported で、既存のテストの引数を減らしたもの。\n- ruff は 201 件で、HEAD は 202 件。ファイルと規則ごとに比べると、違いは report.py の ISC004 が 2 件から 1 件に減っただけで、増えたものはない。\n\n【golden】\n23 件の名前は 0.24.1 と同じ。23 件とも不変性・最終・DTD が合格し、J-STAGE のチェックは 0 件。\n- XML とレポートが違うのは sample_structure_manual・sample_structure_split だけ。\n  - XML の違いは、節「３．囲みと図の注記」が増えたことと、章番号が 1 つずつ後ろにずれたこと。中身は boxed-text 3 つ（list・FD1 の disp-formula・VML の absolute）、fig 2 つ、xref。\n  - 1 章の既存の囲み「注」「Area model」は、0.24.1 と同じく XML に出ない。除外の理由が「決められない」に変わった。\n  - レポートの違いは、暫定の知らせが消えたことと、要確認 2 つ・3 章・4 章・6 章・10 章・14 章。\n- prompt は 11 件で、どれもテンプレートの 31 行だけが違う。SYSTEM_PROMPT・FIELD_GUIDE・MANUAL_EXAMPLE・manual_prompt の部分。\n- sample_float・sample_b3 系・sample_notes の XML は 0.24.1 と同じ。B3 の図表の位置と組み方、E の注は変わっていない。\n\n【td1〜3】\n--route docx --ai manual で、0.24.1 と作業ツリーを比べた。0.24.1 は f/impl/base_parent で動かし、版の表示で確かめた。\n- 終了コードはどれも 1。\n- XML・ZIP・画像はバイト単位で同じ。本文の文字も同じで、XML に入らなかった画像は 0 件のまま。\n- td1・td2 のレポートは、版の行だけが違う。\n- td3 のレポートの差分は 105 行。中身は次のとおり。\n  - 注記 27 件の判断（M-001〜027）、6 章の除外の理由、10 章の警告 2 件、1 章の「テキストボックスの文字」の行\n  - 暫定の要確認が消えたこと\n  - 標準エラーの違いは、暫定の要確認の行が消えたことだけ。\n\n【独立の反例】\nrun_f.py の結果は OK 29 / FAIL 3。FAIL は B06・A07・N03 で、まとめ役の判断（期待の側の問題）と同じ。\n\n【変異】\n条件を 25 通り変えて、全テストを流した。\n- 落ちたもの（20 通り）\n  - しきい値 BOX_CHARS・BOX_WIDTH・LABEL_CHARS・LABEL_WIDTH を上下に動かしたもの、NEAR_PARAS=1\n  - 幅を読めないときの注記の規則と囲みの規則、box の行数の条件、グループの規則、浮動配置の画像を near に数えること\n  - set_role の規則、builder の p で包むこと、assign_ids の BoxNode、exclude_blank\n  - build_back の N7、2 回目の classify\n- 生き残ったもの（5 通り）: NEAR_PARAS=3、near_image のグループの判定、body_seq の textbox_id、linker の BoxNode、place_boxes の after の守り。グループの判定は、textbox_kind のグループの規則が near を使わないので、変えても結果は同じ。残りの 4 通りは findings に書いた。\n\n【自分の反例】\n架空の docx を 11 件作り、作業ツリーと 0.24.1 で比べた（R1〜R10 は py/gen_r.py。V は py/probe2.py）。どれも不変性・最終・DTD が合格し、出力漏れの画像は 0 件。ただし R4 は、自分で作った docx の誤り（脚注の部品の名前空間）で、どちらの版でも読み取りで止まった。\n\n| 例 | 作業ツリーの結果 |\n|---|---|\n| R1 | 囲みの中の引用・図の参照が xref になる |\n| R2 | 入れ子の外側・内側の文字が 1 つの boxed-text に 1 回ずつ出る |\n| R3 | 表のセルの中の囲みは 0.24.1 と同じ（対象外） |\n| R5 | 見出しの囲みは見出しの後ろ、箇条書きの項目の囲みは箇条書きの後ろ |\n| R6 | 引用文献に結び付いた囲みの中の「注」・英文要旨のスタイルの段落が、本文の最後の boxed-text になる。0.24.1 では fn-group に入っていた |\n| R7 | 囲みの中の見出しのスタイルは p、引用は disp-quote、全角空白は空白の除外 |\n| R8 | 空のアンカー段落の at_anchor の囲みは、その前 |\n| R9 | 同じ段落の行内の囲み 2 つは docx の順 |\n| R10 | VML のグループの短い文字は注記（0.24.1 と同じく除外。理由だけ変わる） |\n| V | VML の図キャプション入りテキストボックスの説明文は、0.24.1 と同じく除外。set_role p は不採用になった（0.24.1 は採用されても出力されなかった） |\n\n- R11 は作り方の誤りで、テキストボックスが入らなかった（確かめになっていない）。\n- 次の 2 つは問題なかった。\n  - AI の kind box の after を画像だけの段落にすると、図の組は保たれる。\n  - after を行内の囲みの段落 d32 にすると不採用になる。\n\n【fixture】\nmake_structure・make_outside を一時ファイルに作り直し、tests/fixtures の 2 本と比べた。zip の中身はすべて同じ。make_outside は main の一覧にあり、ALL_DOCS には入っていない。\n\n【版とノートブック】\n0.25.0 になっている（__init__.py・pyproject.toml）。ノートブックの差分は版の 3 行だけ。colab.py・cli.py・make_notebook.py は変わっていない。\n\n【前の確かめの担当の指摘】\n次のとおり直っていることを確かめた。\n- 機械的な注記を kind box で戻す経路: (a) を採った\n- 9(3) と DESIGN 6.2 の実測の訂正\n- 幅を読めないときの注記の規則: 変異で確かめた\n- 段落一覧の「（浮動配置）」と、機械的に決めた囲みの拒否の理由\n- README\n- FIX_PLAN の (9) と offset\n- 版\n\n【文書とコードの食い違い】\n- 直していないもの（nit として findings に書いた）\n  - DESIGN 6.2 の body_seq の範囲。\n- 既知で、FIX_PLAN の F の節に「直していない」とあるもの\n  - D1・N7 の項目の本文の古い行番号\n  - rvz_d1.py・rvz_back.py への言及\n- 前の担当の報告とずれていたもの（指摘ではない）\n  - FIX_PLAN の付録 D1「after に囲みの中の段落を指定すると不採用」のテストは、浮動配置の囲みの段落でしか確かめていない。\n  - 仕上げの担当の報告では golden の prompt の差分が「27 行」だが、今は 31 行。直しの担当が依頼文の文を足したため。",
+        "findings": [
+          {
+            "severity": "should",
+            "file": "src/jasme_jats/structure.py",
+            "line": 1167,
+            "problem": "place_boxes の守りにテストがない。この守りは、AI の役割の指定で組み直した後に、kind box の after が本文の要素でなくなったら指定を捨てるもの（F の (3)「組み直した後に after が本文の段落でなければ指定なしに戻す」）。外すと、回答 1 つで変換が KeyError で止まるのに、全テストが通る。",
+            "evidence": "変異 spec_after_nocheck: `if spec and spec.get(\"kind\") == \"box\" and spec.get(\"after\") not in src_index:` を `if False:` にした。\n- 全テスト 877 passed のまま（mut/mut_full.log）。\n- py/probe1.py: sample_structure.docx で、次の 2 つを同じ回答に書いた。\n  - x5（（ヒント））への kind box（after は d35）\n  - d35 への set_role exclude\n- 作業ツリーでは、set_role は採用、kind は 2 章の不採用になり、変換は合格した。\n- 変異では、pipeline._mechanical の classify で KeyError: 'd35' になり、変換が止まった。\n- 既存の test_textbox_placement_unused_after_set_role_is_rejected が確かめるのは「文字だけのテキストボックスでなくなった」側だけ。after の側は確かめていない。0.24.1 にはない経路。",
+            "fix": "tests/test_ai.py にテストを 1 つ足す。同じ回答で、ある段落に set_role exclude を指定し、その段落を after にした kind box も指定する。確かめること: 変換が止まらない、place_float が「組み直した後に…」の理由で 2 章の不採用になる、set_role は採用、undecided のまま要確認が出る。"
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/structure.py",
+            "line": 960,
+            "problem": "F の (4)「plan.body_seq から textbox_id のある段落を除く」にテストがない。外すと、AI の kind box の after に、浮動配置でない（行内）囲みの段落を指定しても採用される。",
+            "evidence": "変異 body_seq_keep_tb: `and not b.textbox_id` を外しても、全テスト 877 passed（mut/mut_full.log）。\n- py/probe1.py: x5 の kind box の after を、行内の囲み x4 の段落 d32 にした。\n  - 作業ツリー: 「置く位置の段落 d32 は本文の段落ではない」で不採用。\n  - 変異: 採用され、boxed-text が 4 つになった。\n- tests/test_ai.py:976 の「囲みの中の段落」の例は、浮動配置の x3 の段落を使っている。この段落は float_id でもともと body_seq から除かれるので、(4) を確かめていない。",
+            "fix": "tests/test_ai.py:976 の並びに、行内の囲み（x4「問2…」）の段落を after にした例を足す。"
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/linker.py",
+            "line": 140,
+            "problem": "linker.body_paragraphs の BoxNode の枝（F の (2)）にテストがない。外すと、囲みの中の引用・図の参照がリンクにならないのに、全テストが通る。",
+            "evidence": "変異 linker_no_box: `yield from walk(node.children, \"cell\")` を `pass` にしても、全テスト 877 passed。\n- 作業ツリーの R1（架空。行内の囲みに「試験（2024）にならい，図1の…」）では、boxed-text の中に xref bibr B1 と fig F1 が付く（r_wt.json）。\n- sample_structure の囲みの中には引用も参照もないので、この枝は確かめられていない。",
+            "fix": "sample_structure の囲み（x3 か x4）の文に引用「試験（2025）」を入れるか、小さな docx のテストを足す。確かめること: boxed-text の中に xref ref-type=bibr ができること。"
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/floats.py",
+            "line": 35,
+            "problem": "「画像の近く」の範囲（NEAR_PARAS = 2）は、内側の境界しかテストにない。外側の境界（3 段落離れたら近くでない）にはない。",
+            "evidence": "変異で確かめた。\n- NEAR_PARAS=1: test_floats の list_textbox が落ちる。\n- NEAR_PARAS=3: 全テスト 877 passed（mut/mut_full.log）。\n- 実装の担当への指示「境界の例をテストにする」のうち、近さの条件の上限が確かめられていない。",
+            "fix": "tests/test_structure.py か test_floats.py に例を足す。同じ短い文字（15 字以下・幅 0.4 以下）のテキストボックスで、画像の段落から 2 段落離れたものは label、3 段落離れたものは undecided になること。"
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/ai_assist.py",
+            "line": 1098,
+            "problem": "図表の入ったテキストボックス（文字だけでない。plan.textboxes にない）の段落への set_role p を拒否する理由が、「囲みか図の注記かは placements の kind box・label で指定する」と案内する。そのテキストボックスは placements の対象の節にないので、案内どおりに指定しても不採用になる。依頼文の段落一覧でも「テキストボックス x1 の中」と ID が示される。0.24.1 では set_role p が採用されたが、文字は除外のままで、何も変わらなかった。出力は 0.24.1 と同じで、悪くなったのは案内だけ。",
+            "evidence": "py/probe2.py（架空）: VML の行内のテキストボックスに「図1　架空の図」（図キャプション）と「説明文：架空の図の説明である。」を入れた。\n- 作業ツリー\n  - textboxes は []（対象外）。\n  - 説明文は「図の一部とみなして本文から除外」。\n  - 依頼文は「（body / テキストボックス x1 の中 / …）」。\n  - set_role p の不採用の理由は「…（囲みか図の注記かは placements の kind box・label で指定する）」。\n- 0.24.1: set_role p は採用されたが、XML に説明文は出ない。",
+            "fix": "set_role_problem で、textbox_id が plan.textboxes にない段落には、placements の案内を付けない理由にする（例: 「図表の入ったテキストボックスの段落に指定できる役割は fig_caption・table_caption・exclude だけ」）。直さないなら、FIX_PLAN の F の節の残る限界に書く。"
+          },
+          {
+            "severity": "nit",
+            "file": "docs/DESIGN.md",
+            "line": 800,
+            "problem": "DESIGN 6.2 は「文字だけのテキストボックスの段落は、本文の段落の並び（plan.body_seq）から除き」と書く。コードは、textbox_id のある段落をすべて除く。図キャプションの入った、浮動配置でない VML・行内のテキストボックスの段落も除かれる。文書の範囲がコードより狭い。",
+            "evidence": "structure.py:960 は `plan.body_seq = [b.src for b, _ in items if isinstance(b, Para) and not b.float_id and not b.textbox_id]`。\n- 一方、run_end の skip は text_only のものだけを飛ばす（structure.py の run_end）。\n- 計画の F の (4) は「textbox_id のある段落を除く」で、コードと合っている。\n- golden の sample_float・b3 系の XML と依頼文の本体は 0.24.1 と同じ。",
+            "fix": "DESIGN 6.2 の該当の文を、コードに合わせて直す。例: 「テキストボックスの段落（textbox_id のあるもの。図表の入ったものも）は本文の段落の並びから除き、文字だけのテキストボックスの段落は run_end で飛ばす」。"
+          }
+        ]
+      },
+      {
+        "checked": "I changed no files in the working tree. Experiments ran under /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/f/review/user/; the response JSON and leak-check script remain there. I deleted the large outputs, including the td XML and reports (they contain real manuscript text). I also deleted tests/__pycache__ (created by my pytest run). df shows 23GB free.\n\n[Measurements]\n- pytest (Python 3.13, -p no:cacheprovider): 877 passed.\n- ruff check src tests tools: 201 errors (HEAD has 202).\n- git status: the only new file is tests/fixtures/sample_outside.docx. No temporary files.\n- Version: pyproject.toml and __init__.py are both 0.25.0. The notebook shows \"0.25.0\" in 3 places, and test_notebook_is_up_to_date passes.\n\n[td1-3 (--route docx --ai manual; 0.24.1 run via PYTHONPATH=impl/base_parent, confirmed to load 0.24.1)]\n- All 3 XML files are byte-identical to 0.24.1. Exit code is 1 for both versions.\n- td1 and td2: the reports differ only in the version line. stderr is identical.\n- td3:\n  - The report differs from 0.24.1 in about 105 diff lines: the 1 章 row \"テキストボックスの文字: 図の注記として除外 27 件\"; the provisional notice removed from the top and from 14 章; decisions M-001 to M-027 added to 4 章; the 6 章 reason \"図に重ねた注記とみなして本文から除外\"; and 2 warnings added to 10 章.\n  - In stderr, only the provisional \"要確認: テキストボックスの中の文字 27 段落\" line disappeared.\n  - The AI request grew from 436 to 511 lines (the template text plus the section listing the 27 labels).\n- The notes in td3 are not reported as items to check, so the user learns of them only from the 1 章 count, 4 章, 6 章 and 10 章. This matches the provisional decision (b) in DESIGN 6.2.\n- I confirmed that td1 and td2 contain no box that becomes boxed-text, which matches the correction already written in FIX_PLAN 9(3).\n\n[Fictional fixtures]\n- sample_structure, --ai none (exit 0):\n  - The top, 14 章 and stderr show 2 items to check: x1, x2 and x5 could not be decided; x6's position was estimated.\n  - 3 章 lists these 4 items, each with a reason.\n  - 6 章 has 3 reason types (undecided, label, blank).\n  - 10 章 has the label warning for x9.\n  - DTD and invariance checks pass. There are 3 boxed-text elements, none with an id.\n- sample_structure, manual answer (my own resp1.json: x1 label, x2 box, x9 box to restore a mechanical label, x6 box to move it):\n  - All 4 were accepted into 2 章, and each judgment sentence also states the mechanical classification.\n  - The remaining x5 shows up in the top notice and in stderr as \"AI の回答に…指定がないか…採用されませんでした（2 章）\". The message is clear.\n- sample_outside:\n  - --ai none: exit 2. The reason \"図形が本文の外（引用文献）/（注）の段落に結び付いている\" is clear.\n  - manual: x2 and x4 are placed at the end of the body and reported as estimated positions. img2 inside the reference paragraph remains a must-fix item.\n\n[AI request file]\n- SYSTEM_PROMPT, the manual_prompt list items, the MANUAL_EXAMPLE x2 box, FIELD_GUIDE, and the 4 textbox sections (undecided / estimated position / treated as label / fixed) all explain \"kind box and label, with caption and body as empty lists, and after empty for label\" consistently.\n- The paragraph list shows \"テキストボックス x1（浮動配置）の中\".\n- I judge this is enough for a chat AI to follow.\n\n[Real-text leak check]\n- I built every 8-character n-gram containing Japanese from the paragraph text of td1-3 (41,711 n-grams). I checked them against the added lines of git diff HEAD (excluding fixtures) and against the text of sample_structure and sample_outside.\n- The only matches were generic phrases: 「引用および参考文献」, 「記録されていない」, the J-STAGE manual quotation 「…あります。」とある」, and the template journal name. No manuscript text was copied.\n\n[User approval]\n- The relayed request is 「しきい値はそれでいこう」「N7もそれで」.\n- FIX_PLAN decision 9(3) records the approval and the threshold values (box: 20 characters and 0.6 of a column; label: 15 characters, near an image and 0.4 of a column; in a group: 15 characters). These match floats.textbox_kind exactly.\n- Decision 10 records the confirmation at the start of F.\n\n[Docs vs implementation]\nConsistent: the DESIGN 6.2 rule table, placement table, notices and provisional decisions; the DESIGN 5 placements and set_role rules; DEVELOPMENT (module list, test list, remaining issues); JSTAGE_NOTES (boxed-text section 3.5.4); STYLE_MAPPING; FIX_PLAN (F section items, test list, measured counts, files touched).\n\nMismatches I found (none fixed; I made no changes):\n- (1) report.py's Colab notice text points to 手順 5 as the step where the AI mode is chosen; it is 手順 4. Finding 1.\n- (2) README:149 says 10 章 lists the undecided textboxes; in fact only 3 章 does.\n- (3) README:250 says the request appears with 手順 6; it appears at 手順 5.\n- (4) README:153 says \"囲みの ID\" (the textbox ID) can be used, but XML has no ID, and the README omits \"違えば\".\n- (5) README:255 and STYLE_MAPPING describe \"文字だけは本文の最後の boxed-text\" as unconditional, but labels and undecided boxes are excluded.\n- (6) The 1 章 row points to \"3 章・6 章\", but labels and fixed boxes do not appear in 3 章.\n- (7) The 2 章 intro sentence does not mention box/label.\n- (8) The 10 章 warning for AI-judged labels does not say the AI made the judgment.\n- (9) FIX_PLAN's list of files touched by F names \"render.py\", which does not exist (render is a function in report.py).\n- (10) Already recorded by earlier steps as left as is: the old line numbers and rvz_*.py references in the D1/N7 item text; the offset field and item (9) are recorded as replaced by F section notes.\n- (11) A doc point outside F that I did not check myself: src/jasme_jats.egg-info/PKG-INFO keeps the old README text (generated file, already in open_issues).\n\nNot checked again in this step (other steps measured them): golden, route 2, independent counterexamples, Python 3.10.",
+        "findings": [
+          {
+            "severity": "should",
+            "file": "src/jasme_jats/report.py",
+            "line": 770,
+            "problem": "When AI is off, the Colab red box for undecided textboxes (box_detail) tells the user to choose AI completion at 手順 5 and convert again. The AI mode is actually chosen at 手順 4 in the notebook; 手順 5 runs the conversion. The box is shown at 手順 5, so the user looks for a choice that is not there. tests/test_colab.py:184 asserts the wrong text, so the test cannot catch it.",
+            "evidence": "- tools/make_notebook.py step table (lines 141-149): 「| 4 | AI による補完の方法を選ぶ |」 and 「| 5 | 変換を実行 |」.\n- Existing messages say the same: make_notebook.py:426 「手順 4 で「API で自動実行」か「手動（チャットに貼り付け）」を選び、手順 4 からやり直してください」.\n- The new text at report.py:770 starts 「手順 5 で AI による補完（「API で自動実行」か「手動」）を選んで変換し直すと…」.\n- test_result_boxes_show_textbox_notices asserts 「手順 5 で AI による補完」 in html.\n- In 0.24.1 this notice did not exist (it was the provisional textbox notice, which named no step), so this is new in F.",
+            "fix": "Change box_how to say: choose \"API で自動実行\" or \"手動\" at 手順 4, then convert again at 手順 5. Alternatively drop the step number and follow the AIRequiredError wording (「API で自動実行」か「手動（チャットに貼り付け）」を選んで、もう一度変換してください). Update the assertion at tests/test_colab.py:184 to match."
+          },
+          {
+            "severity": "nit",
+            "file": "README.md",
+            "line": 149,
+            "problem": "Several README statements about F do not match the implementation or the notebook: (a) undecided textboxes are listed in 3 章, not 10 章; (b) the AI request appears at 手順 5, not 手順 6; (c) 「囲みの ID」 cannot be searched for in the XML, and the README always says to move the box and never mentions that the AI can move it; (d) for text-only boxes outside the body, \"output as boxed-text at the end of the body\" is described as unconditional.",
+            "evidence": "- (a) README:149 says 「6 章に全文、10 章にどの段落かを載せます」. In the sample_structure --ai none report, 10 章 has only the label warning for x9 (d46). The undecided x1, x2 and x5 appear only in 3 章, 6 章, the top and 14 章.\n- (b) README:250 says 「（手順 6 の依頼文に載ります）」, but README:88 says 「手順 5 の結果の先頭（とレポートの後ろ）に、依頼文が…」.\n- (c) README:153 says 「XML を開いて、正しい位置に移してください（囲みの ID と位置はレポートの 3 章にあります）」. The output XML has only `<boxed-text>` with no id (grep for x6 finds 0 hits). The Action text says 「PDF と見比べ、違えば…移して」. In my manual-answer test, AI-placed x6 was accepted and the estimated-position notice disappeared.\n- (d) README:255 and STYLE_MAPPING say 「文字だけのテキストボックスは、本文の最後に boxed-text として出力し、要確認にします」. In fact a box outside the body that is classified label or undecided is excluded (place_boxes runs textbox_kind first).",
+            "fix": "Fix the README (and the matching STYLE_MAPPING sentence):\n- (a) Make it \"10 章\" → \"3 章\".\n- (b) Make it \"手順 6\" → \"手順 5\".\n- (c) Say the box can be found in the XML by its first characters, shown in 3 章 of the report; say to move it only if it differs from the PDF; and add that AI completion can also give the position.\n- (d) Say \"文字だけの囲みは本文の最後の boxed-text（要確認）。図の注記・決められないものは本文と同じ扱い\"."
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/report.py",
+            "line": 1172,
+            "problem": "The 1 章 row 「テキストボックスの文字（3 章・6 章）」 sends the user to 3 章 even when 3 章 has nothing about labels or mechanically placed boxes. In td3 the row says 「図の注記として除外 27 件」, but 3 章 has no textbox entries; the details are in 4 章, 6 章 and 10 章.",
+            "evidence": "- In the td3 report (working tree), the 3 章 section has 0 lines mentioning 注記 or テキストボックス.\n- The 27 labels appear as 4 章 M-001 to M-027, as 6 章 reasons and as 2 entries in 10 章.\n- pipeline.convert adds to unresolved_after (3 章) only for plan.undecided_boxes + plan.estimated_boxes.\n- 0.24.1 had no such row, so this is new in F.",
+            "fix": "Choose the chapter list from the content, for example \"3 章\" only when there are undecided or estimated boxes, plus \"4 章・6 章・10 章\". Alternatively use a fixed list such as \"4 章・6 章\"."
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/report.py",
+            "line": 1206,
+            "problem": "The 2 章 intro sentence 「AI が変更できるのは…テキストボックス・グループ図形に入った図表の位置と組み合わせだけ」 does not cover what F lets the AI do: decide box or label for text-only textboxes, restore a mechanical label to a box, and move an estimated box. The 10 章 warning for labels (structure.py:1243) also uses the same text when the AI made the label judgment: 「図に重ねた注記と判断した…AI による補完で囲みに指定するか」. It does not say that the AI judged it.",
+            "evidence": "- In my manual answer on sample_structure (x1 label, x2 box, x9 box, x6 moved), 2 章 lists A-001 to A-004 with category 「囲み・図の注記（テキストボックス）」, but the intro sentence above is unchanged.\n- For x1, which the AI judged a label, 6 章 says 「AI による補完で図に重ねた注記と判断し」, but 10 章 says 「d12: 図に重ねた注記と判断したテキストボックス x1 の文字を…AI による補完で囲みに指定するか」.",
+            "fix": "Add 「文字だけのテキストボックスの囲み・図の注記の判断と囲みの位置」 to the 2 章 sentence. For the 10 章 warning on an AI label, say \"AI が図の注記と判断した\" and suggest asking the AI again or editing in Word."
+          },
+          {
+            "severity": "nit",
+            "file": "docs/FIX_PLAN.md",
+            "line": 583,
+            "problem": "The list of files touched by F says 「pdfmatch.py・pdfdocx.py・colab.py・cli.py・render.py は触っていない」. There is no render.py in src/jasme_jats (render is a function in report.py, which F did touch).",
+            "evidence": "ls src/jasme_jats shows no render.py. git diff --stat shows report.py changed and colab.py and cli.py unchanged.",
+            "fix": "Remove render.py from the list, or write it as \"report.render 以外の表示（colab.py・cli.py）\"."
+          }
+        ]
+      }
+    ],
+    "failedFirst": [],
+    "firstFindings": [
+      {
+        "lens": "principle",
+        "severity": "should",
+        "file": "src/jasme_jats/structure.py",
+        "line": 912,
+        "problem": "囲み（BoxNode）を本文の要素の列に差し込むと、図表の組み立てで囲みが「隣の要素」として数えられ、0.24.1 では組めていた図・表が組めなくなる。\n- 組み立ては、本文スタイルの図表キャプションの推定、画像とキャプションの組、表とキャプションの組。\n- 図は、画像だけの fig とキャプションのない p（またはキャプションだけの fig）に分かれる。本文の「図1」はリンクされない。\n- 要対応・要確認の知らせは出ない。",
+        "evidence": "架空の docx（scratchpad/f/review/principle/gen_p.py）で、0.24.1 と比べた。\n- P35: 画像の段落に行内の囲み 1 つ。次の段落は本文スタイルの「図1　架空の地図」。\n  - 0.24.1: <fig id=\"F1\">（caption と graphic）と、本文の xref。\n  - 0.25.0: <fig>（id・caption なし）、<boxed-text>、<p>図1　架空の地図</p> になる。本文の「図1」はリンクされず、3 章に「図1 に対応する図が見つからない」と出るだけ。actions は空。\n- P36: 位置を推定した浮動配置の囲みでも同じ。知らせは textbox_place（位置を推定した囲みの要確認）だけ。\n- P37: 本文スタイルの「表1」の段落に行内の囲みがあり、続いて表。0.25.0 は p と、キャプションのない table-wrap になる。\n- P32・P33: キャプションのスタイルでも、画像とキャプションの間に囲みが 2 つあると、画像だけの fig とキャプションだけの fig F1 に分かれる。\n- 囲みが 1 つで、キャプションのスタイルのとき（P01・P02）は組める（assemble_floats は 2 つ前まで見る）。\n- 不変性・DTD は合格し、画像も XML に入る。\n- 原因\n  - build_body が box_inserts を inserts に足す（841 行）。\n  - same_place(flat, self.provisional) では、BoxNode の置き場所が図形の外の要素と同じ \"\" になる（909〜912 行）。\n  - そのため、prv/nxt と、assemble_floats の last_out(k, 2)・ahead(k, 2)（1726 行）が、囲みを隣として数える。",
+        "fix": "囲みを図表の組み立てで透明にする。\n- 例: BoxNode の差し込みに専用の置き場所を与える（self.provisional[id(node)] = \"@box\" など）。same_place・last_out・ahead・table_for_figure が、図形の外の要素の隣として数えないようにする。\n- または、BoxNode を assemble_floats の後に差し込む。\nP35・P37・P32 の形のテストを tests/test_structure.py に足す。確かめる内容は、fig の id・caption・graphic、本文の xref、表キャプション。"
+      },
+      {
+        "lens": "principle",
+        "severity": "should",
+        "file": "src/jasme_jats/report.py",
+        "line": 1110,
+        "problem": "暫定の知らせ（PROVISIONAL）を消したので、図表の入った「浮動配置でない」テキストボックス（行内・VML）の中の、キャプションでも本体でもない段落が、要確認なしで XML から消えるようになった。\n- 除外の理由は「テキストボックス内の文字（図の一部とみなして本文から除外）」。\n- 0.25.0 では 6 章の表にだけ載る。\n- AI でも戻せない。set_role の不採用の理由は placements の kind box・label を案内するが、その placements も不採用になる（行き止まり）。",
+        "evidence": "- P09（行内のテキストボックスに、画像・図キャプション・「出典：架空の町の資料…」）\n  - 0.24.1: 冒頭・14 章・コマンドラインに「要確認: テキストボックスの中の文字 1 段落を、XML に出力していません」。\n  - 0.25.0: actions が空で、レポートでは 6 章の d15 の行だけ。\n- P41（AI がその段落に set_role p）: 不採用。理由は「浮動配置でないテキストボックスの段落に指定できる役割は fig_caption・table_caption・exclude だけ（囲みか図の注記かは placements の kind box・label で指定する）」（ai_assist.py:1097）。\n- P42（その x1 に placements の kind box）: 不採用。理由は「x1 は…にない」。\n- docs/STYLE_MAPPING.md:47 は「AI 補完で図の後ろの段落に指定できる」と書くが、それができるのは浮動配置の図形だけ（float_from_spec が残りを p に出す）。\n- 0.24.1 の暫定の知らせは、理由が TEXTBOX_TEXT_EXCLUDED の除外をすべて数えていた（structure.py:863 の除外も含む）。DESIGN.md:121 の説明より範囲が広かった。",
+        "fix": "report.actions() に、理由 TEXTBOX_TEXT_EXCLUDED の除外を要確認で知らせる Action を足す（AI の回答待ちのときは除く）。\n- 文言の例: 「図の入ったテキストボックスの中の、キャプションでない文字 N 段落を XML に出力していません。本文の文字なら Word でテキストボックスの外に出して変換し直してください」。\n- 表示の仕組みは変えない。\nset_role_problem は、段落の textbox_id が plan.textboxes にないとき、placements を案内しない理由にする。\nSTYLE_MAPPING.md:47 と DESIGN.md:121 を実装に合わせる。必要なら、暫定の判断として FIX_PLAN の F の節に書く。"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "src/jasme_jats/structure.py",
+        "line": 979,
+        "problem": "N7 の残り。どれも lost_images の要対応で知らせるので、黙っては消えない。\n- (a) 画像だけの浮動配置のグループ図形が引用文献の段落に結び付いていると、中身の段落がないので Classifier.outside に記録されない（1962 行は段落・表しか見ない）。位置を決められない図表にならない。\n- (b) 本文の外のグループ図形で中身が単純でないとき（画像・図キャプション・注記）、回答前と、AI が画像を書かなかったときは、仮に置いた図に画像が入らない。\n- (c) そのときの要対応「位置を決められなかった図表」は、「XML の本文の最後にある図表の中身」を移すよう案内する。しかし、本文の最後に何もないことがある。",
+        "evidence": "- P05（画像だけのグループ図形が引用文献に結び付く）: 0.24.1・0.25.0 とも図はなく、lost が 1 件（要対応）。\n- P30（手動・回答前）: 本文の最後に、caption だけで graphic のない <fig>。img1 は XML に入らない画像（要対応）。\n- P29（注記なし）・P25（AI が body に img1）: 画像は図に入り、lost は 0 件。\n- P26（AI の body が空で不採用）: forced と lost の要対応が出るが、本文の最後には何もない（注記は除外）。\n- DESIGN.md:680 は「グループ図形の画像は、アンカー段落（本文の外の段落）から集めて図に入れる」と書くが、これは中身が単純なときか、AI が画像の ID を書いたときだけ。",
+        "fix": "DESIGN 6.1 と FIX_PLAN の F の節に、この限界を書く。\n- 画像だけのグループ図形は範囲外で、N1 の要対応のまま。\n- 中身が単純でない仮の配置では、グループ図形の画像は図に入らない。\n直すなら次のようにする。\n- build_back・build_front_en で、アンカー段落が本文の外にある、画像のある浮動配置の図形も outside に記録する。\n- 仮の配置（raw）には、グループ図形の画像をキャプションなしの FigNode として入れる。"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "tests/test_floats.py",
+        "line": 1,
+        "problem": "原則に関わる次の 5 つの分岐は、1 か所変えても 877 件のテストがすべて通る（変異で確かめた）。\n- M5: 本文の外のグループ図形の画像を、アンカー段落から集める処理（structure.py:979）。\n- M17: text_only の「図表の入った浮動配置の図形の中は対象外」（structure.py:1058）。\n- M18: text_only の textbox_caption の判定。\n- M10: body_seq から textbox_id のある段落を除く処理（structure.py:960）。\n- M15: place_boxes の「組み直した後に after が本文の段落でなければ、指定なしに戻す」。",
+        "evidence": "scratchpad/f/review/principle/mut/mutate.py で src を写し、1 か所ずつ変えた。fixB2r4/tools/pytest_src.sh で全テストを流し、WHICH の行で変異の src を使ったことを確かめた。\n- M5: P25・P29 で画像が XML に入らない（lost 1 件）。\n- M17: P25 で不変性チェックが不合格（注記の段落を二重に出す）。\n- M10: P43 で、行内の囲みの中の段落を after にした kind box が採用される（0.25.0 は「本文の段落ではない」で不採用）。\n- M15: after が除外されると KeyError になる経路が、テストで守られていない。\n- M18: 浮動配置でないテキストボックスの、本文スタイルの「図N」だけの段落が、囲み・注記の判定に回る経路が、テストで守られていない。\n- 次の 11 個は失敗で検出された: M1〜M3、M6〜M9、M12〜M14、M16。",
+        "fix": "架空の docx でテストを足す。\n- 引用文献に結び付いたグループ図形（画像と図キャプション）の画像が図に入り、lost_images が空になる。\n- AI の placements で組んだグループ図形の中の注記が、二重に出ない（不変性チェックに合格する）。\n- 浮動配置でないテキストボックスの、本文スタイルの「図2 …」がキャプションになる。\n- 行内の囲みの段落を after にした kind box が不採用になる。\n- after の段落を set_role exclude にした kind box が 2 章の不採用になり、変換が止まらない。"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "docs/DESIGN.md",
+        "line": 767,
+        "problem": "DESIGN 6.2 は「画像の近く」を「アンカー段落とその前後 2 段落（図形の外の段落）」と書く。コードは、図形の外の段落と表の並び（Classifier._top）で前後 2 要素を見るので、表も 1 つと数える。floats.NEAR_PARAS のコメント（段落・表で数える）はコードと合っている。",
+        "evidence": "P45: 画像の段落、表、段落、注記「点Ｔ」（幅 1 cm）のアンカー段落の順に並べた。\n- 段落だけで数えると、画像は 2 段落前。\n- 表を数えると 3 要素前なので「画像の近く」にならず、undecided（要確認）になった。\n- 安全側に倒れるので、害はない。",
+        "fix": "DESIGN 6.2 を「前後 2 つ（図形の外の段落と表で数える）」に直す。"
+      },
+      {
+        "lens": "regression",
+        "severity": "should",
+        "file": "src/jasme_jats/structure.py",
+        "line": 1167,
+        "problem": "place_boxes の守りにテストがない。この守りは、AI の役割の指定で組み直した後に、kind box の after が本文の要素でなくなったら指定を捨てるもの（F の (3)「組み直した後に after が本文の段落でなければ指定なしに戻す」）。外すと、回答 1 つで変換が KeyError で止まるのに、全テストが通る。",
+        "evidence": "変異 spec_after_nocheck: `if spec and spec.get(\"kind\") == \"box\" and spec.get(\"after\") not in src_index:` を `if False:` にした。\n- 全テスト 877 passed のまま（mut/mut_full.log）。\n- py/probe1.py: sample_structure.docx で、次の 2 つを同じ回答に書いた。\n  - x5（（ヒント））への kind box（after は d35）\n  - d35 への set_role exclude\n- 作業ツリーでは、set_role は採用、kind は 2 章の不採用になり、変換は合格した。\n- 変異では、pipeline._mechanical の classify で KeyError: 'd35' になり、変換が止まった。\n- 既存の test_textbox_placement_unused_after_set_role_is_rejected が確かめるのは「文字だけのテキストボックスでなくなった」側だけ。after の側は確かめていない。0.24.1 にはない経路。",
+        "fix": "tests/test_ai.py にテストを 1 つ足す。同じ回答で、ある段落に set_role exclude を指定し、その段落を after にした kind box も指定する。確かめること: 変換が止まらない、place_float が「組み直した後に…」の理由で 2 章の不採用になる、set_role は採用、undecided のまま要確認が出る。"
+      },
+      {
+        "lens": "regression",
+        "severity": "nit",
+        "file": "src/jasme_jats/structure.py",
+        "line": 960,
+        "problem": "F の (4)「plan.body_seq から textbox_id のある段落を除く」にテストがない。外すと、AI の kind box の after に、浮動配置でない（行内）囲みの段落を指定しても採用される。",
+        "evidence": "変異 body_seq_keep_tb: `and not b.textbox_id` を外しても、全テスト 877 passed（mut/mut_full.log）。\n- py/probe1.py: x5 の kind box の after を、行内の囲み x4 の段落 d32 にした。\n  - 作業ツリー: 「置く位置の段落 d32 は本文の段落ではない」で不採用。\n  - 変異: 採用され、boxed-text が 4 つになった。\n- tests/test_ai.py:976 の「囲みの中の段落」の例は、浮動配置の x3 の段落を使っている。この段落は float_id でもともと body_seq から除かれるので、(4) を確かめていない。",
+        "fix": "tests/test_ai.py:976 の並びに、行内の囲み（x4「問2…」）の段落を after にした例を足す。"
+      },
+      {
+        "lens": "regression",
+        "severity": "nit",
+        "file": "src/jasme_jats/linker.py",
+        "line": 140,
+        "problem": "linker.body_paragraphs の BoxNode の枝（F の (2)）にテストがない。外すと、囲みの中の引用・図の参照がリンクにならないのに、全テストが通る。",
+        "evidence": "変異 linker_no_box: `yield from walk(node.children, \"cell\")` を `pass` にしても、全テスト 877 passed。\n- 作業ツリーの R1（架空。行内の囲みに「試験（2024）にならい，図1の…」）では、boxed-text の中に xref bibr B1 と fig F1 が付く（r_wt.json）。\n- sample_structure の囲みの中には引用も参照もないので、この枝は確かめられていない。",
+        "fix": "sample_structure の囲み（x3 か x4）の文に引用「試験（2025）」を入れるか、小さな docx のテストを足す。確かめること: boxed-text の中に xref ref-type=bibr ができること。"
+      },
+      {
+        "lens": "regression",
+        "severity": "nit",
+        "file": "src/jasme_jats/floats.py",
+        "line": 35,
+        "problem": "「画像の近く」の範囲（NEAR_PARAS = 2）は、内側の境界しかテストにない。外側の境界（3 段落離れたら近くでない）にはない。",
+        "evidence": "変異で確かめた。\n- NEAR_PARAS=1: test_floats の list_textbox が落ちる。\n- NEAR_PARAS=3: 全テスト 877 passed（mut/mut_full.log）。\n- 実装の担当への指示「境界の例をテストにする」のうち、近さの条件の上限が確かめられていない。",
+        "fix": "tests/test_structure.py か test_floats.py に例を足す。同じ短い文字（15 字以下・幅 0.4 以下）のテキストボックスで、画像の段落から 2 段落離れたものは label、3 段落離れたものは undecided になること。"
+      },
+      {
+        "lens": "regression",
+        "severity": "nit",
+        "file": "src/jasme_jats/ai_assist.py",
+        "line": 1098,
+        "problem": "図表の入ったテキストボックス（文字だけでない。plan.textboxes にない）の段落への set_role p を拒否する理由が、「囲みか図の注記かは placements の kind box・label で指定する」と案内する。そのテキストボックスは placements の対象の節にないので、案内どおりに指定しても不採用になる。依頼文の段落一覧でも「テキストボックス x1 の中」と ID が示される。0.24.1 では set_role p が採用されたが、文字は除外のままで、何も変わらなかった。出力は 0.24.1 と同じで、悪くなったのは案内だけ。",
+        "evidence": "py/probe2.py（架空）: VML の行内のテキストボックスに「図1　架空の図」（図キャプション）と「説明文：架空の図の説明である。」を入れた。\n- 作業ツリー\n  - textboxes は []（対象外）。\n  - 説明文は「図の一部とみなして本文から除外」。\n  - 依頼文は「（body / テキストボックス x1 の中 / …）」。\n  - set_role p の不採用の理由は「…（囲みか図の注記かは placements の kind box・label で指定する）」。\n- 0.24.1: set_role p は採用されたが、XML に説明文は出ない。",
+        "fix": "set_role_problem で、textbox_id が plan.textboxes にない段落には、placements の案内を付けない理由にする（例: 「図表の入ったテキストボックスの段落に指定できる役割は fig_caption・table_caption・exclude だけ」）。直さないなら、FIX_PLAN の F の節の残る限界に書く。"
+      },
+      {
+        "lens": "regression",
+        "severity": "nit",
+        "file": "docs/DESIGN.md",
+        "line": 800,
+        "problem": "DESIGN 6.2 は「文字だけのテキストボックスの段落は、本文の段落の並び（plan.body_seq）から除き」と書く。コードは、textbox_id のある段落をすべて除く。図キャプションの入った、浮動配置でない VML・行内のテキストボックスの段落も除かれる。文書の範囲がコードより狭い。",
+        "evidence": "structure.py:960 は `plan.body_seq = [b.src for b, _ in items if isinstance(b, Para) and not b.float_id and not b.textbox_id]`。\n- 一方、run_end の skip は text_only のものだけを飛ばす（structure.py の run_end）。\n- 計画の F の (4) は「textbox_id のある段落を除く」で、コードと合っている。\n- golden の sample_float・b3 系の XML と依頼文の本体は 0.24.1 と同じ。",
+        "fix": "DESIGN 6.2 の該当の文を、コードに合わせて直す。例: 「テキストボックスの段落（textbox_id のあるもの。図表の入ったものも）は本文の段落の並びから除き、文字だけのテキストボックスの段落は run_end で飛ばす」。"
+      },
+      {
+        "lens": "user",
+        "severity": "should",
+        "file": "src/jasme_jats/report.py",
+        "line": 770,
+        "problem": "When AI is off, the Colab red box for undecided textboxes (box_detail) tells the user to choose AI completion at 手順 5 and convert again. The AI mode is actually chosen at 手順 4 in the notebook; 手順 5 runs the conversion. The box is shown at 手順 5, so the user looks for a choice that is not there. tests/test_colab.py:184 asserts the wrong text, so the test cannot catch it.",
+        "evidence": "- tools/make_notebook.py step table (lines 141-149): 「| 4 | AI による補完の方法を選ぶ |」 and 「| 5 | 変換を実行 |」.\n- Existing messages say the same: make_notebook.py:426 「手順 4 で「API で自動実行」か「手動（チャットに貼り付け）」を選び、手順 4 からやり直してください」.\n- The new text at report.py:770 starts 「手順 5 で AI による補完（「API で自動実行」か「手動」）を選んで変換し直すと…」.\n- test_result_boxes_show_textbox_notices asserts 「手順 5 で AI による補完」 in html.\n- In 0.24.1 this notice did not exist (it was the provisional textbox notice, which named no step), so this is new in F.",
+        "fix": "Change box_how to say: choose \"API で自動実行\" or \"手動\" at 手順 4, then convert again at 手順 5. Alternatively drop the step number and follow the AIRequiredError wording (「API で自動実行」か「手動（チャットに貼り付け）」を選んで、もう一度変換してください). Update the assertion at tests/test_colab.py:184 to match."
+      },
+      {
+        "lens": "user",
+        "severity": "nit",
+        "file": "README.md",
+        "line": 149,
+        "problem": "Several README statements about F do not match the implementation or the notebook: (a) undecided textboxes are listed in 3 章, not 10 章; (b) the AI request appears at 手順 5, not 手順 6; (c) 「囲みの ID」 cannot be searched for in the XML, and the README always says to move the box and never mentions that the AI can move it; (d) for text-only boxes outside the body, \"output as boxed-text at the end of the body\" is described as unconditional.",
+        "evidence": "- (a) README:149 says 「6 章に全文、10 章にどの段落かを載せます」. In the sample_structure --ai none report, 10 章 has only the label warning for x9 (d46). The undecided x1, x2 and x5 appear only in 3 章, 6 章, the top and 14 章.\n- (b) README:250 says 「（手順 6 の依頼文に載ります）」, but README:88 says 「手順 5 の結果の先頭（とレポートの後ろ）に、依頼文が…」.\n- (c) README:153 says 「XML を開いて、正しい位置に移してください（囲みの ID と位置はレポートの 3 章にあります）」. The output XML has only `<boxed-text>` with no id (grep for x6 finds 0 hits). The Action text says 「PDF と見比べ、違えば…移して」. In my manual-answer test, AI-placed x6 was accepted and the estimated-position notice disappeared.\n- (d) README:255 and STYLE_MAPPING say 「文字だけのテキストボックスは、本文の最後に boxed-text として出力し、要確認にします」. In fact a box outside the body that is classified label or undecided is excluded (place_boxes runs textbox_kind first).",
+        "fix": "Fix the README (and the matching STYLE_MAPPING sentence):\n- (a) Make it \"10 章\" → \"3 章\".\n- (b) Make it \"手順 6\" → \"手順 5\".\n- (c) Say the box can be found in the XML by its first characters, shown in 3 章 of the report; say to move it only if it differs from the PDF; and add that AI completion can also give the position.\n- (d) Say \"文字だけの囲みは本文の最後の boxed-text（要確認）。図の注記・決められないものは本文と同じ扱い\"."
+      },
+      {
+        "lens": "user",
+        "severity": "nit",
+        "file": "src/jasme_jats/report.py",
+        "line": 1172,
+        "problem": "The 1 章 row 「テキストボックスの文字（3 章・6 章）」 sends the user to 3 章 even when 3 章 has nothing about labels or mechanically placed boxes. In td3 the row says 「図の注記として除外 27 件」, but 3 章 has no textbox entries; the details are in 4 章, 6 章 and 10 章.",
+        "evidence": "- In the td3 report (working tree), the 3 章 section has 0 lines mentioning 注記 or テキストボックス.\n- The 27 labels appear as 4 章 M-001 to M-027, as 6 章 reasons and as 2 entries in 10 章.\n- pipeline.convert adds to unresolved_after (3 章) only for plan.undecided_boxes + plan.estimated_boxes.\n- 0.24.1 had no such row, so this is new in F.",
+        "fix": "Choose the chapter list from the content, for example \"3 章\" only when there are undecided or estimated boxes, plus \"4 章・6 章・10 章\". Alternatively use a fixed list such as \"4 章・6 章\"."
+      },
+      {
+        "lens": "user",
+        "severity": "nit",
+        "file": "src/jasme_jats/report.py",
+        "line": 1206,
+        "problem": "The 2 章 intro sentence 「AI が変更できるのは…テキストボックス・グループ図形に入った図表の位置と組み合わせだけ」 does not cover what F lets the AI do: decide box or label for text-only textboxes, restore a mechanical label to a box, and move an estimated box. The 10 章 warning for labels (structure.py:1243) also uses the same text when the AI made the label judgment: 「図に重ねた注記と判断した…AI による補完で囲みに指定するか」. It does not say that the AI judged it.",
+        "evidence": "- In my manual answer on sample_structure (x1 label, x2 box, x9 box, x6 moved), 2 章 lists A-001 to A-004 with category 「囲み・図の注記（テキストボックス）」, but the intro sentence above is unchanged.\n- For x1, which the AI judged a label, 6 章 says 「AI による補完で図に重ねた注記と判断し」, but 10 章 says 「d12: 図に重ねた注記と判断したテキストボックス x1 の文字を…AI による補完で囲みに指定するか」.",
+        "fix": "Add 「文字だけのテキストボックスの囲み・図の注記の判断と囲みの位置」 to the 2 章 sentence. For the 10 章 warning on an AI label, say \"AI が図の注記と判断した\" and suggest asking the AI again or editing in Word."
+      },
+      {
+        "lens": "user",
+        "severity": "nit",
+        "file": "docs/FIX_PLAN.md",
+        "line": 583,
+        "problem": "The list of files touched by F says 「pdfmatch.py・pdfdocx.py・colab.py・cli.py・render.py は触っていない」. There is no render.py in src/jasme_jats (render is a function in report.py, which F did touch).",
+        "evidence": "ls src/jasme_jats shows no render.py. git diff --stat shows report.py changed and colab.py and cli.py unchanged.",
+        "fix": "Remove render.py from the list, or write it as \"report.render 以外の表示（colab.py・cli.py）\"."
+      }
+    ],
+    "rounds": [
+      {
+        "round": 1,
+        "fix": {
+          "changed_files": [
+            "/home/user/jstgxmlcng_JASME/src/jasme_jats/structure.py",
+            "/home/user/jstgxmlcng_JASME/src/jasme_jats/report.py",
+            "/home/user/jstgxmlcng_JASME/src/jasme_jats/ai_assist.py",
+            "/home/user/jstgxmlcng_JASME/tests/test_structure.py",
+            "/home/user/jstgxmlcng_JASME/tests/test_ai.py",
+            "/home/user/jstgxmlcng_JASME/tests/test_floats.py",
+            "/home/user/jstgxmlcng_JASME/tests/test_colab.py",
+            "/home/user/jstgxmlcng_JASME/docs/DESIGN.md",
+            "/home/user/jstgxmlcng_JASME/docs/DEVELOPMENT.md",
+            "/home/user/jstgxmlcng_JASME/docs/FIX_PLAN.md",
+            "/home/user/jstgxmlcng_JASME/docs/STYLE_MAPPING.md",
+            "/home/user/jstgxmlcng_JASME/README.md"
+          ],
+          "summary": "単位 F の点検（1 回目）の指摘を直した。blocking の指摘はなく、should 4 件はすべて直した。nit も、テスト・文書・文言の小さなものは直した。N7 の残りの限界だけは、コードを変えずに文書に書いた。版は 0.25.0 のまま。コミット・ブランチの操作はしていない。fixture は作り直していない（sample_structure.docx と sample_outside.docx は直す前とバイト単位で同じ）。\n\n(1) should・原則（structure.py）: 囲みを図表の組み立てで隣の要素として数えないようにした。\n- build_body で、BoxNode の置き場所を BOX_PLACE（\"@box\"）にした（self.provisional に入れる）。\n- same_place・assemble_floats の last_out/ahead・table_for_figure・本文スタイルのキャプションの推定が、囲みを飛ばす。\n- 画像の行内の囲みと本文スタイルの「図1」、キャプションの左上の囲み 2 つ、本文スタイルの「表1」と表の形で、図・表が 0.24.1 と同じに組まれ、本文の「図1」「表1」がリンクになる。\n- 間にあった囲みは、組み立てた図表の前に出る（キャプションが本体の前なら後ろ）。\n\n(2) should・原則（report.py）: 新しい要確認 report._textbox_figure_text_action（key textbox_figure_text）を足した。\n- 対象は、図表の入ったテキストボックス・グループ図形の中の、キャプションでない文字の除外（理由 TEXTBOX_TEXT_EXCLUDED）。\n- 冒頭・14 章・Colab の赤い枠・コマンドラインに出る（report.actions に足しただけ）。\n- 手動モードで回答を貼り戻す前は、位置を決められない図表の中身を数えない。\n- ai_assist.set_role_problem: plan.textboxes にないテキストボックスの段落には、placements を案内しない理由を返す。\n\n(3) should・回帰: 組み直した後の after の守り（place_boxes）にテストを足した。\n\n(4) should・利用者: Colab の「決められないテキストボックス」の枠の手順を直した（手順 4 で AI による補完の方法を選び、手順 5 から変換し直す）。テストの期待も直した。\n\nnit で直したもの:\n- 1 章の「テキストボックスの文字」の行に出す章を、中身のある章だけにした。\n- 2 章の説明に、文字だけのテキストボックスがある論文だけ「囲み・図の注記の判断と囲みの位置」を加えた。\n- AI が図の注記と判断したものの 10 章の警告を、AI の判断と分かる文にした。\n- 位置を推定した囲みの知らせに、囲みの最初の文字を足した（XML の boxed-text には ID がないため）。\n- 変異で守られていなかった分岐（M5・M10・M15・M17・M18、linker の囲みの枝、NEAR_PARAS の上限）にテストを足した。\n- 文書（DESIGN 4.3・5・6.1・6.2・7、STYLE_MAPPING、README の 4 か所、DEVELOPMENT、FIX_PLAN の F の節と render.py）をコードに合わせた。\n\n直したことは、FIX_PLAN の F の節に「点検の 1 回目で直したこと（暫定。利用者に未確認）」と暫定の判断 (j)(k) として書いた。",
+          "tests_added": [
+            "tests/test_structure.py::test_boxes_do_not_split_figures[inline|two_boxes|table]",
+            "tests/test_structure.py::test_text_in_figure_textbox_is_notified",
+            "tests/test_structure.py::test_text_in_unplaced_figure_textbox_is_notified_after_answer",
+            "tests/test_structure.py::test_caption_shaped_paragraph_in_inline_textbox_stays_caption",
+            "tests/test_structure.py::test_links_inside_box",
+            "tests/test_structure.py::test_near_image_counts_two_elements[4 通り: 間なし・段落 1・段落 2・表と段落。1 章の行の章も確かめる]",
+            "tests/test_floats.py::test_group_shape_on_reference_keeps_its_image",
+            "tests/test_ai.py::test_textbox_placement_after_excluded_paragraph_is_rejected",
+            "tests/test_ai.py::test_ai_textbox_placements_are_validated に 1 通り（行内の囲みの段落を after にした kind box）",
+            "既存テストの期待を足した・直したもの: test_ai.py::test_ai_kind_box_and_label_for_undecided_textboxes（AI の注記の 10 章の警告・2 章の説明）、test_structure.py::test_label_and_undecided_textboxes_are_excluded（1 章の行の章）、test_colab.py::test_result_boxes_show_textbox_notices（手順 4・5 の文言）"
+          ],
+          "pytest_result": "python -m pytest -q -p no:cacheprovider: Python 3.13 で 891 passed、Python 3.10（venv310、PYTHONPATH=src）で 891 passed。直す前は 877 件で、新しいテストが 14 件。\n\n直す前の src（scratchpad/f/fix1/pre_src）で流すと、新しい挙動を確かめるテストは 12 件落ちる（WHICH の行で pre_src を使ったことを確かめた）。\n- boxes_do_not_split が 3 件、figure_textbox が 2 件、near_image_counts が 4 件。\n- label_and_undecided、ai_kind_box_and_label、test_colab が 1 件ずつ。\n\n残りの 5 件は、今の挙動を守るテスト。直す前の src では通り、変異で落ちる。\n- caption_shaped・links_inside_box・group_shape_on_reference・after_excluded_paragraph と、placements の検証の 1 通り。\n\ntests/__pycache__ は消した。",
+          "measures": "golden（23 件。0.24.1 は scratchpad/f/golden_base、直す前は scratchpad/f/fix1/golden_pre で作り直した）\n- 23 件とも、不変性・最終・DTD が合格で、J-STAGE のチェックは 0 件。\n- 0.24.1 と違うのは、直す前と同じ 13 件。\n  - 依頼文の 11 件は、F の依頼文の書式による。\n  - sample_structure_manual・split は、fixture の節を足したため XML・レポートが違う。\n- 直す前と違うのは、sample_structure_manual・split のレポートだけ。manual で 3 行、split で 2 行。\n  - 1 章の「テキストボックスの文字」の行に出す章（3 章・6 章 → 3 章・4 章・6 章・10 章）。\n  - 位置を推定した囲みの知らせに、囲みの最初の文字が付く。\n  - manual の 2 章の説明。\n  - XML と依頼文は、直す前と同じ。\n\ntd1〜3（--route docx --ai manual。0.24.1・直す前・直した後の 3 つ）\n- XML は 3 本とも、0.24.1 とバイト単位で同じ。\n- 不変性・最終・DTD は合格で、J-STAGE のチェックは問題なし。XML に入らなかった画像の行はない（td3 の「要対応 2 件」は、用意が必要な画像の件数）。終了コードは 3 つとも 1（手動モードで回答を貼り戻す前のため）。\n- td1・td2 のレポートと標準エラーは、0.24.1 と同じ。\n- td3 のレポートは直す前と 2 行違う（1 章の行の章、2 章の説明）。0.24.1 とは 93 行違う（直す前は 91 行）。標準エラーは直す前と同じ。\n- 新しい要確認 textbox_figure_text は、td1〜3 では出ない。\n- 本文の文字は記録していない（logs/td_cmp.txt には行数と判定の欄だけ）。\n\n独立の反例（scratchpad/f/oracle の 32 件）\n- OK 29 / FAIL 3（B06・A07・N03）。直す前の fixv・review_reg の結果と、ケースごと・チェックごとに同じ。0.24.1 は 13 / 19。\n\n点検の反例（principle の gen_p.py の 45 件を作り直して流した）\n- 45 件とも、不変性・最終・DTD が合格で、J-STAGE は 0 件。docx の段落ごとの独立の確かめでも、欠け・重複は 0 件。\n- 直す前と違うのは 10 件で、どれも意図したもの。\n  - P27・P32・P33・P35・P36・P37 は、図表が組めるようになった。囲みを除いた XML の並びは 0.24.1 と同じ（P01・P02・P34 も同じ）。\n  - P09・P41・P42・P26 に、textbox_figure_text の要確認が出る。\n  - P41 の set_role p の不採用の理由は、placements を案内しない。\n- XML に入らなかった画像は、直す前と同じ（P05・P06・P23・P26・P30 の 1 件ずつ）。\n\n変異（scratchpad/f/fix1/mut/mutate.py）\n- 14 個とも、どれかのテストで落ちる。\n- 点検で挙がった 7 個: M5・M10・M15・M17・M18・linker_no_box・NEAR_PARAS=3。\n- この修正の 7 個: box_not_transparent・no_figure_text_action・figure_text_counts_pending・setrole_box_none_placements・ai_label_warning_same・chapters_fixed・ch2_no_boxes。\n\nruff\n- src tests tools で 201 件。直す前と同じで、HEAD（202 件）より多くない。ファイル・規則ごとの件数も直す前と同じ。\n\nノートブック\n- python tools/make_notebook.py で作り直しても、内容は同じ（md5 が同じ）。\n\n大きな出力は消した（docx・xml・zip・画像・golden の本体・td の出力）。結果の JSON・ログ・スクリプトは scratchpad/f/fix1 に残した。ディスクの空きは 23GB。",
+          "deviations": "指摘ごとの対応（設計と違えたこと、直さなかったこと）\n\n1. should・原則（structure.py:912。囲みが隣の要素になる）\n- 指摘の 1 つ目の案（専用の置き場所）で直した（BOX_PLACE）。\n- 2 つ目の案（assemble_floats の後に差し込む）は採らなかった。今の差し込みの位置の仕組みを変えずに済み、組み方が 0.24.1 と同じになるため。\n- 図表はキャプションの位置に組み立てる。そのため、本体とキャプションの間にあった囲みは図表の前に出る（キャプションが前なら後ろ）。これは暫定の判断 (k) として FIX_PLAN に書いた。\n\n2. should・原則（report.py。暫定の知らせを消して、図のテキストボックスの文字が知らせなく消える）\n- 直した。ただし、指摘の「AI の回答待ちのときは除く」は、そのまま全体を除くのではなく、狭くした。\n  - 回答待ちに除くのは、位置を決められない図表の中身だけ（AI が図を組めば、図の後ろの段落に出る）。\n  - 浮動配置でない（行内・VML の）図のテキストボックスの文字は、AI でも戻せない。そのため、回答待ちのときも知らせる。\n- set_role_problem の理由は、指摘のとおり直した。\n- STYLE_MAPPING.md:47 と DESIGN.md:121 は、コードに合わせた。\n- 暫定の判断 (j) として FIX_PLAN に書いた。\n\n3. nit・原則（N7 の残り (a)(b)(c)）\n- コードは直さず、DESIGN 6.1・7 章と FIX_PLAN の F の「残る限界」に書いた。\n  - 直すには、本文の外の図形の記録（outside）と、仮の配置の組み方を変える必要がある。浮動配置の図表と AI の流れに広く触ることになる。\n  - どれも、XML に入らなかった画像（要対応）で知らせるので、黙っては消えない。\n- (c) の P26 では、除外した注記の文字に、新しい要確認 textbox_figure_text が出るようになった。\n\n4. 残りの指摘は、指摘のとおり直した。\n- nit・原則: 変異のテスト（M5・M17・M18・M10・M15）、DESIGN 6.2 の「前後 2 つ」。\n- should・回帰: after の守りのテスト。\n- nit・回帰: body_seq・NEAR_PARAS の上限・set_role の理由・DESIGN 6.2 の body_seq。\n- linker の囲みの枝のテストは、指摘の 2 つ目の案（小さな docx のテスト。test_links_inside_box）にした。sample_structure を作り直すと golden が広く変わるため。\n- should・利用者: 手順の番号。\n- nit・利用者: README (a)〜(d)、1 章の行、2 章・10 章、FIX_PLAN の render.py。\n  - 2 章の説明は、文字だけのテキストボックスがある論文のときだけ加える。ほかの fixture の golden を変えないため。\n\n5. 指摘にない追加\n- 位置を推定した囲みの知らせに、囲みの最初の文字を付けた（README (c) と合わせるため）。\n\n文書とコードの食い違い（直したもの。どれも文書の側をコードに合わせた）\n- DESIGN 6.2「アンカー段落とその前後 2 段落（図形の外の段落）」。コードは、図形の外の段落と表で数える。\n- DESIGN 6.2「文字だけのテキストボックスの段落は body_seq から除き」。コードは、textbox_id のある段落をすべて除く。\n- DESIGN 4.3「0.19.0〜0.24.1 は文字だけのテキストボックスの文字をすべて除外し…」。実際の暫定の知らせは、図の一部の除外もすべて数えていた。\n- DESIGN 6.1「グループ図形の画像は、アンカー段落から集めて図に入れる」。実際は、中身が単純なときか、AI が画像を指定したときだけ。\n- STYLE_MAPPING「AI 補完で図の後ろの段落に指定できる」。できるのは、位置を決められない浮動配置の図形だけ。\n- STYLE_MAPPING「文字だけのテキストボックスは本文の最後に回す」。実際は、囲みだけが本文の最後の boxed-text になる。\n- README（決められないテキストボックスの場所〈10 章 → 3 章〉、依頼文の手順〈手順 6 → 手順 5〉、XML に囲みの ID はないこと、本文の外の文字だけのテキストボックス）。\n- FIX_PLAN「render.py は触っていない」。render.py というファイルはなく、render は report.py の関数。\n- DEVELOPMENT の「残っている課題」の「暫定の知らせはなくした」。実際は、新しい要確認に置き換えた。\n\n文書とコードの食い違い（直さなかったもの）\n- FIX_PLAN の D1・N7 の項目の本文にある古い行番号（structure.py:570 など）と、rvz_d1.py・rvz_back.py への言及（前回と同じ扱い）。\n- FIX_PLAN の「F の実装」(6) は、知らせを 2 つ（textbox_undecided・textbox_place）と書いている。これは最初の実装の記録として残し、3 つ目の知らせは「点検の 1 回目」の項目に書いた。",
+          "open_issues": "利用者にまだ確かめていない暫定の判断（FIX_PLAN の F の節に書いた）\n- (j) 図表の入った図形の中の、キャプションでない文字の除外を要確認（終了コード 0）で知らせる。文言も確かめていない。\n- (k) 図表の本体とキャプションの間にあった囲みを、組み立てた図表の隣に出す（キャプションが本体の後ろなら図表の前）。\n- 画面（Colab・CLI）の見え方は変えていない。新しい知らせは、既存の赤い枠・手順 8・標準エラーに出るだけ。\n\n次の点検に回すこと\n- AI の依頼文の段落一覧は、図表の入ったテキストボックスの段落にも「テキストボックス x1 の中」と ID を出す。SYSTEM_PROMPT にも「囲みか図の注記かは placements の kind box・label で指定」とある。そのため、AI が対象外の x1 に placements を書くと「…にない」で不採用になる（害はない）。golden の依頼文が変わるので、今回は直していない。\n- N7 の範囲外が 2 つある。どちらも XML に入らなかった画像として要対応で知らせる。\n  - 画像だけの浮動配置のグループ図形。\n  - 中身が単純でないグループ図形を仮に置くときの画像。\n- このとき「位置を決められなかった図表」の知らせは、本文の最後に何もないのに中身を移すよう案内することがある。\n- 独立の反例の FAIL 3 件（B06・A07・N03）は前回と同じで、期待の側の問題と判断している。\n- kind box・label と新しい知らせは、模擬回答と架空の docx でしか確かめていない。実際の AI と試験登載での確かめが残る。\n- 点検の修正と再点検は最大 3 回までで、今回は 1 回目。"
+        },
+        "findings": [
+          {
+            "lens": "principle",
+            "severity": "nit",
+            "file": "tests/test_structure.py",
+            "line": 719,
+            "problem": "囲みを図表の組み立てで隣の要素と数えない仕組み（BOX_PLACE）のうち、2 か所にテストがない。外しても全テストが通る。\n- table_for_figure の前後の数え方。DESIGN 6.1 は「キャプションのない表と画像のない図キャプションの間に囲みを置いても組にする」と書く。\n- assemble_floats の same_place（キャプションの続きと、図キャプションの後ろの画像を探すところ）。\ntest_boxes_do_not_split_figures は、画像と図キャプション、表キャプションと表の 3 通りだけを見ている。",
+            "evidence": "変異を作り、全テストを流した（r2pass/mut/mut.log。WHICH の行で変異の src を使ったことを確かめた）。\n- MB3: table_for_figure の near に \"@box\" を入れる。891 passed。\n- MB5: assemble_floats の same_place だけ囲みを数える。891 passed。\n\n架空の docx（r2pass/new/gen_r2.py）を、0.24.1・修正前・作業ツリー・変異で比べた（r2pass/new/out/*/）。\n- Q01: キャプションのない表、図キャプションの段落に結び付いた左上の囲み、図キャプション（下）。\n  - 作業ツリー: boxed-text と fig（中に table-wrap）。囲みを除けば 0.24.1 と同じ。\n  - 修正前・MB3: キャプションのない table-wrap、boxed-text、本体のない fig。要確認 figbody が出る。\n- Q02: キャプションを上に置く原稿で、図キャプションの段落に行内の囲み、続いてキャプションのない表。Q01 と同じ違い。\n- Q03: 図キャプションの段落に行内の囲み、続いてキャプションの続き。\n  - 作業ツリー: 続きをキャプションに含める（0.24.1 と同じ）。\n  - 修正前・MB5: 続きだけをキャプションにした、画像のない fig ができる。\n- Q04: キャプションが上、行内の囲み 2 つ、画像。\n  - 作業ツリー: fig 1 つ。\n  - 修正前・MB5: キャプションだけの fig と、キャプションのない fig に分かれる。\n- どれも不変性・DTD は合格する。修正で正しく直っているが、守るテストがない。",
+            "fix": "test_boxes_do_not_split_figures に、Q01〜Q04 の形の variant を足す。\n- 表で組んだ図: キャプションが下（左上の囲み）と、キャプションが上（行内の囲み）。\n- キャプションの続きの前の囲み。\n- 上のキャプションと画像の間の囲み 2 つ。\n確かめること: fig の id・caption・graphic（または中の table-wrap）、caption にキャプションの続きが入ること、plan.figure_issues が空、actions が空。"
+          },
+          {
+            "lens": "principle",
+            "severity": "nit",
+            "file": "tests/test_structure.py",
+            "line": 763,
+            "problem": "新しい要確認 textbox_figure_text の対象の決め方（report.figure_text_exclusions）のうち、2 つの規則にテストがない。外しても全テストが通る。\n- 図の注記・決められないものの除外は数えないこと。\n- 手動モードで回答を貼り戻す前でも、浮動配置でない（行内・VML の）図のテキストボックスの文字は数えること（修正の担当の報告に書かれた判断）。",
+            "evidence": "変異を作り、全テストを流した（r2pass/mut/mut.log）。\n- MF1: `if why != TEXTBOX_TEXT_EXCLUDED` を「テキストボックス内の文字」で始まる理由すべてに広げる。891 passed。\n- MF2: 回答待ちなら全部数えない。891 passed。\n\n出力で確かめた。\n- MF1: sample_structure.docx（--ai none・manual）で、注記・決められないものの除外に、要確認 textbox_figure_text がもう 1 つ出る。作業ツリーは textbox_undecided・textbox_place だけ。\n- MF2: Q09（行内の図のテキストボックスに画像・図キャプション・出典の文。手動モードで回答前）で、textbox_figure_text が消える。作業ツリーは ai_pending と textbox_figure_text（r2pass/new/out/MF2・wt）。\n- test_text_in_figure_textbox_is_notified は --ai none だけ、test_text_in_unplaced_figure_textbox_is_notified_after_answer は浮動配置の図だけを見ている。",
+            "fix": "次の 2 つを足す。\n- test_text_in_figure_textbox_is_notified に、手動モード（回答前）でも textbox_figure_text が出ること。\n- test_label_and_undecided_textboxes_are_excluded（または test_colab の囲みの知らせのテスト）に、\"textbox_figure_text\" が actions に出ないこと。"
+          },
+          {
+            "lens": "principle",
+            "severity": "nit",
+            "file": "src/jasme_jats/structure.py",
+            "line": 917,
+            "problem": "文書・コメントは「図表はキャプションの位置に組み立てるので、間にあった囲みは、キャプションが本体の後ろなら図表の前に出る」と書く。表の下に表キャプションを置く書き方では、コードは表の位置に table-wrap を組み、後から来たキャプションを付ける。そのため、間の囲みは表の後ろに出る。\n同じ文がある場所:\n- structure.py:917 の build_body のコメント\n- structure.py:1692 の assemble_floats の docstring\n- DESIGN.md 6.1（741 行）\n- FIX_PLAN の F の「点検の 1 回目で直したこと」(1) と暫定の判断 (k)",
+            "evidence": "Q11（表、表キャプションの段落に結び付いた左上の囲み、表キャプション〈表の下〉）。\n- 作業ツリーの XML: p、table-wrap T1（caption「表1　架空の集計」）、boxed-text、p の順。囲みは表の後ろにある（r2pass/new/out/wt/Q11…json の tokens）。\n- 0.24.1: table-wrap T1 だけ（囲みの文字は除外）。\n- 修正前: キャプションのない table-wrap、boxed-text、キャプションだけの table-wrap。\n- Q01（表で組んだ図。キャプションが下）と、画像と下のキャプションでは、文書のとおり囲みが図の前に出る。\n- 文字は落ちない。不変性・DTD は合格。",
+            "fix": "文書・コメントの側をコードに合わせる。例:「図（画像・図の本体の表）は図キャプションの位置に組むので、間の囲みは、キャプションが本体の後ろなら図の前、前なら図の後ろに出る。表は表キャプションが上なら表キャプションの位置、下なら表の位置に組むので、間の囲みは表の後ろに出る」。暫定の判断 (k) も同じく直す。"
+          },
+          {
+            "lens": "principle",
+            "severity": "nit",
+            "file": "docs/DESIGN.md",
+            "line": 122,
+            "problem": "文書は「浮動配置でない（行内・VML の）図のテキストボックスの中の、キャプションでない文字は、AI の set_role・placements でも戻せない」と書く。\nコードは、その段落への set_role fig_caption・table_caption を受け付ける。依頼文の除外の一覧も「（set_role で指定できる役割: fig_caption, table_caption）」と案内する。AI がそれを選ぶと、文字は図のキャプションの続きとして XML に出る。\n同じ文がある場所:\n- DESIGN.md 4.3（122 行）\n- report._textbox_figure_text_action の docstring（863 行）\n- STYLE_MAPPING.md:47（「AI 補完でも出せない」）\n- tests/test_structure.py:766 のテストの説明\nDESIGN 7（893 行）の「AI による補完でも本文に出せない」は正しい。",
+            "evidence": "r2pass/py/q09_figcap.py を作業ツリーで流した。docx は Q09（行内の図のテキストボックスに、画像・図キャプション・出典の文）。出典の段落 d15 に set_role を指定した。\n- fig_caption: 採用。\n  - fig の caption は「図1　架空の町の地図出典：架空の町の資料をもとに筆者が作成した。」になる。\n  - 除外の記録はなく、actions は空。\n  - 不変性・最終・DTD は合格。\n- p: 不採用（理由は placements を案内しない）。除外のままで、textbox_figure_text が出る。\n- exclude: 採用（AI の除外の理由になる）。\n- 依頼文（new/out/wt/Q09…prompt.txt）の除外の一覧で、この段落に「（set_role で指定できる役割: fig_caption, table_caption）」と出る。\n利用者に出す文言（FIGURE_TEXT_HOW。Word でテキストボックスの外に出す）には、AI について書いていないので、利用者向けの問題はない。",
+            "fix": "文書の側を合わせる。例:「本文の段落としては戻せない（AI の set_role fig_caption・table_caption でキャプションの続きにすることはできる。p は採用しない。placements の対象でもない）」。docstring・STYLE_MAPPING・テストの説明も同じく直す。"
+          },
+          {
+            "lens": "principle",
+            "severity": "nit",
+            "file": "src/jasme_jats/report.py",
+            "line": 189,
+            "problem": "1 章の「テキストボックスの文字」の行に示す章（textbox_chapters。修正の 1 回目で足した）は、4 章を常に含む。テキストボックスの判断がすべて AI のもの（2 章に載る）のときは、4 章にテキストボックスの行がなく、2 章を示さない。DESIGN 6.2 の「示す章は中身のあるところだけ」と合わない。",
+            "evidence": "P17（注記を AI が kind box で囲みにした。r2pass/prev/out/wt/P17_label_ai_box.report.md）。\n- 1 章の行は「| テキストボックスの文字（4 章） | 囲み 1 件（boxed-text） |」。\n- 4 章: テキストボックスの行が 0 件。\n- 2 章: A-001（囲み・図の注記）がある。\n- place_boxes は、AI の指定があると plan.decide(\"ai\", …) だけを記録し、機械的な判断を 4 章に残さない。\n0.24.1 にはこの行がない（修正で入った小さな不正確さ）。",
+            "fix": "textbox_chapters で、mode が mechanical の（blank でない）テキストボックスがあるときだけ 4 章を入れ、mode が ai のものがあれば 2 章を入れる。test_near_image_counts_two_elements の 1 章の行の確かめに、AI の回答の例（P17 の形）を 1 つ足す。"
+          },
+          {
+            "lens": "regression",
+            "severity": "nit",
+            "file": "tests/test_structure.py",
+            "line": 717,
+            "problem": "DESIGN 6.1 は「キャプションのない表と画像のない図キャプションの間に囲みを置いても、0.24.1 と同じく組にする（table_for_figure）」と書く。この保証を守るテストがない。test_boxes_do_not_split_figures の 3 通りは、画像の図と表キャプションの表だけを見る。",
+            "evidence": "変異 r5: table_for_figure の near の作り方を、BOX_PLACE の要素も数えるように変えた（provisional.get(...) in (here, BOX_PLACE)）。それでも全テスト 891 passed。\n反例 q7（キャプションのない表、左上がそろった囲み、図キャプションのスタイルの「図1」）:\n- 0.24.1: fig#F1（caption と table）。\n- 作業ツリー: box、fig#F1（caption と table）。正しい。\n- 変異: table-wrap#T1（キャプションなし）、box、fig#F1（caption のみ）に分かれ、要確認 figbody が出る。\n今のコードは正しく、守りのテストが欠けているだけ。",
+            "fix": "test_boxes_do_not_split_figures の variant に \"figtable\" を足す。形は、キャプションのない表、図キャプションの段落（wrapTopAndBottom の囲み）、本文の順。確かめること: fig の id が F1 で、caption と table を含むこと、囲みが fig の前に出ること。"
+          },
+          {
+            "lens": "regression",
+            "severity": "nit",
+            "file": "tests/test_structure.py",
+            "line": 606,
+            "problem": "修正で足した文言の分岐 2 つに、テストがない。どちらを外しても全テストが通る。\n- (a) 位置を推定した囲みの知らせ（textbox_place）に付けた、囲みの最初の文字。XML の boxed-text には ID がないので、README と知らせの文が「最初の文字で探せます」と案内している。\n- (b) 2 章の説明に「囲み・図の注記の判断と囲みの位置」を加えるのは、文字だけのテキストボックスがある論文だけ、という条件。",
+            "evidence": "作業ツリーの src の写しで 1 か所ずつ変え、全テストを流した（WHICH の行で写しを使ったことを確かめた）。\n- m2_place_head_empty（head() を常に \"\" にする）: 891 passed。\n- m6_ch2_always_boxes（条件を常に真にする）: 891 passed。\n- (b) の逆（常に足さない）は、修正の担当の変異 ch2_no_boxes で検出される。\n- (b) は golden では検出できる（sample_structure 以外の 0.24.1 のレポートは変わらない）。ただし golden はテストではない。",
+            "fix": "tests/test_structure.py:606 の textbox_place の検査に、知らせ（top か cli）に x6「問3　架空の数の列の規則を説明せよ。」の形で、最初の文字が入ることを足す。囲みのない fixture（例: sample_full）の 2 章に「囲み・図の注記の判断」が入らないことを、既存のレポートのテストに 1 行足す。"
+          },
+          {
+            "lens": "regression",
+            "severity": "nit",
+            "file": "docs/FIX_PLAN.md",
+            "line": 541,
+            "problem": "「F で確かめた数（0.25.0）」が、最初の実装の数のまま。点検の 1 回目の修正の後の数と合わない。",
+            "evidence": "FIX_PLAN.md:541 の記述: 「pytest 877 件（Python 3.13・3.10）」「td3 のレポートは 0.24.1 と 91 行違う」。\n今の作業ツリーの数（修正の担当の measures の値と同じ）:\n- python -m pytest -q は 891 passed（3.13・3.10）。\n- td3 のレポートは 0.24.1 と 93 行違う。\n542 行の「点検の 1 回目で直したこと」にも、新しい数はない。",
+            "fix": "541 行の数を 891 件・93 行に直す。または「最初の実装の時点の数」と明記し、542 行に点検の 1 回目の後の数を足す。"
+          }
+        ],
+        "failedLens": []
+      }
+    ],
+    "remaining": [
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "tests/test_structure.py",
+        "line": 719,
+        "problem": "囲みを図表の組み立てで隣の要素と数えない仕組み（BOX_PLACE）のうち、2 か所にテストがない。外しても全テストが通る。\n- table_for_figure の前後の数え方。DESIGN 6.1 は「キャプションのない表と画像のない図キャプションの間に囲みを置いても組にする」と書く。\n- assemble_floats の same_place（キャプションの続きと、図キャプションの後ろの画像を探すところ）。\ntest_boxes_do_not_split_figures は、画像と図キャプション、表キャプションと表の 3 通りだけを見ている。",
+        "evidence": "変異を作り、全テストを流した（r2pass/mut/mut.log。WHICH の行で変異の src を使ったことを確かめた）。\n- MB3: table_for_figure の near に \"@box\" を入れる。891 passed。\n- MB5: assemble_floats の same_place だけ囲みを数える。891 passed。\n\n架空の docx（r2pass/new/gen_r2.py）を、0.24.1・修正前・作業ツリー・変異で比べた（r2pass/new/out/*/）。\n- Q01: キャプションのない表、図キャプションの段落に結び付いた左上の囲み、図キャプション（下）。\n  - 作業ツリー: boxed-text と fig（中に table-wrap）。囲みを除けば 0.24.1 と同じ。\n  - 修正前・MB3: キャプションのない table-wrap、boxed-text、本体のない fig。要確認 figbody が出る。\n- Q02: キャプションを上に置く原稿で、図キャプションの段落に行内の囲み、続いてキャプションのない表。Q01 と同じ違い。\n- Q03: 図キャプションの段落に行内の囲み、続いてキャプションの続き。\n  - 作業ツリー: 続きをキャプションに含める（0.24.1 と同じ）。\n  - 修正前・MB5: 続きだけをキャプションにした、画像のない fig ができる。\n- Q04: キャプションが上、行内の囲み 2 つ、画像。\n  - 作業ツリー: fig 1 つ。\n  - 修正前・MB5: キャプションだけの fig と、キャプションのない fig に分かれる。\n- どれも不変性・DTD は合格する。修正で正しく直っているが、守るテストがない。",
+        "fix": "test_boxes_do_not_split_figures に、Q01〜Q04 の形の variant を足す。\n- 表で組んだ図: キャプションが下（左上の囲み）と、キャプションが上（行内の囲み）。\n- キャプションの続きの前の囲み。\n- 上のキャプションと画像の間の囲み 2 つ。\n確かめること: fig の id・caption・graphic（または中の table-wrap）、caption にキャプションの続きが入ること、plan.figure_issues が空、actions が空。"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "tests/test_structure.py",
+        "line": 763,
+        "problem": "新しい要確認 textbox_figure_text の対象の決め方（report.figure_text_exclusions）のうち、2 つの規則にテストがない。外しても全テストが通る。\n- 図の注記・決められないものの除外は数えないこと。\n- 手動モードで回答を貼り戻す前でも、浮動配置でない（行内・VML の）図のテキストボックスの文字は数えること（修正の担当の報告に書かれた判断）。",
+        "evidence": "変異を作り、全テストを流した（r2pass/mut/mut.log）。\n- MF1: `if why != TEXTBOX_TEXT_EXCLUDED` を「テキストボックス内の文字」で始まる理由すべてに広げる。891 passed。\n- MF2: 回答待ちなら全部数えない。891 passed。\n\n出力で確かめた。\n- MF1: sample_structure.docx（--ai none・manual）で、注記・決められないものの除外に、要確認 textbox_figure_text がもう 1 つ出る。作業ツリーは textbox_undecided・textbox_place だけ。\n- MF2: Q09（行内の図のテキストボックスに画像・図キャプション・出典の文。手動モードで回答前）で、textbox_figure_text が消える。作業ツリーは ai_pending と textbox_figure_text（r2pass/new/out/MF2・wt）。\n- test_text_in_figure_textbox_is_notified は --ai none だけ、test_text_in_unplaced_figure_textbox_is_notified_after_answer は浮動配置の図だけを見ている。",
+        "fix": "次の 2 つを足す。\n- test_text_in_figure_textbox_is_notified に、手動モード（回答前）でも textbox_figure_text が出ること。\n- test_label_and_undecided_textboxes_are_excluded（または test_colab の囲みの知らせのテスト）に、\"textbox_figure_text\" が actions に出ないこと。"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "src/jasme_jats/structure.py",
+        "line": 917,
+        "problem": "文書・コメントは「図表はキャプションの位置に組み立てるので、間にあった囲みは、キャプションが本体の後ろなら図表の前に出る」と書く。表の下に表キャプションを置く書き方では、コードは表の位置に table-wrap を組み、後から来たキャプションを付ける。そのため、間の囲みは表の後ろに出る。\n同じ文がある場所:\n- structure.py:917 の build_body のコメント\n- structure.py:1692 の assemble_floats の docstring\n- DESIGN.md 6.1（741 行）\n- FIX_PLAN の F の「点検の 1 回目で直したこと」(1) と暫定の判断 (k)",
+        "evidence": "Q11（表、表キャプションの段落に結び付いた左上の囲み、表キャプション〈表の下〉）。\n- 作業ツリーの XML: p、table-wrap T1（caption「表1　架空の集計」）、boxed-text、p の順。囲みは表の後ろにある（r2pass/new/out/wt/Q11…json の tokens）。\n- 0.24.1: table-wrap T1 だけ（囲みの文字は除外）。\n- 修正前: キャプションのない table-wrap、boxed-text、キャプションだけの table-wrap。\n- Q01（表で組んだ図。キャプションが下）と、画像と下のキャプションでは、文書のとおり囲みが図の前に出る。\n- 文字は落ちない。不変性・DTD は合格。",
+        "fix": "文書・コメントの側をコードに合わせる。例:「図（画像・図の本体の表）は図キャプションの位置に組むので、間の囲みは、キャプションが本体の後ろなら図の前、前なら図の後ろに出る。表は表キャプションが上なら表キャプションの位置、下なら表の位置に組むので、間の囲みは表の後ろに出る」。暫定の判断 (k) も同じく直す。"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "docs/DESIGN.md",
+        "line": 122,
+        "problem": "文書は「浮動配置でない（行内・VML の）図のテキストボックスの中の、キャプションでない文字は、AI の set_role・placements でも戻せない」と書く。\nコードは、その段落への set_role fig_caption・table_caption を受け付ける。依頼文の除外の一覧も「（set_role で指定できる役割: fig_caption, table_caption）」と案内する。AI がそれを選ぶと、文字は図のキャプションの続きとして XML に出る。\n同じ文がある場所:\n- DESIGN.md 4.3（122 行）\n- report._textbox_figure_text_action の docstring（863 行）\n- STYLE_MAPPING.md:47（「AI 補完でも出せない」）\n- tests/test_structure.py:766 のテストの説明\nDESIGN 7（893 行）の「AI による補完でも本文に出せない」は正しい。",
+        "evidence": "r2pass/py/q09_figcap.py を作業ツリーで流した。docx は Q09（行内の図のテキストボックスに、画像・図キャプション・出典の文）。出典の段落 d15 に set_role を指定した。\n- fig_caption: 採用。\n  - fig の caption は「図1　架空の町の地図出典：架空の町の資料をもとに筆者が作成した。」になる。\n  - 除外の記録はなく、actions は空。\n  - 不変性・最終・DTD は合格。\n- p: 不採用（理由は placements を案内しない）。除外のままで、textbox_figure_text が出る。\n- exclude: 採用（AI の除外の理由になる）。\n- 依頼文（new/out/wt/Q09…prompt.txt）の除外の一覧で、この段落に「（set_role で指定できる役割: fig_caption, table_caption）」と出る。\n利用者に出す文言（FIGURE_TEXT_HOW。Word でテキストボックスの外に出す）には、AI について書いていないので、利用者向けの問題はない。",
+        "fix": "文書の側を合わせる。例:「本文の段落としては戻せない（AI の set_role fig_caption・table_caption でキャプションの続きにすることはできる。p は採用しない。placements の対象でもない）」。docstring・STYLE_MAPPING・テストの説明も同じく直す。"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "src/jasme_jats/report.py",
+        "line": 189,
+        "problem": "1 章の「テキストボックスの文字」の行に示す章（textbox_chapters。修正の 1 回目で足した）は、4 章を常に含む。テキストボックスの判断がすべて AI のもの（2 章に載る）のときは、4 章にテキストボックスの行がなく、2 章を示さない。DESIGN 6.2 の「示す章は中身のあるところだけ」と合わない。",
+        "evidence": "P17（注記を AI が kind box で囲みにした。r2pass/prev/out/wt/P17_label_ai_box.report.md）。\n- 1 章の行は「| テキストボックスの文字（4 章） | 囲み 1 件（boxed-text） |」。\n- 4 章: テキストボックスの行が 0 件。\n- 2 章: A-001（囲み・図の注記）がある。\n- place_boxes は、AI の指定があると plan.decide(\"ai\", …) だけを記録し、機械的な判断を 4 章に残さない。\n0.24.1 にはこの行がない（修正で入った小さな不正確さ）。",
+        "fix": "textbox_chapters で、mode が mechanical の（blank でない）テキストボックスがあるときだけ 4 章を入れ、mode が ai のものがあれば 2 章を入れる。test_near_image_counts_two_elements の 1 章の行の確かめに、AI の回答の例（P17 の形）を 1 つ足す。"
+      },
+      {
+        "lens": "regression",
+        "severity": "nit",
+        "file": "tests/test_structure.py",
+        "line": 717,
+        "problem": "DESIGN 6.1 は「キャプションのない表と画像のない図キャプションの間に囲みを置いても、0.24.1 と同じく組にする（table_for_figure）」と書く。この保証を守るテストがない。test_boxes_do_not_split_figures の 3 通りは、画像の図と表キャプションの表だけを見る。",
+        "evidence": "変異 r5: table_for_figure の near の作り方を、BOX_PLACE の要素も数えるように変えた（provisional.get(...) in (here, BOX_PLACE)）。それでも全テスト 891 passed。\n反例 q7（キャプションのない表、左上がそろった囲み、図キャプションのスタイルの「図1」）:\n- 0.24.1: fig#F1（caption と table）。\n- 作業ツリー: box、fig#F1（caption と table）。正しい。\n- 変異: table-wrap#T1（キャプションなし）、box、fig#F1（caption のみ）に分かれ、要確認 figbody が出る。\n今のコードは正しく、守りのテストが欠けているだけ。",
+        "fix": "test_boxes_do_not_split_figures の variant に \"figtable\" を足す。形は、キャプションのない表、図キャプションの段落（wrapTopAndBottom の囲み）、本文の順。確かめること: fig の id が F1 で、caption と table を含むこと、囲みが fig の前に出ること。"
+      },
+      {
+        "lens": "regression",
+        "severity": "nit",
+        "file": "tests/test_structure.py",
+        "line": 606,
+        "problem": "修正で足した文言の分岐 2 つに、テストがない。どちらを外しても全テストが通る。\n- (a) 位置を推定した囲みの知らせ（textbox_place）に付けた、囲みの最初の文字。XML の boxed-text には ID がないので、README と知らせの文が「最初の文字で探せます」と案内している。\n- (b) 2 章の説明に「囲み・図の注記の判断と囲みの位置」を加えるのは、文字だけのテキストボックスがある論文だけ、という条件。",
+        "evidence": "作業ツリーの src の写しで 1 か所ずつ変え、全テストを流した（WHICH の行で写しを使ったことを確かめた）。\n- m2_place_head_empty（head() を常に \"\" にする）: 891 passed。\n- m6_ch2_always_boxes（条件を常に真にする）: 891 passed。\n- (b) の逆（常に足さない）は、修正の担当の変異 ch2_no_boxes で検出される。\n- (b) は golden では検出できる（sample_structure 以外の 0.24.1 のレポートは変わらない）。ただし golden はテストではない。",
+        "fix": "tests/test_structure.py:606 の textbox_place の検査に、知らせ（top か cli）に x6「問3　架空の数の列の規則を説明せよ。」の形で、最初の文字が入ることを足す。囲みのない fixture（例: sample_full）の 2 章に「囲み・図の注記の判断」が入らないことを、既存のレポートのテストに 1 行足す。"
+      },
+      {
+        "lens": "regression",
+        "severity": "nit",
+        "file": "docs/FIX_PLAN.md",
+        "line": 541,
+        "problem": "「F で確かめた数（0.25.0）」が、最初の実装の数のまま。点検の 1 回目の修正の後の数と合わない。",
+        "evidence": "FIX_PLAN.md:541 の記述: 「pytest 877 件（Python 3.13・3.10）」「td3 のレポートは 0.24.1 と 91 行違う」。\n今の作業ツリーの数（修正の担当の measures の値と同じ）:\n- python -m pytest -q は 891 passed（3.13・3.10）。\n- td3 のレポートは 0.24.1 と 93 行違う。\n542 行の「点検の 1 回目で直したこと」にも、新しい数はない。",
+        "fix": "541 行の数を 891 件・93 行に直す。または「最初の実装の時点の数」と明記し、542 行に点検の 1 回目の後の数を足す。"
+      }
+    ],
+    "incomplete": null
+  },
+  "workflowProgress": [
+    {
+      "type": "workflow_phase",
+      "index": 1,
+      "title": "Design"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 2,
+      "title": "Implement"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 3,
+      "title": "Verify"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 4,
+      "title": "Finalize"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 5,
+      "title": "Review"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 6,
+      "title": "Fix"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 7,
+      "title": "Recheck"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 1,
+      "label": "design",
+      "phaseIndex": 1,
+      "phaseTitle": "Design",
+      "agentId": "a37210fdfc36a499e",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793523701329,
+      "queuedAt": 1793523701261,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「F（0.25.0）: 文字だけのテキストボックス（囲み）と、本文の外に結び付いた図形（D1・N7）」を作るチームの一員です。\nHEAD は main の 3157349（0.24.1。detached HEAD）。作業ツリーには、まとめ役の FIX_PLAN.md の小さな変更（決定事項 9(3)・10 の確認の追記）だけがあり、F の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。F では pdfmatch.py の照合の規則には触らない（pdfdocx.pa…",
+      "promptFramed": true,
+      "lastProgressAt": 1793525244730,
+      "tokens": 488469,
+      "toolCalls": 100,
+      "durationMs": 1543399,
+      "resultPreview": "{\"design_doc\":\"/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/f/DESIGN_F.md\",\"decisions\":\"【実測で分かったこと（設計書 1 章。数値だけ記録）】td1・td2 に文字だけのテキストボックスはない。決定事項 9(3)・作業指示の「td1・td2 の 276〜402 文字の 2 件ずつは囲み」は、図・表キャプションと表（1 行 1 列の表に問題文 211・389 字、または表そのもの）を入れた浮動配置の図形（td1 s1/s7、td2 s1/s3）で、B3 の図表として扱われている（F で変わらない）。td3 の 31 件は、行内のグループ図形（画像のない Word の図形の図 2 つ）の中の 28 件（0〜11 字、幅…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 2,
+      "label": "oracle_f",
+      "phaseIndex": 1,
+      "phaseTitle": "Design",
+      "agentId": "a60e62f131a359479",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793523701329,
+      "queuedAt": 1793523701262,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「F（0.25.0）: 文字だけのテキストボックス（囲み）と、本文の外に結び付いた図形（D1・N7）」を作るチームの一員です。\nHEAD は main の 3157349（0.24.1。detached HEAD）。作業ツリーには、まとめ役の FIX_PLAN.md の小さな変更（決定事項 9(3)・10 の確認の追記）だけがあり、F の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。F では pdfmatch.py の照合の規則には触らない（pdfdocx.pa…",
+      "promptFramed": true,
+      "lastProgressAt": 1793524611864,
+      "tokens": 262405,
+      "toolCalls": 50,
+      "durationMs": 910529,
+      "resultPreview": "{\"dir\":\"/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/f/oracle/（生成器 gen_f.py、架空の docx 32 件の cases/*.docx、期待の cases.json、比べる道具 run_f.py、0.24.1 での結果 out/base/*.json と summary.json、ログ base_result.log、文字の重なりを調べる overlap.py、td1〜3 の数値だけを出す tdstats.py）。docx は make_fixtures.py の部品（Builder・para・textbox・anchored・drawing・png_bytes・front_ja/front_en/tail）を import して…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 3,
+      "label": "impl",
+      "phaseIndex": 2,
+      "phaseTitle": "Implement",
+      "agentId": "a34dbde036b63dda9",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793525246867,
+      "queuedAt": 1793525246843,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "単位 F（0.25.0。D1・N7）を DESIGN_F.md のとおり作業ツリーに…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「F（0.25.0）: 文字だけのテキストボックス（囲み）と、本文の外に結び付いた図形（D1・N7）」を作るチームの一員です。\nHEAD は main の 3157349（0.24.1。detached HEAD）。作業ツリーには、まとめ役の FIX_PLAN.md の小さな変更（決定事項 9(3)・10 の確認の追記）だけがあり、F の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。F では pdfmatch.py の照合の規則には触らない（pdfdocx.pa…",
+      "promptFramed": true,
+      "lastProgressAt": 1793529601610,
+      "tokens": 369551,
+      "toolCalls": 346,
+      "durationMs": 4354742,
+      "resultPreview": "{\"changed_files\":[\"/home/user/jstgxmlcng_JASME/src/jasme_jats/model.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/docx_reader.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/floats.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/structure.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/builder.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/linker.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 4,
+      "label": "verify",
+      "phaseIndex": 3,
+      "phaseTitle": "Verify",
+      "agentId": "ab7935642fb67bdbb",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793529605452,
+      "queuedAt": 1793529605424,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "作業ツリーのファイルは変更していない。実験は /tmp/claude-0/…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「F（0.25.0）: 文字だけのテキストボックス（囲み）と、本文の外に結び付いた図形（D1・N7）」を作るチームの一員です。\nHEAD は main の 3157349（0.24.1。detached HEAD）。作業ツリーには、まとめ役の FIX_PLAN.md の小さな変更（決定事項 9(3)・10 の確認の追記）だけがあり、F の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。F では pdfmatch.py の照合の規則には触らない（pdfdocx.pa…",
+      "promptFramed": true,
+      "lastProgressAt": 1793530371951,
+      "tokens": 311430,
+      "toolCalls": 80,
+      "durationMs": 766498,
+      "resultPreview": "{\"passed_all\":false,\"measures\":\"作業ツリーのファイルは変更していない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/f/verify/ の下で行った。結果の JSON・ログ・スクリプトは py/・cx/・golden_wt/manifest.json に残し、大きな出力（docx・pdf・xml・zip・画像）は消した。td の標準出力・標準エラーは実際の論文の文字を含むので消した。tests/__pycache__ も消した。worktree の headwt は remove・prune 済み。df は 23GB 空き。\\n\\n【pytest】\\n- Python 3.13（python -m pytest -q …"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 5,
+      "label": "fix_verify",
+      "phaseIndex": 3,
+      "phaseTitle": "Verify",
+      "agentId": "a4d3b2d6bbb199376",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793530373915,
+      "queuedAt": 1793530373911,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "確かめの問題のうち should 2 件と、コードの nit 2 件（3・4）…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「F（0.25.0）: 文字だけのテキストボックス（囲み）と、本文の外に結び付いた図形（D1・N7）」を作るチームの一員です。\nHEAD は main の 3157349（0.24.1。detached HEAD）。作業ツリーには、まとめ役の FIX_PLAN.md の小さな変更（決定事項 9(3)・10 の確認の追記）だけがあり、F の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。F では pdfmatch.py の照合の規則には触らない（pdfdocx.pa…",
+      "promptFramed": true,
+      "lastProgressAt": 1793532317661,
+      "tokens": 511757,
+      "toolCalls": 145,
+      "durationMs": 1943745,
+      "resultPreview": "{\"changed_files\":[\"/home/user/jstgxmlcng_JASME/src/jasme_jats/ai_assist.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/floats.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/structure.py\",\"/home/user/jstgxmlcng_JASME/tests/test_ai.py\",\"/home/user/jstgxmlcng_JASME/tests/test_floats.py\",\"/home/user/jstgxmlcng_JASME/tests/test_structure.py\",\"/home/user/jstgxmlcng_JASME/docs/DESIGN.md\",\"/home/user/js…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 6,
+      "label": "finalize",
+      "phaseIndex": 4,
+      "phaseTitle": "Finalize",
+      "agentId": "a9cf1fb8dfc60e339",
+      "model": "claude-sonnet-5-5",
+      "state": "done",
+      "startedAt": 1793532320235,
+      "queuedAt": 1793532320229,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "仕上げ（finalize）を作業ツリーに積んだ。コミットはしていな…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「F（0.25.0）: 文字だけのテキストボックス（囲み）と、本文の外に結び付いた図形（D1・N7）」を作るチームの一員です。\nHEAD は main の 3157349（0.24.1。detached HEAD）。作業ツリーには、まとめ役の FIX_PLAN.md の小さな変更（決定事項 9(3)・10 の確認の追記）だけがあり、F の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。F では pdfmatch.py の照合の規則には触らない（pdfdocx.pa…",
+      "promptFramed": true,
+      "lastProgressAt": 1793532492385,
+      "tokens": 129148,
+      "toolCalls": 14,
+      "durationMs": 172149,
+      "resultPreview": "{\"changed_files\":[\"/home/user/jstgxmlcng_JASME/src/jasme_jats/__init__.py\",\"/home/user/jstgxmlcng_JASME/pyproject.toml\",\"/home/user/jstgxmlcng_JASME/notebooks/JASME_docx_to_JSTAGE_XML.ipynb\",\"/home/user/jstgxmlcng_JASME/docs/FIX_PLAN.md\",\"/home/user/jstgxmlcng_JASME/README.md\"],\"summary\":\"仕上げ（finalize）を作業ツリーに積んだ。コミットはしていない。HEAD は 3157349 のまま。\\n\\n- 版を 0.25.0 にした（`__init__.py` と `pyproject.toml`）。`p…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 7,
+      "label": "review:principle",
+      "phaseIndex": 5,
+      "phaseTitle": "Review",
+      "agentId": "aac589113b48f9398",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793532494210,
+      "queuedAt": 1793532494177,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "作業ツリーのファイルは変更していない。実験は /tmp/claude-0/…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「F（0.25.0）: 文字だけのテキストボックス（囲み）と、本文の外に結び付いた図形（D1・N7）」の実装を点検する担当です。\nHEAD は main の 3157349（0.24.1。detached HEAD）。作業ツリーには、まとめ役の FIX_PLAN.md の小さな変更（決定事項 9(3)・10 の確認の追記）だけがあり、F の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。F では pdfmatch.py の照合の規則には触らない（pdfdocx.p…",
+      "promptFramed": true,
+      "lastProgressAt": 1793535216262,
+      "tokens": 626614,
+      "toolCalls": 162,
+      "durationMs": 2722051,
+      "resultPreview": "{\"checked\":\"作業ツリーのファイルは変更していない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/f/review/principle/ の下で行った（gen_p.py・run_p.py・mut/mutate.py・r2/r2.py・results_summary.json・pt313.log・pt310.log・golden_wt/manifest.json・out/ と oracle_run/out/ の JSON が残る）。\\n- 大きな出力（docx・pdf・xml・zip・画像）、td の出力、変異の src は消した。td の出力は実際の論文の文字を含むので丸ごと消した。\\n- git worktree（HEAD の ruff …"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 8,
+      "label": "review:regression",
+      "phaseIndex": 5,
+      "phaseTitle": "Review",
+      "agentId": "a295b81bd4748c93b",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793532494211,
+      "queuedAt": 1793532494178,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "作業ツリーのファイルは変えていない。実験は /tmp/claude-0/-h…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「F（0.25.0）: 文字だけのテキストボックス（囲み）と、本文の外に結び付いた図形（D1・N7）」の実装を点検する担当です。\nHEAD は main の 3157349（0.24.1。detached HEAD）。作業ツリーには、まとめ役の FIX_PLAN.md の小さな変更（決定事項 9(3)・10 の確認の追記）だけがあり、F の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。F では pdfmatch.py の照合の規則には触らない（pdfdocx.p…",
+      "promptFramed": true,
+      "lastProgressAt": 1793533779379,
+      "tokens": 315038,
+      "toolCalls": 77,
+      "durationMs": 1285166,
+      "resultPreview": "{\"checked\":\"作業ツリーのファイルは変えていない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/f/review/regression/ の下で行った。スクリプトは py/・mut/、結果は r_wt.json・r_base.json・oracle.log・mut/mut*.log・golden_wt/manifest.json に残した。大きな出力（td の出力、docx、変異した src、golden の本体）は消した。td の標準出力・標準エラーは実際の論文の文字を含むので消した。tests/__pycache__ はない。git status で増えたファイルは tests/fixtures/sample_outside.docx …"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 9,
+      "label": "review:user",
+      "phaseIndex": 5,
+      "phaseTitle": "Review",
+      "agentId": "aae563a30025db2e7",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793533781422,
+      "queuedAt": 1793532494178,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "I changed no files in the working tree. Experiments ran und…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「F（0.25.0）: 文字だけのテキストボックス（囲み）と、本文の外に結び付いた図形（D1・N7）」の実装を点検する担当です。\nHEAD は main の 3157349（0.24.1。detached HEAD）。作業ツリーには、まとめ役の FIX_PLAN.md の小さな変更（決定事項 9(3)・10 の確認の追記）だけがあり、F の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。F では pdfmatch.py の照合の規則には触らない（pdfdocx.p…",
+      "promptFramed": true,
+      "lastProgressAt": 1793534203855,
+      "tokens": 213579,
+      "toolCalls": 45,
+      "durationMs": 422432,
+      "resultPreview": "{\"checked\":\"I changed no files in the working tree. Experiments ran under /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/f/review/user/; the response JSON and leak-check script remain there. I deleted the large outputs, including the td XML and reports (they contain real manuscript text). I also deleted tests/__pycache__ (created by my pytest run). df sho…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 10,
+      "label": "fix:1",
+      "phaseIndex": 6,
+      "phaseTitle": "Fix",
+      "agentId": "a42d013cad06daaab",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793535218809,
+      "queuedAt": 1793535218804,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "単位 F の点検（1 回目）の指摘を直した。blocking の指摘はな…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「F（0.25.0）: 文字だけのテキストボックス（囲み）と、本文の外に結び付いた図形（D1・N7）」を作るチームの一員です。\nHEAD は main の 3157349（0.24.1。detached HEAD）。作業ツリーには、まとめ役の FIX_PLAN.md の小さな変更（決定事項 9(3)・10 の確認の追記）だけがあり、F の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。F では pdfmatch.py の照合の規則には触らない（pdfdocx.pa…",
+      "promptFramed": true,
+      "lastProgressAt": 1793537067185,
+      "tokens": 639834,
+      "toolCalls": 188,
+      "durationMs": 1848376,
+      "resultPreview": "{\"changed_files\":[\"/home/user/jstgxmlcng_JASME/src/jasme_jats/structure.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/report.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/ai_assist.py\",\"/home/user/jstgxmlcng_JASME/tests/test_structure.py\",\"/home/user/jstgxmlcng_JASME/tests/test_ai.py\",\"/home/user/jstgxmlcng_JASME/tests/test_floats.py\",\"/home/user/jstgxmlcng_JASME/tests/test_colab.py\",\"/home/us…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 11,
+      "label": "review:principle",
+      "phaseIndex": 7,
+      "phaseTitle": "Recheck",
+      "agentId": "a97731dfb32fab123",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793537069481,
+      "queuedAt": 1793537069474,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "点検の 2 回目（原則の観点）。対象は、1 回目の修正の差分（fi…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「F（0.25.0）: 文字だけのテキストボックス（囲み）と、本文の外に結び付いた図形（D1・N7）」の実装を点検する担当です。\nHEAD は main の 3157349（0.24.1。detached HEAD）。作業ツリーには、まとめ役の FIX_PLAN.md の小さな変更（決定事項 9(3)・10 の確認の追記）だけがあり、F の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。F では pdfmatch.py の照合の規則には触らない（pdfdocx.p…",
+      "promptFramed": true,
+      "lastProgressAt": 1793539046098,
+      "tokens": 472801,
+      "toolCalls": 119,
+      "durationMs": 1976616,
+      "resultPreview": "{\"checked\":\"点検の 2 回目（原則の観点）。対象は、1 回目の修正の差分（fix1/pre_src と作業ツリーの src を diff した。変わったのは structure.py・report.py・ai_assist.py の 3 本）、足したテスト、文書。ファイルは変更していない。git status は始めたときと同じで、tests/ に一時ファイルも __pycache__ もない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/f/review/principle/r2pass/ に置いた。\\n\\n結論: blocking と should はない。nit が 5 件。\\n\\n■ 物差し\\n- pytest: Python 3…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 12,
+      "label": "review:regression",
+      "phaseIndex": 7,
+      "phaseTitle": "Recheck",
+      "agentId": "a783a16d0a0fe3af3",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793537069481,
+      "queuedAt": 1793537069475,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "修正の 1 回目の後の、単位 F の点検（回帰とテスト）。ファイ…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「F（0.25.0）: 文字だけのテキストボックス（囲み）と、本文の外に結び付いた図形（D1・N7）」の実装を点検する担当です。\nHEAD は main の 3157349（0.24.1。detached HEAD）。作業ツリーには、まとめ役の FIX_PLAN.md の小さな変更（決定事項 9(3)・10 の確認の追記）だけがあり、F の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。F では pdfmatch.py の照合の規則には触らない（pdfdocx.p…",
+      "promptFramed": true,
+      "lastProgressAt": 1793537976529,
+      "tokens": 290067,
+      "toolCalls": 84,
+      "durationMs": 907045,
+      "resultPreview": "{\"checked\":\"修正の 1 回目の後の、単位 F の点検（回帰とテスト）。ファイルは変更していない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/f/review/regression/r2/ の下に置いた。tests/__pycache__ は消した。\\n\\n■ 修正の差分\\n- pre_src（直す前）と作業ツリーで違う src は 3 つ（structure.py・report.py・ai_assist.py）。\\n- 読んだもの\\n  - structure.py: BOX_PLACE と build_body の self.provisional への登録、same_place・assemble_floats（last_out・ah…"
+    }
+  ],
+  "totalTokens": 4630693,
+  "totalToolCalls": 1410
+}

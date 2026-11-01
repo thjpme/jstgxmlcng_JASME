@@ -969,6 +969,8 @@ def test_ai_kind_box_restores_mechanical_label(journal, meta, tmp_path):
     assert not any("図に重ねた注記と判断したテキストボックス" in w for w in res.warnings)
     info = res.plan.textboxes[label]
     assert (info.kind, info.mode, info.where, info.estimated) == ("box", "ai", "ai", False)
+    # 1 章の「テキストボックスの文字」の行は、AI の判断（2 章）と機械的な判断（4 章）の両方があるときに両方の章を示す
+    assert "| テキストボックスの文字（2 章・3 章・4 章・6 章） |" in res.report_path.read_text(encoding="utf-8").split("## 2.")[0]
     # kind label（注記のまま）は採用しない。注記のまま除外し、10 章の警告に、本文の文字なら囲みに指定できることを書く
     res = _manual_pl(STRUCTURE, [_box_pl(label, "", kind="label")], meta, journal, tmp_path / "label")
     assert [why for _, why in res.ai.rejected] == [

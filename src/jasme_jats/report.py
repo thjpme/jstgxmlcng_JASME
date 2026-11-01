@@ -187,11 +187,15 @@ def textbox_summary(plan) -> str:
 
 
 def textbox_chapters(plan) -> str:
-    """1 章の「テキストボックスの文字」の行に示す章（中身があるところだけ）: 3 章（決められないもの・位置を推定した囲み）、4 章
-    （判断の一覧）、6 章（除外した文字）、10 章（図の注記の警告）。"""
+    """1 章の「テキストボックスの文字」の行に示す章（中身があるところだけ）: 2 章（AI が囲み・図の注記を判断したもの）、3 章
+    （決められないもの・位置を推定した囲み）、4 章（機械的な判断の一覧）、6 章（除外した文字）、10 章（図の注記の警告）。"""
     kinds = {b.kind for b in plan.textboxes.values()}
-    out = ["3 章"] if plan.undecided_boxes or plan.estimated_boxes else []
-    out.append("4 章")
+    stages = {d.stage for d in plan.decisions if d.category == "box"}
+    out = ["2 章"] if "ai" in stages else []
+    if plan.undecided_boxes or plan.estimated_boxes:
+        out.append("3 章")
+    if "mechanical" in stages:
+        out.append("4 章")
     if kinds & {"label", "undecided"}:
         out.append("6 章")
     if "label" in kinds:
@@ -860,8 +864,8 @@ def _textbox_figure_text_action(r):
     """図表の入ったテキストボックス・グループ図形の中の文字を XML に出力しなかった段落（figure_text_exclusions）。なければ None。
 
     要確認にとどめる（文字はレポートの 6 章に全文がある。0.19.0〜0.24.1 の暫定の知らせ〈文字だけのテキストボックスも含めて
-    数えていた〉のうち、0.25.0 でも図の一部として除外するものの知らせ。AI の set_role・placements では戻せないので、Word で
-    テキストボックスの外に出してもらう。暫定の判断）。
+    数えていた〉のうち、0.25.0 でも図の一部として除外するものの知らせ。AI の placements では戻せず、set_role も fig_caption・
+    table_caption・exclude しか採らない（本文の段落には戻せない）ので、Word でテキストボックスの外に出してもらう。暫定の判断）。
     """
     rows = figure_text_exclusions(r)
     if not rows:
