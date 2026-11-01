@@ -576,6 +576,52 @@ def test_shapes_outside_body(journal, meta, tmp_path):
     assert [(li.location, li.text[:4]) for li in res.lost_images] == [("引用文献 3件目", "試験八郎")]
 
 
+def _refs_group(path, inner):
+    """引用文献の段落に結び付いた、浮動配置のグループ図形（画像と、inner を入れたテキストボックス。2 cm 下）がある小さな論文。"""
+    cm = 360000
+
+    def refs(b):
+        rid = b.add_image("refgroup.png", mf.png_bytes("Group figure", size=(300, 200)))
+        return [mf.para(mf.S["ref"], "試験九郎（2023）．「グループの図」．『架空誌』，第4巻．",
+                        mf.group(rid, 5 * cm, 3 * cm, inner, 971, 6 * cm, 4 * cm, v=("paragraph", 2 * cm),
+                                 wrap="wrapTopAndBottom"))]
+
+    def body(b):
+        return [mf.para(mf.S["sec1"], "１．はじめに"), mf.para(mf.S["body"], "試験（2024）の図を引用文献の後ろに置いた。"),
+                mf.para(mf.S["body"], "以上である。")]
+    mf.make_article(path, "引用文献のグループ図形の検証用文書", body, refs=refs)
+    return path
+
+
+def test_group_shape_on_reference_keeps_its_image(journal, meta, tmp_path):
+    """引用文献の段落に結び付いたグループ図形の画像は、アンカー段落（引用文献の段落）から集めて図に入れる（修正計画の N7。
+    XML に入らなかった画像にしない）。画像と図キャプションのグループ図形は、AI の回答の前でも本文の最後の図（画像あり）に仮に
+    置く。画像と注記のグループ図形を AI が図として組んだときは、注記の段落は図の後ろに 1 回だけ出る（図表の入った図形の中の
+    テキストボックスは、文字だけのテキストボックスとして別に扱わない。Classifier.text_only）。"""
+    path = _refs_group(tmp_path / "cap.docx", mf.para(mf.S["fig_cap"], "図2　架空のグループの図"))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "cap", ai_mode="manual", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.lost_images == []
+    assert res.plan.unplaced_floats == ["s1"] and len(res.images) == 1
+    fig = load(res).find("body")[-1][-1]
+    assert fig.tag == "fig" and "".join(fig.find("caption").itertext()) == "図2　架空のグループの図"
+    assert fig.find("graphic") is not None
+    path = _refs_group(tmp_path / "label.docx", mf.para(mf.S["body"], "点Ｐ"))
+    _, first, _ = _mechanical(path, journal)
+    [img] = first.floats["s1"].images
+    resp = json.dumps({"placements": [{"float": "s1", "after": src_of(first, "以上である。"), "items": [
+        {"kind": "fig", "caption": [], "body": [img.image_id]}], "reason": "試験の回答", "confidence": "低"}],
+        "operations": [], "notes": []}, ensure_ascii=False)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "label", ai_mode="manual", ai_response=resp,
+                                               convert_metafiles=False))
+    fid = res.fidelity
+    assert fid.ok and fid.final_ok and fid.conflicts == [] and res.dtd_valid and res.lost_images == []
+    assert res.plan.floats["s1"].mode == "ai" and res.plan.textboxes == {}
+    root = load(res)
+    texts = ["".join(el.itertext()) for el in root.find("body").iter("p")]
+    assert texts.count("点Ｐ") == 1 and root.find(".//fig/graphic") is not None
+    assert "点Ｐ" not in {t for _, _, t in fid.excluded}
+
+
 def test_classify_twice_for_shapes_outside_body(journal, monkeypatch):
     """本文の外の段落に結び付いた図形があるときだけ、構造の組み立てを 2 回行う（1 回目で見つけ、2 回目で本文の最後に回す）。
     判断の番号は重複せず、同じ doc で classify を 2 回呼んでも同じ結果（1 回目が段落に書き込んだものを戻している）。"""
@@ -605,7 +651,7 @@ LAYOUT = Layout(text_width_cm=20.0, column_width_cm=10.0, columns=2, chars_per_l
 
 
 @pytest.mark.parametrize("chars, width, lines, near, group, kind", [
-    (1, 0.5, 1, True, True, "label"),           # テストデータ3 のグループ図形の中の注記（0〜11 字・段の 0.05〜0.37）
+    (1, 0.5, 1, True, True, "label"),           # テストデータ3 のグループ図形の中の注記（1〜11 字・段の 0.05〜0.37）
     (11, 3.7, 1, True, True, "label"),
     (16, 5.0, 1, True, True, "undecided"),      # グループの中の長い文字
     (40, 14.0, 3, False, False, "box"),         # (a) 幅の広い囲み
@@ -617,7 +663,8 @@ LAYOUT = Layout(text_width_cm=20.0, column_width_cm=10.0, columns=2, chars_per_l
     (8, 8.0, 1, True, False, "undecided"),      # 画像の近くの幅広の短い文字（図の題を枠に入れたもの）
     (1, 1.9, 1, False, False, "undecided"),     # 画像から遠い小さな枠「注」
     (5, None, 1, False, False, "undecided"),    # 幅を読めない短い文字は label に倒れない
-    (5, None, 1, True, False, "label"),
+    (5, None, 1, True, False, "undecided"),     # 画像の近くでも（VML の幅が cm・% など。修正計画の付録の D1）
+    (5, None, 1, True, True, "label"),          # グループの中は幅を使わない
     (30, None, 1, False, False, "box"),
     (30, 5.0, 3, False, False, "undecided"),    # 幅の狭い長い文字
     (17, 9.0, 1, False, False, "undecided"),    # 16〜19 字
@@ -636,8 +683,8 @@ def test_textbox_kind_boundaries(chars, width, lines, near, group, kind):
     assert got == kind
     if kind != "blank":
         assert f"文字 {chars} 字" in why and ("幅は読めない" if width is None else f"幅 {width:.1f} cm") in why
-    # 段組みの設定がなければ、幅の条件を使わない
-    assert textbox_kind(5, 1.0, 1, True, False, None)[0] == "label"
+    # 段組みの設定がなければ（1 段の幅に対する割合を求められない）、囲みの規則では幅の条件を使わず、注記の規則は当てはめない
+    assert textbox_kind(5, 1.0, 1, True, False, None)[0] == "undecided"
     assert textbox_kind(30, 1.0, 1, False, False, Layout())[0] == "box"
 
 

@@ -19,7 +19,7 @@ from .model import note_key, note_label
 from .package import article_dir
 from .pdfmatch import (DISPLACED_WHY, EDGE_WHY, FORMULA_MARK, HEAD_WHY, LINE_MARK, LONG_WHY, MATH_WHY, RE_PAGE_NO, UNSURE_WHY,
                        WHOLE_WHY)
-from .structure import NO_LINK_KINDS
+from .structure import NO_LINK_KINDS, TEXTBOX_TEXT_EXCLUDED
 
 
 def esc(s, n=None) -> str:
@@ -184,6 +184,19 @@ def textbox_summary(plan) -> str:
     if n["undecided"]:
         parts.append(f"決められずに除外 {n['undecided']} 件（要確認）")
     return "、".join(parts)
+
+
+def textbox_chapters(plan) -> str:
+    """1 章の「テキストボックスの文字」の行に示す章（中身があるところだけ）: 3 章（決められないもの・位置を推定した囲み）、4 章
+    （判断の一覧）、6 章（除外した文字）、10 章（図の注記の警告）。"""
+    kinds = {b.kind for b in plan.textboxes.values()}
+    out = ["3 章"] if plan.undecided_boxes or plan.estimated_boxes else []
+    out.append("4 章")
+    if kinds & {"label", "undecided"}:
+        out.append("6 章")
+    if "label" in kinds:
+        out.append("10 章")
+    return "・".join(out)
 
 
 def _box_samples(plan, xids, n=5) -> str:
@@ -767,9 +780,9 @@ def _textbox_undecided_action(r):
         how = ("AI による補完を使うと、AI が囲みか注記かを判断し、囲みは本文に出します（強く勧めます）。AI を使わないときは、"
                "Word でそのテキストボックスを確かめ、本文に必要な囲みなら、文字をテキストボックスの外（本文の段落）に出してから"
                "変換し直してください。")
-        box_how = ("手順 5 で AI による補完（「API で自動実行」か「手動」）を選んで変換し直すと、AI が囲みか注記かを判断します。"
-                   "AI を使わないときは、Word で確かめ、本文に必要な囲みなら文字をテキストボックスの外に出してから変換し直して"
-                   "ください")
+        box_how = ("手順 4 で AI による補完の方法を「API で自動実行」か「手動（チャットに貼り付け）」にして ▶ を押し、手順 5 から"
+                   "変換し直すと、AI が囲みか注記かを判断します。AI を使わないときは、Word で確かめ、本文に必要な囲みなら文字を"
+                   "テキストボックスの外に出してから変換し直してください")
         cli_how = "--ai manual か --ai api で AI による補完を使うか、docx でその文字をテキストボックスの外に出して変換し直すこと"
     elif ai_pending(r):
         how = "AI の回答を反映すると、AI が囲みか注記かを判断し、囲みは本文に出します。"
@@ -801,9 +814,13 @@ def _textbox_place_action(r):
     if not xids:
         return None
     n = len(xids)
-    where = "、".join(f"{x}（{plan.box_place(x)}）" for x in xids[:5]) + ("ほか" if n > 5 else "")
+
+    def head(x):        # 囲みの最初の文字（XML の boxed-text には ID がないので、文字で探してもらう）
+        return next((q.text_only().strip() for q in plan.textboxes[x].paras if not q.is_blank), "")
+    where = "、".join(f"{x}「{esc(head(x), 15)}」（{plan.box_place(x)}）" for x in xids[:5]) + ("ほか" if n > 5 else "")
     detail = ("docx には Word で表示したときの位置が記録されていないため、アンカー段落のすぐ後ろ（本文の外に結び付いたものは"
-              "本文の最後）に置きました。PDF と見比べ、違えば XML の中で囲み（boxed-text）を正しい位置に移してください")
+              "本文の最後）に置きました。PDF と見比べ、違えば XML の中で囲み（boxed-text。最初の文字で探せます）を正しい位置に"
+              "移してください")
     return Action(
         TO_CHECK, "textbox_place",
         top=f"> **要確認: 位置を推定して置いた囲み（boxed-text）が {n} 件あります（3 章）。** {detail}: {where}",
@@ -811,6 +828,56 @@ def _textbox_place_action(r):
         box_title=f"位置を推定して置いた囲みが {n} 件あります（要確認）",
         box_detail=f"{detail}（レポートの冒頭と 3 章）。\n対象: {where}",
         cli=f"要確認: 位置を推定して置いた囲み {n} 件（レポートの冒頭と 3 章）。{detail}。対象: {where}")
+
+
+def figure_text_exclusions(r) -> list:
+    """図表の入ったテキストボックス・グループ図形の中の、キャプションでも図の本体でもない段落で、XML に出力しなかったもの
+    （理由 structure.TEXTBOX_TEXT_EXCLUDED。図の一部とみなした説明・出典など）: [(段落 ID, 文字)]。
+
+    手動モードで AI の回答を貼り戻す前は、位置を決められない図表の中身を数えない（AI がその図表を placements で組めば、図の
+    後ろに本文の段落として出せる。回答を反映した後も位置を決められなかった図表の中身は数える）。
+    """
+    plan, pending = r.plan, ai_pending(r)
+    out = []
+    for src, why, text in r.fidelity.excluded:
+        if why != TEXTBOX_TEXT_EXCLUDED:
+            continue
+        p = plan.paras.get(src)
+        info = plan.floats.get(p.float_id) if p is not None and p.float_id else None
+        if pending and info is not None and info.mode == "unplaced":
+            continue
+        out.append((src, text))
+    return out
+
+
+# 図表の入ったテキストボックス・グループ図形の中の文字を出力しなかったときの説明と対処（_textbox_figure_text_action）
+FIGURE_TEXT_WHY = ("図・表の入ったテキストボックス・グループ図形の中の、キャプションでも図の本体でもない文字（図の説明・出典など）は、"
+                   "図の一部とみなして本文から除いています。")
+FIGURE_TEXT_HOW = "本文に必要な文字なら、Word でその文字をテキストボックスの外（本文の段落）に出してから、変換し直してください。"
+
+
+def _textbox_figure_text_action(r):
+    """図表の入ったテキストボックス・グループ図形の中の文字を XML に出力しなかった段落（figure_text_exclusions）。なければ None。
+
+    要確認にとどめる（文字はレポートの 6 章に全文がある。0.19.0〜0.24.1 の暫定の知らせ〈文字だけのテキストボックスも含めて
+    数えていた〉のうち、0.25.0 でも図の一部として除外するものの知らせ。AI の set_role・placements では戻せないので、Word で
+    テキストボックスの外に出してもらう。暫定の判断）。
+    """
+    rows = figure_text_exclusions(r)
+    if not rows:
+        return None
+    n = len(rows)
+    what = f"図表の入ったテキストボックス・グループ図形の中の文字 {n} 段落"
+    samples = _para_samples(rows)
+    return Action(
+        TO_CHECK, "textbox_figure_text",
+        top=f"> **要確認: {what}を、XML に出力していません（6 章）。** {FIGURE_TEXT_WHY}{FIGURE_TEXT_HOW}対象の段落: {samples}",
+        checklist=(f"- [ ] **{what}**（6 章。XML に出力していない）: 図の一部（説明・出典など）か確かめ、本文に必要なら Word で"
+                   "テキストボックスの外（本文の段落）に出して変換し直す"),
+        box_title=f"図表の入ったテキストボックスの中の文字 {n} 段落を、XML に出力していません（要確認）",
+        box_detail=f"{FIGURE_TEXT_WHY}{FIGURE_TEXT_HOW}（レポートの冒頭と 6 章）\n対象の段落: {samples}",
+        cli=(f"要確認: {what}を、XML に出力していません（レポートの冒頭と 6 章）。{FIGURE_TEXT_WHY}本文に必要な文字なら、docx で"
+             f"その文字をテキストボックスの外（本文の段落）に出して変換し直すこと。対象の段落: {samples}"))
 
 
 def images_action(r):
@@ -1116,7 +1183,7 @@ def actions(r) -> list:
     """
     head = [f(r) for f in (_fidelity_action, _dtd_action, _upload_action, _ai_error_action, _ai_pending_action,
                            _partial_action, _forced_action, figure_body_action, _textbox_undecided_action,
-                           _textbox_place_action, images_action, lost_action,
+                           _textbox_place_action, _textbox_figure_text_action, images_action, lost_action,
                            _abstract_ja_action, _app_after_refs_action, _note_overlap_action)]
     return [a for a in head if a is not None] + pdf_actions(r)
 
@@ -1169,7 +1236,8 @@ def render(r) -> str:
     if plan.unplaced_floats:
         rows.insert(7, ("位置を決められなかった図表（3 章）", f"{len(plan.unplaced_floats)} 件（{float_places(plan)}に仮に配置）"))
     if textbox_summary(plan):
-        rows.insert(8 if plan.unplaced_floats else 7, ("テキストボックスの文字（3 章・6 章）", textbox_summary(plan)))
+        rows.insert(8 if plan.unplaced_floats else 7,
+                    (f"テキストボックスの文字（{textbox_chapters(plan)}）", textbox_summary(plan)))
     L.append(table(["項目", "結果"], rows))
     L.append("")
     # 要対応・要確認（actions）。ルート2 の「docx を直してから変換しました」の案内は、PDF の知らせの前に固定で出す
@@ -1202,9 +1270,12 @@ def render(r) -> str:
     elif ai.error:
         L.append(f"AI による補完は行えませんでした: {ai.error}")
     else:
+        # 文字だけのテキストボックスがある論文では、その判断（placements の kind box・label）も AI が変えられる
+        boxes = ("、文字だけのテキストボックスの囲み・図の注記の判断と囲みの位置"
+                 if any(b.kind != "blank" for b in r.plan.textboxes.values()) else "")
         L.append("AI の判断には誤りの可能性があります。特に確度「低」「中」の項目は、PDF と照らして確認してください。"
                  "AI が変更できるのはリンク・段落の役割・姓名の区切り・数式画像への MathML の併記と、テキストボックス・"
-                 "グループ図形に入った図表の位置と組み合わせだけで、本文の文字は変更していません。")
+                 f"グループ図形に入った図表の位置と組み合わせ{boxes}だけで、本文の文字は変更していません。")
         L.append("")
         if ai.partial:
             L.append(f"**AI の回答が途中で切れていました。** {esc(ai.partial)}")

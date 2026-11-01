@@ -181,7 +181,8 @@ def test_result_boxes_show_textbox_notices(journal, meta, tmp_path):
     res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "n", convert_metafiles=False))
     html = result_boxes(res, level="要確認")
     assert "囲みか図の注記か決められなかったテキストボックスが 3 件あります（要確認）" in html
-    assert "手順 5 で AI による補完" in html and "位置を推定して置いた囲みが 1 件あります（要確認）" in html
+    assert ("手順 4 で AI による補完の方法を「API で自動実行」か「手動（チャットに貼り付け）」にして ▶ を押し、手順 5 から"
+            "変換し直すと") in html and "位置を推定して置いた囲みが 1 件あります（要確認）" in html
     assert result_boxes(res, level="要対応") == ""
     res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "m", ai_mode="manual", convert_metafiles=False))
     html = result_boxes(res)

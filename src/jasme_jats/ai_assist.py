@@ -86,7 +86,7 @@ PLACEMENT_SCHEMA = {
     "properties": {
         "float": {"type": "string", "description": "図形の ID（s1 など）、またはテキストボックスの ID（x1 など）。「位置を決められ"
                                                    "なかった図表」「囲みか図の注記か決められなかったテキストボックス」「位置を推定した"
-                                                   "囲み」に挙げたもの"},
+                                                   "囲み」「図に重ねた注記とみなして除外したテキストボックス」に挙げたもの"},
         "after": {"type": "string", "description": "図表・囲みを置く位置: Word で表示したときに図の左上の直上にある本文の文章を含む"
                                                    "段落の ID。テキストボックスで kind が label のときは空文字"},
         "items": {"type": "array", "description": "図形の中身を、図・表ごとに組にしたもの（テキストボックスでは kind の組 1 つ）", "items": {
@@ -167,10 +167,12 @@ Python のプログラムがすでに機械的な変換を済ませています�
      box は本文の囲み（問題文・ヒント・まとめなど、本文として読まれる文章）で、after の段落の直後に枠で囲んだ段落として置きます。
      label は図に重ねた注記（矢印・点・辺の名前など、図の一部の短い文字）で、本文に出しません（after は空文字）。
      「# 位置を推定した囲み」に挙げたものは、置いた位置が違うときだけ、kind box で正しい after を指定してください。
-     「# 扱いを機械的に決めたテキストボックス（変更不可）」に挙げたものは placements に書かないでください。
-   - 浮動配置の図形（s1 など）の中の段落の役割は、set_role ではなく placements で指定してください。浮動配置でないテキストボックスの
-     段落に set_role で指定できるのは fig_caption・table_caption・exclude だけです（囲みか図の注記かは placements の kind box・label で
-     指定します）。
+     「# 図に重ねた注記とみなして除外したテキストボックス」に挙げたものは、図の注記ではなく本文として読まれる文章（問題文・ヒントなど）の
+     ときだけ、kind box で after を指定してください（本文の囲みに戻ります。図の注記なら書かないでください）。
+     「# 囲みとして位置を機械的に決めたテキストボックス（変更不可）」に挙げたものは placements に書かないでください。
+   - 浮動配置の図形（s1 など）と、浮動配置のテキストボックス（段落一覧の位置が「テキストボックス x1（浮動配置）の中」の段落）の
+     役割は、set_role ではなく placements で指定してください。浮動配置でないテキストボックスの段落に set_role で指定できるのは
+     fig_caption・table_caption・exclude だけです（囲みか図の注記かは placements の kind box・label で指定します）。
 
 回答の JSON は、placements、operations、notes の順に書いてください（placements を最初に。回答が長すぎて途中で切れても、
 図表の位置の指定が残るようにするためです）。
@@ -267,7 +269,9 @@ def build_request(plan: ArticlePlan, linker, build_exclusions=(), unsplit_names=
         role = p.role or region
         loc = plan.locations.get(src, "")
         if p.textbox_id and p.textbox_id in plan.textboxes:
-            loc = f"テキストボックス {p.textbox_id} の中"      # 文字だけのテキストボックス（placements では x1 などで指定する）
+            # 文字だけのテキストボックス（placements では x1 などで指定する）。浮動配置のものの段落は set_role で役割を変えられない
+            # （set_role_problem）ので、そう分かるように書く
+            loc = f"テキストボックス {p.textbox_id}" + ("（浮動配置）の中" if p.float_id else " の中")
         elif p.float_id:
             loc = f"図形 {p.float_id} の中"
         elif p.textbox_id:
@@ -430,12 +434,15 @@ def _box_contents(info) -> list:
 def textbox_section(plan: ArticlePlan) -> list:
     """依頼文の、文字だけのテキストボックス（structure.Classifier.place_boxes）の節: 「囲みか図の注記か決められなかった
     テキストボックス」（placements の kind box・label の指定が必要）、「位置を推定した囲み」（位置が違うときだけ指定）、
-    「扱いを機械的に決めたテキストボックス（変更不可）」。該当がなければ、その節は出さない。"""
+    「図に重ねた注記とみなして除外したテキストボックス」（本文の文章のときだけ kind box で指定。機械的な注記の判断も、本文の
+    問題文などなら AI が囲みに戻せるようにする。暫定の判断）、「囲みとして位置を機械的に決めたテキストボックス（変更不可）」。
+    該当がなければ、その節は出さない。"""
     from .structure import OUTSIDE_JA
     boxes = plan.textboxes
     undecided = [x for x, info in boxes.items() if info.kind == "undecided"]
     estimated = [x for x, info in boxes.items() if info.kind == "box" and info.estimated]
-    fixed = [x for x, info in boxes.items() if info.kind in ("box", "label") and x not in estimated]
+    labels = [x for x, info in boxes.items() if info.kind == "label"]
+    fixed = [x for x, info in boxes.items() if info.kind == "box" and not info.estimated]
     lines = []
 
     def anchor(info):
@@ -461,17 +468,17 @@ def textbox_section(plan: ArticlePlan) -> list:
             lines.append(f"  {_box_size(plan, info)}")
             lines.append("  中身:")
             lines += _box_contents(info)
-    if fixed:
-        lines.append("\n# 扱いを機械的に決めたテキストボックス（変更不可。placements に書かないこと）")
-        labels = {}
-        for x in fixed:
+    if labels:
+        lines.append("\n# 図に重ねた注記とみなして除外したテキストボックス（本文の文章のときだけ placements で kind box と after を"
+                     "指定）")
+        for x in labels:
             info = boxes[x]
-            if info.kind == "label":
-                labels.setdefault(info.box.anchor_src, []).append(x)
-            else:
-                lines.append(f"[{x}] 囲み: {_box_at(info)}に配置済み")
-        for src, xids in labels.items():
-            lines.append(f"[{'・'.join(xids)}] 図の注記（段落 [{src}] の図）として除外済み")
+            body = " / ".join(f"[{q.src}] {para_view(q)[:40]}" for q in info.paras if not q.is_blank)
+            lines.append(f"[{x}] 段落 [{info.box.anchor_src}] の図の注記（{info.why}）: {body}")
+    if fixed:
+        lines.append("\n# 囲みとして位置を機械的に決めたテキストボックス（変更不可。placements に書かないこと）")
+        for x in fixed:
+            lines.append(f"[{x}] 囲み: {_box_at(boxes[x])}に配置済み")
     return lines
 
 
@@ -834,7 +841,8 @@ MANUAL_EXAMPLE = """```json
 FIELD_GUIDE = """回答は placements、operations、notes の順に書く（placements を最初に）。
 
 placements（「# 位置を決められなかった図表」と「# 囲みか図の注記か決められなかったテキストボックス」に挙げたものごとに 1 件。
-どちらもなければ []）の各項目:
+どちらもなければ []。「# 位置を推定した囲み」「# 図に重ねた注記とみなして除外したテキストボックス」に挙げたものは、変えるときだけ
+kind box で書く）の各項目:
 - float: 図形の ID（s1 など）か、テキストボックスの ID（x1 など）
 - after: 図表を置く位置（Word で表示したときに図の左上の直上にある本文の文章を含む段落の ID。その段落の直後に置く）。
   テキストボックスを label にするときは ""
@@ -880,6 +888,8 @@ def manual_prompt(request_text, images) -> str:
             "なければ \"placements\": [] としてください。\n"
             "- 「# 囲みか図の注記か決められなかったテキストボックス」に挙げたもの（x1 など）も、すべて placements に書いてください"
             "（kind は box か label）。\n"
+            "- 「# 図に重ねた注記とみなして除外したテキストボックス」に挙げたものは、本文の文章（問題文・ヒントなど）のときだけ、"
+            "placements に kind box で書いてください。\n"
             "- 提案する操作がなければ \"operations\": [] とし、気づいたことだけを notes に書いてください。\n\n"
             "回答の見本（形式の見本です。内容はこの論文とは関係ありません）:\n"
             f"{MANUAL_EXAMPLE}\n\n"
@@ -1070,13 +1080,24 @@ def set_role_problem(p, plan: ArticlePlan, role: str) -> str:
     AI に勧めないように、判定を 1 か所にまとめる。修正計画の N6）。上から順に見て、最初に当たった理由を返す。
     浮動配置の図形（float_id）の段落は、すべて placements で指定させる。浮動配置でないテキストボックス（行内・VML）の段落には
     fig_caption・table_caption・exclude だけを受け付け（VML のキャプションへの fig_caption は今までどおり効く）、ほかの役割は
-    囲みか図の注記かを placements の kind box・label で指定させる（修正計画の F の (1)）。
+    囲みか図の注記かを placements の kind box・label で指定させる（修正計画の F の (1)）。囲みとして位置を機械的に決めた
+    文字だけのテキストボックス（placements でも変えられないもの。_box_placement_problem）の段落と、囲み・図の注記の判断の
+    対象でないテキストボックス（plan.textboxes にないもの: 図表の入ったテキストボックス、本文の外・表のセルのものなど）の段落には、
+    placements を案内しない（案内が行き止まりにならないように）。
     """
     if role not in ROLES:
         return f"役割「{role}」は指定できない"
+    box = plan.textboxes.get(p.textbox_id) if p.textbox_id else None
+    fixed = (f"テキストボックス {p.textbox_id} は囲み（boxed-text）として扱いと位置を機械的に決めたので、変更できない"
+             if box is not None and box.kind == "box" and not box.estimated else "")
     if p.float_id:
-        return "テキストボックス・グループ図形の中の段落の役割は placements で指定する"
+        return fixed or "テキストボックス・グループ図形の中の段落の役割は placements で指定する"
     if p.textbox_id and role not in ("fig_caption", "table_caption", "exclude"):
+        if fixed:
+            return fixed + "（浮動配置でないテキストボックスの段落に指定できる役割は fig_caption・table_caption・exclude だけ）"
+        if box is None:
+            return (f"テキストボックス {p.textbox_id} は囲み・図の注記の判断の対象でない（図表の入ったテキストボックス・本文の外の"
+                    "テキストボックスなど）ので、段落に指定できる役割は fig_caption・table_caption・exclude だけ")
         return ("浮動配置でないテキストボックスの段落に指定できる役割は fig_caption・table_caption・exclude だけ"
                 "（囲みか図の注記かは placements の kind box・label で指定する）")
     if p.src in plan.note_of:
@@ -1098,13 +1119,14 @@ def set_role_problem(p, plan: ArticlePlan, role: str) -> str:
 def set_role_hint(p, plan: ArticlePlan) -> str:
     """依頼文の除外の一覧で、段落 p に添える set_role の案内（set_role_problem で指定できる役割だけを勧める）。
 
-    囲みか図の注記か決められなかったテキストボックスの段落には、placements の kind box・label を案内する（set_role では
-    囲みにできない）。扱いを機械的に決めたテキストボックスの段落は、ほかの段落と同じく set_role で指定できる役割だけを示す
-    （placements の指定は採用されないので勧めない）。
+    囲みか図の注記か決められなかったテキストボックスの段落には、placements の kind box・label を案内し、図に重ねた注記とみなした
+    テキストボックスの段落には、本文の文章なら kind box で囲みにできることを案内する（set_role では囲みにできない）。
     """
     box = plan.textboxes.get(p.textbox_id) if p.textbox_id else None
     if box is not None and box.kind == "undecided":
         return "（囲みなら placements の kind box、図の注記なら label で指定）"
+    if box is not None and box.kind == "label":
+        return "（図の注記でなく本文の文章なら、placements の kind box で囲みに指定）"
     if not set_role_problem(p, plan, "p"):
         return "（本文の一部なら set_role を提案）"
     ok = [r for r in ROLES if r != "exclude" and not set_role_problem(p, plan, r)]
@@ -1187,7 +1209,7 @@ def _placement_problem(pl, plan: ArticlePlan, body: set, done: dict) -> str:
     info = plan.floats.get(fid) if isinstance(fid, str) else None
     if info is None:
         return (f"{fid} は「位置を決められなかった図表」「囲みか図の注記か決められなかったテキストボックス」"
-                "「位置を推定した囲み」にない")
+                "「位置を推定した囲み」「図に重ねた注記とみなして除外したテキストボックス」にない")
     if info.mode != "unplaced":
         return f"図形 {fid} は位置を機械的に決めた図表なので、位置も組み合わせも変更できない"
     if fid in done:
@@ -1249,11 +1271,14 @@ def _placement_problem(pl, plan: ArticlePlan, body: set, done: dict) -> str:
 def _box_placement_problem(xid, box, after, items, body: set, done: dict) -> str:
     """文字だけのテキストボックスの指定（placements の kind box・label）を採用しない理由（採用できれば ''）。
 
-    指定できるのは、囲みか図の注記か決められなかったもの（box か label）と、位置を推定した囲み（box で位置だけ）。box の after は
-    本文の段落だけ。label の after は使わない。
+    指定できるのは、囲みか図の注記か決められなかったもの（box か label）、位置を推定した囲み（box で位置だけ）と、図に重ねた
+    注記とみなしたもの（box で本文の囲みに戻すだけ。機械的な注記の判断でも、本文の問題文などなら AI が戻せるようにする。
+    暫定の判断）。box の after は本文の段落だけ。label の after は使わない。囲みとして位置を機械的に決めたもの（図の左上が
+    アンカー段落の左上にある浮動配置・行内）と空白だけのものは変更させない。
     """
-    if not (box.kind == "undecided" or (box.kind == "box" and box.estimated)):
-        return f"テキストボックス {xid} は扱いを機械的に決めたので、変更できない"
+    if box.kind not in ("undecided", "label") and not (box.kind == "box" and box.estimated):
+        what = "囲み（boxed-text）として扱いと位置" if box.kind == "box" else "扱い"
+        return f"テキストボックス {xid} は{what}を機械的に決めたので、変更できない"
     if xid in done:
         return f"テキストボックス {xid} の指定が 2 回ある（最初の指定を採用）"
     if (not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], dict)
@@ -1263,6 +1288,9 @@ def _box_placement_problem(xid, box, after, items, body: set, done: dict) -> str
         return "テキストボックスの指定では caption と body は空の一覧 [] にする"
     if items[0]["kind"] == "label" and box.kind == "box":
         return "位置を推定した囲みには box だけを指定できる"
+    if items[0]["kind"] == "label" and box.kind == "label":
+        return (f"テキストボックス {xid} は図に重ねた注記とみなして除外したので、指定できるのは box（本文の囲みに戻す）だけ"
+                "（図の注記のままなら書かない）")
     if items[0]["kind"] == "box" and (not isinstance(after, str) or after not in body):
         return f"置く位置の段落 {after} は本文の段落ではない（図形の中の段落・表のセル・本文以外は指定できない）"
     return ""
