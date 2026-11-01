@@ -1,22 +1,46 @@
 """docx を読み取り、中間表現（model.Document）を作る。
 
 文字の扱いは ooxml.py の文字ポリシーに従う。ここで作る「アトム」の文字列を連結したものが、
-ooxml.canonical_text() で独立に取り出した文字列と一致することを、最後に fidelity.py で確かめる。
+ooxml.canonical_texts() で独立に取り出した文字列と一致することを、最後に fidelity.py で確かめる。
+段落記号の削除でつながる段落（ooxml.joined_paragraphs）と隠し文字の判定（ooxml.HiddenRule）は、検証・ルート2 と同じ規則を使う:
+つながる段落は連鎖の最初の段落の ID の 1 つの段落として読み（後ろの段落の ID は欠番）、つなげない段落記号の削除は
+レポートの 10 章の警告で知らせる。変更履歴で削除された表の行のうち、Word で表示される文字・画像などが残らない行は読み飛ばして
+記録する。スタイル・既定の書式の設定で隠した文字・画像は、隠し文字の判定が暫定なので別にも記録する（要確認で知らせる）。
 """
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
 
-from .model import Atom, Cell, Document, Float, ImageRef, Layout, Para, Row, Table, TextBox, note_key
+from .model import (Atom, Cell, DeletedRow, Document, Float, ImageRef, JoinInfo, Layout, Para, Row, Table, TextBox,
+                    note_key)
 from .numbering import Numbering
-from .ooxml import (A_NS, BR_TEXT_TYPES, O_NS, PIC_NS, R_NS, V_NS, WP_NS, WPS_NS, DocxPackage, m,
-                    on_off, paragraph_ids, run_hidden, sym_char, w, wval)
+from .ooxml import (A_NS, BR_TEXT_TYPES, O_NS, PIC_NS, R_NS, V_NS, WP_NS, WPS_NS, DocxPackage, HiddenRule, canonical_text,
+                    joined_paragraphs, m, on_off, paragraph_ids, sym_char, unjoined_deleted_marks, w, wval)
 
 WPG_NS = "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"
 WPC_NS = "http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas"
 # テキストボックスを入れる VML の図形（style に大きさ・位置がある）
 VML_BOX_SHAPES = {f"{{{V_NS}}}shape", f"{{{V_NS}}}rect", f"{{{V_NS}}}roundrect"}
+
+# レポートの 10 章の警告（読み取りで見つけた、変更履歴の承諾の状態をまねきれないもの。Action にはしない）
+UNJOINED_MSG = ("{src}: 段落「{head}」は、変更履歴で段落の区切り（段落記号）が削除されていますが、{why}なので、次の段落と"
+                "つながずに出力しました。Word で変更をすべて承諾して保存してから変換し直すと、Word の表示と同じ段落になります。")
+DELETED_ROW_KEPT_MSG = ("{where}の {row} 行目: 変更履歴で削除された行ですが、削除されていない文字・画像などがあるので、行のまま出力しました"
+                        "（Word で変更をすべて承諾すると、この行は消えます）。Word で確かめ、変更をすべて承諾して保存してから"
+                        "変換し直してください。")
+CELL_DELETED_MSG = ("{where}の {row} 行目に、変更履歴で削除されたセルがあります。セルはそのまま出力しました（削除された文字は"
+                    "出力していません）。Word で変更をすべて承諾すると、セルが消えて表の形が変わることがあるので、Word で"
+                    "承諾して保存してから変換し直してください。")
+
+
+def table_where(head: str, caption: str = "") -> str:
+    """読み取りの表を利用者が Word で探す手がかり（キャプション「表1　…」の表 / 「区分」で始まる表 / 文字のない表）。head は
+    table_head（DeletedRow.head と同じ形）、caption は表のキャプションの文字（あれば、キャプションの冒頭 20 字で示す）。"""
+    cap = caption.strip()
+    if cap:
+        return f"キャプション「{cap[:20]}{'…' if len(cap) > 20 else ''}」の表"
+    return f"「{head}」で始まる表" if head else "文字のない表"
 
 
 @dataclass
@@ -86,6 +110,9 @@ class Reader:
         self.images = []
         self.warnings = []
         self.hidden = []
+        # 隠し文字のうち、スタイル・既定の書式の設定で隠したもの（ooxml.HiddenRule.run_hidden_by が "style"。規則が暫定なので
+        # 要確認で知らせる。report._style_hidden_action）。self.hidden の一部
+        self.style_hidden = []
         # 削除の変更履歴の中の脚注・文末脚注の参照の注の鍵（参照として数えない。structure.Classifier.attach_word_notes が除外の理由に使う）
         self.deleted_note_refs = set()
         self._img_count = 0
@@ -93,6 +120,14 @@ class Reader:
         self._float = None      # 読み取り中の浮動配置の図形（Float）
         self.textboxes = []
         self._textbox = None    # 読み取り中のテキストボックス（TextBox）。入れ子の内側を読む間も外側のまま
+        # 隠し文字の判定（検証・ルート2 と同じ規則）と、読み取り中の w:p の段落の状態（HiddenRule.para_state）
+        self.hidden_rule = HiddenRule(self.pkg.xml("word/styles.xml"))
+        self._pstate = False
+        # 段落記号の削除でつなぐ段落（部品ごと。_set_joins）: 連鎖の最初の w:p -> 連鎖、連鎖の後ろの w:p の集合
+        self.chains, self.later = {}, set()
+        self.joined = []        # (最初の段落の ID, [段落の ID, …])（すべての連鎖）
+        self.joins = []         # JoinInfo（スタイルの違う段落をつないだ連鎖。structure が判断の一覧に記録する）
+        self.deleted_rows = []  # DeletedRow（変更履歴で削除された、文字のない表の行。読み飛ばしたもの）
 
     # ------------------------------------------------------------ styles
     def style_chain(self, sid):
@@ -120,6 +155,7 @@ class Reader:
         self.part = "word/document.xml"
         self.rels = self.pkg.rels(self.part)
         self.pids = paragraph_ids(root, "d")
+        self._set_joins(root)
         body = root.find(w("body"))
         blocks = []
         self._tcount = 0
@@ -130,10 +166,11 @@ class Reader:
         tracked = sum(1 for _ in root.iter(w("ins"), w("del"), w("moveFrom"), w("moveTo")))
         comments = sum(1 for _ in root.iter(w("commentRangeStart")))
         doc = Document(blocks=blocks, footnotes=footnotes, endnotes=endnotes, media=self.media,
-                       styles=self.styles, warnings=self.warnings, hidden_text=self.hidden,
+                       styles=self.styles, warnings=self.warnings, hidden_text=self.hidden, style_hidden=self.style_hidden,
                        tracked_changes=tracked, comments=comments,
                        images=self.images, floats=self.floats, textboxes=self.textboxes, layout=read_layout(root, self.pkg),
-                       deleted_note_refs=self.deleted_note_refs)
+                       deleted_note_refs=self.deleted_note_refs, joined=self.joined, joins=self.joins,
+                       deleted_rows=self.deleted_rows)
         return doc
 
     def read_notes(self, part, tag, prefix) -> dict:
@@ -141,8 +178,9 @@ class Reader:
         out = {}
         if root is None:
             return out
-        saved = (self.part, self.rels, self.pids)
+        saved = (self.part, self.rels, self.pids, self.chains, self.later)
         self.part, self.rels, self.pids = part, self.pkg.rels(part), paragraph_ids(root, prefix)
+        self._set_joins(root)
         for note in root.findall(w(tag)):
             if note.get(w("type")) in ("separator", "continuationSeparator", "continuationNotice"):
                 continue
@@ -155,12 +193,30 @@ class Reader:
                     else:
                         paras.extend(b.paragraphs())
             out[nid] = paras
-        self.part, self.rels, self.pids = saved
+        self.part, self.rels, self.pids, self.chains, self.later = saved
         return out
+
+    def _set_joins(self, root):
+        """部品 root の段落記号の削除でつなぐ段落（ooxml.joined_paragraphs）を決め、つなげないもの（unjoined_deleted_marks）を
+        10 章の警告にする。つなげない段落が連鎖の最後の段落なら、警告の ID は連鎖の最初の段落のもの（読み取った段落の ID）。
+        警告は、その段落（連鎖なら連鎖全体）の docx の文字が空でないときだけ（空の段落は、つながなくても見える違いがない。
+        変更履歴で削除された表の行のセルの最後の段落などで、警告が並ぶのを避ける）。"""
+        self.chains = joined_paragraphs(root)
+        self.later = {q for c in self.chains.values() for q in c[1:]}
+        chain_of = {q: c for c in self.chains.values() for q in c}
+        for p, why in unjoined_deleted_marks(root):
+            chain = chain_of.get(p, [p])
+            text = "".join(canonical_text(q, self.hidden_rule) for q in chain)
+            if text:
+                # 理由が英字で終わるとき（「次がカスタム XML」）は「なので」の前に空白を入れる
+                why = why + (" " if why[-1:].isascii() else "")
+                self.warnings.append(UNJOINED_MSG.format(src=self.pids.get(chain[0], "?"), head=text.strip()[:20], why=why))
 
     def read_block(self, el):
         tag = el.tag
         if tag == w("p"):
+            if el in self.later:        # 段落記号の削除で前の段落につながる（前の段落といっしょに読んだ）
+                return []
             para, extra = self.read_paragraph(el)
             return [para] + extra
         if tag == w("tbl"):
@@ -186,10 +242,20 @@ class Reader:
         t = Table(tid=f"t{self._tcount}", style_id=sid or "",
                   style_name=self.styles[sid].name if sid in self.styles else (sid or ""),
                   float_id=self._float.fid if self._float else "", textbox_id=self._textbox.xid if self._textbox else "")
+        # 変更履歴で削除された行（w:trPr/w:del）のうち読み飛ばしたもの、文字が残るので出力したもの、変更履歴で削除されたセル
+        # （w:tcPr/w:cellDel）のある行（どれも docx の表の何行目か。1 から、読み飛ばした行も数える）
+        skipped, kept, cell_del = [], [], []
         # 行と、行の中のセルは、コンテンツコントロール（w:sdt）や w:customXml に包まれていることがある
-        for tr in _children(tbl, (w("tr"),)):
+        for k, tr in enumerate(_children(tbl, (w("tr"),)), 1):
             trpr = tr.find(w("trPr"))
             row = Row(header=trpr is not None and on_off(trpr.find(w("tblHeader"))))
+            row_deleted = trpr is not None and trpr.find(w("del")) is not None
+            shapes = (len(self.images), len(self.floats), len(self.textboxes))
+            records = (len(self.joined), len(self.joins), len(self.deleted_rows), len(self.hidden), len(self.warnings),
+                       len(self.style_hidden))
+            # 削除された行を読み飛ばすときに戻す、自動番号の数え方（Numbering.counters の写し）
+            counters = {n: dict(c) for n, c in self.numbering.counters.items()} if row_deleted else None
+            has_cell_del = False
             for c in _children(tr, (w("tc"),)):
                 tcpr = c.find(w("tcPr"))
                 cell = Cell()
@@ -200,27 +266,56 @@ class Reader:
                     vm = tcpr.find(w("vMerge"))
                     if vm is not None:
                         cell.vmerge = "restart" if wval(vm) == "restart" else "continue"
+                    has_cell_del = has_cell_del or tcpr.find(w("cellDel")) is not None
                 for ch in c:
                     cell.blocks.extend(self.read_block(ch))
                 row.cells.append(cell)
+            if row_deleted:
+                # Word で変更を承諾すると行ごと消える。文字・画像・数式・注の参照（アトム）がひとつもなく、図形（画像・浮動配置の
+                # 図形・テキストボックス）も読まなかった行だけを読み飛ばす（行の段落の docx の文字はすべて空なので、検証は
+                # 何もしなくても同じ結果になる。図形を読み飛ばすと、図形のアンカーが出力しない段落を指してしまう）
+                if _row_empty(row) and shapes == (len(self.images), len(self.floats), len(self.textboxes)):
+                    skipped.append(k)
+                    # 読み飛ばした行の中でつないだ段落・読み飛ばした入れ子の表の行・隠し文字・警告は、出力した段落の記録から外し
+                    # （行ごと記録する）、行の中で数えた自動番号は戻す（Word で承諾すると行ごと消え、後ろの番号が詰まる）
+                    del (self.joined[records[0]:], self.joins[records[1]:], self.deleted_rows[records[2]:],
+                         self.hidden[records[3]:], self.warnings[records[4]:], self.style_hidden[records[5]:])
+                    self.numbering.counters = counters
+                    continue
+                kept.append(k)
+            if has_cell_del:
+                cell_del.append(k)
             t.rows.append(row)
+        head = table_head(t)
+        t.skipped_rows = len(skipped)
+        self.deleted_rows += [DeletedRow(tid=t.tid, row=k, head=head) for k in skipped]
+        self.warnings += [DELETED_ROW_KEPT_MSG.format(where=table_where(head), row=k) for k in kept]
+        self.warnings += [CELL_DELETED_MSG.format(where=table_where(head), row=k) for k in cell_del]
         return t
 
     # ------------------------------------------------------------ paragraph
     def read_paragraph(self, p, in_textbox=False):
+        """段落 p を読む。p が段落記号の削除でつながる連鎖の最初の段落なら、連鎖の段落を順に読んで 1 つの段落にする。
+
+        つないだ段落の ID は最初の段落のもの。書式（スタイル・番号・揃え）は、連鎖の中で docx の文字（canonical_text）が空でない
+        最初の段落のもの（すべて空なら最後の段落のもの。「前の段落が空なら後ろの段落のもの、そうでなければ前の段落のもの」を
+        先頭からたたみ込んだものと同じ）。セクションの区切りは最後の段落のもの。自動番号は連鎖ごとに 1 回だけ数える。
+        """
         src = self.pids.get(p, "?")
-        ppr = p.find(w("pPr"))
+        chain = self.chains.get(p, [p])
+        fp = p if len(chain) == 1 else next((q for q in chain if canonical_text(q, self.hidden_rule) != ""), chain[-1])
+        ppr = fp.find(w("pPr"))
         sid = ""
         numpr = None
         align = ""
-        sect = False
         if ppr is not None:
             sid = wval(ppr.find(w("pStyle")), "") or ""
             np = ppr.find(w("numPr"))
             if np is not None:
                 numpr = (wval(np.find(w("numId"))), int(wval(np.find(w("ilvl")), "0") or 0))
             align = wval(ppr.find(w("jc")), "") or ""
-            sect = ppr.find(w("sectPr")) is not None
+        last = chain[-1].find(w("pPr"))
+        sect = last is not None and last.find(w("sectPr")) is not None
         sid = sid or self.default_pstyle
         if numpr is None:
             numpr = self.style_num(sid)
@@ -233,12 +328,25 @@ class Reader:
                     float_id=self._float.fid if self._float else "", textbox_id=self._textbox.xid if self._textbox else "")
         if para.numbering:
             para.autonum = self.numbering.label(*para.numbering)
+        if len(chain) > 1:
+            self._record_join(chain, para)
         self._extra = []
-        self._fields = []
-        self._walk(p, para, fmt={}, href=None, hidden=False, deleted=False)
+        for q in chain:
+            # フィールドと隠し文字の段落の状態は w:p ごと（段落をまたぐフィールドは扱わない）
+            self._fields = []
+            self._pstate = self.hidden_rule.para_state(q)
+            self._walk(q, para, fmt={}, href=None, hidden="", deleted=False)
         extra = self._extra
         self._extra = []
         return para, extra
+
+    def _record_join(self, chain, para):
+        """つないだ連鎖を記録する。段落のスタイル（pStyle がなければ既定の段落スタイル）が 1 種類でなければ JoinInfo も。"""
+        srcs = [self.pids.get(q, "?") for q in chain]
+        self.joined.append((para.src, srcs))
+        sids = [wval(q.find(f"{w('pPr')}/{w('pStyle')}"), "") or self.default_pstyle for q in chain]
+        if len(set(sids)) > 1:
+            self.joins.append(JoinInfo(src=para.src, srcs=srcs, style_ids=sids, used=para.style_id))
 
     def _field_href(self):
         for f in reversed(self._fields):
@@ -262,6 +370,7 @@ class Reader:
             para.atoms.append(Atom(kind="text", text=text, fmt=f, href=href))
 
     def _walk(self, el, para, fmt, href, hidden, deleted):
+        """el の子を読む。hidden は隠し文字か（隠したときの指定。ooxml.HiddenRule.run_hidden_by の "direct"・"style"。隠さないなら ""）。"""
         for ch in el:
             tag = ch.tag
             if not isinstance(tag, str):
@@ -285,7 +394,7 @@ class Reader:
                 self._walk(ch, para, fmt, mm.group(1) if mm else href, hidden, deleted)
                 continue
             if tag == w("r"):
-                self._run(ch, para, fmt, href, hidden or run_hidden(ch), deleted)
+                self._run(ch, para, fmt, href, hidden or self.hidden_rule.run_hidden_by(ch, self._pstate), deleted)
                 continue
             if tag == m("oMathPara") or tag == m("oMath"):
                 if deleted or hidden or self._in_code():
@@ -358,6 +467,8 @@ class Reader:
                 txt = _plain_of_run_child(ch)
                 if txt:
                     self.hidden.append((para.src, txt))
+                    if hidden == "style":
+                        self.style_hidden.append((para.src, txt))
                 continue
             if tag == w("t"):
                 self._add_text(para, ch.text or "", fmt, h)
@@ -419,6 +530,8 @@ class Reader:
             # 段落と表も、コンテンツコントロール（w:sdt）や w:customXml に包まれていることがある
             for el in _children(tx, (w("p"), w("tbl"))):
                 if el.tag == w("p"):
+                    if el in self.later:        # 段落記号の削除で前の段落につながる（前の段落といっしょに読んだ）
+                        continue
                     sub, extra = self._read_nested_paragraph(el)
                     self._extra.append(sub)
                     self._extra.extend(extra)
@@ -465,21 +578,25 @@ class Reader:
         return tb
 
     def _read_nested_paragraph(self, p):
-        saved = (self._extra, self._fields)
+        # 外側の段落の読み取りの途中なので、外側の段落の分（中の段落・フィールド・隠し文字の段落の状態）を退避しておく
+        saved = (self._extra, self._fields, self._pstate)
         sub, extra = self.read_paragraph(p, in_textbox=True)
-        self._extra, self._fields = saved
+        self._extra, self._fields, self._pstate = saved
         return sub, extra
 
     def _read_nested_table(self, tbl):
-        # セルの段落を読むと read_paragraph が _extra を作り直すため、外側の段落の分を退避しておく
-        saved = (self._extra, self._fields)
+        # セルの段落を読むと read_paragraph が _extra・_fields・_pstate を作り直すため、外側の段落の分を退避しておく
+        saved = (self._extra, self._fields, self._pstate)
         t = self.read_table(tbl)
         t.in_textbox = True
-        self._extra, self._fields = saved
+        self._extra, self._fields, self._pstate = saved
         return t
 
     def _graphic(self, el, para, hidden):
-        """画像・図形。隠し文字のランの中の画像も doc.images に入れる（ImageRef.hidden）が、段落のアトムにはしない。"""
+        """画像・図形。隠し文字のランの中の画像も doc.images に入れる（ImageRef.hidden。スタイル・既定の書式で隠したものは
+        hidden_style も）が、段落のアトムにはしない。テキストボックスの中の段落は、隠し文字のランの中でも隠さずに読む
+        （画像と違う。0.25.0 と同じ。docs/DESIGN.md の 4.1）。"""
+        hid = {"hidden": bool(hidden), "hidden_style": hidden == "style"}
         if el.tag == w("drawing"):
             holder = el.find(f"{{{WP_NS}}}inline")
             inline = holder is not None
@@ -508,14 +625,13 @@ class Reader:
                 rid = blip.get(f"{{{R_NS}}}embed") if blip is not None else None
                 ext = pic.find(f".//{{{A_NS}}}ext")
                 pcx, pcy = (int(ext.get("cx", "0")), int(ext.get("cy", "0"))) if (ext is not None and len(pics) > 1) else (cx, cy)
-                img = self._new_image(rid, "drawing", cx_emu=pcx, cy_emu=pcy, inline=inline, descr=descr,
-                                      hidden=hidden)
+                img = self._new_image(rid, "drawing", cx_emu=pcx, cy_emu=pcy, inline=inline, descr=descr, **hid)
                 if not hidden:
                     para.atoms.append(Atom(kind="image", image=img))
             if not pics:
                 if not has_tx or "wordprocessingGroup" in uri or "wordprocessingCanvas" in uri or "chart" in uri:
                     img = self._new_image(None, "drawing", cx_emu=cx, cy_emu=cy, inline=inline, descr=descr,
-                                          shape_only=True, hidden=hidden)
+                                          shape_only=True, **hid)
                     if not hidden:
                         para.atoms.append(Atom(kind="image", image=img))
             if has_tx:
@@ -540,13 +656,12 @@ class Reader:
         for d in imgdata:
             rid = d.get(f"{{{R_NS}}}id")
             img = self._new_image(rid, "ole" if el.tag == w("object") else "vml",
-                                  cx_emu=cx, cy_emu=cy, ole_progid=progid, hidden=hidden)
+                                  cx_emu=cx, cy_emu=cy, ole_progid=progid, **hid)
             if not hidden:
                 para.atoms.append(Atom(kind="image", image=img))
         has_tx = any(True for _ in el.iter(w("txbxContent")))
         if not imgdata and not has_tx:
-            img = self._new_image(None, "vml", cx_emu=cx, cy_emu=cy, shape_only=True, ole_progid=progid,
-                                  hidden=hidden)
+            img = self._new_image(None, "vml", cx_emu=cx, cy_emu=cy, shape_only=True, ole_progid=progid, **hid)
             if not hidden:
                 para.atoms.append(Atom(kind="image", image=img))
         if has_tx:
@@ -687,10 +802,46 @@ def _plain(el) -> str:
 
 
 def _plain_of_run_child(ch) -> str:
-    if ch.tag == w("t"):
+    """隠し文字のランの子の文字（レポートの 6 章の隠し文字の一覧に載せる。文字ポリシーの「含める」もの）。"""
+    tag = ch.tag
+    if tag == w("t"):
         return ch.text or ""
-    if ch.tag in (w("tab"),):
+    if tag in (w("tab"), w("ptab")):
         return "\t"
+    if tag == w("br"):
+        return "\n" if ch.get(w("type")) in BR_TEXT_TYPES else ""
+    if tag == w("cr"):
+        return "\n"
+    if tag == w("noBreakHyphen"):
+        return "\u2011"
+    if tag == w("softHyphen"):
+        return "\u00ad"
+    if tag == w("sym"):
+        return sym_char(ch)
+    return ""
+
+
+def _cell_paragraphs(cell):
+    """セルの段落（入れ子の表のセル・セルの中のテキストボックスの段落を含む）。"""
+    for b in cell.blocks:
+        if isinstance(b, Para):
+            yield b
+        else:
+            yield from b.paragraphs()
+
+
+def _row_empty(row) -> bool:
+    """行のどのセルの段落にも、アトム（文字・画像・数式・注の参照）がない。"""
+    return not any(q.atoms for c in row.cells for q in _cell_paragraphs(c))
+
+
+def table_head(t) -> str:
+    """表の最初の文字のあるセルの文字の冒頭 20 字（長ければ「…」を付ける。Word で表を探す手がかり）。"""
+    for row in t.rows:
+        for c in row.cells:
+            text = "".join(q.text_only() for q in _cell_paragraphs(c)).strip()
+            if text:
+                return text[:20] + ("…" if len(text) > 20 else "")
     return ""
 
 

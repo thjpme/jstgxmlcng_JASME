@@ -2,6 +2,8 @@
 
 段落の文字は必ず <jx:span src=... seq=...> の中に書き出す（tracking.py 参照）。
 書式（太字など）やリンクは、文字を包む要素として付け加えるだけで、文字そのものは変えない。
+段落の中の改行（Word の Shift+Enter。文字は "\\n"）は、どの文脈でも文字のまま出力する。表のセル（Ctx.breaks）では、改行の前に
+<break/> を補う（文字を持たない要素で、改行の文字はその後ろに残す。修正計画の U3）。
 """
 from __future__ import annotations
 
@@ -10,7 +12,7 @@ from typing import Optional
 
 from lxml import etree
 
-from .model import LinkSpec, Para, note_key
+from .model import LinkSpec, Newline, Para, note_key
 from .omml import OmmlConverter
 from .tracking import GEN, JX, SPAN
 
@@ -32,17 +34,19 @@ class Ctx:
     images: bool = True
     label: bool = False               # LinkSpec(kind="label") を <label> にするか（別行数式）
     ref_tags: bool = False            # year / article-title / source / pub-id を使えるか（文献内）
+    breaks: bool = False              # 段落の中の改行（"\n"）の前に <break/> を入れるか（表のセル。リンクの中には入れない）
+    newline_label: str = ""           # 段落の中の改行を要確認として知らせる文脈の名前（空なら知らせない。report._newline_action）
 
 
 BODY = Ctx()
 SECTITLE = Ctx(link=None)
-TITLE = Ctx(fmt=BASIC_FMT, link=None, xref=False, images=False)
-NAME = Ctx(fmt=frozenset(), link=None, xref=False, math="none", images=False)
-AFF = Ctx(fmt=frozenset({"sup", "sub"}), link=None, xref=False, math="none", images=False)
+TITLE = Ctx(fmt=BASIC_FMT, link=None, xref=False, images=False, newline_label="題目・副題")
+NAME = Ctx(fmt=frozenset(), link=None, xref=False, math="none", images=False, newline_label="著者名")
+AFF = Ctx(fmt=frozenset({"sup", "sub"}), link=None, xref=False, math="none", images=False, newline_label="所属")
 ABSTRACT = Ctx(link="uri")
-REF = Ctx(fmt=BASIC_FMT, link="ref", xref=False, images=False, ref_tags=True)
+REF = Ctx(fmt=BASIC_FMT, link="ref", xref=False, images=False, ref_tags=True, newline_label="引用文献")
 BACKP = Ctx(link="ext-link")
-CELL = Ctx()
+CELL = Ctx(breaks=True)
 CAPTION = Ctx()
 DISPF = Ctx(link=None, xref=False, math="display", label=True)
 LABEL = Ctx(link=None, xref=False, math="none", images=False)
@@ -58,6 +62,8 @@ class Emitter:
         self.fn_numbers = fn_numbers or {}      # Word の脚注・文末脚注の鍵（model.note_key）-> (fid, 表示する番号の文字列。本誌は「1)」)
         self.skip_images = set(skip_images)     # 図に移したため段落の中では出力しない画像の ID
         self.math_warnings = []
+        self.breaks = 0                         # 改行の前に入れた <break/> の数（表のセル）
+        self.newlines = []                      # 改行のある段落を書き出した記録（model.Newline。builder がレポートの 10 章に出す）
 
     # ------------------------------------------------------------------ 範囲の切り出し
     @staticmethod
@@ -95,7 +101,12 @@ class Emitter:
         atoms = self.slice_atoms(para, start, end)
         if skip_gen:
             atoms = [a for a in atoms if a.kind != "gen"]
+        before = self.breaks
         self.write_atoms(sp, atoms, ctx)
+        n = sum(a.text.count("\n") for a in atoms if a.kind == "text")
+        if n:
+            self.newlines.append(Newline(src=para.src, count=n, breaks=self.breaks - before, cell=ctx.breaks,
+                                         label=ctx.newline_label))
         return sp
 
     def drop(self, parent, para: Para, start: int, end: int, seq: int, reason: str):
@@ -188,16 +199,31 @@ class Emitter:
     def write_inline(self, parent, items, ctx: Ctx):
         run = []   # 同じ書式が続く文字をまとめる
 
-        def flush():
-            if not run:
-                return
-            fmt = run[0].fmt & ctx.fmt
+        def formatted(fmt, text):
             target = parent
             for f in FMT_ORDER:
                 if f in fmt:
                     target = etree.SubElement(target, f)
-            _append_text(target, "".join(a.text for a in run))
+            _append_text(target, text)
+
+        def flush():
+            if not run:
+                return
+            fmt = run[0].fmt & ctx.fmt
+            text = "".join(a.text for a in run)
             run.clear()
+            if not (ctx.breaks and parent.tag == SPAN and "\n" in text):
+                formatted(fmt, text)
+                return
+            # 表のセル: 改行の前に <break/> を入れ、改行の文字はその後ろ（tail）に残す。書き込み先が jx:span そのもの（リンクの
+            # 中ではない）ときだけ。<break/> は書式の要素（<bold> など）の中に置けないので、書式の要素はいったん閉じ、改行の
+            # 後ろで作り直す（空の部分には書式の要素を作らない）
+            for k, piece in enumerate(text.split("\n")):
+                if k:
+                    etree.SubElement(parent, "break").tail = "\n"
+                    self.breaks += 1
+                if piece:
+                    formatted(fmt, piece)
 
         for a in items:
             if a.kind == "text":

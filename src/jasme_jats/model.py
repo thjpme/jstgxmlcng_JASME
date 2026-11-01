@@ -102,6 +102,7 @@ class ImageRef:
     image_id: str = ""          # レポート・AI 用の識別子 (img1, img2, ...)
     float_id: str = ""          # 浮動配置の図形（Float）の中の画像なら、その図形の ID
     hidden: bool = False        # 隠し文字（w:vanish）のランの中の画像。段落のアトムにしない（XML に出力しない）
+    hidden_style: bool = False  # hidden のうち、スタイル・既定の書式の設定で隠したもの（ランの直接の指定でない。要確認で知らせる）
 
     @property
     def height_cm(self) -> float:
@@ -174,6 +175,7 @@ class Table:
     float_id: str = ""          # 浮動配置の図形（Float）の中の表なら、その図形の ID
     in_textbox: bool = False    # テキストボックスの中の表（浮動配置でない VML・行内の図形の中の表は、float_id が空でも True）
     textbox_id: str = ""        # テキストボックスの中の表なら、そのテキストボックス（TextBox）の ID
+    skipped_rows: int = 0       # 変更履歴で削除された、文字のない行のうち、読み飛ばした行の数（docx_reader。rows に入れていない）
 
     def paragraphs(self):
         for r in self.rows:
@@ -269,6 +271,34 @@ class LostImage:
 
 
 @dataclass
+class JoinInfo:
+    """段落記号が削除された段落の連鎖のうち、段落のスタイルが 1 種類でないもの（docx_reader。structure が判断の一覧に記録する）。"""
+    src: str                # 連鎖の最初の段落の ID（読み取った段落の ID）
+    srcs: list              # 連鎖の段落の ID（後ろの段落の ID は欠番）
+    style_ids: list         # 連鎖の段落ごとのスタイルの ID（pStyle がなければ既定の段落スタイル）
+    used: str               # 読み取った段落のスタイルの ID（文字のある最初の段落のもの。すべて空なら最後の段落のもの）
+
+
+@dataclass
+class DeletedRow:
+    """変更履歴で削除された表の行（w:trPr/w:del）のうち、どの段落にも Word で表示される文字（画像・数式・注の参照も）がなく、
+    図形も読まなかったので読み飛ばしたもの（docx_reader。隠し文字だけが残る行も含む）。"""
+    tid: str                # 読み取りの表の ID（t1, t2, …）
+    row: int                # docx の表の何行目か（1 から。読み飛ばした行も数える）
+    head: str               # 表の最初の文字のあるセルの文字の冒頭（Word で表を探す手がかり）
+
+
+@dataclass
+class Newline:
+    """段落の中の改行（w:br・w:cr。文字は "\\n"）を XML に書き出した記録（emit.Emitter.span が書き出すたびに 1 つ）。"""
+    src: str                # 段落の ID
+    count: int              # 書き出した文字の中の改行の数
+    breaks: int             # 改行の前に入れた <break/> の数（表のセル。リンクの中の改行には入れない）
+    cell: bool = False      # <break/> を入れる文脈（表のセル。emit.Ctx.breaks）か
+    label: str = ""         # 要確認として知らせる文脈の名前（題目・副題、著者名、所属、引用文献。emit.Ctx.newline_label）
+
+
+@dataclass
 class Decision:
     """機械処理または AI が下した判断。レポートの根拠になる。"""
     did: str
@@ -290,6 +320,8 @@ class Document:
     styles: dict                       # {style_id: StyleInfo}
     warnings: list = field(default_factory=list)
     hidden_text: list = field(default_factory=list)   # [(src, text)]
+    # hidden_text のうち、スタイル・既定の書式の設定で隠したもの [(src, text)]（ooxml.HiddenRule.run_hidden_by が "style"。要確認）
+    style_hidden: list = field(default_factory=list)
     deleted_note_refs: set = field(default_factory=set)   # 変更履歴で削除された脚注・文末脚注の参照の note_key（docx_reader）
     tracked_changes: int = 0
     comments: int = 0
@@ -297,6 +329,10 @@ class Document:
     floats: list = field(default_factory=list)         # Float（出現順）
     textboxes: list = field(default_factory=list)      # TextBox（出現順。本文のテキストボックス）
     layout: Optional[Layout] = None
+    # 段落記号の削除でつないだ段落の連鎖 [(最初の段落の ID, [段落の ID, …])]（本文・Word の脚注・文末脚注。docx_reader）
+    joined: list = field(default_factory=list)
+    joins: list = field(default_factory=list)          # JoinInfo（つないだ連鎖のうち、段落のスタイルが 1 種類でないもの）
+    deleted_rows: list = field(default_factory=list)   # DeletedRow（変更履歴で削除された、文字のない表の行。読み飛ばしたもの）
 
     def all_paragraphs(self):
         for b in self.blocks:
