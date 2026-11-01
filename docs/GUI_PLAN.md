@@ -246,3 +246,34 @@ Colab 上で、`app.py` の最小版（アップロード・入力欄・ボタ�
 - G2（試作）は Gradio で行う。5 章の S1〜S4 を Gradio で読み替える: S1 は `gr.File` のアップロード（Colab の中継の上限）、
   S2 は `.click()` の処理の中で `pipeline.convert()` を動かしたときの進捗（`gr.Progress`）、S3 は `gr.File` のダウンロード、
   S4 はシークレットの読み出し。S5・S6（E' 用）は行わない。
+
+### 2026-11-01: G2 の試作
+
+作ったもの（未コミット。出力の形は変わらないので版は上げていない。試作を残すか決めるときに合わせて決める）:
+
+- `src/jasme_jats/app.py`（試作）: 2 層。`AppState`（Gradio に依存しない。必須項目の不足・要対応・手動モードの回答待ち・足りない画像・ZIP・次の論文のリセット。
+  変換は `pipeline.convert()` を呼ぶだけ）と `build_app(state, io)`（`gr.Blocks`）。Colab に依存する操作は `io`（既定は環境変数、`ColabIO` は
+  `google.colab.userdata`。`ColabIO.libreoffice_ready()` は準備のセルが裏で起動した `LO_PROC` の終了を待つ）。`launch()` は `share=False` 固定。
+  画面は 4.1 の並び。結果は `colab.result_boxes` → `summary_box` → `report_details`。足りない画像は 1 つの `gr.File`（複数可）で受け取り、出力ファイル名の順に
+  割り当てる簡単な形（ファイル名の順に並べて上の図から）。「結果をダウンロード」は要対応が残っていれば一度知らせ、「このままダウンロード」のチェックで進める。
+- `pyproject.toml`: `gui = ["gradio==6.31.0"]`（`dev` にも）。`notebooks/JASME_試作_Gradio.ipynb`（`tools/make_notebook.py` で生成。「1. 準備」と「2. 画面を開く」の 2 セル）。
+- `tests/test_app.py`（`AppState` の遷移と `build_app`）、`tests/test_notebook.py`（試作のノートブックの一致・構文）。
+
+Colab で利用者に確かめてもらうこと（5 章の S1〜S4 の読み替え。結果は下に書き足す）:
+
+| ID | 確かめること | 通らなかったとき |
+|---|---|---|
+| S1 | `gr.File` で docx（数 MB）と PDF（10〜30 MB）をアップロードできるか（Colab の中継の上限で落ちないか） | ファイルを Google ドライブに置いて読む形に変える |
+| S2 | 変換中（数分）に進捗（`gr.Progress`）が出て、画面が固まらず Colab が切れないか | 進捗を細かくする／`pipeline.convert()` を別スレッドで動かす |
+| S3 | 「結果をダウンロード」で出した ZIP を `gr.File` からダウンロードできるか（`allowed_paths` が効くか） | `google.colab.files.download()` を `io` に足す |
+| S4 | API モードで `google.colab.userdata.get()` をボタンの処理から読めるか（許可のダイアログが出るか） | 準備のセルで先に読んで渡す |
+| 追加 | 「1. 準備」の時間（Gradio が加わる分）と、「2. 画面を開く」で出力欄の中に画面が出るか（埋め込み表示） | 案 E'（セルの整理）に戻す（6 章の 3） |
+
+ここ（Colab なし）で確かめたこと:
+
+- `python -m pytest -q` がすべて通る（892 件 + 試作の 9 件）。
+- `demo.launch(prevent_thread_lock=True, share=False)` でローカルに立ち上げ、`gradio_client.Client` から「変換する」を呼び、結果の HTML
+  （「結果の要約」を含む）と、「結果をダウンロード」の ZIP が返ることを確かめた（AI を使わない場合）。手動モードでは、依頼文が返り、要対応が残っていると
+  ダウンロードが止まり、回答（`{"operations": []}`）を反映すると回答待ちが消え、「次の論文」で論文ごとの項目だけ空になることを確かめた。
+- 確かめていない（Colab でしか分からない）こと: 上の表のすべて。API モードの実際の呼び出しも未確認。
+- 気づいたこと: 画面の状態（`AppState`）は 1 つのプロセスで 1 つなので、Colab の画面を 2 つのタブで同時に使うと互いに上書きする（試作の範囲では 1 人 1 画面）。

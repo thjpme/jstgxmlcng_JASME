@@ -35,6 +35,7 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
 | `images.py` / `package.py` / `report.py` | 画像の書き出し（変換できなかった EMF/WMF の元の画像は、出力フォルダの直下の `要変換/`）、ZIP、レポート。アップロード用の ZIP に入れるものは `package.upload_entries()` だけで決め（今回の XML・今回指定した PDF・出力できた画像）、作った ZIP は `package.zip_problems()` で読み直して確かめる（`Result.zip_issues`）。記事フォルダにあるのに ZIP に入れなかったファイルは `package.unzipped_files()`（`Result.not_zipped`。レポートの 10 章）。利用者への知らせ（要対応・要確認）は `report.actions()` の 1 か所で `report.Action` の一覧にする（レポートの冒頭・14 章、Colab の赤い枠、コマンドラインの標準エラーと終了コードはこれだけで決まる。`docs/DESIGN.md` の 3 章） |
 | `pipeline.py` / `cli.py` | 全体の流れ（画像の出力漏れの検出 `lost_images()` を含む）とコマンドライン。`Result.needs_action`（要対応があるか）・`Result.pdf_fallback`（ルート2 で PDF の文字を読めなかった）。コマンドラインの終了コードは、0 が要対応なし、1 が要対応あり（要対応の一覧は標準エラー）、2 が中止 |
 | `colab.py` | Colab ノートブックの表示部品（手動モードの依頼文の枠、要対応（赤）・要確認（黄）の枠 `result_boxes()`〈`missing_images_box()` などは、その中の 1 つの枠〉、結果の要約の灰色の枠 `summary_box()`、畳んで出すレポート全文 `report_details()`）と、続けて変換するときの入力の確認 |
+| `app.py` | **試作**（`docs/GUI_PLAN.md` の G2）: Gradio の 1 画面の操作画面。`AppState`（Gradio に依存しない。入力・結果・「変換できるか」「要対応が残っているか」「手動モードで回答待ちか」「足りない画像」・ZIP・次の論文のリセット）と `build_app(state, io)`（画面。Colab に依存する操作は `io`）、`launch()`（share は常に False）。表示は `colab.py` の部品を使う。Gradio の版は pyproject の `gui` で固定。ノートブックは `notebooks/JASME_試作_Gradio.ipynb`。採用が決まるまで、従来のノートブックが正 |
 | `config.py` | 本誌の設定の読み込みと、記事ごとの書誌情報（`ArticleMeta.from_dict()`。巻・号・ページは NFKC にして、巻・号・開始ページが半角の英数字でなければ欄の名前を示して止める。日付は `_date()` で 2026/3/31 などの書き方も読む） |
 | `data/jasme.toml` | 本誌の設定（誌名・ISSN・DOI 形式・スタイル名の対応表など） |
 

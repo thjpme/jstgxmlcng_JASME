@@ -26,6 +26,20 @@ def test_notebook_shows_version_and_cells_compile():
             compile("".join(c["source"]), "cell", "exec")
 
 
+def test_gradio_notebook_is_up_to_date_and_cells_compile():
+    """試作の Gradio のノートブック（準備と画面を開く）も、生成と一致し、セルが構文として正しく、Gradio を入れて share なしで開く。"""
+    assert mk.OUT_GRADIO.read_text(encoding="utf-8") == mk.render_gradio()
+    nb = json.loads(mk.render_gradio())
+    sources = ["".join(c["source"]) for c in nb["cells"]]
+    assert f"ツールの版: {__version__}" in sources[0] and "試作版" in sources[0] and "ZIP をダウンロードできるか" in sources[0]
+    codes = [src for c, src in zip(nb["cells"], sources) if c["cell_type"] == "code"]
+    assert len(codes) == 2
+    for src in codes:
+        compile(src, "cell", "exec")
+    assert "jasme-jats[ai,images,colab,gui]" in codes[0] and "DONE" not in codes[0] and "手順 2" not in codes[0]
+    assert "from jasme_jats.app import launch" in codes[1] and "launch()" in codes[1]
+
+
 def test_step_guard_and_mark():
     ns = {}
     with pytest.raises(SystemExit, match="先に手順 1・2 を"):
