@@ -115,7 +115,7 @@ def main(argv=None):
     if res.not_zipped:        # add_images の後の値（ZIP を作り直すと計算し直す）
         print(f"※ 記事フォルダにあるが ZIP に入れなかったファイル {len(res.not_zipped)} 件（前の変換の残りか、手で置いたもの。"
               "PDF は --pdf、画像は --images で指定し直すと入る。レポートの 10 章）: " + ", ".join(res.not_zipped))
-    # 要対応・要確認（report.actions。レポートの冒頭・14 章、Colab の赤い枠と同じもの）。画像を入れた後に調べる
+    # 要対応・要確認（report.actions。レポートの冒頭・14 章、Colab の枠と同じもの）。画像を入れた後に調べる
     for act in actions(res):
         if act.cli:
             print(act.cli, file=sys.stderr)

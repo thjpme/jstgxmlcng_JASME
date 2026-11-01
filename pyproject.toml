@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jasme-jats"
-version = "0.25.0"
+version = "0.26.0"
 description = "Word（docx）の論文を J-STAGE 全文 XML（JATS 1.1）に変換する。『全国数学教育学会誌 数学教育学研究』用"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -17,7 +17,8 @@ dependencies = [
 [project.optional-dependencies]
 ai = ["anthropic>=1.0", "openai>=1.66", "google-genai>=1.30"]
 images = ["pypdfium2>=4"]
-dev = ["pytest>=7", "anthropic>=1.0", "openai>=1.66", "google-genai>=1.30", "pypdfium2>=4"]
+colab = ["markdown>=3.4"]    # Colab で変換レポートを畳んで表示する（colab.report_details）
+dev = ["pytest>=7", "anthropic>=1.0", "openai>=1.66", "google-genai>=1.30", "pypdfium2>=4", "markdown>=3.4"]
 
 [project.scripts]
 jasme-jats = "jasme_jats.cli:main"

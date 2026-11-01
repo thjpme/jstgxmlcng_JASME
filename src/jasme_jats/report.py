@@ -4,7 +4,7 @@
 機械的な推定、出力しなかった文字の全件、落とした空白の全件、生成文字、画像、書誌情報、DTD 検証と J-STAGE の登載時チェック、
 出版版 PDF との照合、登載前のチェックリストの順に並べる。
 
-利用者に知らせること（要対応・要確認）は actions() の 1 か所で決める。レポートの冒頭・14 章、Colab の赤い枠
+利用者に知らせること（要対応・要確認）は actions() の 1 か所で決める。レポートの冒頭・14 章、Colab の枠（要対応は赤、要確認は黄）
 （colab.result_boxes）、コマンドラインの標準エラーと終了コード（pipeline.Result.needs_action）は、どれもその結果を使う。
 """
 from __future__ import annotations
@@ -545,18 +545,18 @@ def note_notes(plan):
 
 
 # ---------------------------------------------------------------------------- 要対応・要確認の知らせ（1 か所にまとめる）
-# 利用者に知らせることは、ここ（actions）に Action を 1 つ足す。レポートの冒頭・14 章、Colab の赤い枠（colab.result_boxes）と
+# 利用者に知らせることは、ここ（actions）に Action を 1 つ足す。レポートの冒頭・14 章、Colab の枠（要対応は赤、要確認は黄）（colab.result_boxes）と
 # 手順 8 の止め方、コマンドラインの標準エラーと終了コードは、どれも actions の結果だけで決まる（個別の表示を足さない）。
 NEEDS_ACTION = "要対応"     # コマンドラインの終了コード 1、Colab の手順 8 で一度止める、赤い枠、レポートの冒頭・14 章
-TO_CHECK = "要確認"         # 赤い枠、レポートの冒頭・14 章だけ（終了コードは 0）
+TO_CHECK = "要確認"         # 黄色い枠、レポートの冒頭・14 章だけ（終了コードは 0）
 
 
 @dataclass
 class Action:
     """利用者に知らせる 1 件（要対応か要確認）。文面の欄が空なら、そこには出さない。
 
-    top: レポートの冒頭の囲み（Markdown。複数行でもよい）。checklist: 14 章の行。box_title・box_detail: Colab の赤い枠の
-    見出しと本文。cli: コマンドラインの標準エラーに出す文（Colab の手順の番号ではなく、コマンドラインの指定で書く）。
+    top: レポートの冒頭の囲み（Markdown。複数行でもよい）。checklist: 14 章の行。box_title・box_detail: Colab の枠（要対応は赤、
+    要確認は黄）の見出しと本文。cli: コマンドラインの標準エラーに出す文（Colab の手順の番号ではなく、コマンドラインの指定で書く）。
     """
     level: str
     key: str
@@ -1017,7 +1017,7 @@ def pdf_suspect(r) -> bool:
 
 
 def _marks_note(docx_texts, pdf_texts, insert=False) -> str:
-    """赤い枠の一覧の前に添える、記号の説明（一覧に「〓」〈と、insert なら「［］」〉があるときだけ。レポートの 13 章の表と同じ
+    """Colab の枠の一覧の前に添える、記号の説明（一覧に「〓」〈と、insert なら「［］」〉があるときだけ。レポートの 13 章の表と同じ
     意味。docx の側と PDF の側で「〓」の意味が違う）。"""
     in_docx = any(FORMULA_MARK in (t or "") for t in docx_texts)
     in_pdf = any(FORMULA_MARK in (t or "") for t in pdf_texts)
@@ -1140,7 +1140,7 @@ def _pdf_suspect_action(r):
         cli=f"要確認: 別の記事の PDF かもしれません。{what}（レポートの 13 章）。--pdf の PDF がこの記事のものか確かめること")
 
 
-IGNORED_SHOWN = 10      # 赤い枠に並べる、照合に使わなかった PDF の文字の段落の数（全件はレポートの 13 章の最後）
+IGNORED_SHOWN = 10      # Colab の枠に並べる、照合に使わなかった PDF の文字の段落の数（全件はレポートの 13 章の最後）
 
 
 def _pdf_ignored_action(r):

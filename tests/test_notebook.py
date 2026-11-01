@@ -229,21 +229,21 @@ def test_step2_route_defaults_to_published_pdf():
 
 
 def test_steps5_and_6_show_result_boxes():
-    """要対応・要確認の赤い枠（XML に入らなかった画像など）は、手順 5 と手順 6（AI の回答で再変換）で、report.actions から
-    まとめて出す（colab.result_boxes。個別の枠の表示を並べない。修正計画 D）。"""
+    """要対応・要確認の枠（XML に入らなかった画像など）は、手順 5 と手順 6（AI の回答で再変換）で、report.actions から
+    まとめて出す（colab.result_boxes。個別の枠の表示を並べない。修正計画 D）。その後に結果の要約（summary_box）、
+    レポート全文（report_details。畳んで出す）の順。要約の行を print で並べない。"""
     for prefix in ("#@title 5.", "AI_RESPONSE = r'''"):
         src = cell_source(prefix)
         assert "display(HTML(result_boxes(res" in src
-        # 赤い枠は、レポートの表示より前に出す
-        assert src.index("result_boxes(res") < src.index("display(Markdown(res.report_path")
+        assert (src.index("result_boxes(res") < src.index("display(HTML(summary_box(res)))")
+                < src.index("display(HTML(report_details(res.report_path"))
+        assert "Markdown(" not in src and 'print("文字の不変性チェック' not in src
         for old in ("missing_images_box", "lost_images_box", "figure_body_box", "pdf_diff_box", "unplaced_box",
                     "error_box("):
             assert old not in src
     assert "result_boxes" in cell_source("#@title 5.").split("api_key = None")[0]   # 手順 5 で import する
     # 手順 5 の手動モードでは、依頼文の枠を出すので「AI の回答をまだ反映していません」の枠は出さない
     assert 'result_boxes(res, skip=("ai_pending",))' in cell_source("#@title 5.")
-    # PDF に合わせられなかったときの 1 行（M4）
-    assert "elif res.pdf_fallback:" in cell_source("#@title 5.")
 
 
 def test_step6_shows_ai_error_box_before_report(monkeypatch, tmp_path):
@@ -251,27 +251,26 @@ def test_step6_shows_ai_error_box_before_report(monkeypatch, tmp_path):
     レポートの表示より前に出す（result_boxes の呼び出しと、変換の後の流れを、文字列ではなく実行して確かめる）。"""
     from conftest import FULL
 
-    from jasme_jats.colab import result_boxes
+    from jasme_jats.colab import report_details, result_boxes, summary_box
     from jasme_jats.config import ArticleMeta, JournalConfig
     from jasme_jats.pipeline import Options, add_images, convert
-    from jasme_jats.report import pdf_summary, upload_issues
     shown = fake_display(monkeypatch)
     src = cell_source("AI_RESPONSE = r'''").replace("ここに AI の回答を貼り付ける", "提案はありません（JSON ではない回答）", 1)
     ns = {"DONE": {1, 2, 3, 4, 5}, "AI": "manual", "docx_path": FULL, "pdf_path": None, "ROUTE_KEY": "docx",
           "SPLIT_LABELS": None, "OUT": tmp_path / "output", "journal": JournalConfig.load(),
           "meta": ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり"}),
-          "convert": convert, "Options": Options, "add_images": add_images, "upload_issues": upload_issues,
-          "pdf_summary": pdf_summary, "result_boxes": result_boxes, "HTML": lambda x: x, "display": shown.append,
-          "Markdown": lambda x: ("Markdown", x)}
+          "convert": convert, "Options": Options, "add_images": add_images, "result_boxes": result_boxes,
+          "summary_box": summary_box, "report_details": report_details, "HTML": lambda x: x, "display": shown.append}
     exec(src, ns)
     assert ns["res"].ai.mode == "manual" and ns["res"].ai.error and ns["LAST_AI_RESPONSE"]
-    box = next(i for i, x in enumerate(shown) if isinstance(x, str) and "貼り付けた回答を読み込めませんでした" in x)
-    report = next(i for i, x in enumerate(shown) if isinstance(x, tuple) and x[0] == "Markdown")
-    assert box < report and "#dc2626" in shown[box]
+    box = next(i for i, x in enumerate(shown) if "貼り付けた回答を読み込めませんでした" in x)
+    summary = next(i for i, x in enumerate(shown) if "結果の要約" in x)
+    report = next(i for i, x in enumerate(shown) if "<details" in x and "変換レポート" in x)
+    assert box < summary < report and "#dc2626" in shown[box]
 
 
 def test_step8_shows_result_boxes():
-    """手順 8（ダウンロード）でも、ダウンロードの後に要対応・要確認の赤い枠を出す（手順 5・6 の枠を読み飛ばしたとき用）。"""
+    """手順 8（ダウンロード）でも、ダウンロードの後に要対応・要確認の枠を出す（手順 5・6 の枠を読み飛ばしたとき用）。"""
     src = cell_source("#@title 8.")
     assert "from jasme_jats.colab import result_boxes" in src
     assert src.index("files.download(archive)") < src.index("display(HTML(result_boxes(res)))")
