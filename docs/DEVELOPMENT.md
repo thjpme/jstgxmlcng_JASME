@@ -21,10 +21,10 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
 | `numbering.py` | Word の自動段落番号を表示どおりの文字列にする |
 | `omml.py` | Word の数式（OMML）→ MathML 2.0 |
 | `structure.py` | 段落の役割の決定と論文の構造（`ArticlePlan`）の組み立て。出力しない段落の記録（`ArticlePlan.exclude()`、空白だけの段落は `exclude_blank()`）。浮動配置の図表の配置（`Classifier.place_floats`。位置を決められない図表の仮の位置は `provisional_target`）と、図の本体の組み方（表のセルの画像とキャプション `cell_figures`、画像のない図キャプションの隣の表 `table_for_figure`）。文字だけのテキストボックス（囲み・図に重ねた注記・決められないもの。`Classifier.place_boxes`。囲みは `BoxNode` → `<boxed-text>`。`docs/DESIGN.md` の 6.2）。本文の外（引用文献・注・英文の部分）の段落に結び付いた図形は、その領域の段落にせず本文の最後に回す（`classify` が組み立てを 2 回行う。`Classifier.outside`。6.1）。Word の脚注・文末脚注を、本文で最初に参照される順の通し番号の注にする（`Classifier.attach_word_notes`。参照のない注は理由付きで除外。参照が XML に出力しない段落と、題目・引用文献など注の番号をリンクにしない段落〈`ArticlePlan.no_link_paras`。builder の `xref=False` の文脈をなぞる〉の中にだけある注は、本文からのリンクのない注）。英文要旨の後ろの資料の見出し（`appendix_heading`〈形は `RE_APPENDIX`。文の形の段落〈`appendix_sentence`〉は除き、判断の一覧に記録する〉、見出しのスタイル。`Classifier.build_front_en`）と、英文要旨の中の和文の段落・引用文献などの後ろの資料の見出し・手で書いた注と番号が重なる Word の注の知らせ（`ArticlePlan.abstract_ja`・`app_after_refs`・`note_overlap`・`warnings`） |
-| `linker.py` | 図・表・数式・注・URL・DOI の機械的リンク、アトムにリンクを付ける共通関数 `apply_span()` |
+| `linker.py` | 図・表・数式・注・URL・DOI の機械的リンク、アトムにリンクを付ける共通関数 `apply_span()`。本文の上付きの数字は、論文の注番号の書き方（`Linker.note_style`・`bare_notes`）と、番号の形・指数・単位の形（`_sup_marks`）でリンクするかを決め、語の中の「図1」「表1」（直前が漢字。`FLOAT_REF_OK_BEFORE` を除く）はリンクしない（`float_refs`）。リンクしなかったものは、その番号の注・図表があれば判断の一覧に記録する（applied=False。AI の text と occurrence は `occurrence_at`） |
 | `refparse.py` | 引用文献の解析と著者・年方式の引用の抽出・照合（先行ツール「文献チェック」refcheck.py から移植） |
-| `ai_assist.py` | AI 補完（依頼文の作成、API 呼び出し（Claude・ChatGPT・Gemini・Sakana AI）、回答の検証と適用。途中で切れた回答から、最後まで書かれた図表の位置の指定だけを読む `parse_cut_response()`）。図表の位置の指定と同じ `placements` で、文字だけのテキストボックスの種類（kind box・label）も指定させる（`_box_placement_problem`）。set_role の可否は `set_role_problem()` の 1 か所で決め、回答の検証（`role_overrides`）と依頼文の「出力から除外」の一覧の案内（`set_role_hint`）の両方で使う |
-| `emit.py` / `builder.py` | XML の組み立て（文字は必ず `jx:span` の中に書く。囲みは `<boxed-text>`。本文の最上位では `<p>` で包む）。表のセルの段落の中の改行の前に `<break/>` を補い（`emit.Ctx.breaks`）、改行のある段落を `BuildInfo.newlines` に記録して 10 章の警告にする |
+| `ai_assist.py` | AI 補完（依頼文の作成、API 呼び出し（Claude・ChatGPT・Gemini・Sakana AI）、回答の検証と適用。既定の AI モデルは `DEFAULT_MODEL` と `DEFAULT_MODEL_INFO`〈表示名・料金・提供終了の予定〉の 1 か所で決める。途中で切れた回答から、最後まで書かれた図表の位置の指定だけを読む `parse_cut_response()`）。図表の位置の指定と同じ `placements` で、文字だけのテキストボックスの種類（kind box・label）も指定させる（`_box_placement_problem`）。set_role の可否は `set_role_problem()` の 1 か所で決め、回答の検証（`role_overrides`）と依頼文の「出力から除外」の一覧の案内（`set_role_hint`）の両方で使う |
+| `emit.py` / `builder.py` | XML の組み立て（文字は必ず `jx:span` の中に書く。囲みは `<boxed-text>`。本文の最上位では `<p>` で包む）。表のセルの段落の中の改行の前に `<break/>` を補い（`emit.Ctx.breaks`）、改行のある段落を `BuildInfo.newlines` に記録して 10 章の警告にする。姓と名の区切りがない氏名は `BuildInfo.unsplit_names`（段落の ID・氏名・言語。AI 依頼文に使う）に記録し、英文の氏名なら 10 章の警告にする |
 | `tracking.py` | 変換途中の目印の定義 |
 | `fidelity.py` | 文字の不変性チェック（出力した段落が除外にも記録されていないか、空白だけとした除外が本当に空白だけか、も確かめる） |
 | `validate.py` | DTD 検証（`dtd/` に J-STAGE 指定 DTD を同梱） |
@@ -70,7 +70,7 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
 
 - `tests/make_fixtures.py` がテスト用の docx（`tests/fixtures/sample_full.docx`, `sample_edge.docx`, `sample_float.docx`, `sample_notes.docx`,
   `sample_pdfcheck.docx`, `sample_reader.docx`, `sample_float_text.docx`, `sample_structure.docx`, `sample_b3_cells.docx`,
-  `sample_b3_tablefig.docx`, `sample_b3_place.docx`, `sample_outside.docx`）と、照合用の PDF（`sample_pdfcheck.pdf`。
+  `sample_b3_tablefig.docx`, `sample_b3_place.docx`, `sample_outside.docx`, `sample_links.docx`, `sample_links_bare.docx`）と、照合用の PDF（`sample_pdfcheck.pdf`。
   LibreOffice が要る。なければ作り直さない）を生成する。内容は架空。変更したら `python tests/make_fixtures.py` で作り直してコミットする
   （中身の変わらない docx も作り直されるので、差分は確かめてから）。1 つの docx だけを作り直すときは、その関数だけを呼ぶ
   （例: `cd tests && python -c "import make_fixtures as mf; mf.make_reader(mf.HERE / 'fixtures' / 'sample_reader.docx')"`）。
@@ -228,6 +228,20 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
   もう一度指定できること、画像ファイルがない図の 9 章の備考（手順 7・`--images`）、14 章の PDF の行。
   書誌情報の入力: 全角の巻・号・ページの正規化とその知らせ、英数字以外の巻などのエラー（コマンドラインは終了コード 2）、
   日付の書き方（`test_dates_accept_common_forms`）。`tests/test_notebook.py` で、手順 3 の表示とエラーも確かめる。
+- `tests/test_links.py`: 注・図表へのリンクの規則（修正計画の H。D2・M5）。`sample_links.docx`（注番号が「1)」の書き方の論文）で、
+  上付きの指数・単位（「3 cm」＋²・x²+y²・上付きの「−1」・f(x²)）と番号だけの上付きの ² をリンクしないこと、番号の形がはっきりした
+  注番号（「1,2)」「1-3)」の 1 も、「註1」は「註」ごと、上付きの「1」＋本文の「)」）と本文の「注」＋上付きの「1」をリンクすること、
+  リンクしなかった数字の記録（指数・単位は段落ごとに 1 件、番号だけのものは 1 件ずつ。レポートの 4 章と AI 依頼文の「推定:」。
+  actions は増えない）と、記録の text・occurrence の `link_note` を貼り戻すとその上付きにリンクが付くこと。`sample_links_bare.docx`
+  （番号だけの上付きの論文）で、¹ ² はリンクし m² はリンクしないこと、上付きの「1-3」「1, 2」のリンクに空白を入れないこと。
+  その場で作る小さな論文で、指数の形の上付きは注がなくても 3 章に出さないこと、符号で始まる上付き・英字の後ろの「2)」・
+  閉じ括弧の後ろの番号だけの上付き・本文の「注 」＋上付き・直前が「注」の上付きだけの論文の書き方・全角の「２）」、囲み
+  （boxed-text）の中の上付き。`_sup_marks` の種類と `occurrence_at` の単体テストも。語の中の「図1」「表1」（地図1・図表1・発表1回目・
+  概念図1・代表1名・付表1）をリンクせず記録し、「図表1と表1」の後ろの表1・「地図1、図2」の図2 をリンクすること、記録の `link_figure`
+  を貼り戻せること、`Linker.float_refs` の単体テスト（docs/fix_plan_repro_tests.py の再現テストの逆）、式の参照は変えないこと。
+  U4（姓と名の区切りがない氏名を `BuildInfo.unsplit_names` から依頼文に載せる。英文 1 語の氏名は依頼文にも載せ、10 章の警告も出す）と
+  U5（既定の AI モデル名を `ai_assist.DEFAULT_MODEL` の 1 か所にだけ書く）は `tests/test_ai.py`、ノートブックがその値を使うことは
+  `tests/test_notebook.py`。
 - `tests/test_notes.py`: テンプレートの規定と違う書き方の注（`sample_notes.docx` の本文の大きさの「（注1）」・引用文献の後ろの注の節・
   番号の書き方が想定外の注、`sample_edge.docx` の Word の脚注機能）。AI による注の区切りの指定（`fn_start`）も。Word の脚注・文末脚注
   （修正計画の D4。`sample_structure.docx` の節「Word の脚注と文末脚注」と、その場で作る小さな論文）: 文末脚注を注として出すこと、
@@ -386,7 +400,11 @@ docx と組にして確かめるときは、`--pdf` を付けて（ルート2）
 - **利用者への知らせを足す**: `report.py` に、条件を満たすときに `Action`（level は `NEEDS_ACTION` か `TO_CHECK`）を返す関数を作り、
   `actions()` の並びに加える（冒頭の順。PDF の知らせは `pdf_actions()`）。レポート・Colab・コマンドラインは自動で出す。
 - **AI の依頼内容を変える**: `ai_assist.py` の `SYSTEM_PROMPT`。操作の種類を増やすときは `OP_SCHEMA` と `apply_ops()` に検証を加える。
-- **モデルを変える**: ノートブックの `MODEL`（Claude）・`OTHER_MODEL`（Claude 以外）、コマンドラインの `--ai-model`。
+- **モデルを変える**: 1 回の変換だけなら、ノートブックの `MODEL`（Claude）・`OTHER_MODEL`（Claude 以外）、コマンドラインの `--ai-model`。
+  既定の Claude のモデルを変えるときは、`ai_assist.DEFAULT_MODEL` と `DEFAULT_MODEL_INFO`（表示名・料金・提供終了の予定。どちらも
+  リテラルだけで書く）を直し、`python tools/make_notebook.py` でノートブックを作り直す（`pipeline.Options`・コマンドライン・ノートブックの
+  既定と説明は、この 2 つから作る。`tests/test_ai.py`・`tests/test_notebook.py` が、ほかの場所に直書きがないことと、ノートブックの値を
+  確かめる）。
 - **API モードの AI を増やす**: OpenAI 互換の API なら `call_sakana()` と同じく `_openai_client()` に接続先を渡す。それ以外は `ai_assist.call_openai()` などと同じ形（依頼文と画像 → `AIOutcome.raw` に JSON の文字列）の関数を足し、
   `PROVIDERS`・`API_KEY_NAMES`・`call_provider()`、CLI の `--ai-provider`、ノートブックの手順 4 の選択肢に加える。テストは偽のクライアントで書く。
 
@@ -484,4 +502,5 @@ Claude Code の環境の作り方）を読む。
 0.25.0 と同じ）。規則が Word と違っても不変性チェックでは見つからないので、スタイル・既定の書式で隠した文字・画像は要確認で知らせ
 （`report._style_hidden_action`。利用者が Word で表示されないことを確かめ、表示されれば開発者に知らせる）、試験運用で件数と確かめた
 結果を記録する。J-STAGE の試験登載で、表のセルの `<break/>`（改行の位置と、セルの中の段落の間。全文 XML 作成マニュアルの td・th の文字修飾の一覧にない）の表示と、アップロードのときのエラーの有無を確かめる（`docs/JSTAGE_NOTES.md`）。手元のテストデータ1〜3 には段落記号の削除・隠し文字・削除された行はなく、出力が変わるのはテストデータ3 のセルの `<break/>` と題目の改行の要確認だけ |
+| 注・図表へのリンクの規則（0.27.0） | 修正計画（`docs/FIX_PLAN.md`）の H で、上付きの指数・単位（cm²・x²・s⁻¹）を注にリンクせず、論文ごとに注番号の書き方（「1)」の形か、番号だけの上付きか）を判定し（D2・決定事項 15）、語の中の「図1」「表1」（地図1・付表1・発表1回目など）を図・表にリンクしないようにした（M5・決定事項 16。`docs/DESIGN.md` の 6 章）。リンクしなかったものは、その番号の注・図表があれば判断の一覧（4 章）と AI 依頼文の「推定:」に載る（要対応・要確認にはしない）。架空の docx（`sample_links.docx`・`sample_links_bare.docx`）でのみ確かめていて、テストデータ1〜3 には上付きの指数・単位も、番号だけの注も、語の中の図表番号もない（0.26.0 と出力が同じ）。試験運用で、指数の多い論文の記録の件数（上限は置いていない）、番号だけの注の論文、「1)」の注と番号だけの注が混ざった論文、実際の AI（Claude）が記録から `link_note`・`link_figure` を提案するかを確かめる。番号だけの論文で英字・数字の直後の注番号（「Piaget¹」）は指数とみなしてリンクしないなど、残る形は `docs/DESIGN.md` の 7 章。「1)」の書き方の論文の番号だけの上付きの数字を 1 件ずつ記録すること（決定事項 15 の「段落ごとに 1 行」は明らかな指数だけ）は暫定。英文 1 語の著者名は、決定事項 17 のとおりAI 依頼文に今までどおり載せ、10 章の警告でも知らせる（AI の split_name は和文の氏名にしか使えない） |
 | 正式リリース | 試験運用で問題がなければ、版を 1.0.0 にする |

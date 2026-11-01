@@ -47,6 +47,9 @@ class BuildInfo:
     exclusions: list = field(default_factory=list)   # Exclusion（書き出しの段階で出力しないと決めたもの）
     notes: list = field(default_factory=list)        # (category, src, message) 機械的な判断の記録
     newlines: list = field(default_factory=list)     # 段落の中の改行（model.Newline。段落ごとにまとめたもの。10 章と要確認）
+    # 姓と名を分けられなかった氏名 [(段落の ID, 氏名〈前後の空白・タブを除く〉, 言語 ja / en)]。AI 依頼文の「姓と名の区切りがない
+    # 氏名」に使う（ai_assist.build_request。notes の文言から氏名を切り出さない）
+    unsplit_names: list = field(default_factory=list)
 
 
 def _sub(parent, tag, text=None, **attrs):
@@ -426,6 +429,14 @@ class Builder:
             self.em.span(sn, p, E.NAME)
             self.info.notes.append(("name", p.src,
                                     f"氏名「{text.strip()}」に姓と名の区切り（空白）がないため、全体を姓（surname）として出力"))
+            core = text.strip(" \u3000\t")     # AI の split_name の検証（ai_assist.apply_ops）と同じ空白の扱い
+            self.info.unsplit_names.append((p.src, core, lang))
+            if lang == "en":
+                # 英文の氏名は AI の split_name でも分けられない（和文の氏名だけ）ので、利用者に知らせる（10 章。決定事項 17）
+                self.info.warnings.append(
+                    f"英文の著者名「{core}」（段落 {p.src}）に姓と名の区切り（空白）がないため、全体を姓（surname）として"
+                    "出力しました。名もある氏名なら、Word で姓と名の間に空白を入れて保存してから変換し直してください"
+                    "（AI による補完では、英文の著者名は分けられません）。")
             return
         order = {"surname": 0, "given": 1}
         holders = {}

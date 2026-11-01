@@ -1,6 +1,8 @@
 """AI 補完: 回答の検証と適用（実際の API は呼ばない）。"""
+import inspect
 import json
 import types
+from pathlib import Path
 
 import pytest
 from lxml import etree
@@ -8,7 +10,8 @@ from lxml import etree
 import make_fixtures as mf
 from conftest import DATA, FLOAT, FULL, STRUCTURE
 from jasme_jats import ai_assist
-from jasme_jats.ai_assist import parse_response, parse_mathml
+from jasme_jats import pipeline
+from jasme_jats.ai_assist import DEFAULT_MODEL, parse_response, parse_mathml
 from jasme_jats.model import Para
 from jasme_jats.pipeline import Options, _mechanical, convert
 from jasme_jats.report import actions
@@ -135,11 +138,21 @@ def test_api_mode_with_fake_client(journal, meta, tmp_path, monkeypatch):
     monkeypatch.setattr(anthropic, "Anthropic", FakeClient)
     res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_api_key="test",
                                                convert_metafiles=False))
-    assert calls["model"] == "claude-opus-5-5"
+    assert calls["model"] == DEFAULT_MODEL
     assert calls["output_config"]["format"]["type"] == "json_schema"
     assert calls["fallbacks"] == "default"
     assert not res.ai.error
     assert len(res.ai.accepted) == 7 and res.fidelity.ok
+
+
+def test_default_model_is_written_once(tmp_path):
+    """既定の AI モデル名は ai_assist.DEFAULT_MODEL の 1 か所にだけ書く（修正計画の U5）。pipeline.Options の既定もこれで、
+    ノートブックの生成スクリプト（tools/make_notebook.py）は ai_assist.py から読む（tests/test_notebook.py）。"""
+    assert Options(out_dir=tmp_path).ai_model == DEFAULT_MODEL
+    root = Path(pipeline.__file__).resolve().parent
+    for path in sorted(root.glob("*.py")) + [root.parent.parent / "tools" / "make_notebook.py"]:
+        n = path.read_text(encoding="utf-8").count(f'"{DEFAULT_MODEL}"')
+        assert n == (1 if path.name == "ai_assist.py" else 0), path
 
 
 def test_response_schema_is_strict():
@@ -149,7 +162,7 @@ def test_response_schema_is_strict():
     json.dumps(ai_assist.RESPONSE_SCHEMA)
 
 
-def _fake_anthropic(monkeypatch, calls, available=("claude-opus-5-5",), listed=(), text=RESPONSE, stop="end_turn"):
+def _fake_anthropic(monkeypatch, calls, available=(DEFAULT_MODEL,), listed=(), text=RESPONSE, stop="end_turn"):
     """偽の Anthropic クライアント。available にないモデルを指定すると NotFoundError、listed は Models API の一覧。
     text・stop は回答の文字列と止まった理由（max_tokens なら、回答が長すぎて途中で切れた）。"""
     import anthropic
@@ -187,7 +200,7 @@ def test_api_model_auto_and_retired_fallback(journal, meta, tmp_path, monkeypatc
     calls = []
     _fake_anthropic(monkeypatch, calls, available=("claude-opus-6",), listed=listed)
     res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_api_key="t", convert_metafiles=False))
-    assert calls == ["claude-opus-5-5", "claude-opus-6"] and res.ai.model == "claude-opus-6"
+    assert calls == [DEFAULT_MODEL, "claude-opus-6"] and res.ai.model == "claude-opus-6"
     assert "切り替えた" in res.ai.model_note and not res.ai.error
     assert "使用したモデル: claude-opus-6" in res.report_path.read_text(encoding="utf-8")
     # 「自動」→ はじめから最新の Opus
@@ -323,7 +336,7 @@ def test_gemini_errors_are_reported(monkeypatch):
 
 def test_other_providers_require_a_model_name(journal, meta, tmp_path):
     # ChatGPT・Gemini ではモデル名を利用者が指定する（Claude のモデル名・「自動」・空欄は受け付けない）
-    for model in ("", "auto", "claude-opus-5-5"):
+    for model in ("", "auto", DEFAULT_MODEL):
         out = ai_assist.call_provider("openai", "x", [], model=model)
         assert "モデルの名前を指定" in out.error and "Opus と同等以上" in out.error
     res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_provider="gemini", ai_model="",
@@ -1204,3 +1217,61 @@ def test_fullwidth_space_paragraphs_in_textboxes_keep_fidelity(journal, meta, tm
     kinds = sorted(bi.kind for bi in res.plan.textboxes.values())
     assert kinds == ["box", "label", "undecided"] and res.plan.unplaced_floats == ["s4"]
     assert sum(1 for _, why, t in fid.excluded if why == "空白のみの段落" and t == "　") == 4
+
+
+# ============================================================================= 姓と名の区切りがない氏名（修正計画の U4）
+def names_article(path, ja_names, en_names):
+    """和文・英文の著者名だけを変えた小さな論文（著者名は ja_names・en_names の順。所属はどれも架空大学）。"""
+    b = mf.Builder()
+    body = mf.front_ja(b, "氏名の検証用文書", "―姓と名―", [("架空大学", n) for n in ja_names])
+    body += [mf.para(mf.S["sec1"], "１．はじめに"), mf.para(mf.S["body"], "試験（2024）にならい，著者名を確かめる。"),
+             mf.para(mf.S["ref_head"], "引用および参考文献"),
+             mf.para(mf.S["ref"], "試験六郎（2024）．「小さな論文」．『架空誌』，第5巻，pp.9-10．")]
+    body += mf.front_en(b, "Checking Names", "Surnames", [(n, "Fictional University") for n in en_names], ["Name abstract."])
+    body += mf.tail(b)
+    b.save(path, body)
+    return path
+
+
+def test_unsplit_names_come_from_build_info(journal, meta, tmp_path):
+    """姓と名の区切りがない氏名は、builder.BuildInfo.unsplit_names（段落の ID・前後の空白を除いた氏名・言語）から AI 依頼文に
+    載せる（4 章の記録の文言から切り出さない）。sample_full の d11 は、模擬回答の split_name の対象。"""
+    from jasme_jats.builder import build
+    _, plan, _ = _mechanical(FULL, journal)
+    assert build(plan, meta, journal, None)[1].unsplit_names == [("d11", "研究次郎", "ja")]
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", convert_metafiles=False))
+    assert "- [d11] 姓と名の区切りがない氏名: 「研究次郎」" in res.prompt_path.read_text(encoding="utf-8")
+    assert 'split("「"' not in inspect.getsource(pipeline.convert)
+    # 氏名の前後の空白（全角も）は AI の split_name の検証と同じく除き、間に空白のある氏名は載せない
+    path = names_article(tmp_path / "names.docx", ["研究次郎", "架空四郎\u3000", "\u3000架空五郎", "試験\u3000太郎", "試験 三郎"],
+                         ["Jiro KENKYU", "Shiro KAKU", "Goro KAKU", "Taro SHIKEN", "Saburo SHIKEN"])
+    _, plan, _ = _mechanical(path, journal)
+    info = build(plan, meta, journal, None)[1]
+    assert [(text, lang) for _, text, lang in info.unsplit_names] == [("研究次郎", "ja"), ("架空四郎", "ja"), ("架空五郎", "ja")]
+
+
+def test_build_request_lists_unsplit_names_with_language(journal):
+    """build_request は (段落の ID, 氏名, 言語) の組を受け取り、英文の氏名も載せる（利用者の決定事項 17: 英文 1 語の氏名も、
+    今までどおり AI 依頼文に載せる）。"""
+    from jasme_jats.ai_assist import build_request
+    _, plan, linker = _mechanical(FULL, journal)
+    req, _ = build_request(plan, linker, (), [("d11", "研究次郎", "ja"), ("d12", "KENKYU", "en")])
+    assert "- [d11] 姓と名の区切りがない氏名: 「研究次郎」" in req
+    assert "- [d12] 姓と名の区切りがない氏名: 「KENKYU」" in req
+
+
+def test_english_one_word_name_is_listed_and_warned(journal, meta, tmp_path):
+    """英文 1 語の著者名は、全体を姓として出力し、4 章の記録（今までどおり）・AI 依頼文（決定事項 17）・10 章の警告（決定事項 17
+    の後半）に出す。要対応・要確認は増えない。和文の「研究　次郎」は分けられるので載せない。"""
+    path = names_article(tmp_path / "en.docx", ["研究\u3000次郎"], ["KENKYU"])
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    [warn] = [w for w in res.warnings if "英文の著者名" in w]
+    assert "「KENKYU」" in warn and "姓（surname）" in warn and "Word で" in warn
+    assert any(d.category == "name" and "「KENKYU」" in d.message for d in res.build_notes)
+    names = [ln for ln in res.prompt_path.read_text(encoding="utf-8").splitlines() if "姓と名の区切りがない氏名: " in ln]
+    assert len(names) == 1 and names[0].endswith("「KENKYU」")
+    assert [a.key for a in actions(res)] == ["ai_pending"]
+    root = load(res)
+    [en] = [n for n in root.iter("name") if n.get("name-style") == "western"]
+    assert [(x.tag, x.text) for x in en] == [("surname", "KENKYU")]

@@ -29,6 +29,12 @@ tests/fixtures/sample_b3_place.docx : 位置を決められない図表の仮の
                                    結び付いた図形、引用文献の後ろの注）。AI 補完が必要（ALL_DOCS には入れない）
 tests/fixtures/sample_outside.docx : 本文の外（引用文献・注・英文要旨）の段落に結び付いた図形と囲み、資料の中の囲み、
                                    引用文献の段落の中の画像。AI 補完が必要（ALL_DOCS には入れない）
+tests/fixtures/sample_links.docx : 注・図表へのリンクの規則の境界ケース（注番号が「1)」の書き方の論文）。指数・単位の上付き
+                                   （cm²・x²・s⁻¹・f(x²)）、番号の形がはっきりした注番号（「1,2)」「1-3)」「註1」、上付きの「1」＋本文の
+                                   「)」）、本文の「注」＋上付きの「1」、番号だけの上付きの数字、語の中の「図1」「表1」（地図1・図表1・
+                                   発表1回目・付表1 など）とリンクする参照（前掲表1・乃至・並び・「図表1と表1」の後ろの表1）
+tests/fixtures/sample_links_bare.docx : sample_links と同じ規則の、注番号が番号だけの上付きの論文（「主張である¹」「（試験, 2024）²」と
+                                   「4 m²」、上付きの「1-3」「1, 2」。注の一覧の番号も上付き）
 
 make_article() は小さな論文を作る。テストの中で、境界ケースの docx をその場で作るのにも使う。
 
@@ -1475,6 +1481,69 @@ def make_outside(path):
     b.save(path, body)
 
 
+# ----------------------------------------------------------------------------- sample_links*（注・図表へのリンクの規則。修正計画の D2・M5）
+def links_parts(b: Builder, bare=False):
+    """注・図表へのリンクの規則の境界ケースの本文（章見出しから注の一覧まで）。
+
+    bare が偽なら、注番号が「1)」の書き方の論文（sample_links）: 指数・単位の上付き（「3 cm」＋²、「x²+y²」、「m s」＋上付きの
+    「−1」、「f(x²)」）、番号の形がはっきりした注番号（「1)」「1,2)」「1-3)」「註1」「注3」、上付きの「1」＋本文の「)」）、
+    本文の「注」＋上付きの「1」、番号だけの上付きの「2」。注の一覧は「1) …」〜「3) …」。
+    真なら、注番号が番号だけの上付きの論文（sample_links_bare）: かな・閉じ括弧の後ろの ¹ ²、「4 m」＋²、上付きの「1-3」「1, 2」
+    （上付きの直前に「注」の字を置かない）。注の一覧の番号も上付き。
+    どちらにも、語の中の「図1」「表1」（地図1・図表1・発表1回目・概念図1・代表1名・付表1）と、リンクする参照（前掲表1・乃至・
+    括弧・並び・「図表1と表1」の後ろの表1・「地図1、図2」の図2）、図1・図2（画像あり）、表1（本体あり）を入れる。
+    """
+    fig1 = b.add_image("links_fig1.png", png_bytes("Links figure 1"))
+    fig2 = b.add_image("links_fig2.png", png_bytes("Links figure 2", size=(480, 260)))
+    out = [para(S["sec1"], "１．はじめに"), para(S["body"], "試験（2024）にならい，注と図表へのリンクの規則を確かめる。")]
+    if not bare:
+        out += [
+            para(S["body"], "面積は 3 cm", run("2", sup=True), " である", run("1)", sup=True), "。"),
+            para(S["body"], "式 x", run("2", sup=True), "+y", run("2", sup=True), " を考える", run("1,2)", sup=True), "。"),
+            para(S["body"], "速さの単位は m s", run("\u22121", sup=True), " である", run("1-3)", sup=True), "。"),
+            para(S["body"], "架空の補足がある", run("註1", sup=True), "。また", run("注3", sup=True), "も参照。"),
+            para(S["body"], "番号の後ろが本文の括弧である", run("1", sup=True), ")。本文の注", run("1", sup=True), "も同じ。"),
+            para(S["body"], "関数 f(x", run("2", sup=True), ") は架空の例である。番号だけの", run("2", sup=True), "は注にしない。"),
+        ]
+    else:
+        out += [
+            para(S["body"], "これは架空の主張である", run("1", sup=True), "。"),
+            para(S["body"], "架空の報告がある（試験, 2024）", run("2", sup=True), "。"),
+            para(S["body"], "教室の広さは 4 m", run("2", sup=True), " である。"),
+            para(S["body"], "架空の議論がある", run("1-3", sup=True), "。別の議論もある", run("1, 2", sup=True), "。"),
+        ]
+    out += [
+        para(S["body"], "地図1と図表1を見る。発表1回目は概念図1で、代表1名が付表1を示した。"),
+        para(S["body"], "前掲表1、図1乃至図2、（図1）、図1、2を参照する。"),
+        para(S["body"], "図表1と表1を比べる。地図1、図2も見る。地図1、2は架空である。"),
+        para(S["body"], drawing(fig1, 2880000, 1800000, 951), jc="center"),
+        para(S["fig_cap"], "図1\u3000架空の図"),
+        para(S["body"], drawing(fig2, 2880000, 1560000, 952), jc="center"),
+        para(S["fig_cap"], "図2\u3000もう一つの架空の図"),
+        para(S["tab_cap"], "表1\u3000架空の表"),
+        table([[cell("観点"), cell("内容")], [cell("架空"), cell("架空の内容")]]),
+        para(S["sec1"], "２．おわりに"),
+        para(S["body"], "以上のように，指数や語の中の番号はリンクにしない。"),
+        para(S["fn_head"], "注"),
+    ]
+    notes = ("一つ目の架空の注。", "二つ目の架空の注。", "三つ目の架空の注。")
+    if not bare:
+        out += [para(S["body"], f"{k}) {text}") for k, text in enumerate(notes, 1)]
+    else:
+        out += [para(S["body"], run(str(k), sup=True), f" {text}") for k, text in enumerate(notes, 1)]
+    return out
+
+
+def make_links(path, bare=False):
+    """注・図表へのリンクの規則の境界ケースの原稿（links_parts。bare なら注番号が番号だけの上付きの論文）。"""
+    make_article(path, "リンクの規則の検証用文書" + ("（番号だけの注）" if bare else ""), lambda b: links_parts(b, bare))
+
+
+def make_links_bare(path):
+    """注番号が番号だけの上付きの論文の原稿（make_links の bare=True）。"""
+    make_links(path, bare=True)
+
+
 if __name__ == "__main__":
     out = HERE / "fixtures"
     make_full(out / "sample_full.docx")
@@ -1489,10 +1558,13 @@ if __name__ == "__main__":
     make_b3_tablefig(out / "sample_b3_tablefig.docx")
     make_b3_place(out / "sample_b3_place.docx")
     make_outside(out / "sample_outside.docx")
+    make_links(out / "sample_links.docx")
+    make_links_bare(out / "sample_links_bare.docx")
     pdf_done = make_pdfcheck_pdf(out / "sample_pdfcheck.pdf")
     print("written:", out / "sample_full.docx", out / "sample_edge.docx", out / "sample_float.docx",
           out / "sample_notes.docx", out / "sample_pdfcheck.docx", out / "sample_reader.docx",
           out / "sample_float_text.docx", out / "sample_structure.docx", out / "sample_b3_cells.docx",
           out / "sample_b3_tablefig.docx", out / "sample_b3_place.docx", out / "sample_outside.docx",
+          out / "sample_links.docx", out / "sample_links_bare.docx",
           out / "sample_pdfcheck.pdf" if pdf_done else "（LibreOffice がないので sample_pdfcheck.pdf は作り直していない）")
     sys.exit(0)
