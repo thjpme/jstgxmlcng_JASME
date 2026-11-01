@@ -1,0 +1,1003 @@
+[
+ {
+  "id": "d5_two",
+  "title": "本文の 2 段落の段落記号の削除（つながる。ID は前の段落、後は欠番）",
+  "checks": [
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "甲の段落の前半であり，甲の段落の後半である。"
+   },
+   {
+    "check": "p_absent",
+    "level": "exact",
+    "text": "甲の段落の前半であり，"
+   },
+   {
+    "check": "p_absent",
+    "level": "exact",
+    "text": "甲の段落の後半である。"
+   },
+   {
+    "check": "id_gap",
+    "level": "exact",
+    "text": "甲の段落の前半であり，甲の段落の後半である。",
+    "next": "乙の段落はそのまま残る。",
+    "gap": 2
+   },
+   {
+    "check": "no_ch10",
+    "level": "exact",
+    "keys": [
+     "承諾"
+    ]
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/d5_two.docx"
+ },
+ {
+  "id": "d5_chain3",
+  "title": "3 段落の連鎖（1 段落になる。ID は最初の段落、後の 2 つは欠番）",
+  "checks": [
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "丙の一つ目，丙の二つ目，丙の三つ目。"
+   },
+   {
+    "check": "p_absent",
+    "level": "exact",
+    "text": "丙の三つ目。"
+   },
+   {
+    "check": "id_gap",
+    "level": "exact",
+    "text": "丙の一つ目，丙の二つ目，丙の三つ目。",
+    "next": "丁の段落。",
+    "gap": 3
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/d5_chain3.docx"
+ },
+ {
+  "id": "d5_prev_empty",
+  "title": "前の段落が空（文字ごと削除した節見出し）: 後の段落の書式（本文）になる。ID は前の段落",
+  "checks": [
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "戊の段落の本文である。"
+   },
+   {
+    "check": "not_title",
+    "level": "exact",
+    "text": "戊の段落の本文である。"
+   },
+   {
+    "check": "id_gap",
+    "level": "exact",
+    "text": "戊の段落の本文である。",
+    "next": "己の段落。",
+    "gap": 2
+   },
+   {
+    "check": "decision",
+    "level": "either",
+    "keys": [
+     "段落記号",
+     "つな",
+     "結合",
+     "続"
+    ],
+    "text": "戊の段落の本文である。",
+    "alts": [
+     true,
+     false
+    ]
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/d5_prev_empty.docx"
+ },
+ {
+  "id": "d5_heading_first",
+  "title": "節見出し + 本文: 前の段落（見出し）の書式のまま。pStyle が違うので 4 章の判断に記録",
+  "checks": [
+   {
+    "check": "title_exact",
+    "level": "exact",
+    "text": "（1）見出しの前半と見出しの後半"
+   },
+   {
+    "check": "p_absent",
+    "level": "exact",
+    "text": "見出しの後半"
+   },
+   {
+    "check": "decision",
+    "level": "exact",
+    "keys": [
+     "段落記号",
+     "つな",
+     "結合",
+     "続"
+    ],
+    "text": "（1）見出しの前半と"
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/d5_heading_first.docx"
+ },
+ {
+  "id": "d5_body_first",
+  "title": "本文 + 節見出し（fix_plan_repro_tests の逆向き）: 本文の <p> になり、見出しは消える。4 章の判断",
+  "checks": [
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "辛の前半の文と（2）辛の後半の見出し"
+   },
+   {
+    "check": "no_title",
+    "level": "exact",
+    "text": "（2）辛の後半の見出し"
+   },
+   {
+    "check": "decision",
+    "level": "exact",
+    "keys": [
+     "段落記号",
+     "つな",
+     "結合",
+     "続"
+    ],
+    "text": "辛の前半の文と"
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/d5_body_first.docx"
+ },
+ {
+  "id": "d5_autonum",
+  "title": "自動番号の段落の連鎖: 連鎖の最後で 1 回だけ番号を数える（文字ごと消した項目の次も同じ番号）",
+  "checks": [
+   {
+    "check": "p_exact_in",
+    "level": "exact",
+    "text": "甲項目の前半，甲項目の後半。"
+   },
+   {
+    "check": "label",
+    "level": "exact",
+    "text": "甲項目の前半，甲項目の後半。",
+    "label": "1."
+   },
+   {
+    "check": "label",
+    "level": "exact",
+    "text": "乙項目。",
+    "label": "2."
+   },
+   {
+    "check": "label",
+    "level": "exact",
+    "text": "丙項目。",
+    "label": "3."
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/d5_autonum.docx"
+ },
+ {
+  "id": "d5_bookmark",
+  "title": "段落の間にブックマーク（飛ばしてつなぐ）",
+  "checks": [
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "癸の前半，癸の後半。"
+   },
+   {
+    "check": "id_gap",
+    "level": "exact",
+    "text": "癸の前半，癸の後半。",
+    "next": "癸の次の段落。",
+    "gap": 2
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/d5_bookmark.docx"
+ },
+ {
+  "id": "d5_movefrom",
+  "title": "段落記号の w:moveFrom（削除と同じくつなぐ）",
+  "checks": [
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "子の前半，子の後半。"
+   },
+   {
+    "check": "p_absent",
+    "level": "exact",
+    "text": "子の後半。"
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/d5_movefrom.docx"
+ },
+ {
+  "id": "d5_vanish_mark",
+  "title": "段落記号の w:vanish（スタイル区切り）はつながない。警告もない",
+  "checks": [
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "丑の前半の見出し風"
+   },
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "丑の後半の本文。"
+   },
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "寅の前半の見出し風"
+   },
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "寅の後半の本文。"
+   },
+   {
+    "check": "no_ch10",
+    "level": "exact",
+    "keys": [
+     "承諾"
+    ]
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/d5_vanish_mark.docx"
+ },
+ {
+  "id": "d5_sdt_boundary",
+  "title": "sdt・customXml の境界ではつながず、10 章に「承諾できず」の警告",
+  "checks": [
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "卯のSDTの中の最後，"
+   },
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "卯のSDTの後。"
+   },
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "辰のSDTの前，"
+   },
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "辰のSDTの中。"
+   },
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "巳のXMLの中の最後，"
+   },
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "巳のXMLの後。"
+   },
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "午のXMLの前，"
+   },
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "午のXMLの中。"
+   },
+   {
+    "check": "ch10",
+    "level": "exact",
+    "keys": [
+     "承諾",
+     "反映"
+    ],
+    "text": "卯のSDTの中の最後，"
+   },
+   {
+    "check": "ch10",
+    "level": "exact",
+    "keys": [
+     "承諾",
+     "反映"
+    ],
+    "text": "辰のSDTの前，"
+   },
+   {
+    "check": "ch10",
+    "level": "exact",
+    "keys": [
+     "承諾",
+     "反映"
+    ],
+    "text": "巳のXMLの中の最後，"
+   },
+   {
+    "check": "ch10",
+    "level": "exact",
+    "keys": [
+     "承諾",
+     "反映"
+    ],
+    "text": "午のXMLの前，"
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/d5_sdt_boundary.docx"
+ },
+ {
+  "id": "d5_before_table",
+  "title": "表の直前の段落（表題）の段落記号の削除: つながず、表題のまま。10 章に警告",
+  "checks": [
+   {
+    "check": "table_caption",
+    "level": "exact",
+    "caption": "表1　未の表の表題"
+   },
+   {
+    "check": "ch10",
+    "level": "exact",
+    "keys": [
+     "承諾",
+     "反映"
+    ],
+    "text": "表1　未の表の表題"
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/d5_before_table.docx"
+ },
+ {
+  "id": "d5_cell",
+  "title": "セルの中: 途中の段落はつながる（<break/> なし）、最後の段落はつながず警告",
+  "checks": [
+   {
+    "check": "cell_exact",
+    "level": "exact",
+    "text": "申のセルの前半，申のセルの後半。",
+    "breaks": 0
+   },
+   {
+    "check": "cell_exact",
+    "level": "exact",
+    "text": "酉のセルの一つ目。酉のセルの最後。",
+    "breaks": 1
+   },
+   {
+    "check": "ch10",
+    "level": "exact",
+    "keys": [
+     "承諾",
+     "反映"
+    ],
+    "text": "酉のセルの最後。"
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/d5_cell.docx"
+ },
+ {
+  "id": "d5_textbox",
+  "title": "テキストボックス: アンカーが後の段落でも 1 段落、中での連鎖、中の最後の段落はつながず警告",
+  "checks": [
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "図1は戌の図である。前半，後半の説明。"
+   },
+   {
+    "check": "fig_caption",
+    "level": "exact",
+    "caption": "図1　戌の図の表題の前半と後半"
+   },
+   {
+    "check": "fig_caption",
+    "level": "exact",
+    "caption": "図2　亥の図の表題"
+   },
+   {
+    "check": "ch10",
+    "level": "exact",
+    "keys": [
+     "承諾",
+     "反映"
+    ],
+    "text": "図2　亥の図の表題"
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/d5_textbox.docx"
+ },
+ {
+  "id": "d5_note",
+  "title": "脚注: 1 段落目の段落記号の削除はつながる。注の最後の段落はつながず警告",
+  "checks": [
+   {
+    "check": "fn_paras",
+    "level": "exact",
+    "text": "乾の注の前半と乾の注の後半。",
+    "n": 1
+   },
+   {
+    "check": "fn_paras",
+    "level": "exact",
+    "text": "坤の注の最後。",
+    "n": 1
+   },
+   {
+    "check": "ch10",
+    "level": "exact",
+    "keys": [
+     "承諾",
+     "反映"
+    ],
+    "text": "坤の注の最後。"
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/d5_note.docx"
+ },
+ {
+  "id": "d5_body_last",
+  "title": "本文の最後の段落（英文要旨の最後）の段落記号の削除: つながず警告",
+  "checks": [
+   {
+    "check": "p_exact_in",
+    "level": "exact",
+    "text": "The last oracle paragraph."
+   },
+   {
+    "check": "ch10",
+    "level": "exact",
+    "keys": [
+     "承諾",
+     "反映"
+    ],
+    "text": "The last oracle paragraph."
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/d5_body_last.docx"
+ },
+ {
+  "id": "u8_char",
+  "title": "直接の w:vanish と文字スタイルの vanish（どちらも隠す。6 章に載る）",
+  "checks": [
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "見える文字の甲との後。"
+   },
+   {
+    "check": "text_absent",
+    "level": "exact",
+    "text": "〔直接に隠した甲〕"
+   },
+   {
+    "check": "text_absent",
+    "level": "exact",
+    "text": "〔文字スタイルで隠した乙〕"
+   },
+   {
+    "check": "hidden_listed",
+    "level": "exact",
+    "text": "〔直接に隠した甲〕"
+   },
+   {
+    "check": "hidden_listed",
+    "level": "exact",
+    "text": "〔文字スタイルで隠した乙〕"
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/u8_char.docx"
+ },
+ {
+  "id": "u8_para",
+  "title": "段落スタイルの vanish: 段落全体が消える。文字スタイルの vanish とのトグル・直接の val=0 は見える",
+  "checks": [
+   {
+    "check": "text_absent",
+    "level": "exact",
+    "text": "段落スタイルで隠した段落の文字。"
+   },
+   {
+    "check": "hidden_listed",
+    "level": "exact",
+    "text": "段落スタイルで隠した段落の文字。"
+   },
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "トグルで見える丙直接の指定で見える丁重ねて見える戊"
+   },
+   {
+    "check": "text_absent",
+    "level": "exact",
+    "text": "〔隠れる部分〕"
+   },
+   {
+    "check": "text_absent",
+    "level": "exact",
+    "text": "〔文字スタイルが無指定で隠れる〕"
+   },
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "前後の見える段落。"
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/u8_para.docx"
+ },
+ {
+  "id": "u8_basedon",
+  "title": "basedOn の派生: vanish を最初に指定しているスタイル（いちばん派生した側）の値（連鎖の中で反転しない）",
+  "checks": [
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "己一派生で戻して見える。"
+   },
+   {
+    "check": "text_absent",
+    "level": "exact",
+    "text": "〔基で隠す〕"
+   },
+   {
+    "check": "text_absent",
+    "level": "exact",
+    "text": "〔継いで隠す〕"
+   },
+   {
+    "check": "text_absent",
+    "level": "exact",
+    "text": "〔派生も隠す〕"
+   },
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "段落の派生で戻して見える文。"
+   },
+   {
+    "check": "text_absent",
+    "level": "exact",
+    "text": "〔段落の派生も隠す文〕"
+   },
+   {
+    "check": "text_absent",
+    "level": "exact",
+    "text": "〔段落の派生が継いで隠す文〕"
+   },
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "派生段落と文字のトグルで見える"
+   },
+   {
+    "check": "text_absent",
+    "level": "exact",
+    "text": "〔派生段落で隠れる〕"
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/u8_basedon.docx"
+ },
+ {
+  "id": "u8_docdef_twin",
+  "title": "（比べる相手）docDefaults・標準スタイルに vanish のない同じ文書",
+  "checks": [
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "〔既定で隠れる段落〕"
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/u8_docdef_twin.docx"
+ },
+ {
+  "id": "u8_docdef",
+  "title": "docDefaults の vanish を標準スタイル（段落スタイル）の vanish で打ち消す: 本文は見える。val=0 の段落スタイルは隠れる",
+  "checks": [
+   {
+    "check": "text_absent",
+    "level": "exact",
+    "text": "〔既定で隠れる段落〕"
+   },
+   {
+    "check": "same_as_twin",
+    "level": "exact",
+    "ignore": [
+     "既定で隠れる段落"
+    ]
+   },
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "既定の後の本文。"
+   }
+  ],
+  "route": "docx",
+  "twin": "u8_docdef_twin",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/u8_docdef.docx"
+ },
+ {
+  "id": "u8_spec",
+  "title": "ランの specVanish（隠す）",
+  "checks": [
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "庚の文字の後。"
+   },
+   {
+    "check": "text_absent",
+    "level": "exact",
+    "text": "〔特別に隠す〕"
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/u8_spec.docx"
+ },
+ {
+  "id": "u8_br_sym",
+  "title": "隠し文字の中の w:br・w:sym・w:noBreakHyphen（どれも出力しない。6 章の書き方はどちらか）",
+  "checks": [
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "辛の文字の後。"
+   },
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "壬の文字の後。"
+   },
+   {
+    "check": "text_absent",
+    "level": "exact",
+    "text": "〔隠Ａ〕"
+   },
+   {
+    "check": "text_absent",
+    "level": "exact",
+    "text": "〔隠Ｃ〕"
+   },
+   {
+    "check": "hidden_has_br",
+    "level": "either",
+    "text": "〔隠Ａ〕",
+    "alts": [
+     true,
+     false
+    ]
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/u8_br_sym.docx"
+ },
+ {
+  "id": "u3_cell",
+  "title": "セルの中の w:br は <break/> を補う（\\n は残す）。見出し行・太字の中・太字の間・セルの末尾も。リンクの中は今のまま",
+  "checks": [
+   {
+    "check": "cell_break",
+    "level": "exact",
+    "text": "見出しの一行目\n見出しの二行目",
+    "tag": "th_or_td"
+   },
+   {
+    "check": "cell_break",
+    "level": "exact",
+    "text": "セルの一行目\nセルの二行目"
+   },
+   {
+    "check": "cell_break",
+    "level": "exact",
+    "text": "太字の前\n太字の後"
+   },
+   {
+    "check": "cell_break",
+    "level": "exact",
+    "text": "太字の甲\n太字の乙"
+   },
+   {
+    "check": "cell_break_prefix",
+    "level": "exact",
+    "text": "末尾で改行\n"
+   },
+   {
+    "check": "link_no_break",
+    "level": "exact",
+    "text": "リンクの前\nリンクの後"
+   },
+   {
+    "check": "ch10",
+    "level": "either",
+    "keys": [
+     "改行"
+    ],
+    "text": "セルの一行目",
+    "alts": [
+     true,
+     false
+    ]
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/u3_cell.docx"
+ },
+ {
+  "id": "u3_body",
+  "title": "本文・見出しの w:br は文字のまま（<break/> なし）。10 章に一覧。本文は要対応・要確認の知らせにしない",
+  "checks": [
+   {
+    "check": "no_break_in",
+    "level": "exact",
+    "text": "２．見出しの\n改行",
+    "tag": "title"
+   },
+   {
+    "check": "no_break_in",
+    "level": "exact",
+    "text": "本文の一行目\n本文の二行目。",
+    "tag": "p"
+   },
+   {
+    "check": "ch10",
+    "level": "exact",
+    "keys": [
+     "改行"
+    ],
+    "text": "本文の一行目"
+   },
+   {
+    "check": "ch10",
+    "level": "exact",
+    "keys": [
+     "改行"
+    ],
+    "text": "２．見出しの"
+   },
+   {
+    "check": "no_action",
+    "level": "exact",
+    "keys": [
+     "改行"
+    ]
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/u3_body.docx"
+ },
+ {
+  "id": "u3_title_ref",
+  "title": "題目・引用文献の w:br は文字のまま。10 章に一覧し、知らせ（Action）にする",
+  "checks": [
+   {
+    "check": "no_break_in",
+    "level": "exact",
+    "text": "改行を含む\n題目の検証",
+    "tag": "article-title"
+   },
+   {
+    "check": "no_break_in",
+    "level": "exact",
+    "text": "改行のある\n文献",
+    "tag": "mixed-citation",
+    "contains": true
+   },
+   {
+    "check": "ch10",
+    "level": "exact",
+    "keys": [
+     "改行"
+    ],
+    "text": "改行を含む"
+   },
+   {
+    "check": "ch10",
+    "level": "exact",
+    "keys": [
+     "改行"
+    ],
+    "text": "改行のある"
+   },
+   {
+    "check": "action",
+    "level": "exact",
+    "keys": [
+     "改行"
+    ]
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/u3_title_ref.docx"
+ },
+ {
+  "id": "n8_rows",
+  "title": "削除された空の行は消えて記録される。削除の印があっても文字の残る行は残る",
+  "checks": [
+   {
+    "check": "table_rows",
+    "level": "exact",
+    "caption": "表1　削除された行の表",
+    "rows": [
+     [
+      "区分",
+      "内容"
+     ],
+     [
+      "残る行",
+      "残る内容"
+     ],
+     [
+      "印だけの行",
+      "文字は残る"
+     ],
+     [
+      "最後の行",
+      "最後の内容"
+     ]
+    ]
+   },
+   {
+    "check": "report_line",
+    "level": "exact",
+    "any_of": [
+     [
+      "削除",
+      "表の行"
+     ],
+     [
+      "削除された行"
+     ],
+     [
+      "行を読み飛ば"
+     ],
+     [
+      "削除",
+      "行を"
+     ]
+    ]
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/n8_rows.docx"
+ },
+ {
+  "id": "n8_celldel",
+  "title": "削除されたセル（w:cellDel）: セルを消すか空のセルのままか（どちらか）。ほかのセルの文字は残る",
+  "checks": [
+   {
+    "check": "table_has",
+    "level": "exact",
+    "caption": "表1　削除されたセルの表",
+    "texts": [
+     "左",
+     "右",
+     "残るセル",
+     "下の右"
+    ]
+   },
+   {
+    "check": "celldel",
+    "level": "either",
+    "caption": "表1　削除されたセルの表",
+    "alts": [
+     "removed",
+     "empty"
+    ]
+   }
+  ],
+  "route": "docx",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/n8_celldel.docx"
+ },
+ {
+  "id": "r2_join",
+  "title": "ルート2: 段落記号の削除でつないだ段落を PDF に合わせて直す。直した docx も 2 つの w:p と印のまま",
+  "checks": [
+   {
+    "check": "p_exact",
+    "level": "exact",
+    "text": "詳しくは付録の学習指導案を参照されたい。授業は２回行った。"
+   },
+   {
+    "check": "p_absent",
+    "level": "exact",
+    "text": "授業は２回行った。"
+   },
+   {
+    "check": "fixed_docx",
+    "level": "exact",
+    "first_head": "詳しくは",
+    "joined": [
+     "詳しくは付録の学習指導案を参照されたい。授業は２回行った。"
+    ]
+   }
+  ],
+  "route": "pdf",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/r2_join.docx"
+ },
+ {
+  "id": "r2_boundary",
+  "title": "ルート2: つないだ境目に PDF の文字（。）がある。足すか直さずに 13 章に出すか（どちらか）。段落は 1 つ",
+  "checks": [
+   {
+    "check": "p_one_of",
+    "level": "exact",
+    "texts": [
+     "詳しくは付録の学習指導案を参照されたい。授業は２回行った。",
+     "詳しくは付録の学習指導案を参照されたい授業は２回行った。"
+    ]
+   },
+   {
+    "check": "p_absent",
+    "level": "exact",
+    "text": "授業は２回行った。"
+   },
+   {
+    "check": "fixed_docx",
+    "level": "exact",
+    "first_head": "詳しくは",
+    "joined": [
+     "詳しくは付録の学習指導案を参照されたい。授業は２回行った。",
+     "詳しくは付録の学習指導案を参照されたい授業は２回行った。"
+    ]
+   }
+  ],
+  "route": "pdf",
+  "twin": null,
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/cases/r2_boundary.docx"
+ }
+]

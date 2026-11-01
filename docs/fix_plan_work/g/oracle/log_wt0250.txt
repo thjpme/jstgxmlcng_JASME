@@ -1,0 +1,156 @@
+[FAIL] d5_two  本文の 2 段落の段落記号の削除（つながる。ID は前の段落、後は欠番）  (終了コード 0)
+    NG exact  p_exact(甲の段落の前半であり，甲の段): 0 個
+    NG exact  p_absent(甲の段落の前半であり，): ある: ['p']
+    NG exact  p_absent(甲の段落の後半である。): ある: ['p']
+    NG exact  id_gap(甲の段落の前半であり，甲の段): 段落が見つからない（甲の段落の前半であり: None, 乙の段落はそのまま残: d14）
+    ok exact  no_ch10: 
+[FAIL] d5_chain3  3 段落の連鎖（1 段落になる。ID は最初の段落、後の 2 つは欠番）  (終了コード 0)
+    NG exact  p_exact(丙の一つ目，丙の二つ目，丙の): 0 個
+    NG exact  p_absent(丙の三つ目。): ある: ['p']
+    NG exact  id_gap(丙の一つ目，丙の二つ目，丙の): 段落が見つからない（丙の一つ目，丙の二つ: None, 丁の段落。: d15）
+[FAIL] d5_prev_empty  前の段落が空（文字ごと削除した節見出し）: 後の段落の書式（本文）になる。ID は前の段落  (終了コード 0)
+    ok exact  p_exact(戊の段落の本文である。): 1 個
+    ok exact  not_title(戊の段落の本文である。): 
+    NG exact  id_gap(戊の段落の本文である。): d13 → d14
+    ok either decision(戊の段落の本文である。): 4 章 なし
+[FAIL] d5_heading_first  節見出し + 本文: 前の段落（見出し）の書式のまま。pStyle が違うので 4 章の判断に記録  (終了コード 0)
+    NG exact  title_exact(（1）見出しの前半と見出しの): title にない
+    NG exact  p_absent(見出しの後半): ある: ['p']
+    NG exact  decision(（1）見出しの前半と): 4 章 なし
+[FAIL] d5_body_first  本文 + 節見出し（fix_plan_repro_tests の逆向き）: 本文の <p> になり、見出しは消える。4 章の判断  (終了コード 0)
+    NG exact  p_exact(辛の前半の文と（2）辛の後半): 0 個
+    NG exact  no_title(（2）辛の後半の見出し): title にある
+    NG exact  decision(辛の前半の文と): 4 章 なし
+[FAIL] d5_autonum  自動番号の段落の連鎖: 連鎖の最後で 1 回だけ番号を数える（文字ごと消した項目の次も同じ番号）  (終了コード 0)
+    NG exact  p_exact_in(甲項目の前半，甲項目の後半。): ない
+    NG exact  label(甲項目の前半，甲項目の後半。): list-item なし。p=[]
+    NG exact  label(乙項目。): label='3.'
+    NG exact  label(丙項目。): label='5.'
+[FAIL] d5_bookmark  段落の間にブックマーク（飛ばしてつなぐ）  (終了コード 0)
+    NG exact  p_exact(癸の前半，癸の後半。): 0 個
+    NG exact  id_gap(癸の前半，癸の後半。): 段落が見つからない（癸の前半，癸の後半。: None, 癸の次の段落。: d14）
+[FAIL] d5_movefrom  段落記号の w:moveFrom（削除と同じくつなぐ）  (終了コード 0)
+    NG exact  p_exact(子の前半，子の後半。): 0 個
+    NG exact  p_absent(子の後半。): ある: ['p']
+[OK] d5_vanish_mark  段落記号の w:vanish（スタイル区切り）はつながない。警告もない  (終了コード 0)
+    ok exact  p_exact(丑の前半の見出し風): 1 個
+    ok exact  p_exact(丑の後半の本文。): 1 個
+    ok exact  p_exact(寅の前半の見出し風): 1 個
+    ok exact  p_exact(寅の後半の本文。): 1 個
+    ok exact  no_ch10: 
+[FAIL] d5_sdt_boundary  sdt・customXml の境界ではつながず、10 章に「承諾できず」の警告  (終了コード 0)
+    ok exact  p_exact(卯のSDTの中の最後，): 1 個
+    ok exact  p_exact(卯のSDTの後。): 1 個
+    ok exact  p_exact(辰のSDTの前，): 1 個
+    ok exact  p_exact(辰のSDTの中。): 1 個
+    ok exact  p_exact(巳のXMLの中の最後，): 1 個
+    ok exact  p_exact(巳のXMLの後。): 1 個
+    ok exact  p_exact(午のXMLの前，): 1 個
+    ok exact  p_exact(午のXMLの中。): 1 個
+    NG exact  ch10(卯のSDTの中の最後，): 10 章 なし
+    NG exact  ch10(辰のSDTの前，): 10 章 なし
+    NG exact  ch10(巳のXMLの中の最後，): 10 章 なし
+    NG exact  ch10(午のXMLの前，): 10 章 なし
+[FAIL] d5_before_table  表の直前の段落（表題）の段落記号の削除: つながず、表題のまま。10 章に警告  (終了コード 0)
+    ok exact  table_caption: 表題: ['表1\u3000未の表の表題']
+    NG exact  ch10(表1　未の表の表題): 10 章 なし
+[FAIL] d5_cell  セルの中: 途中の段落はつながる（<break/> なし）、最後の段落はつながず警告  (終了コード 0)
+    NG exact  cell_exact(申のセルの前半，申のセルの後): break 1 個
+    ok exact  cell_exact(酉のセルの一つ目。酉のセルの): break 1 個
+    NG exact  ch10(酉のセルの最後。): 10 章 なし
+[FAIL] d5_textbox  テキストボックス: アンカーが後の段落でも 1 段落、中での連鎖、中の最後の段落はつながず警告  (終了コード 0)
+    NG exact  p_exact(図1は戌の図である。前半，後): 0 個
+    ok exact  fig_caption: 図: ['図1\u3000戌の図の表題の前半と後半', '図2\u3000亥の図の表題']
+    ok exact  fig_caption: 図: ['図1\u3000戌の図の表題の前半と後半', '図2\u3000亥の図の表題']
+    NG exact  ch10(図2　亥の図の表題): 10 章 なし
+[FAIL] d5_note  脚注: 1 段落目の段落記号の削除はつながる。注の最後の段落はつながず警告  (終了コード 0)
+    NG exact  fn_paras(乾の注の前半と乾の注の後半。): 注がない
+    ok exact  fn_paras(坤の注の最後。): ['2) 坤の注の最後。']
+    NG exact  ch10(坤の注の最後。): 10 章 なし
+[FAIL] d5_body_last  本文の最後の段落（英文要旨の最後）の段落記号の削除: つながず警告  (終了コード 0)
+    ok exact  p_exact_in(The last oracl): ['The last oracle paragraph.']
+    NG exact  ch10(The last oracl): 10 章 なし
+[FAIL] u8_char  直接の w:vanish と文字スタイルの vanish（どちらも隠す。6 章に載る）  (終了コード 0)
+    NG exact  p_exact(見える文字の甲との後。): 0 個
+    ok exact  text_absent(〔直接に隠した甲〕): 
+    NG exact  text_absent(〔文字スタイルで隠した乙〕): XML にある（[('p', '見える文字の甲と〔文字スタイルで隠した乙〕の後。')]）
+    ok exact  hidden_listed(〔直接に隠した甲〕): ('d12', '〔直接に隠した甲〕')
+    NG exact  hidden_listed(〔文字スタイルで隠した乙〕): hidden_text: ["('d12', '〔直接に隠した甲〕')"]
+[FAIL] u8_para  段落スタイルの vanish: 段落全体が消える。文字スタイルの vanish とのトグル・直接の val=0 は見える  (終了コード 0)
+    NG exact  text_absent(段落スタイルで隠した段落の文): XML にある（[('p', '段落スタイルで隠した段落の文字。')]）
+    NG exact  hidden_listed(段落スタイルで隠した段落の文): hidden_text: []
+    NG exact  p_exact(トグルで見える丙直接の指定で): 0 個
+    NG exact  text_absent(〔隠れる部分〕): XML にある（[('p', '〔隠れる部分〕トグルで見える丙直接の指定で見える丁〔文字スタ')]）
+    NG exact  text_absent(〔文字スタイルが無指定で隠れ): XML にある（[('p', '〔隠れる部分〕トグルで見える丙直接の指定で見える丁〔文字スタ')]）
+    ok exact  p_exact(前後の見える段落。): 1 個
+[FAIL] u8_basedon  basedOn の派生: vanish を最初に指定しているスタイル（いちばん派生した側）の値（連鎖の中で反転しない）  (終了コード 0)
+    NG exact  p_exact(己一派生で戻して見える。): 0 個
+    NG exact  text_absent(〔基で隠す〕): XML にある（[('p', '己一〔基で隠す〕派生で戻して見える〔継いで隠す〕〔派生も隠す')]）
+    NG exact  text_absent(〔継いで隠す〕): XML にある（[('p', '己一〔基で隠す〕派生で戻して見える〔継いで隠す〕〔派生も隠す')]）
+    NG exact  text_absent(〔派生も隠す〕): XML にある（[('p', '己一〔基で隠す〕派生で戻して見える〔継いで隠す〕〔派生も隠す')]）
+    ok exact  p_exact(段落の派生で戻して見える文。): 1 個
+    NG exact  text_absent(〔段落の派生も隠す文〕): XML にある（[('p', '〔段落の派生も隠す文〕')]）
+    NG exact  text_absent(〔段落の派生が継いで隠す文〕): XML にある（[('p', '〔段落の派生が継いで隠す文〕')]）
+    NG exact  p_exact(派生段落と文字のトグルで見え): 0 個（XML: [('p', '〔派生段落で隠れる〕派生段落と文字のトグルで見える')]）
+    NG exact  text_absent(〔派生段落で隠れる〕): XML にある（[('p', '〔派生段落で隠れる〕派生段落と文字のトグルで見える')]）
+[OK] u8_docdef_twin  （比べる相手）docDefaults・標準スタイルに vanish のない同じ文書  (終了コード 0)
+    ok exact  p_exact(〔既定で隠れる段落〕): 1 個
+[FAIL] u8_docdef  docDefaults の vanish を標準スタイル（段落スタイル）の vanish で打ち消す: 本文は見える。val=0 の段落スタイルは隠れる  (終了コード 0)
+    NG exact  text_absent(〔既定で隠れる段落〕): XML にある（[('p', '〔既定で隠れる段落〕')]）
+    ok exact  same_as_twin: 
+    ok exact  p_exact(既定の後の本文。): 1 個
+[OK] u8_spec  ランの specVanish（隠す）  (終了コード 0)
+    ok exact  p_exact(庚の文字の後。): 1 個
+    ok exact  text_absent(〔特別に隠す〕): 
+[FAIL] u8_br_sym  隠し文字の中の w:br・w:sym・w:noBreakHyphen（どれも出力しない。6 章の書き方はどちらか）  (終了コード 0)
+    ok exact  p_exact(辛の文字の後。): 1 個
+    NG exact  p_exact(壬の文字の後。): 0 個
+    ok exact  text_absent(〔隠Ａ〕): 
+    NG exact  text_absent(〔隠Ｃ〕): XML にある（[('p', '壬の文字〔隠Ｃ〕\nγの後。')]）
+    ok either hidden_has_br(〔隠Ａ〕): 6 章の隠し文字: ('d12', '〔隠Ａ〕')
+[FAIL] u3_cell  セルの中の w:br は <break/> を補う（\n は残す）。見出し行・太字の中・太字の間・セルの末尾も。リンクの中は今のまま  (終了コード 0)
+    NG exact  cell_break(見出しの一行目
+見出しの二行): th: '<th>見出しの一行目\n見出しの二行目</th>'
+    NG exact  cell_break(セルの一行目
+セルの二行目): td: '<td>セルの一行目\nセルの二行目</td>'
+    NG exact  cell_break(太字の前
+太字の後): td: '<td><bold>太字の前\n太字の後</bold></td>'
+    NG exact  cell_break(太字の甲
+太字の乙): td: '<td><bold>太字の甲</bold>\n<bold>太字の乙</bold></td>'
+    NG exact  cell_break_prefix(末尾で改行
+): td: '<td>末尾で改行\n<break/>次の段落</td>'
+    ok exact  link_no_break(リンクの前
+リンクの後): [('uri', 0)]
+    ok either ch10(セルの一行目): 10 章 なし
+[FAIL] u3_body  本文・見出しの w:br は文字のまま（<break/> なし）。10 章に一覧。本文は要対応・要確認の知らせにしない  (終了コード 0)
+    ok exact  no_break_in(２．見出しの
+改行): [('title', 0)]
+    ok exact  no_break_in(本文の一行目
+本文の二行目。): [('p', 0)]
+    NG exact  ch10(本文の一行目): 10 章 なし
+    NG exact  ch10(２．見出しの): 10 章 なし
+    ok exact  no_action: 終了コード 0、標準エラーに知らせなし
+[FAIL] u3_title_ref  題目・引用文献の w:br は文字のまま。10 章に一覧し、知らせ（Action）にする  (終了コード 0)
+    ok exact  no_break_in(改行を含む
+題目の検証): [('article-title', 0)]
+    ok exact  no_break_in(改行のある
+文献): [('mixed-citation', 0)]
+    NG exact  ch10(改行を含む): 10 章 なし
+    NG exact  ch10(改行のある): 10 章 なし
+    NG exact  action: 終了コード 0、標準エラーに知らせなし
+[FAIL] n8_rows  削除された空の行は消えて記録される。削除の印があっても文字の残る行は残る  (終了コード 0)
+    NG exact  table_rows: [['区分', '内容'], ['残る行', '残る内容'], ['', ''], ['印だけの行', '文字は残る'], ['', ''], ['最後の行', '最後の内容']]
+    NG exact  report_line: レポートに記録がない
+[OK] n8_celldel  削除されたセル（w:cellDel）: セルを消すか空のセルのままか（どちらか）。ほかのセルの文字は残る  (終了コード 0)
+    ok exact  table_has: 
+    ok either celldel: 行: ['残るセル', '']（empty）
+[FAIL] r2_join  ルート2: 段落記号の削除でつないだ段落を PDF に合わせて直す。直した docx も 2 つの w:p と印のまま  (終了コード 0)
+    NG exact  p_exact(詳しくは付録の学習指導案を参): 0 個
+    NG exact  p_absent(授業は２回行った。): ある: ['p']
+    ok exact  fixed_docx: w:p 27→27、段落記号の削除 あり、つないだ文字 '詳しくは付録の学習指導案を参照されたい。授業は２回行った。'、直した 44・直さなかった 0
+[FAIL] r2_boundary  ルート2: つないだ境目に PDF の文字（。）がある。足すか直さずに 13 章に出すか（どちらか）。段落は 1 つ  (終了コード 0)
+    NG exact  p_one_of: ない（XML: [('p', '詳しくは付録の学習指導案を参照されたい。')]）
+    NG exact  p_absent(授業は２回行った。): ある: ['p']
+    ok exact  fixed_docx: w:p 27→27、段落記号の削除 あり、つないだ文字 '詳しくは付録の学習指導案を参照されたい。授業は２回行った。'、直した 45・直さなかった 0
+
+合計: OK 4 / FAIL 25（/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/out/wt0250/summary.json）

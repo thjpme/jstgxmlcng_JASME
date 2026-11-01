@@ -1,0 +1,773 @@
+{
+  "summary": "単位 G（0.26.0）: 読み取りの文字ポリシー（段落記号の削除・スタイルの隠し文字・セルの改行・削除された表の行。D5・U8・U3・N8）。設計と独立の反例 → 実装 → 確かめ → 仕上げ → 3 観点の点検 → 修正と再点検（最大 3 回）",
+  "agentCount": 12,
+  "logs": [
+    "design: ok / oracle: ok",
+    "指摘: blocking 0 / should 1 / nit 13",
+    "1 回目の点検: blocking 0 / should 0"
+  ],
+  "result": {
+    "design": {
+      "design_doc": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/DESIGN_G.md",
+      "decisions": "D5 (deleted paragraph marks):\n- New functions in ooxml: paragraph_mark_deleted(p) is true only for w:pPr/w:rPr with w:del or w:moveFrom. A w:vanish on the paragraph mark (style separator) and w:ins on it are never joined. joined_paragraphs(root) returns {first w:p: [w:p...]}. It looks only at siblings in the same parent and joins only when the next sibling is a w:p, after skipping empty markers (JOIN_SKIP: bookmarkStart/End, proofErr, permStart/End, commentRangeStart/End, move*/customXml*RangeStart/End). unjoined_deleted_marks(root) returns [(w:p, reason)]. canonical_texts(root, prefix, hidden) puts the joined text of a chain under the first ID; the IDs of the later paragraphs are dropped (欠番).\n- Places that do not join, each with a fixed reason string: next element is a table, sdt or customXml (or some other non-paragraph); end of body, end of a cell, end of a text box, end of a note, end of sdtContent, end of customXml.\n- Paragraph numbering stays as it is in all three places (every w:p in document order). The chain takes the first paragraph's ID.\n- Formatting comes from the first paragraph in the chain whose canonical_text is not empty, or the last paragraph if all are empty. This gives the same result as applying \"if the earlier paragraph is empty, use the later one's\" from the front of the chain, and it matches LibreOffice in cases B, C, D and P. This covers pStyle, numPr and jc. section_break comes from the last paragraph's sectPr. in_textbox, float_id and textbox_id come from the first paragraph.\n- Automatic numbering: label is called once per chain, using the formatting paragraph's numPr. It is called when the chain is read, before _walk (same order as a single paragraph today). Later paragraphs are judged by the set self.later, so label is never called for them. The only difference from FIX_PLAN's \"once at the end of the chain\" is the counting order when a text box inside the chain contains a numbered paragraph.\n- Hidden-text state of each paragraph in a chain comes from that paragraph's own pStyle (provisional; listed as a limit).\n- Decision: when a chain joins paragraphs with different styles, the reader records JoinInfo. structure adds plan.decide(mechanical, style) at the very end of Classifier.run, so existing decision numbers do not change.\n- Chapter 6 gets one extra line listing the joined paragraphs. The existing sentence \"変更履歴が N 箇所あります\" is left unchanged so that 0.25.0 reports stay identical; this one-line addition is how FIX_PLAN's \"fix the wording\" item is met.\n- Chapter 10 warning wording: 「dNN: 変更履歴で段落記号（段落の区切り）が削除されていますが、{reason}なので、次の段落とつながずに 2 段落のまま出力しました。Word で変更履歴を承諾してから変換し直すと、Word と同じ 1 段落になります。」 It is shown only when the paragraph's docx text is not empty, to avoid a flood of warnings from cells in deleted rows. It is not an Action.\n- F's TextBox: _textboxes skips w:p in self.later, so the box only gets the paragraphs that remain after joining. TextBox.anchor_src and Float.anchor_src point to the first ID.\n- Route 2: write_fixed_docx gets ID chains from joined_paragraphs on a preprocessed copy (new _chains; the copy is skipped when the part has no deleted mark). Later IDs are not fixed. The first ID uses the units of all paragraphs in the chain concatenated. Deletions go into the w:t where the character sits, so a fix spanning the boundary is split across the two w:p. Inserted text follows the existing rule (after the preceding character), which puts it in the earlier w:p's last w:t. The deleted paragraph mark itself is not touched.\n- LibreOffice comparison (16 cases):\n  - It differs from our rule in 3 cases: it joins across sdt and customXml boundaries; it does not join a moveFrom paragraph mark; it does not join a paragraph that contains a footnote reference. We keep our rule in all three and put them on the list for checking in Word.\n  - All other cases match.\n\nU8 (hidden text through styles):\n- HiddenRule.style_value(sid) follows basedOn and returns the vanish value of the most-derived style that specifies one (FIX_PLAN rule; no flipping along the chain).\n- I compared FIX_PLAN's rule against LibreOffice's UNO CharHidden and pdftotext output, 21 cases plus a docDefaults version. It disagreed in two places, and in both I followed LibreOffice (provisional, deviates from FIX_PLAN):\n  1. A character style whose resolved value is False makes the run visible (FIX_PLAN's ps XOR False would hide it).\n  2. para_state is the paragraph style's value when it has one, otherwise docDefaults. FIX_PLAN uses docDefaults XOR the paragraph style.\n- Run rule, in order:\n  1. A direct w:vanish wins with its own value.\n  2. specVanish hides. This follows FIX_PLAN's order, so the 0.25.0 code result for \"vanish=0 together with specVanish\" changes from hidden to visible.\n  3. rStyle: True flips ps, False shows, None keeps ps.\n  4. Otherwise ps.\n- Left unmatched with LibreOffice: a run with only specVanish (LibreOffice shows it; ECMA says hide, so we hide), and docDefaults-only vanish (LibreOffice's UNO and PDF output disagree with each other).\n- Not handled, to be stated in the character policy: m:r, table styles, numbering formats, paragraph-mark vanish, linked styles.\n- Chapter 6 hidden-text list: _plain_of_run_child is extended to br, cr, sym, noBreakHyphen, softHyphen and ptab. The heading wording stays.\n- ooxml.run_hidden is removed. All three places use HiddenRule, built from word/styles.xml.\n\nU3 (line breaks in cells):\n- emit.Ctx gains breaks and newline_label. CELL=Ctx(breaks=True). TITLE, NAME, AFF and REF get a newline_label.\n- Only when the target of flush is the jx:span itself: split on \\n, put <break/> before each part, and put the \\n into the break's tail. Formatting elements are closed and reopened (<bold>a</bold><break/>\\n<bold>b</bold>), and no element is created for an empty part. Inside links, and anywhere other than cells, behaviour stays as today.\n- DTD check: break is allowed directly under td and th; it is not allowed inside bold, italic, sup, xref, ext-link or p. article-title and sec title would allow it, but per FIX_PLAN we do not add it there.\n- J-STAGE manual: the td/th 文字修飾 list in 3.5.4 (6) does not include break (it does not list xref or inline-formula either). The 修飾タグ許容一覧 in 別紙1 marks break ○ only for 電子付録 and × for title, abstract, affiliation and citations. Breaks between cell paragraphs already exist in 0.25.0. We follow decision 13(1) and add them; display needs checking at trial publication (試験登載).\n- Emitter.span records Newline(src, count, breaks, label). builder adds one chapter-10 line per group (cells, notified contexts, everything else) and fills BuildInfo.newlines.\n- Action: key \"newline\", level TO_CHECK, wording for top / checklist / box / cli is in the design doc. It is added at the end of actions() only.\n\nN8 (deleted table rows):\n- Skip rule: trPr/w:del, and no atom in any paragraph of the row (nested tables and text boxes included), and images, floats and textboxes did not grow while the row was read. Skipped rows are recorded in DeletedRow(tid, row, head) and listed in chapter 6.\n- A deleted row that still has text is output, with a chapter-10 warning (LibreOffice also keeps it).\n- Deleted cells (cellDel): experiment showed LibreOffice deletes the whole column. Cells are not skipped; they are output with a chapter-10 warning.\n- fidelity.source_texts is not changed. The rows have empty text, and verify does not count empty paragraphs, so both sides give the same result. Adding the skip condition to the verification side would only duplicate the implementation. Route 2 is also unchanged.\n\nHow the three places stay aligned:\n- The rules (join and hidden) are shared functions in ooxml.\n- Text extraction stays as independent implementations: canonical_text, _walk and paragraph_units.\n- IDs: same numbering everywhere, first ID for a chain, later IDs dropped.\n\nNotification wording: as above (chapter 10 lines, chapter 6 lines, Decision text, Action). Display only goes through Action; nothing is added to render, colab, cli or make_notebook.\n\nNot decided / rejected:\n- Not joining across sdt or customXml is kept (the LibreOffice-style join was rejected).\n- Skipping cellDel cells was rejected.\n- Adding a row-skip to fidelity was rejected.\n- Keeping the existing specVanish order was rejected (FIX_PLAN order adopted).\n- A sample_pdfcheck_split.docx fixture was not adopted; the docx is built in tmp_path inside the test.\n- sectPr behaviour was not checked in LibreOffice.\n\nAll of the above is provisional, pending the user's check in Word.",
+      "changes": "- ooxml.py:\n  - Character-policy docstring.\n  - Add HiddenRule and NO_RULE.\n  - Add JOIN_SKIP, paragraph_mark_deleted, _join_target, joined_paragraphs, unjoined_deleted_marks, canonical_texts.\n  - Change canonical_text(p, hidden=None): ps = rule.para_state(p); runs use rule.run_hidden.\n  - Remove run_hidden.\n- docx_reader.py:\n  - Reader.__init__: hidden_rule, _pstate, chains, later, joins, joined, deleted_rows.\n  - New _set_joins (computes chains and emits unjoined warnings for paragraphs with non-empty text). Called from read and read_notes; read_notes also saves and restores chains/later.\n  - read_block: return [] for paragraphs in later.\n  - read_paragraph: walk the chain; formatting paragraph = first non-empty one; sectPr from the last paragraph; label once; for each w:p reset _fields and _pstate; record JoinInfo.\n  - _textboxes: skip paragraphs in later.\n  - _read_nested_paragraph and _read_nested_table: also save/restore _pstate.\n  - _walk: use hidden_rule.run_hidden(ch, self._pstate).\n  - read_table: skip deleted rows, record them, add warnings for rows with remaining text and for cellDel.\n  - Extend _plain_of_run_child.\n  - Pass joins, joined and deleted_rows into Document.\n- model.py: Document.joined, joins and deleted_rows; JoinInfo; DeletedRow; Newline.\n- fidelity.py: source_texts uses HiddenRule(styles) and canonical_texts.\n- pdfdocx.py:\n  - paragraph_units(p, hidden=None).\n  - New _chains(root, prefix) (preprocessed copy only when the part has a deleted mark).\n  - write_fixed_docx: build HiddenRule from styles.xml, skip later IDs, use concatenated units for the first ID.\n  - Docstring.\n- emit.py:\n  - Ctx.breaks and newline_label; CELL, TITLE, NAME, AFF, REF.\n  - Emitter.breaks and newlines; span records Newline.\n  - write_inline flush: break split only when parent.tag == SPAN and ctx.breaks and \\n is present; empty parts create no element; otherwise identical to today.\n- builder.py: BuildInfo.newlines; end of build adds one chapter-10 warning per group.\n- structure.py: at the end of Classifier.run, add a Decision for chains with differing styles.\n- pipeline.py: Result.joined, deleted_rows, newlines.\n- report.py: two chapter-6 lines (joined paragraphs, deleted rows); new _newline_action added to actions().\n- Version 0.26.0 in __init__.py and pyproject.toml; regenerate the notebook.\n- Docs:\n  - DESIGN.md 4.1, 4.3, 4.4 and 7.\n  - DEVELOPMENT.md: principle 5, tests section, remaining issues.\n  - CLAUDE.md: one line saying joined_paragraphs and HiddenRule are shared.\n  - STYLE_MAPPING.md line 37.\n  - JSTAGE_NOTES.md: the td break evidence.\n  - FIX_PLAN.md: provisional note for G, the two U8 rule changes, the cellDel decision, the split docx being built in a test.\n  - fix_plan_repro_tests.py: remove the D5 test and update the docstring.\n- A prototype at /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/design/proto_src covers only reader, verification, route 2 and emit (no report, Decision or Action). With it:\n  - The existing 891 tests pass.\n  - Golden: 23 cases identical.\n  - td1 and td2: route 1 and route 2 identical to 0.25.0.\n  - td3: only 17 additional <break/>; the fixed docx is identical.",
+      "tests": "Fixtures (make_fixtures.py, regenerate make_reader only):\n- Builder.styles_extra.\n- Helpers: para_mark_deleted (del/move), run_styled, br, run_with_break, deleted_row, cell_deleted, add_break (adds a break to the title paragraph), READER_STYLES.\n- New READER_SECTIONS: paragraph-mark deletion, style hidden text, line breaks in cells, deleted rows. Contents are listed in design doc 7.1.\n  - Floats must be image+caption text boxes so they stay mechanical.\n  - Hidden runs must not contain images.\n- make_pdfcheck(split=False) parameter. The split docx is generated in tmp_path inside the test; the PDF is the existing one.\n\ntest_reader.py:\n- test_reader_matches_canonical compares against canonical_texts and also checks that later IDs are absent.\n- D5: joined text, style, dropped IDs, warnings (shown only for non-empty paragraphs), numbering 1. 2. 3., anchor_src, chain inside a text box, footnote.\n- U8: hidden and shown cases, plus hidden_text extended to br, sym, noBreakHyphen.\n- N8: deleted rows, rows with remaining text, cellDel.\n- ooxml unit tests:\n  - HiddenRule: the 21 cases, the 4+1 cases from the FIX_PLAN appendix, docDefaults, default paragraph style, basedOn cycle.\n  - joined/unjoined: end of body, block-level ins, comment markers, chain cut by a table.\n\ntest_pipeline.py:\n- Take test_PROBLEM_deleted_paragraph_mark_keeps_two_paragraphs with the expectation reversed (one <p>), plus a heading joined with body staying <title>, and a deleted heading becoming <p>.\n- U3:\n  - break plus \\n in td and th; bold closed and reopened.\n  - No break inside links, p, mixed-citation or article-title.\n  - DTD, fidelity, final check and drops unchanged.\n- Report:\n  - Chapter 10 newline lines; Action \"newline\" at the top and in chapter 14; it leaves needs_action false (exit code 0).\n  - Chapter 6 lines for joined paragraphs and deleted rows; chapter 4 Decision.\n  - sample_edge: chapter 10 gains one line.\n\ntest_pdfmatch.py (route 2):\n- split docx: fixes applied as one paragraph, a single <p>, empty _verify.\n- A fix spanning the deleted mark is split into each w:p's w:t, and re-read text matches expected_text.\n- paragraph_units(p, rule) concatenated equals Para.plain() for all sample_reader paragraphs (checks the three places agree).\n\nExisting tests:\n- Only test_reader_matches_canonical changes.\n- Remove the D5 test from fix_plan_repro_tests.py.\n- Delete tests/__pycache__.",
+      "acceptance": "- pytest: everything passes on 3.13 and 3.10 (the prototype already passes the existing 891 tests).\n- ruff: no more issues than HEAD.\n- golden, 23 cases: only these may differ, with each difference diffed and explained:\n  - sample_reader_manual and sample_reader_split (new sections).\n  - sample_edge_manual and sample_edge_split: one extra chapter-10 line about the line break in a body paragraph, and the warning count in chapter 1. XML unchanged.\n  - The other 19 must be identical. Since the \"変更履歴が N 箇所\" sentence is unchanged, sample_structure and pdfcheck_route2 do not change either.\n- td1–3, route 1 and route 2:\n  - td1 and td2: XML, report and fixed docx all identical.\n  - td3: XML gains exactly 17 <break/> (identical once breaks are removed). The report gains the chapter-10 newline lines and a TO_CHECK notice for the line breaks in the Japanese and English titles. The fixed docx is identical.\n  - Fidelity, final, DTD and J-STAGE checks pass. Images missing from the XML do not increase.\n- Verification docx for the published PDFs (7 files): G elements are 0, so route 2 matches 0.25.0 (confirm with realpdf check.py).\n- Fictional boundary cases under /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/design/ (generated by the gen_*.py scripts): same results as the prototype, fidelity and DTD pass.",
+      "risks": "- The shared rules (joined_paragraphs, HiddenRule) are not caught by the fidelity check if wrong; only unit tests and the LibreOffice comparison guard them. LibreOffice also disagrees with our rules in five places: joins across sdt/customXml, does not join a moveFrom mark, does not join a paragraph with a footnote reference, shows specVanish runs, and contradicts itself on docDefaults. Word behaviour is unconfirmed, so all of this is provisional pending the user's check in Word.\n- The two U8 rules where I deviated from FIX_PLAN (an explicit False on a character style shows the run; the paragraph style overrides docDefaults) and the specVanish order change from the 0.25.0 code need to be reported to the coordinator as deviations from FIX_PLAN.\n- Breaks in td: not listed in the J-STAGE manual's td/th 文字修飾 list, and not yet confirmed at trial publication (the existing breaks between cell paragraphs are in the same position).\n- Choosing the formatting paragraph by \"empty\" text means an image-only paragraph does not supply formatting. Hidden-text state in a chain uses each paragraph's own style. Fields spanning paragraphs are not handled.\n- The chapter-10 warning for unjoined marks is limited to paragraphs with text, so an empty paragraph that stays unjoined is not reported (no visible text difference).\n- Deleted cells are output while LibreOffice deletes the whole column; table shape may differ in Word.\n- route 2 makes a deepcopy and preprocess only when a deleted mark exists; size impact is small.\n- Mismatches between docs and code found while designing (none fixed here; this unit does not change code or repo files):\n  1. ooxml.py docstring says \"隠し文字（w:vanish）\" is excluded, but the code only looks at direct vanish/specVanish.\n  2. DESIGN.md 4.1 says nothing about deleted paragraph marks, deleted rows or style-level hidden text.\n  3. The chapter-6 hidden-text list only records w:t and tabs.\n  4. FIX_PLAN says its U8 rule \"matched in 16 places\", but in this experiment it disagrees with LibreOffice in two places (char-style False, docDefaults XOR).\n  5. FIX_PLAN's specVanish order differs from the existing code.\n  6. FIX_PLAN refers to scratchpad/test_review.py, rvz_u8_fixed.py, d5_row.py and report.py:424; the first three no longer exist and the line number is from an old version. The actual file is docs/fix_plan_repro_tests.py, and report.py:424 is the chapter-6 tracked-changes sentence.\n  7. FIX_PLAN says \"F's TextBox paragraph list\", but model.TextBox has no paragraph list (structure's box_members / plan.textboxes[x].paras holds it).\n  8. FIX_PLAN plans a sample_pdfcheck_split.docx fixture; this design builds it in a test instead.\n  9. STYLE_MAPPING only mentions breaks between cell paragraphs.\n  10. JSTAGE_NOTES has no basis recorded for td breaks; the manual's td/th list lacks break, xref and inline-formula, all of which the tool emits.\n  11. DEVELOPMENT principle 5 mentions only canonical_text and docx_reader, not pdfdocx.paragraph_units.\n  12. tests/__pycache__ already existed (deleted at the end).\n- Experiments are under /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/design/ (scripts, JSON, prototype src). Large outputs (td outputs, docx, PDF, golden_proto) were deleted and the soffice listener was stopped. The repository working tree is unchanged."
+    },
+    "oracle": {
+      "dir": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/ （生成器 gen_g.py、比べる道具 run_g.py、期待 cases.json、原稿 cases/*.docx 29 件、文字の一致の確かめ overlap.py、結果 out/base0250/・out/wt0250/〈ケースごとの facts の JSON と summary.json〉、ログ log_base0250.txt・log_wt0250.txt）",
+      "cases": "29 件（比べる相手 1 件を含む）。docx は make_fixtures の部品（Builder・front_ja・front_en・tail・para・run・cell・table・tr・table_of_rows・textbox・drawing・sdt・custom_xml・deleted・list_item・_note_first・make_pdfcheck）を import して作った。足りない部品は gen_g.py に書いた: pm（段落記号の w:pPr/w:rPr に del・moveFrom・vanish・vanish+specVanish）、hrun（rStyle・直接の vanish/val=0・specVanish）、cstyle・pstyle と GBuilder（styles.xml へのスタイル追加、docDefaults と標準スタイル a の vanish、w:t の中の「⏎」を同じランの w:br に置き換える）、del_row（w:trPr/w:del。keep=文字は残す、pmark=セルの段落記号も削除）、del_cell（w:tcPr/w:cellDel）、bookmark、fn_two（段落記号に印のある 2 段落の脚注）、pdfcheck_split（make_pdfcheck の docx の 1 段落を、段落記号を削除した 2 段落に分ける）。どのケースにも共通の期待（exact）: 不変性チェック・最終出力の再チェック・DTD 検証が合格、J-STAGE のチェックに問題なし、XML に入らなかった画像なし。\n【D5】\n1 d5_two: 本文 2 段落（前の段落記号を削除）。exact: <p>「甲の段落の前半であり，甲の段落の後半である。」が 1 つ、前半だけ・後半だけの <p> はない、つないだ段落の ID と次の段落の ID の差が 2（後の段落は欠番）、10 章に「承諾」の行がない。\n2 d5_chain3: 3 段落の連鎖。exact: <p>「丙の一つ目，丙の二つ目，丙の三つ目。」、ID の差 3。\n3 d5_prev_empty: 文字ごと削除した節見出し（段落記号も削除）+ 本文。exact: 本文の <p>「戊の段落の本文である。」で <title> ではない（後の段落の書式）、その ID は見出しの段落の ID（次の段落との差 2）。either: 4 章の判断の記録（前が空でも pStyle が違うので記録するかは決めかねる）。\n4 d5_heading_first: 節見出し（段落記号を削除）+ 本文。exact: <title>「（1）見出しの前半と見出しの後半」（前の段落の書式）、<p>「見出しの後半」はない、4 章に判断の記録（言葉は 段落記号/つな/結合/続 のどれかと段落の先頭 8 字か ID）。\n5 d5_body_first: 本文（段落記号を削除）+ 節見出し（fix_plan_repro_tests の逆）。exact: <p>「辛の前半の文と（2）辛の後半の見出し」、<title>「（2）辛の後半の見出し」はない、4 章に判断。\n6 d5_autonum: numId=7（1.）の項目。甲の前半（段落記号を削除）+甲の後半、乙、文字ごと削除した項目（段落記号も削除）+丙。exact: list-item「甲項目の前半，甲項目の後半。」の label が 1.、乙が 2.、丙が 3.（連鎖の最後で 1 回だけ数える）。\n7 d5_bookmark: 段落の間に bookmarkStart/End。exact: <p>「癸の前半，癸の後半。」、ID の差 2。\n8 d5_movefrom: 段落記号の w:moveFrom。exact: <p>「子の前半，子の後半。」、後半だけの <p> はない。\n9 d5_vanish_mark: 段落記号の vanish、vanish+specVanish（スタイル区切り）。exact: 4 段落とも別の <p> のまま、10 章に「承諾」なし。\n10 d5_sdt_boundary: sdtContent の最後の段落／次が sdt の段落／customXml の中の最後／次が customXml の段落（4 組）。exact: 8 段落とも別の <p>、4 つの段落それぞれについて 10 章に「承諾」か「反映」と段落（先頭 8 字か ID）を含む行。\n11 d5_before_table: 表の直前の表題（段落記号を削除）。exact: 表題「表1　未の表の表題」のまま、10 章に警告。\n12 d5_cell: セルの途中の段落（つながる）とセルの最後の段落（つながない）。exact: td「申のセルの前半，申のセルの後半。」で break 0 個、td「酉のセルの一つ目。酉のセルの最後。」で break 1 個（段落の間）、10 章に「酉のセルの最後。」の警告。\n13 d5_textbox: アンカーのある後の段落とつなぐ本文、テキストボックスの中の表題の連鎖、テキストボックスの最後の表題。exact: <p>「図1は戌の図である。前半，後半の説明。」、図の表題「図1　戌の図の表題の前半と後半」と「図2　亥の図の表題」、10 章に「図2　亥の図の表題」の警告。\n14 d5_note: 脚注 41 の 1 段落目（段落記号を削除）、脚注 42 の唯一の段落（段落記号を削除）。exact: 脚注 41 の fn の p が 1 つで「乾の注の前半と乾の注の後半。」を含む、脚注 42 は p 1 つ、10 章に「坤の注の最後。」の警告。\n15 d5_body_last: 本文の最後の w:p（英文要旨の最後）の段落記号を削除。exact: 段落はそのまま、10 章に警告。\n【U8】\n16 u8_char: 直接の vanish と文字スタイル（gHid）の vanish。exact: <p>「見える文字の甲との後。」、隠した 2 つは XML になく Result.hidden_text（6 章）に載る。\n17 u8_para: 段落スタイル gHidP（vanish）の段落全体（消える。hidden_text に載る）、同じスタイルの段落でトグル（rStyle gHid）・直接の val=0・rStyle gHid+直接の val=0 は見え、vanish のない文字スタイル（gPlainC）のランは隠れる。exact: <p>「トグルで見える丙直接の指定で見える丁重ねて見える戊」、隠れる 2 つは XML にない。\n18 u8_basedon: 文字スタイル gHidB（vanish）とその派生 gDerOff（val=0 → 見える）・gDerInh（指定なし → 隠れる）・gDerOn（vanish → 隠れる。連鎖の中で反転しない）、段落スタイル gPHidB とその派生 gPDerOff（見える）・gPDerOn（隠れる）・gPDerInh（隠れる）、gPDerOn の段落の rStyle gHidB（トグルで見える）。exact: <p>「己一派生で戻して見える。」「段落の派生で戻して見える文。」「派生段落と文字のトグルで見える」、ほかの〔…〕は XML にない。\n19 u8_docdef_twin: 比べる相手（vanish なし。gNoVan の段落「〔既定で隠れる段落〕」は見える）。\n20 u8_docdef: docDefaults の vanish と標準スタイル a の vanish（打ち消して本文は見える）、gNoVan（val=0）の段落は隠れる。exact: 「〔既定で隠れる段落〕」は XML になく、それ以外の body・back の並びは比べる相手と同じ。\n21 u8_spec: ランの specVanish。exact: <p>「庚の文字の後。」。\n22 u8_br_sym: 直接の vanish のランの中の w:br・w:sym・w:noBreakHyphen、文字スタイル gHid のランの中の w:br・w:sym。exact: <p>「辛の文字の後。」「壬の文字の後。」（\\n・記号・ハイフンも出ない）。either: 6 章の隠し文字に改行・記号を書くか（記録だけ）。\n【U3】\n23 u3_cell: 見出し行（th）の改行、普通のセル、太字のランの中の改行、太字のランの間の改行、セルの段落の末尾の改行+次の段落、セルの中のハイパーリンクの中の改行。exact: それぞれの th/td で <break/> の直後（開く書式の要素をはさんでよい）に \\n がある（\\n は文字のまま）、末尾の改行は <break/>\\n の後に段落の間の <break/>、リンク（uri/ext-link）の中に break はない。either: 10 章にセルの改行を載せるか。\n24 u3_body: 見出しと本文の改行。exact: title と p に \\n があり break はない、10 章に両方の段落（「改行」と段落の先頭か ID）、コマンドラインの標準エラーに「改行」の知らせがない（本文・見出しは Action にしない）。\n25 u3_title_ref: 題目と引用文献の改行。exact: article-title と mixed-citation に \\n があり break はない、10 章に両方、標準エラーに「改行」の知らせ（Action。要対応か要確認かは問わない）。\n【N8】\n26 n8_rows: 削除された空の行、削除の印だけで文字の残る行、セルの段落記号も削除した空の行。exact: 表の行が [区分,内容] [残る行,残る内容] [印だけの行,文字は残る] [最後の行,最後の内容] の 4 行、レポートに読み飛ばした行の記録（「削除」と「表の行」、「削除された行」「行を読み飛ば」「削除…行を」のどれかを含む行）。\n27 n8_celldel: w:cellDel のセル。exact: ほかのセルの文字（左・右・残るセル・下の右）が残る。either: 削除したセルを消す（行が [残るセル]）か空のセルのまま（[残るセル, \"\"]）。\n【ルート2】（tests/fixtures/sample_pdfcheck.pdf、--route pdf）\n28 r2_join: 「詳しくは資料の…されたい。」（段落記号を削除）+「授業は2回行った。」。exact: <p>「詳しくは付録の学習指導案を参照されたい。授業は２回行った。」が 1 つ、後半だけの <p> はない、直した docx の w:p の数は元と同じで、前の段落の段落記号の削除が残り、2 つの w:p の承諾後の文字をつなぐと PDF の文字と同じ。\n29 r2_boundary: 境目の「。」が docx にない分け方。exact: <p> は 1 つで、後半だけの <p> はない、直した docx の段落と印は元のまま。either: 「。」を足した PUB の文字か、足さない文字（13 章に出す）のどちらか。",
+      "runner": "cd /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle && python run_g.py --src <src> [--python <python>] [--label <名前>] [--only id1,id2] [--keep]\n（例: python run_g.py --src /home/user/jstgxmlcng_JASME/src --label wt。3.10 なら --python /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/venv310/bin/python）。29 件で 25 秒ほど。\n- ケースごとに子のプロセス（PYTHONPATH=<src>、cwd=/tmp）で jasme_jats.pipeline.convert（Options: ai_mode=none、convert_metafiles=False。route=pdf のケースは route=\"pdf\"・pdf_path=sample_pdfcheck.pdf）を呼び、Result の欄（xml_path・fidelity・dtd_valid・jstage_issues・lost_images・warnings・hidden_text・plan.paras・report_path・docx_fix）だけを読む。続けて python -m jasme_jats を同じ指定で実行し、標準エラー（知らせ）と終了コードを取る。\n- 出力: ケースごとに [OK]/[FAIL] と、各期待の ok/NG・level（exact/either）・理由。out/<label>/<id>.json に facts、out/<label>/summary.json に一覧。XML などは消す（--keep で残す）。\n- 原稿を作り直すときは python gen_g.py（cases/*.docx と cases.json を作る。make_fixtures.py は import するだけで変えない。PYTHONDONTWRITEBYTECODE=1 を付けると tests/__pycache__ を作らない）。架空の文字の確かめは python overlap.py（tests/private の docx と 12 文字以上一致する文字列リテラル・段落の件数だけを出す）。\n- 判定の道具そのものは、合成した「G の後」の facts（つないだ段落、<break/>\\n、太字をはさむ <break/><bold>\\n、10 章の「承諾できず」の行など）で OK になることを確かめた。",
+      "base_result": "0.25.0（/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/base0250_src）と作業ツリーの今の src（git status は空のまま。差分は egg-info だけ）で、結果は 1 行も違わない。OK 4 / FAIL 25。OK は d5_vanish_mark・u8_docdef_twin（比べる相手）・u8_spec（specVanish は 0.25.0 でもう隠れる）・n8_celldel（空の td のまま。either の範囲内）。どのケースでも、不変性・最終・DTD・J-STAGE は合格で、XML に入らなかった画像もない（0.25.0 の文字ポリシーは両側で同じなので、FAIL はどれも「Word の表示と違う」で、検証は気づかない）。\nFAIL の中身（G で直すもの）:\n- D5: 段落記号を削除した段落はどこでもつながらない（d5_two・chain3・bookmark・movefrom・heading_first・body_first・cell〈申のセルに段落の間の break が 1 つ〉・textbox〈本文〉・note〈脚注 41 が 2 段落〉）。d5_prev_empty は文字・役割は期待どおりだが ID が後の段落のもの（d13→d14、差 1）。d5_autonum の label は 乙 3.・丙 5.（期待 2.・3.）。4 章の判断も、境界での 10 章の「承諾できず」の警告もない（sdt_boundary・before_table・cell・textbox・note・body_last）。\n- U8: 文字スタイル・段落スタイル・派生・docDefaults の vanish はどれも隠れずに XML に出て、hidden_text にも載らない（u8_char の乙、u8_para、u8_basedon、u8_docdef の gNoVan の段落、u8_br_sym の文字スタイルのラン〈「〔隠Ｃ〕\\nγ」が出る〉）。u8_docdef は比べる相手と同じ並び（0.25.0 は docDefaults も標準スタイルも見ないため）。直接の vanish のランの中の br・sym・ハイフンは出ないが、6 章は「〔隠Ａ〕」「〔隠Ｂ〕」の w:t だけで、改行・記号・ハイフンは載らない（FIX_PLAN の指摘どおり）。\n- U3: どのセルにも <break/> がない（th「見出しの一行目\\n…」、td「<bold>太字の前\\n太字の後</bold>」など）。末尾の改行のセルは「末尾で改行\\n<break/>次の段落」（段落の間の break だけ）。リンクの中は break なしで期待どおり。本文・見出し・題目・引用文献の \\n は文字のまま（期待どおり）だが、10 章の一覧も題目・引用文献の知らせ（標準エラー）もない（終了コード 0）。\n- N8: 削除された空の行が 2 つとも [\"\"、\"\"] の行として出る（6 行）。記録もない。印だけの行は残る（期待どおり）。\n- ルート2: r2_join・r2_boundary とも XML は 2 つの <p> のまま。直した docx は 0.25.0 でもすでに w:p の数・段落記号の削除を保ち、2 段落をつなぐと PDF の文字と同じになる（r2_boundary では境目の「。」が前の段落に足された）。",
+      "notes": "期待の決め方（暫定。実装を見ずに FIX_PLAN の G・付録 D5/U3/U8 から決めた）:\n- 「ID は前の段落、後は欠番」を、つないだ段落の ID（plan.paras の dN）と次の段落の ID の差で確かめた（dN は w:p ごとの通し番号であることを 0.25.0 の出力で確かめた）。前の段落が空のときも ID は前の段落のもの（d5_prev_empty）にした。FIX_PLAN の「後の段落の ID は欠番」からこう読んだが、「書式は後の段落」と ID を分けてよいかは実装の側でも確かめてほしい。\n- 4 章の判断は、言葉（段落記号・つな・結合・続）と段落の先頭 8 字か ID が同じ行にあるかだけを見る。前の段落が空でスタイルが違うとき（d5_prev_empty）は記録してもしなくてもよい（either）とした。\n- 10 章の「承諾できず 2 段落のまま」は、言葉を「承諾」か「反映」にゆるめ、段落の先頭 8 字か ID が同じ行にあることを確かめる。文言は either。\n- U3 の Action は、題目・引用文献は「標準エラーに『改行』の行がある」（exact。要対応か要確認かは問わない）、本文・見出しの改行だけのとき（u3_body）は「ない」（exact）とした。FIX_PLAN は見出しを Action の対象に挙げていないので、こう読んだ。セルの改行を 10 章に載せるかは either。\n- N8 の記録は、レポートのどこかに読み飛ばした行の記録の行があること（言葉はゆるめた）。セルの段落記号も削除した行（Word が行を削除したときの形）の、つながない警告が出るかは確かめていない（行を読み飛ばすなら出ない方が自然だが、FIX_PLAN に書かれていない）。w:cellDel は either（セルを消す／空のセル）。0.25.0 は空のセル。\n- U8 の docDefaults の打ち消しは、docDefaults だけに vanish を置くと本文がすべて隠れるので、標準スタイル a にも vanish を置いた（a を継ぐスタイルはすべて True XOR True で見える）。pStyle のない段落（テンプレートの誌名行・装飾行・空行）は、規則の読み方（標準スタイルを使うか、スタイルなしか）で隠れるかどうかが変わるが、どれも除外される段落なので、比べるのは body・back の並びだけにした。\n- 段落記号の vanish・specVanish（スタイル区切り）は、つながず、警告も出さない（exact）。\n- ルート2 は新しい PDF を作らず、sample_pdfcheck.pdf と、make_pdfcheck の docx を後から分けたもの（FIX_PLAN の sample_pdfcheck_split.docx と同じ考え）を使った。\n確かめたこと: gen_g.py の文字列リテラル 848 件と生成した docx の段落のどれも、tests/private の docx 3 件（1223 段落）と 12 文字以上一致しない（overlap.py）。tests/private の文字は書き写していない。make_fixtures.py・tests/fixtures は変えていない（git status は空）。\n文書と動きの食い違い・気づいたこと（直していない。実装を見ていないので文書と出力だけから）:\n- FIX_PLAN の U8 の付録は「make_fixtures.Builder に styles_extra を足す」と書くが、0.25.0 にはまだない（この担当では gen_g.py の GBuilder に書いた。実装の担当が make_fixtures に足すときの参考になる）。\n- DESIGN.md 4.1 の「含めない: 隠し文字」は、どの vanish（直接・スタイル・docDefaults・specVanish）を指すかを書いていない。0.25.0 は直接の vanish と specVanish だけを隠す（u8_spec が OK）。G で文字ポリシーに規則を書くこと。\n- DESIGN.md 4.1 は改行（w:br）を文字に含めると書くが、隠し文字のランの中の w:br・w:sym・w:noBreakHyphen は、0.25.0 の 6 章の隠し文字の記録に載らない（FIX_PLAN の G・615 行の指摘どおり。レポートの説明は「Word で非表示に設定された文字」とだけあり、改行・記号が抜けることを書いていない）。\n- 0.25.0 の出力では、セルの中の段落の間に <break/> が入る（d5_cell・u3_cell）。FIX_PLAN の U3 の付録の「段落の間の <break/>」と合う。ハイパーリンクは <uri> で出る（FIX_PLAN の「リンクの中」は uri・ext-link の両方とみなして確かめた）。\n- FIX_PLAN の行番号（L287・L585 など）と rvz_u8_fixed.py・d5_row.py は当てにしていない（指示どおり）。\n後片付け: 大きな出力（XML・ZIP・画像）は消した（out には facts の JSON だけ）。cases/*.docx（29 件・1.1MB）は run_g.py の入力なので残した（gen_g.py で作り直せる）。/home/user/jstgxmlcng_JASME/tests/__pycache__ は 13:23〜13:27 のほかの担当の pytest（cpython-310/313）が作ったもので、この担当は作っていない（触っていない）。ディスクの空きは 23GB。"
+    },
+    "impl": {
+      "changed_files": [
+        "src/jasme_jats/ooxml.py",
+        "src/jasme_jats/docx_reader.py",
+        "src/jasme_jats/fidelity.py",
+        "src/jasme_jats/pdfdocx.py",
+        "src/jasme_jats/emit.py",
+        "src/jasme_jats/builder.py",
+        "src/jasme_jats/model.py",
+        "src/jasme_jats/structure.py",
+        "src/jasme_jats/pipeline.py",
+        "src/jasme_jats/report.py",
+        "tests/make_fixtures.py",
+        "tests/fixtures/sample_reader.docx",
+        "tests/test_reader.py",
+        "tests/test_pipeline.py",
+        "tests/test_pdfmatch.py",
+        "tests/test_fidelity.py",
+        "docs/DESIGN.md",
+        "docs/DEVELOPMENT.md",
+        "docs/JSTAGE_NOTES.md",
+        "docs/STYLE_MAPPING.md",
+        "docs/fix_plan_repro_tests.py"
+      ],
+      "summary": "I implemented unit G as uncommitted changes on top of c35defd, following DESIGN_G.md. The new tests all pass on Python 3.13 and 3.10. ruff gives 201 issues, the same as HEAD. One of the 29 independent counterexamples still fails (u8_docdef); it fails because the design deliberately departs from FIX_PLAN's U8 rule, and you need to choose which rule to keep (see deviations 1).\n\n- **Shared rules in ooxml**: I added the hidden-text check `HiddenRule` with `NO_RULE`, and the paragraph-joining functions `paragraph_mark_deleted`, `joined_paragraphs`, `unjoined_deleted_marks` and `canonical_texts`. `canonical_text` now takes the hidden rule, and the old `run_hidden` is gone.\n- **The three places that read docx text share these rules**: the reader (docx_reader), the fidelity check (`fidelity.source_texts` now uses `HiddenRule` with `canonical_texts`) and route 2 (`pdfdocx.paragraph_units`, plus a new `_chains` that `write_fixed_docx` uses to fix a joined paragraph as one paragraph).\n- **D5 (deleted paragraph marks)**: a paragraph whose mark is deleted is joined to the next one, as Word shows it after accepting changes.\n  - The joined paragraph keeps the first paragraph's ID; later IDs are dropped.\n  - Formatting comes from the first paragraph that has text, the section break from the last one, and automatic numbering counts once per chain.\n  - Text box paragraphs and footnotes follow the same rule.\n  - Where a mark cannot be joined (next is a table or content control, last paragraph of a cell, text box, note or the body), the paragraph stays separate and chapter 10 of the report gets a warning with the paragraph ID and its first characters.\n  - Joins between different styles are recorded as a decision in chapter 4, and chapter 6 lists every join.\n- **U8 (hidden text from styles)**: character styles, paragraph styles (through basedOn) and document defaults now hide text the way the design specifies. The chapter 6 hidden-text list now also includes line breaks, symbols and non-breaking hyphens.\n- **U3 (line breaks)**: inside table cells, a `<break/>` is added before each line break. The line-break character itself stays. Bold and other formatting is closed around the break, and nothing is added inside links. Breaks in titles, authors, affiliations and references stay as plain characters and raise a 要確認 notice. Body and heading breaks are only listed in chapter 10.\n- **N8 (deleted table rows)**: rows deleted with tracked changes are skipped if they have no text, image or shape left, and chapter 6 lists them. Deleted rows that still have text, and deleted cells, are kept and get a chapter 10 warning.\n- **Fixtures**: `Builder.styles_extra`, new helper functions and four new sections in sample_reader; only `make_reader` was run, and `git diff --stat tests/fixtures` shows only sample_reader.docx changed. `make_pdfcheck(split=True)` builds the split document inside the test, so no new fixture file was added.\n- **Docs**: DESIGN.md (chapters 3, 4.1, 4.3, 4.4, 6 and 7), DEVELOPMENT.md (code table, principle 5, tests, remaining issues), JSTAGE_NOTES.md (basis for `<break/>`), STYLE_MAPPING.md and the docstring of `docs/fix_plan_repro_tests.py`. The D5 repro test was moved into tests/test_pipeline.py with its expectation reversed.",
+      "tests_added": [
+        "tests/test_reader.py::test_reader_matches_canonical (rewritten: compares against canonical_texts and checks that later IDs of joined paragraphs exist in neither the reader output nor the fidelity text)",
+        "tests/test_reader.py::test_deleted_paragraph_marks_join_paragraphs[body-body, deleted-heading, heading-body, body-heading, chain3, moveFrom, bookmark, cell, textbox]",
+        "tests/test_reader.py::test_unjoinable_deleted_marks_are_warned",
+        "tests/test_reader.py::test_joined_numbered_paragraphs_count_once",
+        "tests/test_reader.py::test_joined_paragraph_shapes_and_notes",
+        "tests/test_reader.py::test_hidden_text_from_styles",
+        "tests/test_reader.py::test_deleted_table_rows",
+        "tests/test_reader.py::test_deleted_row_with_shape_is_kept",
+        "tests/test_reader.py::test_deleted_row_with_joined_cell_paragraphs",
+        "tests/test_reader.py::test_hidden_rule[u01..u21, plain] (22 cases, each with and without docDefaults)",
+        "tests/test_reader.py::test_hidden_rule_details",
+        "tests/test_reader.py::test_joined_paragraphs_rules",
+        "tests/test_pipeline.py::test_deleted_paragraph_mark_joins_paragraphs (fix_plan_repro_tests' test_PROBLEM_deleted_paragraph_mark_keeps_two_paragraphs, expectation reversed, plus the two heading cases)",
+        "tests/test_pipeline.py::test_line_breaks_in_cells",
+        "tests/test_pipeline.py::test_cell_breaks_in_emitter",
+        "tests/test_pipeline.py::test_reader_report_and_notices",
+        "tests/test_pipeline.py::test_body_line_break_is_only_listed",
+        "tests/test_pdfmatch.py::test_split_paragraph_is_matched_as_one",
+        "tests/test_pdfmatch.py::test_fix_across_deleted_paragraph_mark",
+        "tests/test_pdfmatch.py::test_paragraph_units_match_reader",
+        "tests/test_fidelity.py::test_joined_and_hidden_text_follow_the_same_policy"
+      ],
+      "pytest_result": "- **Python 3.13** (`python -m pytest -q -p no:cacheprovider`): 940 passed. HEAD had 891; 49 are new.\n- **Python 3.10** (`PYTHONPATH=src venv310/bin/python -m pytest -q -p no:cacheprovider`): 940 passed.\n- **New tests against the 0.25.0 src**: every new or rewritten test fails.\n  - I ran them from a copy of tests/ in scratchpad/g/impl/basecheck (since deleted) where the imports of new names are replaced by stubs that raise. Without the stubs, the whole test module would fail to import.\n  - Tests that check behavior fail on assertions about the behavior itself (no joining, text still hidden-but-output, missing `<break/>`, deleted rows still present). Tests that use the new API fail with NotImplementedError.\n- **Extra check**: I disabled the fix that drops joins recorded inside a skipped deleted row, and test_deleted_row_with_joined_cell_paragraphs failed. The fix is back in place.\n- **docs/fix_plan_repro_tests.py**: when copied into tests/ and run, its remaining 3 tests pass. The temporary copy was deleted.\n- **ruff check src tests tools**: 201 issues, same as HEAD. My first version added 28 in the new tests; I fixed those.",
+      "measures": "- **golden** (23 cases, compared with golden_base for 0.25.0): 19 identical. All 23 have ok = [True, True, True, 0].\n  - sample_edge_manual / split: only the report changes. Chapter 10 gains one line, 「本文などの段落の中の改行（Shift+Enter）1 か所は…: d14（…）」, and the chapter 1 warning count goes from 1 to 2. XML and the AI request file are unchanged.\n  - sample_reader_manual / split: this fixture was rebuilt. In the XML, the title gains \"\\n（改行の後の題目）\", sections 3–6 are inserted, a second reference (B2) is added, and an fn-group is added. A tag-level diff shows nothing else changed. The report and the AI request file change to match.\n- **td1–3, route 1 and route 2, compared with 0.25.0**:\n  - td1 and td2: XML and report identical. The corrected docx (route 2) is identical apart from the tracked-change `w:date` timestamps.\n  - td3: the XML has exactly 17 more `<break/>` and is identical once they are removed. The report changes as follows:\n    - The chapter 1 warning count goes from 4 to 6.\n    - Chapter 10 gains the cell line-break line (17 places) and the title / translated-title line (2 places).\n    - The 要確認 notice for the title line breaks appears at the top of the report, in chapter 14 and on stderr.\n    - The corrected docx is identical apart from `w:date`.\n  - In every run, the fidelity, final, DTD and J-STAGE checks pass. Images missing from the XML stay at 0, the image row in the report is unchanged, and the exit code (1, from the pending manual AI step) is the same as 0.25.0.\n- **Published PDFs** (the 7 check docx built from tests/private/pdf by b21/isolate/realpdf/check.py, run from a copy with --before-src base0250_src): route 2 result JSON, XML and report are all identical to 0.25.0.\n- **Designer's boundary docx** (d5, u8, u8dd, n8 and u3, regenerated from copies of the gen scripts): paragraph text, style and numbering are identical to the prototype (proto_src). Fidelity, final and DTD checks pass for all five. Only the warning wording differs from the prototype, which had no report text yet.\n- **Independent counterexamples** (oracle/run_g.py, 29 cases):\n  - 0.25.0: 4 OK / 25 FAIL. Working tree: 28 OK / 1 FAIL (u8_docdef).\n  - Same result on 3.10. run_g.py itself uses f-string syntax that only works on Python 3.12+, so all cases errored on 3.10. I ran a copy with that one line fixed (scratchpad/g/impl/oracle310); the oracle's own files are unchanged.\n  - d5_note and u3_title_ref failed at first only because the oracle could not find the paragraph ID from the text (a footnote paragraph starts with the footnote mark; the reference was matched by a substring from its middle). Once the warnings included each paragraph's first 20 characters, both passed.\n  - u8_docdef follows FIX_PLAN's rule: docDefaults vanish XOR paragraph-style vanish, so they cancel. The design deliberately lets the paragraph style's value win over docDefaults, matching LibreOffice. That hides all of the case's body text and the titles, so this is not an implementation error but the U8 rule choice in deviations 1.",
+      "deviations": "**Places where I chose differently from, or beyond, the design (DESIGN_G.md):**\n\n1. **U8 rule — needs your decision.** I implemented the design's LibreOffice-based rule. It differs from FIX_PLAN's G rule, and from your instruction to implement FIX_PLAN as written, in two places:\n   - A character style whose value is false makes the run visible. FIX_PLAN XORs it with the paragraph state.\n   - A paragraph style's value overrides docDefaults. FIX_PLAN XORs them.\n\n   This is why the oracle's u8_docdef fails. Points that bear on the choice:\n   - FIX_PLAN's rule matches my understanding of the ECMA-376 toggle-property behaviour (a true value in a style flips the state, false leaves it unchanged); I did not re-check the spec.\n   - The design's own reason for the first change is to avoid dropping text when unsure. The second change goes the other way: it hides more text (docDefaults plus a hiding paragraph style hides the whole body).\n   - Switching to FIX_PLAN's rule is two lines in `HiddenRule`: `para_state = dd ^ (v is True)`, and in `run_hidden`, `v is False → ps`. The u15 case and the docDefaults cases in `U8_CASES` would flip.\n2. **specVanish order changed** (per the design and FIX_PLAN): a run with both `vanish=\"0\"` and specVanish is now visible; 0.25.0 hid it.\n3. **Unjoined-mark warning wording.** The design's 「2 段落のまま」 is wrong when there is no next paragraph (end of a cell or of the body), so I wrote 「次の段落とつながずに出力しました」. The warning also gives the paragraph's first 20 characters, in the format other warnings already use (`{src}: 段落「…」…`), and ends with 「Word で変更をすべて承諾して保存してから変換し直すと、Word の表示と同じ段落になります」. When the unjoinable mark is on the last paragraph of a chain, the warning uses the chain's first ID and the chain's text; otherwise it would name a dropped ID.\n4. **Records for skipped deleted rows.** Joins (`joined`, `joins`) and nested deleted rows recorded while reading a row that is then skipped are removed. Otherwise chapter 6 would claim those paragraphs were output. The design did not cover this.\n5. **Line-break report shape.**\n   - I added a `Newline.cell` field so that cell newlines that sit entirely inside links are still counted as cell newlines.\n   - Cell and body paragraphs are grouped by location (`d122・d124（場所）`). Title, author, affiliation and reference paragraphs show their first characters plus the label, because they have no location.\n   - When some cell newlines are inside links, the line reads 「N か所のうち B か所…リンクの中の M か所は改行の文字のまま」.\n   - `<break/>` is written in backticks so Markdown does not hide it.\n   - I wrote 「表示されることがあります」 instead of the design's 「表示されます」, because the J-STAGE display has not been checked.\n   - The newline Action says 「英文なら空白に置き換えて」; the design said 「題目の途中の改行は空白にするなど」.\n6. **Smaller wording and placement choices:**\n   - Newline lives in model.py; the design allowed model or emit.\n   - The kept deleted-row warning says 「文字・画像など」, because a hidden image also stops a row from being skipped.\n   - Tables are located as 「「区分」で始まる表の N 行目」, with the head cut to 20 characters plus 「…」. The design's example was 「表「区分…」」.\n   - The Decision text says 「文字のある最初の段落（すべて空なら最後の段落）のスタイル」.\n   - In `HiddenRule`, a style ID that is not in styles.xml counts as having no value; this is stated in the docstring.\n7. **Scope.**\n   - Not touched (left for the finishing step, as the task says): FIX_PLAN, CLAUDE.md, README, the version and the notebook. This includes the 暫定 note at the start of FIX_PLAN's G section, which the design assigned to the implementer.\n   - I did update STYLE_MAPPING.md and JSTAGE_NOTES.md (the design assigned JSTAGE_NOTES to the implementer, and neither is on the finishing list).\n   - The td/th 文字修飾 list in JSTAGE_NOTES comes from the designer's check on 2026-11-01. I checked the 別紙1 `<break/>` row in the designer's text dump; I did not reopen the manual itself.\n\n**Mismatches between docs and code:**\n\n8. **Fixed to match the code:**\n   - The ooxml docstring said 「隠し文字（w:vanish）」 are excluded, but the code only looked at direct vanish and specVanish.\n   - DESIGN.md 4.1 said nothing about deleted paragraph marks, deleted rows or style hidden text.\n   - The chapter 6 hidden list recorded only `w:t` and tabs.\n   - DEVELOPMENT.md principle 5 named only canonical_text and docx_reader.\n   - The DEVELOPMENT.md test_reader bullet and the fidelity.py and docx_reader.py docstrings referred to canonical_text.\n   - STYLE_MAPPING.md mentioned only breaks between cell paragraphs.\n   - JSTAGE_NOTES.md had no basis recorded for td breaks.\n   - DESIGN.md chapter 3's list of 要確認 notices had no newline entry.\n9. **Not fixed (FIX_PLAN belongs to the finishing step):**\n   - FIX_PLAN's U8 rule and its claim that the rule matched LibreOffice in 16 places.\n   - FIX_PLAN plans a sample_pdfcheck_split.docx fixture; it is built inside the test instead.\n   - FIX_PLAN says label is called 「連鎖の最後で 1 回」. The code calls it once when the chain's first paragraph is read. The count is the same; only the order differs if a numbered paragraph sits in a text box inside the chain.\n   - FIX_PLAN refers to 「F の TextBox の段落一覧」, but model.TextBox has no paragraph list.\n   - FIX_PLAN refers to rvz_u8_fixed.py, d5_row.py and scratchpad/test_review.py, which no longer exist (the repro file is docs/fix_plan_repro_tests.py), and its line numbers (L287, L585, report.py:424) are stale.\n   - FIX_PLAN's 「report.py:424 の文言も直す」 was met by adding a line rather than changing the existing sentence (the design's choice).\n   - The G row of FIX_PLAN's 反映の順序 table is not marked 実装済み.\n   - CLAUDE.md does not yet have the G line about the shared rules.\n10. **Other observations, not changed:**\n   - The AI request file (AI依頼文) writes in-paragraph newlines as raw newlines, which breaks its one-paragraph-per-line layout. 0.25.0 does the same (sample_edge d14).\n   - The oracle's run_g.py cannot run under Python 3.10.\n   - tests/__pycache__ already existed when I started; I deleted it at the end.",
+      "open_issues": "1. **U8 rule (needs your decision):** keep the design's LibreOffice-based rule, or switch to FIX_PLAN's XOR rule (which follows ECMA-376 as I understand it). The switch is the two-line change described in deviations 1. The independent counterexample u8_docdef stays failing until this is settled.\n2. **Items the user still has to check in Word (all provisional):**\n   - D5 boundaries where LibreOffice differs from us: content-control and customXml boundaries, a `w:moveFrom` paragraph mark, and a paragraph containing a footnote reference.\n   - Where a joined paragraph takes its formatting from (an image-only paragraph counts as having no text) and how numbering is counted.\n   - The two LibreOffice-based U8 changes, and runs that have only specVanish.\n   - The table shape after accepting a deleted cell (`w:cellDel`).\n   - On a J-STAGE trial upload: how `<break/>` inside td/th displays.\n3. **Finishing step:**\n   - Version 0.26.0 in `__init__.py` and pyproject.toml, then regenerate the notebook.\n   - FIX_PLAN:\n     - Add the 暫定 note after G's 前提.\n     - Record the two U8 rule changes or whichever rule you pick.\n     - Record the cellDel decision (output the cell and warn).\n     - Note that the split docx is built inside the test.\n     - Mark G as 実装済み.\n     - Fix the stale references.\n   - CLAUDE.md: add a line saying `joined_paragraphs` and `HiddenRule` are shared by the reader, the fidelity check and pdfdocx.\n   - README: describe the chapter 10 line-break list and the 要確認 notice for title line breaks.\n4. **Known limits, documented in DESIGN.md chapter 7:**\n   - Fields that span paragraphs are not handled.\n   - A later paragraph in a chain decides its hidden text from its own paragraph style.\n   - An empty paragraph whose mark cannot be joined gets no warning.\n   - A paragraph that is entirely hidden is excluded with the reason 「空白のみの段落」.\n   - Deleted cells are output.\n   - docDefaults vanish is inconsistent even within LibreOffice.\n5. **Where the evidence is:**\n   - Scratchpad: scratchpad/g/impl/.\n     - Comparisons: golden manifests (golden_pre, golden_wt), td logs and td_cmp.json, realpdf results JSON and run.log, ruff_head.txt / ruff_wt.txt.\n     - Scripts: rep.py, run_td.sh, cmp_td.py, conv.py, and the lo/ generator copies with their outputs.\n     - Oracle: the 3.10 run from the patched copy (oracle310/), and my 3.13 facts in scratchpad/g/oracle/out/wtG.\n   - Large outputs (docx, xml, zip, images, the basecheck copy) were deleted, and tests/__pycache__ was removed. Disk has 23G free."
+    },
+    "verify": {
+      "passed_all": false,
+      "measures": "作業ツリー（c35defd の上に積んだ G の差分。ファイルは変えていない）を、0.25.0（scratchpad/g/base0250_src）と比べて測った。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/verify/ の下。\n- pytest: 3.13 は 940 passed、3.10（venv310）も 940 passed（verify/pytest313.txt・pytest310.txt）。\n- ruff check src tests tools: HEAD（git worktree で取り出したもの。確かめた後に消した）も作業ツリーも 201 件。ファイルとコードの組で比べても同じ（増えていない）。\n- golden（23 件。verify/golden_wt/manifest.json と g/golden_base を比べた）: 19 件は同じ。23 件すべて ok=[True, True, True, 0]。違いは本体を diff して 1 つずつ確かめた。\n  - sample_edge_manual・split: レポートだけ。1 章の警告の件数が 1 から 2 になり、10 章に「本文などの段落の中の改行 1 か所…d14」が 1 行増える。XML と AI 依頼文は同じ。\n  - sample_reader_manual・split: fixture を作り直したことによる違い。\n    - 題目に「\\n（改行の後の題目）」が入る。節 3〜6、引用文献 B2、fn-group が増える。\n    - つないだ段落は 1 つの <p>／<title> になる。見出し＋本文は <title>、文字ごと削除した見出し＋本文は <p>。\n    - 番号の連鎖は 1. 2. 3.。隠し文字は XML になく、6 章に載る（⏎・α・‑ も）。\n    - セルの <break/> は「<break/>\\n」の形。太字はいったん閉じ、リンクの中には入れない。段落の最後の改行に段落の間の <break/> が続く形もある。\n    - 削除された空の行 2 行は消え、6 章に記録される。文字の残る削除行と cellDel の行は出力され、10 章に警告が出る。\n    - 4 章に M-006〜M-008（スタイルの違う段落をつないだ判断）、10 章に「承諾できず」6 行と改行 3 行、冒頭と 14 章に改行の要確認が出る。\n    - 不変性の件数は 66→130 段落。どれも意図した変化。split 版の差分も manual 版と同じ内容。\n- td1〜3（tests/private/colab）をルート1・ルート2 で変換して比べた（verify/td_cmp.json。文字は記録していない）。\n  - td1・td2: XML・レポートとも同じ。直した docx は w:date を除いてすべての部品が同じで、段落の文字も同じ。\n  - td3: XML は <break/> が 17 個増えるだけで、<break/> を除くと 0.25.0 と同じ。増えた 17 個はどれも直後に「\\n」がある。\n  - td3 のレポート: 1 章の警告が 4→6 件、10 章に「セルの改行 17 か所」と「題目・英文題目の改行 2 か所」、冒頭・14 章に要確認が増える。直した docx は同じ。\n  - どの変換も、不変性・最終・DTD・J-STAGE のチェックは合格。ZIP の中のファイル名は同じで、XML に入らなかった画像は増えていない。終了コードは 1 で 0.25.0 と同じ（AI の手動の待ち）。\n- 本誌の出版版 PDF（realpdf の check.py の写しを、--before-src base0250_src --after-src 作業ツリー で実行。7 本）: ルート2 の results JSON は 7 本とも同じ。XML とレポートも 7 本とも 0.25.0 と同じ。\n- 独立の反例（oracle/run_g.py。29 件）: OK 28 / FAIL 1（u8_docdef）。実装の担当の報告と同じ。u8_docdef は、設計が FIX_PLAN の U8 の規則から変えた点による（problems の 1）。この規則だと題目まで隠れて J-STAGE の EMSGM097E が出るが、知らせは出る。\n- 自分で作った架空の docx 6 本（verify/gen/gen_cx.py・gen_v6.py・gen_r2.py）を目で確かめた。\n  - v1（つながる・つながない境界）: 隠し段落スタイルだけの段落＋本文は本文の書式になる。表の直前で終わる連鎖は、連鎖の最初の ID で警告される。コメントの範囲は飛ばす。文字ごと削除した本文＋見出しは <title> になる。番号付き＋番号なしは番号 1 つ。画像だけの段落＋本文は inline-graphic になる。sdt の前ではつながず、警告が出る。\n  - v2（派生スタイルの隠し文字）: 派生・派生の派生の val=0 は表示、派生の文字スタイルは隠す。隠す段落スタイルの中でも、文字スタイルの反転・直接の val=0 は表示される。見出しを隠すと消え、6 章に載る。循環したスタイル・ないスタイルは表示。セル・脚注の中の隠し文字も隠れる。\n  - v3（改行）: セルでは、斜体・上付きをいったん閉じて <break/>\\n になる。段落の先頭の改行、w:cr、改行 2 つ、リンクの後ろの改行も同じ形。見出し・キャプション・題目・引用文献には <break/> を入れない。10 章 3 行、要確認、標準エラーの要確認が出て、DTD は合格。\n  - v4（削除された行）: 縦の結合の開始の行、隠し文字だけ残る行、削除された画像の行、見出し行、すべての行を削除した表は読み飛ばされ、6 章に記録される。\n  - v5（ルート2。直す段落に文字スタイルの隠し文字を入れたもの、それを段落記号の削除で 2 つに分けたもの）: どちらも 44 件すべて直り、不変性も合格。\n  - v6（削除行の中の番号の段落）: problems の 3。\n  - v1〜v4 は、不変性・最終・DTD・J-STAGE とも合格。\n- わざと片側だけを崩した実験（verify/gen/mutate.py・fidcheck.py）。sample_reader と v1〜v4 をルート1 で変換した結果:\n  - 検証の側だけを崩したもの（隠し文字の規則を見ない／つながない／後ろの ID も入れる）: 不合格。\n  - 読み取りの側だけを崩したもの（後ろの段落も読む／つながない／隠し文字の規則を見ない／文字の残る削除行も飛ばす）: 不合格。\n  - 出力の側だけを崩したもの（<break/> が改行の文字の代わりになる）: 不合格。\n  - その要素がない docx では、どの崩しも合格のまま。両側が同じ規則で動いていることを確かめた。\n  - ルート2 の側: つながない崩し（r2_nojoin）は test_split_paragraph_is_matched_as_one が見つけた。隠し文字の規則を write_fixed_docx に渡さない崩し（r2_norule）は、940 件すべて合格のまま（problems の 2）。\n- make_reader だけで作り直した sample_reader.docx は、リポジトリのものとすべての部品が同じ。tests/fixtures で変わったのは sample_reader.docx だけ。\n- 版（__init__.py・pyproject.toml）はまだ 0.25.0。ノートブック・FIX_PLAN・CLAUDE.md も直していない（まとめ役の仕上げで行う分）。\n- 後片付け:\n  - git worktree（verify/head）は消した。\n  - 大きな出力（docx・xml・zip・変換結果・mut の写し）は消し、結果の JSON・ログ・スクリプトは残した。\n  - 私の実行で tests/__pycache__ ができたので消した。\n  - ディスクの空きは 23G。",
+      "problems": [
+        {
+          "severity": "should",
+          "where": "src/jasme_jats/ooxml.py HiddenRule.para_state・run_hidden（docs/DESIGN.md 4.1 の隠し文字の行も）",
+          "problem": "U8 の規則が FIX_PLAN の G の規則と 2 か所違う。まとめ役の暫定の判断は「FIX_PLAN の G の節の規則をそのまま実装する」だが、設計（DESIGN_G.md 4.2）に従って LibreOffice に合わせた規則になっている。(1) 文字スタイルの値が偽なら表示する（FIX_PLAN は段落の状態との XOR）。(2) 段落スタイルの値があれば既定の書式（docDefaults）より優先する（FIX_PLAN は XOR）。この 2 か所では、隠す文字が FIX_PLAN の規則と逆になる。",
+          "evidence": "oracle/run_g.py は u8_docdef だけが FAIL（28 OK / 1 FAIL）。その docx（docDefaults と既定の段落スタイルに vanish）では、本文と題目がすべて隠れる。p_exact が 0 個になり、J-STAGE の EMSGM097E「タイトル(英)とタイトル(日)の両方が未設定」が出て、終了コードは 1 になる（知らせは出る）。HiddenRule の docstring・DESIGN.md 4.1・DEVELOPMENT.md の残っている課題には「暫定。Word では未確認」と書いてある。実際の原稿（td1〜3）と本誌の 7 本には、スタイルの隠し文字が 0 件なので、出力は変わらない。",
+          "fix": "まとめ役が、どちらの規則を採るかを決める。FIX_PLAN に戻すなら、para_state を dd ^ (v is True) にし、run_hidden の v is False の枝を ps に戻す。test_reader の U8_CASES の u15 と docDefaults の版の期待も反転する。LibreOffice 版のままにするなら、FIX_PLAN の G の U8 に、変えた 2 か所と理由・暫定を書き、「16 か所で一致」の記述を直す。利用者に Word で確かめてもらう項目（DEVELOPMENT の残っている課題）にも入れる。"
+        },
+        {
+          "severity": "should",
+          "where": "src/jasme_jats/pdfdocx.py write_fixed_docx（rule を paragraph_units に渡す行）／tests/test_pdfmatch.py",
+          "problem": "ルート2 で docx を直すときに隠し文字の規則を渡すこと（write_fixed_docx の中の配線）を、どのテストも確かめていない。test_paragraph_units_match_reader は、自分で HiddenRule を作って paragraph_units を呼ぶので、write_fixed_docx が規則を渡さなくなっても気づかない。",
+          "evidence": "write_fixed_docx が paragraph_units(raw[s]) と規則なしで呼ぶ崩し（verify/gen/mutate.py の r2_norule）で、本体のテスト 940 件がすべて合格した。架空の v5_r2h（sample_pdfcheck と同じ文書で、直す段落に文字スタイル gHid の隠し文字を足したもの）をルート2 で変換すると、作業ツリーでは 44 件すべて直る。崩した版では 29 件しか直らず、15 件が「段落の文字列を読み取りと同じに組み立てられない」で直されない。段落記号の削除で分けた v5_r2hs では 27 件／17 件。文字は壊れず、13 章に出るので、黙った誤りにはならない。",
+          "fix": "test_pdfmatch に、make_pdfcheck の文書に文字スタイルの隠し文字のランを足したもの（Builder.styles_extra に READER_STYLES を足す）を、テストの中で作るテストを足す。ルート2 の直しが隠し文字のない場合と同じ件数だけ当たり、直さなかった箇所がないこと、XML に隠し文字がないことを確かめる。"
+        },
+        {
+          "severity": "nit",
+          "where": "src/jasme_jats/docx_reader.py Reader.read_table（削除された行の読み飛ばし）と read_paragraph の numbering.label",
+          "problem": "読み飛ばした削除行（w:trPr/w:del）の中にある自動番号の段落が、番号を 1 つ使ったままになる。行は XML から消えるのに、後ろの同じ番号の段落の番号が 1 つずれる（Word で承諾すると、行が消えて番号が詰まるはず）。D5 は連鎖の番号を 1 回だけ数えるようにしたが、N8 には同じ配慮がない。",
+          "evidence": "架空の v6_numrow: 表の 2 行目を削除し、その行のセルに numId=7 の番号の段落（文字はすべて削除）を置いた。表の後の numId=7 の 3 段落は、作業ツリーでは label が 2. 3. 4. になる。6 章には「「区分」で始まる表の 2 行目」を読み飛ばしたと出る。0.25.0 も 2. 3. 4.（行は空の行として出力していた）なので、新しい不具合ではない。生成文字なので、不変性チェックには出ない。",
+          "fix": "行を読み飛ばすときに、その行の中で使った番号を戻す（Numbering の状態を行の前に控えて戻す）。または、DESIGN.md 7 章の限界に「読み飛ばした削除行の中の自動番号は数えたまま」と書く。"
+        },
+        {
+          "severity": "nit",
+          "where": "src/jasme_jats/docx_reader.py _table_head・table_where、report.py 6 章の削除行の行",
+          "problem": "すべての行を読み飛ばした表は、キャプションと空の <tr><td/></tr> だけの table-wrap として出力される（Word で承諾すると表は消える）。6 章の場所は「文字のない表の 1 行目、文字のない表の 2 行目」になり、利用者が Word でどの表かを探せない。10 章にも何も出ない。もう 1 つ、読み飛ばした行の中の隠し文字は、行を出力しないのに 6 章の隠し文字の一覧に残る。",
+          "evidence": "架空の v4_n8 の表 12（2 行とも deleted_row）の XML は '<table-wrap id=\"T2\"><caption><p>表12　すべて削除</p></caption><table><tbody><tr><td/></tr></tbody></table></table-wrap>'。6 章は「…文字のない表の 1 行目、文字のない表の 2 行目」。隠し文字だけが残る削除行（d20）は読み飛ばされるが、6 章に「［d20］〔隠しの残る行〕」が載る。設計 5.1 は「空の表には空の td を 1 つ」で DTD に合うとしていて、設計どおり。",
+          "fix": "表の手がかりに、読み飛ばす前の行の文字（削除された文字は使わない）か表のキャプションを使う。すべての行を読み飛ばした表は、10 章に「表のすべての行が変更履歴で削除されています。Word で承諾すると表が消えます」と出す。読み飛ばした行の中の隠し文字は、一覧から外すか「（削除した行の中）」と添える。"
+        },
+        {
+          "severity": "nit",
+          "where": "src/jasme_jats/builder.py newline_warnings（本文などの改行の行）、report.py _newline_action",
+          "problem": "利用者向けの文言に小さなばらつきがある。(1) 10 章の「本文などの段落の中の改行…文字のまま出力しました（…詰まって表示されることがあります）」に、何をすればよいかがない（題目などの行にはある）。(2) _newline_action の対象の段落が 6 件以上のとき、「ほか」の前に「、」がなく、「（引用文献）ほか」となる。(3) 標準エラーは「docx で改行を消して」、レポートの冒頭は「Word でその改行を消して」と言い方が違う。",
+          "evidence": "golden の sample_edge_manual の 10 章の行。report.py の samples の組み立ては '\"、\".join(...) + (\"ほか\" if ...)'。v3_u3 の標準エラーは「要らなければ docx で改行を消して変換し直すこと」。",
+          "fix": "本文などの行に「改行が要らなければ、Word で消して変換し直してください」を足す。「、ほか」にする。標準エラーも「Word で」にそろえる。画面の文言は利用者が後でまとめて直す方針なので、そのときに合わせてもよい。"
+        },
+        {
+          "severity": "nit",
+          "where": "src/jasme_jats/ai_assist.py（AI 依頼文の段落の書き出し）",
+          "problem": "AI 依頼文は段落の中の改行をそのまま書くので、1 段落 1 行の並びが崩れる。題目の改行で、「（改行の後の題目）」が ID のない行になる。0.25.0 から同じ（sample_edge の d14）。G の題目・引用文献の改行で目に付きやすくなった。",
+          "evidence": "golden の sample_reader_manual の prompt の差分（126a127 に「（改行の後の題目）」だけの行）。実装の担当の報告 10 にも書いてある。",
+          "fix": "AI 依頼文では、段落の中の改行を ⏎ などの印で書く（文字は AI に渡す表示だけで、docx の文字は変えない）。G の外の保守として H に回してもよい。"
+        },
+        {
+          "severity": "nit",
+          "where": "docs/FIX_PLAN.md の G の節・反映の順序・付録 D5／U8、CLAUDE.md",
+          "problem": "文書とコードの食い違い（まとめ役の仕上げで直す分。実装の担当の報告 9 と同じものを確かめた）。",
+          "evidence": "コードは次のようになっていて、FIX_PLAN の記述と合わない。(a) U8 の規則（problems の 1）と、「16 か所で一致（rvz_u8_fixed.py）」の記述。(b) 番号の label は、連鎖の最初の段落を読むときに 1 回呼ぶ（FIX_PLAN は「連鎖の最後で 1 回」）。(c) model.TextBox に段落の一覧がない（FIX_PLAN は「F の TextBox の段落一覧」）。(d) sample_pdfcheck_split.docx は作らず、make_pdfcheck(split=True) でテストの中で作る。(e) rvz_u8_fixed.py・d5_row.py・test_review.py・L287・L585・report.py:424 は、もうないか、古い。(f) G の前提の後の「暫定」の注記がない。G の行に「実装済み」の印がない。(g) CLAUDE.md に、joined_paragraphs・HiddenRule を 3 か所で共有することの 1 行がない。(h) cellDel は出力して警告する、という判断が FIX_PLAN にない。版は 0.25.0 のままで、ノートブックも作り直していない。",
+          "fix": "仕上げで FIX_PLAN（暫定の注記、U8 の規則、cellDel の判断、split の fixture の作り方、古い参照、実装済みの印）・CLAUDE.md・README を直す。版を 0.26.0 に上げ、python tools/make_notebook.py を実行する。"
+        }
+      ]
+    },
+    "pre": {
+      "changed_files": [
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/ooxml.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/docx_reader.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/model.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/builder.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/report.py",
+        "/home/user/jstgxmlcng_JASME/tests/make_fixtures.py",
+        "/home/user/jstgxmlcng_JASME/tests/fixtures/sample_reader.docx",
+        "/home/user/jstgxmlcng_JASME/tests/test_reader.py",
+        "/home/user/jstgxmlcng_JASME/tests/test_pdfmatch.py",
+        "/home/user/jstgxmlcng_JASME/tests/test_pipeline.py",
+        "/home/user/jstgxmlcng_JASME/docs/DESIGN.md",
+        "/home/user/jstgxmlcng_JASME/docs/DEVELOPMENT.md"
+      ],
+      "summary": "確かめで見つかった should 2 件をどちらも直し、nit は 3〜5 を直した（6・7 は理由を付けて残した）。どれもコミットしていない差分として積んである。\n\n**should 1（U8 の規則）**: まとめ役の暫定の判断（「FIX_PLAN の G の規則をそのまま実装する」）に合わせて、修正計画の XOR の規則に戻した。\n- 変えたのは `ooxml.HiddenRule` の 2 か所で、`para_state` を `dd ^ (style_value(...) is True)` にし、`run_hidden` の文字スタイルの値が偽なら表示する枝を外した（偽は段落の状態のまま）。\n- これは ECMA-376 の切り替えの性質（スタイルの値が真なら反転、偽なら変えない）と同じ。設計者の LibreOffice の結果と違う形は、DESIGN.md 4.1・7 章と DEVELOPMENT の残っている課題に、Word で確かめる項目として書いた。\n- `U8_CASES` の期待を規則に合わせた（u15 と、docDefaults の版の u03・u05〜u08・u10・u16・u18・u21）。\n- sample_reader の u15 型のケース（以前は「戻して見える」と期待していた）は、今の規則で隠れる文字「〔…〕」と、直接の指定で見える後半に作り直した。`make_reader` だけを呼び、`git diff --stat tests/fixtures` で sample_reader.docx だけが変わったことを確かめた。\n- 独立の反例 u8_docdef は合格になった（29/29）。\n\n**should 2（ルート2 の規則の配線）**: `make_pdfcheck(hidden=True)` を足した。直す段落の、直す文字のすぐ前に、文字スタイル gHid の隠し文字を入れる。既定の出力は今の fixture とバイト単位で同じ。\n- 新しいテスト `test_route2_fixes_paragraphs_with_style_hidden_text[one/split]` は、隠し文字のない docx と直した箇所が同じ（44 件・start/end まで）こと、直さなかった箇所が 0 件であること、XML に隠し文字が出ないこと、直した docx に隠し文字が残り、却下すると元に戻ることを確かめる。\n- 確かめで残っていた崩し（r2_norule）は、このテストで落ちるようになった。\n\n**nit**:\n- (3) 読み飛ばした削除行の中で数えた自動番号を、行の前の状態に戻すようにした。v6_numrow は 2./3./4. から 1./2./3. になった。\n- (4) 読み飛ばした行の隠し文字（と警告）を、出力した段落の記録から外した。行をすべて読み飛ばした表は、10 章の警告に出し（`Builder.all_rows_deleted`。キャプションと空の表は今までどおり出力する）、6 章の場所はキャプションで示すようにした。\n- (5) 本文などと題目などの 10 章の改行の行に「改行が要らなければ、Word で消して変換し直してください」を足し、要確認の一覧の区切りを「、ほか」にした。",
+      "tests_added": [
+        "tests/test_pdfmatch.py::test_route2_fixes_paragraphs_with_style_hidden_text[one]（新規。ルート2 で直す段落に文字スタイルの隠し文字があっても、隠し文字のない docx と同じ 44 箇所を直す）",
+        "tests/test_pdfmatch.py::test_route2_fixes_paragraphs_with_style_hidden_text[split]（新規。段落記号の削除でつながる後ろの w:p にも隠し文字がある形）",
+        "tests/test_reader.py::test_deleted_row_numbering_and_hidden_text（新規。読み飛ばした削除行の中の自動番号は数えず、行の中の隠し文字は一覧に載せない。Table.skipped_rows）",
+        "tests/test_pipeline.py::test_table_with_all_rows_deleted（新規。すべての行を削除した表: キャプションと空の表、10 章の警告、6 章でキャプションで示す）",
+        "tests/test_pipeline.py::test_newline_action_lists_samples（新規。改行の要確認の一覧は NEWLINE_SAMPLES 件まで並べ、それより多ければ「、ほか」。セルの改行は数えない）",
+        "tests/test_reader.py::test_hidden_rule[u01..u21, plain]（書き換え。期待を修正計画の XOR の規則に: u15 と docDefaults の版の u03・u05〜u08・u10・u16・u18・u21）",
+        "tests/test_reader.py::test_hidden_rule_details（書き換え。既定の書式と既定の段落スタイルの両方に vanish があると打ち消し合って見える）",
+        "tests/test_reader.py::test_hidden_text_from_styles（書き換え。fixture の u15 型のケース: 「〔表示を指定した派生の文字スタイルでも隠れる文字〕」は隠れ、「直接の指定で見える後半。」「表示を指定した派生の文字スタイルの見える文字。」は見える）"
+      ],
+      "pytest_result": "- **Python 3.13**（`python -m pytest -q -p no:cacheprovider`）: 945 passed。直す前の作業ツリーは 940、HEAD は 891。\n- **Python 3.10**（`PYTHONPATH=src venv310/bin/python -m pytest -q -p no:cacheprovider`）: 945 passed。\n- **ruff**（`ruff check src tests tools`）: 201 件。HEAD と同じ件数。\n- **直す前の src で新しいテストを流した結果**（pytest_src.sh、直す前の写しは scratchpad/g/fixv/pre_src）:\n  - U8 のテストは 12 件が落ちる（u03・u05〜u08・u10・u15・u16・u18・u21、test_hidden_rule_details、test_hidden_text_from_styles）。\n  - nit のテストは 2 件が落ちる（test_deleted_row_numbering_and_hidden_text、test_table_with_all_rows_deleted）。\n  - 削除行の番号（2./3. と 1./2.）と隠し文字の一覧は、属性を見る前にも別のスクリプトで差を確かめた。\n- **崩し**（確かめの担当の verify/gen/mutate.py の 10 個）: 本体のテストで 10 個とも落ちる。直す前は r2_norule だけが 940 件すべて合格していた。今は `test_route2_fixes_paragraphs_with_style_hidden_text[one/split]` が落ちる。r2_nojoin は既存の split のテストと新しい split のテストの両方で落ちる。\n- tests/__pycache__ と src/jasme_jats/__pycache__ は最後に消した。",
+      "measures": "**golden**（23 件）: 23 件とも ok=[True, True, True, 0]。\n- 0.25.0（golden_base）と同じものが 19 件。\n- sample_edge_manual / split はレポートだけが違う。10 章の本文の改行の行（G で足したもの）に、今回「改行が要らなければ、Word で消して変換し直してください」を足した。\n- sample_reader_manual / split は fixture を作り直したので、XML・レポート・依頼文が違う。\n- 同じ fixture で、直す前の src と比べた違いは次だけ:\n  - d118 の XML から「〔表示を指定した派生の文字スタイルでも隠れる文字〕」が消えた（U8 の規則の変更）。\n  - 6 章の隠し文字の一覧にその 1 件が増えた。\n  - 10 章の改行の 2 行の文言。\n  - 依頼文の d118 の行。\n\n**td1〜3**（ルート1・ルート2）:\n- 0.25.0 との比べ:\n  - td1・td2 は XML とレポートが同じで、直した docx は w:date のほかは同じ。\n  - td3 は XML の違いが `<break/>` 17 個だけ（41→58。取り除くと同じ）。レポートは警告が 4→6 件、題目の改行の要確認（冒頭・14 章）、10 章のセルの改行（17 か所）と題目の改行（2 か所）の行が増えた。\n- 直す前の作業ツリーとの比べ: XML は 6 件とも同じで、レポートは td3 の題目の改行の行の文言だけが違う。直した docx は w:date のほかは同じ。\n- 不変性・最終・DTD・J-STAGE のチェックはすべて合格。XML に入らなかった画像は増えていない（1 章の画像の行は 0.25.0 と同じ）。終了コードは 1 で、0.25.0 と同じ（手動の AI 補完がまだのため）。\n- 結果: scratchpad/g/fixv/td_base_wt.json と td_pre_wt.json。原稿の文字は伏せてある。\n\n**出版版 PDF**（7 本の確かめ用 docx。ルート2。check.py --before-src base0250_src）: 結果の JSON・XML・レポートは 7 本とも 0.25.0 と同じ。\n\n**独立の反例**（oracle の run_g.py、29 件）:\n- 3.13 は OK 29 / FAIL 0。直す前は 28/1 で、u8_docdef だけが落ちていた。\n- 3.10（impl/oracle310 の写し）も OK 29 / FAIL 0。\n- 0.25.0 は 4/25（実装の担当の値）。\n\n**確かめの担当の反例**（gen_cx・gen_r2・gen_v6 で作り直したもの）:\n- v1〜v4・v6 は、直す前も今も不変性・最終が合格。\n- v5_r2h・v5_r2hs（ルート2）は、どちらも直した 44 件・直さなかった 0 件で、XML に隠し文字は出ない。\n- v6_numrow の表の後の番号は 2./3./4. から 1./2./3. になった。\n- v4_n8:\n  - 10 章に「表 T2（キャプション「表12　すべて削除」）: 変更履歴で表のすべての行が削除されています…」が増えた。\n  - 6 章の場所は「キャプション「表12　すべて削除」の表の 1 行目」になった。\n  - 6 章の隠し文字の一覧から ［d20］〔隠しの残る行〕 が外れた。\n- v3_u3 は文言だけが違い、v1・v2 は違いがない。\n\n結果のファイルは scratchpad/g/fixv/ の下（golden_fix・golden_pre の manifest、realpdf/out/results_*.json、mut/*.result、cx/out/{pre,wt}/*.show）と、oracle/out/fixvG/summary.json。大きな出力（docx・xml・zip・画像）は消した。ディスクの空きは 23G。",
+      "deviations": "**直し方の判断**\n1. **U8 は修正計画の XOR の規則にした**（設計 DESIGN_G.md 4.2 の LibreOffice に合わせた規則は採らなかった）。理由は次の 3 つ。\n   - まとめ役の暫定の判断が「FIX_PLAN の G の規則をそのまま実装する」だから。\n   - ECMA-376 の切り替えの性質と同じだから。\n   - LibreOffice 版の規則では、docDefaults と標準スタイルの両方に vanish がある docx で本文と題目がすべて隠れる（u8_docdef。題目がないので J-STAGE で EMSGM097E）。Word で書いた原稿なら著者に本文が見えているはずなので、打ち消し合う XOR のほうが原稿の実際に合う。\n\n   LibreOffice（24.2）と違う形は次の 3 つ。どれも暫定で、利用者が Word で確かめる項目として DEVELOPMENT の残っている課題 (2) に入れた。\n   - 偽を指定した派生の文字スタイルを、隠す段落の中で使ったラン（u15。LibreOffice は表示）。\n   - docDefaults と段落スタイルの両方に vanish の指定があるとき（docDefaults の版の 9 通り。LibreOffice は段落スタイルの値をそのまま使う）。\n   - specVanish だけのラン（u19。LibreOffice は表示）。\n\n   LibreOffice 版に戻すなら、HiddenRule の 2 行と、U8_CASES・sample_reader の u15 型のケースを戻す。\n2. sample_reader の「派生の文字スタイルで戻して見える文字。」（LibreOffice 版の振る舞いを前提にした fixture）は作り直し、段落を 1 つ足した。後ろの段落の ID が直す前の golden より 1 つずつずれる（golden_base とはもともと違う）。\n3. nit 3 は、DESIGN 7 章に限界として書く案ではなく、直すほう（行の前の番号の状態に戻す）を採った。\n4. nit 4:\n   - 読み飛ばした行の中の警告も記録から外した。これは確かめの担当の案より広い。入れ子の表の cellDel や外部リンク画像の警告が、出力しない行を指さないようにするため。\n   - すべての行を削除した表の警告は、TableNode の表（builder.table_wrap）だけに出す。表で組んだ図の中の表には出さない。これは DESIGN 7 章に書いた。\n5. nit 5(3)（標準エラーの「docx で」を「Word で」にそろえる）は直さなかった。既存のコードの書き方では、どの Action も cli は「docx で…」、冒頭・枠・チェックリストは「Word で…」になっている（_abstract_ja_action・_app_after_refs_action・_note_overlap_action など）。CLAUDE.md の「コードの書き方に従う」に当たるので、利用者が画面の文言をまとめて直すときに扱うのがよい。\n6. nit 6（AI 依頼文の段落の中の改行）は G の外として H に回した。0.25.0 から同じ振る舞い。\n7. nit 7（FIX_PLAN・CLAUDE.md・README・版・ノートブック）は、まとめ役の仕上げの分として触っていない。\n\n**文書とコードの食い違い**\n- 直したもの:\n  - HiddenRule の docstring（LibreOffice に合わせた 2 か所の記述）。\n  - DESIGN.md 4.1 の冒頭（「LibreOffice との比較で確かめた」）と隠し文字の項目。\n  - DESIGN.md 7 章（「規則は LibreOffice … で決めた」）。\n  - DEVELOPMENT のテストの説明（「U8_CASES。LibreOffice の結果と同じ」）と、残っている課題 (2)。\n  - DESIGN.md 4.1 の N8 の項目と、DEVELOPMENT のテストの説明に、今回の nit の振る舞いを足した。\n- 直さなかったもの（まとめ役の仕上げ、または scratchpad のもの）:\n  - FIX_PLAN の G の U8 の「この規則は LibreOffice の表示と 16 か所で一致した（rvz_u8_fixed.py）」と、前提の「LibreOffice で確かめたもの」。設計者の実験では、修正計画の規則が LibreOffice と合うのは、docDefaults なしで 21 通り中 19（u15・u19 が違う）、docDefaults ありで 22 通り中 13。\n  - FIX_PLAN の残りは確かめの担当の nit 7 の (b)〜(h) と同じ。label を呼ぶのは連鎖の最初、TextBox に段落の一覧はない、split の fixture、古い参照、暫定の注記、実装済みの印、cellDel の判断。\n  - FIX_PLAN に、今回足した振る舞いがない（削除行の中の番号は数えない、すべての行を削除した表の警告、make_pdfcheck(hidden=True)）。\n  - scratchpad の DESIGN_G.md 4.1・4.2 は LibreOffice 版の規則のまま。今回の直しで古くなった。",
+      "open_issues": "1. **まとめ役に確かめてほしいこと**: U8 を修正計画の規則に戻した（deviations 1）。LibreOffice 版を採るなら、HiddenRule の 2 行と U8_CASES、sample_reader の u15 型のケースを戻す。\n2. **利用者が Word で確かめること**（どれも暫定）:\n   - U8 で LibreOffice と表示が違う 3 つの形。sample_reader.docx の節「スタイルの隠し文字」で、1 つ目の形（「〔表示を指定した派生の文字スタイルでも隠れる文字〕」が隠れるか）を確かめられる。\n   - D5 の境界（コンテンツコントロールとカスタム XML の境目、w:moveFrom、脚注の参照のある段落）と、つないだ段落の書式・番号。\n   - cellDel を承諾した後の表の形。\n   - J-STAGE の試験登載で、td・th の `<break/>` の表示。\n3. **仕上げ**（まとめ役）:\n   - 版を 0.26.0 に上げる（__init__.py と pyproject.toml）。python tools/make_notebook.py を実行する。\n   - FIX_PLAN を直す: 暫定の注記、U8 の規則と LibreOffice との違い（16 か所の記述）、cellDel の判断、split・hidden の fixture はテストの中で作ること、古い参照（rvz_u8_fixed.py・d5_row.py・test_review.py・L287・L585・report.py:424）、label を呼ぶ時点、TextBox の段落一覧、実装済みの印、今回足した N8 の振る舞い。\n   - CLAUDE.md に、joined_paragraphs と HiddenRule を 3 か所で共有することを書く。\n   - README に、10 章の改行の一覧と、題目などの改行の要確認を書く。\n4. **H に回したもの**: AI 依頼文で、段落の中の改行を印にして 1 段落 1 行に保つ（nit 6）。\n5. **画面の文言**: 標準エラーの「docx で」と冒頭の「Word で」の言い方のそろえ（nit 5(3)）は、利用者が後でまとめて直すときに合わせる。\n6. **残る限界**（DESIGN 7 章）: 表で組んだ図の中の表は、すべての行が削除されても警告しない。読み飛ばした削除行の中の、削除された脚注の参照は記録に残す（参照が削除済みである事実は変わらないため）。"
+    },
+    "fin": {
+      "changed_files": [
+        "src/jasme_jats/__init__.py",
+        "pyproject.toml",
+        "notebooks/JASME_docx_to_JSTAGE_XML.ipynb",
+        "docs/FIX_PLAN.md",
+        "CLAUDE.md",
+        "README.md"
+      ],
+      "summary": "仕上げを行った。版を 0.26.0 に上げ（`__init__.py` と `pyproject.toml`）、`python tools/make_notebook.py` でノートブックを作り直した。FIX_PLAN の反映の順序の表で G に「（実装済み）」を付けた。G の節に、設計の要点・テスト・確かめた数・暫定の判断・残る限界・文書とコードの食い違いの扱いを足した。「同じファイルを触る順」の節に G で触ったファイルを入れた。CLAUDE.md の「最優先の原則」に、段落のつながり（`ooxml.joined_paragraphs`）と隠し文字の判定（`ooxml.HiddenRule`）を読み取り・検証・pdfdocx で共有する 1 項目を足した。README の「できないこと・注意点」に、承諾した状態で読むこと、スタイルの隠し文字も隠すこと、セルの `<break/>`、本文などの改行は知らせることを短く足した。DEVELOPMENT.md の「守るべき原則」の 5 は、実装の担当が先に直していて同じ内容だったので変えていない。DESIGN.md、DEVELOPMENT.md、`docs/fix_plan_repro_tests.py` の冒頭も実装と合っていた。",
+      "tests_added": [],
+      "pytest_result": "3.13 は 945 passed、3.10 も 945 passed。ruff は 201 件で HEAD と同じ。",
+      "measures": "この担当では再測定していない。FIX_PLAN の G の節には、確かめの修正の担当の数を数値だけで書いた。0.25.0 は pytest 891 件。golden 23 件はすべて合格で、19 件が 0.25.0 と同じ（違う 4 件は sample_edge の 10 章の 1 行と、作り直した sample_reader）。td1 と td2 は XML・レポートとも同じ。td3 は `<break/>` が 17 個増えるだけ。出版版 PDF 7 本のルート2 は同じ。独立の反例は 29 件すべて合格（0.25.0 は 4 件）。td1〜3 には、変更履歴で削除された段落記号・スタイルの隠し文字・削除された行がなかった。",
+      "deviations": "- FIX_PLAN の G の節では、U8 の規則の行（「LibreOffice の表示と 16 か所で一致した」）を書き直さず、計画の本文のまま残した。実装した内容の欄に「設計者の再実験では、docDefaults なしで 21 通り中 19、ありで 22 通り中 13 の一致」と書き足してある。\n- FIX_PLAN の計画の記述（label を呼ぶ時点、「F の TextBox の段落一覧」、`rvz_u8_fixed.py` などの古い参照や行番号）は、本文を消さず、G の節の末尾の「文書とコードの食い違い」に「この節のとおりコードに合わせた」と書いた。\n- DEVELOPMENT.md の「守るべき原則」の 5 は、実装の担当が先に G の内容へ直していたので、変えていない。\n- 標準エラーの「docx で」と冒頭の「Word で」の言い方のそろえは、利用者が画面の文言をまとめて直す方針なので直していない。FIX_PLAN の G の節に書いた。\n- AI 依頼文で段落の中の改行が 1 段落 1 行を崩すこと（0.25.0 から同じ）は H に回した。FIX_PLAN の G の節の「残る限界」に書いた。\n- 実際の論文の文字との突き合わせは、tests/private の td docx と PDF（出版版 PDF を含む）の文字から作った 12 文字の並びと、`git diff` の足した行で行った。一致は 0 件。未追跡のファイルはなく、`__pycache__` は消した。",
+      "open_issues": "- 利用者が Word で確かめる項目はすべて暫定で、FIX_PLAN の G の節に列挙した。\n  - D5: sdt・customXml の境目、`w:moveFrom`、脚注の参照のある段落、つないだ段落の書式と番号の数え方。\n  - U8: LibreOffice と表示が違う 3 つの形。\n  - U3: J-STAGE の試験登載での td・th の `<break/>` の表示。\n  - 削除されたセル（cellDel）を承諾した後の表の形。\n- コミットはしていない（まとめ役が行う）。\n- ruff の 201 件は HEAD と同じで、既存の指摘が残っている。"
+    },
+    "reviews": [
+      {
+        "checked": "作業ツリー（c35defd の上の G の差分）を、0.25.0（scratchpad/g/base0250_src）と比べて点検した。リポジトリのファイルは変えていない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/review/principle/ の下で行った（gen_p.py〜gen_p4.py、run_p.py、cmp_td.py、run_td.sh、xref_break.py。結果の JSON とログは out/・td/・realpdf/out/・oracle/out/wt/ に残した）。\n\n【読んだもの】FIX_PLAN の G の節・D5/U3/U8/N8・同じファイルを触る順・毎回の共通作業、DESIGN.md 4.1・4.2・7 章、DEVELOPMENT.md、差分の全ファイル（ooxml・docx_reader・fidelity・pdfdocx・emit・builder・model・structure・pipeline・report・テスト・make_fixtures・文書）。\n\n【物差し】\n- pytest: 3.13 は 945 passed、3.10（venv310）も 945 passed。\n- ruff: HEAD（git worktree。確かめた後に消した）も作業ツリーも 201 件。ファイルとコードの組でも同じ。\n- golden 23 件: すべて [True, True, True, 0]。19 件は 0.25.0 と同じ。違う 4 件は本体を diff した。sample_edge の 2 件はレポートだけ（警告 1→2 件、10 章に d14 の本文の改行の 1 行）。sample_reader の 2 件は作り直した fixture によるもの（題目の改行、節 3〜6、つないだ段落が 1 つの p／title、番号 1. 2. 3.、隠し文字がない、セルの break の後に改行の文字、削除された空の行が消える、引用文献 B2、fn-group）。どれも意図した変化。\n- 独立の反例（oracle の 29 件の写し）: 作業ツリーで OK 29 / FAIL 0。\n- td1〜3（ルート1・ルート2。0.25.0 と比べた。文字は記録していない）: td1・td2 は XML・レポートとも同じ。直した docx は w:date を除いてすべての部品が同じ。td3 は break が 41→58 個（増えた 17 個はすべて td の中）で、それを除くと 0.25.0 と同じ。レポートに 10 章の 2 行と要確認が増える。不変性・最終・DTD・J-STAGE はどれも合格。ZIP の中のファイル名は同じで、XML に入らなかった画像は 0。数だけ数えた結果: td1〜3 には段落記号の削除、スタイル・既定の書式の vanish、specVanish、削除された行、cellDel はどれも 0。改行は td3 にだけあり、セルに 17、全部で 19。\n- 本誌の出版版 PDF 7 本のルート2（check.py の写しを --before-src base0250_src で実行）: results の jobs は 7 本とも同じ。XML・レポート・直した docx（w:date を除く）も 7 本とも同じ。\n- make_reader だけを scratch で作り直した sample_reader.docx は、リポジトリのものとすべての部品が同じ。tests/fixtures で変わったのは sample_reader.docx だけ。\n- 実際の原稿（td の docx・PDF と本誌の PDF）の 12 文字の並びと、git diff で足した行を突き合わせた。一致は 0 件。\n- docs/fix_plan_repro_tests.py の残りの 3 件は、scratch に写した tests で合格した。\n\n【自分で作った架空の docx 21 本（p01〜p27）】どれも、作業ツリーで不変性・最終・DTD・J-STAGE が合格し、XML に入らなかった画像は 0。3 か所の一致（読み取りの段落 ↔ fidelity.source_texts ↔ pdfdocx.paragraph_units＋_chains）も、どれも食い違い 0。\n- 段落をまたぐフィールド（p01）: begin が前、end が後ろにある形と、命令は前、結果は後ろにある形。どちらも結果の文字が出る。\n- 隠し段落スタイルの段落との連鎖（p02）: 後ろの段落の隠し文字は、その段落自身のスタイルで決まる（DESIGN 7 章の限界のとおり）。\n- 入れ子の削除行（p04）: 内側の記録は外され、外側の行が記録される。\n- 縦の結合の開始の行が削除された表（p05）: 続きのセルの文字は残る。\n- セルの改行のいろいろ（p06）: 先頭の改行、改行 2 つ、太字＋斜体、上付き、w:cr、リンク（uri）の中、引用の xref の後ろ、脚注の参照の後ろ、段落の最後の改行と段落の間の break。DTD は合格。Newline は 12 か所のうち 11 か所。\n- 番号の違う 2 つの段落の連鎖（p08）: 番号は 1 回だけ数え、箇条書きの番号は進まない。\n- 文末脚注の連鎖（p10）: e3＋e4 がつながり、e5 は「注の最後」の警告になる。\n- sectPr のある段落の連鎖（p11）。\n- 画像の段落＋キャプションの連鎖（p16）: caption の中の inline-graphic になり、画像は落ちない。\n- 見出し＋本文の連鎖（p17）。\n- 隠し文字の改行がセルにある形（p18）: break は入らず、6 章に「\\n」が載る。\n- 文字の残る削除行の中の連鎖（p19）。\n- 隠し文字の中の脚注の参照（p20）。\n- 隠し段落の中の数式（p21）。\n- 脚注・テキストボックス・セルの中の、スタイルの違う連鎖（p22）: 4 章に 3 件記録され、レポートも作れる。0.25.0 では、この docx は「位置を機械的に決められない図表」で AI が要るとされて中止した。\n- 隠したランの中の行内のテキストボックスと画像（p23・p26）。\n- 章見出しの連鎖（p24）、引用文献の連鎖（p25）: 0.25.0 では 2 つの sec・2 件の文献だったものが 1 つになる。\n- 隠し文字だけが残る削除行（p27）。\n\n【わざと崩した写し（消した）】\n- emit の `parent.tag == SPAN` を外したもの: 945 件すべて合格（指摘 3）。\n- write_fixed_docx が paragraph_units に規則を渡さないもの: test_route2_fixes_paragraphs_with_style_hidden_text の 2 件が不合格。確かめの担当の problems 2 は、テストで塞がれた。\n- 共有の HiddenRule を誤らせたもの: 見える文字が消えても合格する（指摘 1）。\n\n【確かめの担当の指摘の行方】\n- 1（U8 の規則）: FIX_PLAN の XOR に戻っていて、U8_CASES もそのとおり。\n- 2: 上のとおりテストで塞がれた。\n- 3（削除行の中の自動番号）: 番号を戻すようになり、テストもある。\n- 4（すべての行が削除された表）: 10 章の警告とキャプションでの表示、削除行の中の隠し文字を一覧から外すこと、が入った。\n- 5（文言）: 本文の行の対処と「、ほか」は直った。標準エラーの「docx で」は利用者が後で直す方針のまま。\n- 6（AI 依頼文の段落の中の改行）: H に回した。\n\n【原則の確かめ（コードを読んで確かめた）】\n- 文字を書き換えるコードはない。break は文字を持たず、改行の文字は break の tail に残る。fidelity.piece_text と final_check もその文字を数える。\n- XML の段落の文字は、どれも Emitter.span の中で書かれる。\n- 後ろの段落を読む入口は read_block と _textboxes の 2 つで、どちらも later を飛ばす。二重に読む経路はない。\n- 読み飛ばす行は「アトムも図形もない行」だけ。読み取りと検証が食い違えば、検証の側で「出力漏れ」として不合格になるので、黙って落ちる経路はない。\n- 除外に記録したまま出力する段落はない。\n- `_pstate` は入れ子の段落・表を読む前に退避し、読んだ後に戻している。\n- 3 か所とも、前処理した木の上で同じ joined_paragraphs と HiddenRule を使う。\n\n【文書とコードの食い違い】\n今回の指摘（直していない）:\n(1) report._newline_action の docstring の「<break/> を置けない」。DTD では article-title に置ける。\n(2) 「文字がすべて削除」の言い方（ooxml.py 26 行・docx_reader.py 7 行・model.DeletedRow・6 章の文）。コードは隠し文字だけが残る行も読み飛ばす。\n(3) FIX_PLAN 608 行の「D5 で戻り値が None になる段落」。\n(4) FIX_PLAN 635 行の「隠し文字のレポートは w:t とタブだけ」「cellDel は確かめていない」。どちらも今のコードと違う。\n(5) DEVELOPMENT 98 行の「21 通り」。U8_CASES は plain を含めて 22 件。\n(6) DESIGN 4.1・147 行は、隠し文字のランの中の画像だけを書いていて、テキストボックス・脚注の参照の扱いを書いていない。\n\n仕上げの担当が G の節に記録済みのもの（確かめた）:\n(7) U8 の「16 か所で一致」の記述。\n(8) label を呼ぶ時点。\n(9) TextBox の段落の一覧。\n(10) sample_pdfcheck_split.docx を作らないこと。\n(11) 標準エラーの「docx で」と、冒頭の「Word で」の言い方。\n(12) N8 の「canonical_text が空の行だけ」。コードは、画像・数式・注の参照・図形のある行を残す安全側にしてある。\n\n【後片付け】\n- 大きな出力（docx・xml・zip・変換結果・src の写し・tests の写し）を消した。\n- 私の実行でできた tests/__pycache__・tools/__pycache__・src/jasme_jats/__pycache__（どれも .gitignore 済み）を消した。\n- git worktree は残っていない。git status は点検の前と同じ。\n- ディスクの空きは 23G。",
+        "findings": [
+          {
+            "severity": "should",
+            "file": "src/jasme_jats/report.py",
+            "line": 1224,
+            "problem": "G で、HiddenRule が文字スタイル・段落スタイル・既定の書式（docDefaults）の w:vanish でも文字を隠すようになった。この規則は暫定で、Word では確かめておらず、LibreOffice とも 11 通りの形で違う。不変性チェックの docx 側（fidelity.source_texts）も同じ規則を使うので、規則が Word と違えば、Word で見える文字が XML から消えても不変性チェックは合格する。そのとき利用者に知らせるのは、6 章の隠し文字の一覧の 1 行だけで、report.actions() に Action がない（冒頭・14 章・Colab の赤い枠・標準エラーのどれにも出ない）。README は「この判定は暫定です。Word の表示と違うときは知らせてください」と書いているが、利用者には隠したことが目に入らないので、確かめるきっかけがない。",
+            "evidence": "(1) golden の sample_reader_manual のレポート（作業ツリー）: スタイルで隠した 8 か所（〔文字スタイルで隠す〕など）は、6 章の「隠し文字（Word で非表示に設定された文字）: …」の 1 行にしか出ない。冒頭と 14 章の要確認は改行の 1 件だけ。\n(2) 作業ツリーの写しで、共有の規則だけをわざと誤らせた（HiddenRule.run_hidden の文字スタイルの判定を `style_value(rs) is not None` にして、偽を指定した文字スタイルでも反転させる。scratchpad の mut/m3。消した）。この写しで sample_reader を変換すると、「表示を指定した派生の文字スタイルの見える文字。」が XML から消える。それでも不変性・最終・DTD は合格し、actions() は ['newline'] だけになる（消えた文字は 6 章の一覧にだけ載る）。\n(3) 0.25.0 は直接の w:vanish・w:specVanish だけを隠していた。これは Word の表示と確実に一致する。0.25.0 では、p02・p21 の隠し段落スタイルの文字〔…〕を出力していた。\n(4) td1〜3 と本誌 7 本には、スタイルの隠し文字は 0 件なので、今の利用者の出力は変わらない。",
+            "fix": "report.actions() に、要確認（TO_CHECK）の Action を 1 つ足す。対象は、HiddenRule がスタイル・既定の書式（直接の w:vanish・specVanish 以外）で隠した文字があるとき。文言の例:「Word のスタイルの設定で隠し文字になっている文字が N か所あり、XML に出力していません（6 章）。Word で表示されない文字か確かめてください」。そのために、読み取り（docx_reader._run の hidden の枝）で、直接の指定かスタイルかを記録する（例: HiddenRule に、直接の指定のときだけ真を返す関数を足す）。表示の仕組みは変えず、Action を足すだけにする。sample_reader で Action が出ること、直接の w:vanish だけの docx（sample_edge）では出ないことをテストで確かめる。"
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/docx_reader.py",
+            "line": 623,
+            "problem": "隠し文字のランの中の図形の扱いが、画像とテキストボックスで違う。画像は隠して出力しない（ImageRef.hidden。DESIGN.md 147 行）。これに対して、テキストボックス（行内・浮動配置）は、_graphic が hidden にかかわらず _textboxes を呼ぶので、中の段落を読んで <boxed-text> などに出力する（脚注の参照も同じく xref として出す）。検証側（canonical_texts）は、テキストボックスの段落を別の段落として、アンカーのランの隠し文字を見ずに数えるので、両側が一致して合格する。G は「Word で表示される文字（隠し文字を隠した状態）」を 3 か所の共通の規則にしたが、この経路はその規則の外にあり、文書にも書かれていない。",
+            "evidence": "架空の p26（gen_p3.py）で、行内のテキストボックスのランを 3 通りにした: 隠さない、直接の w:vanish、文字スタイル gHid。3 本とも、作業ツリーと 0.25.0 の両方で、囲みの 2 段落が <boxed-text> に出て、6 章の隠し文字の一覧にも載らない（hidden_text は空）。同じ文字スタイル gHid のランの中の行内の画像（p23）は、作業ツリーでは隠され、6 章・9 章に載る（0.25.0 は rStyle を見ないので出力していた）。浮動配置のテキストボックス（p03）も出力する。隠し段落スタイルの段落の中の脚注の参照（p20）は、文字のない <p><xref …>2)</xref></p> として出る。0.25.0 から同じ形（直接の w:vanish でも出力）で、G で悪くなってはいない。",
+            "fix": "どちらかにする。(a) 読み取り（_graphic が hidden のとき）・検証（canonical_texts で、隠し文字のランの中の w:txbxContent の段落を隠す）・ルート2 の 3 か所で同じ規則にする。規則は ooxml に関数として置き、隠した段落は 6 章に載せる。(b) DESIGN.md 4.1・7 章と README に限界として書き、DEVELOPMENT の残っている課題（利用者が Word で確かめる項目）に足す。行内の図形は Word では隠れるはずで、浮動配置は確かめていない。"
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/emit.py",
+            "line": 215,
+            "problem": "U3 の「リンクの中には <break/> を入れない」を、どのテストも確かめていない。条件は `parent.tag == SPAN` で、書き込み先が jx:span そのもののときだけ break を入れる。この条件が崩れると、表のセルの xref（図表・引用文献・注へのリンク）の中に break が入り、DTD に合わなくなる（xref の中身は link-elements で、break を含まない）。",
+            "evidence": "作業ツリーの写しで、条件から `parent.tag == SPAN and` を外した（mut/m1。pytest_src.sh の WHICH で写しが使われていることを確かめた。消した）。それでも本体のテスト 945 件がすべて合格した。その写しで、CELL の span に xref の LinkSpec の付いた「試験\\n2024」を書くと（xref_break.py）、`<xref ref-type=\"bibr\" rid=\"B1\">試験<break/>\\n2024</xref>` になる。作業ツリーでは xref の中に break は入らない。sample_reader の「リンクの中の改行」は Word のハイパーリンク（文字だけの uri の経路）なので、この条件を通らない。0.25.0 にはこの機能がない。",
+            "fix": "tests/test_pipeline.py の test_cell_breaks_in_emitter に、xref の LinkSpec の付いた、改行のあるアトムを足す。確かめること: xref の中に break がない。xref の外の改行の前には break がある。Newline.breaks がリンクの中の改行を数えない。"
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/report.py",
+            "line": 1447,
+            "problem": "文書とコードの食い違い（コードに合わせて文書を直す側）。読み飛ばす削除行は、コードでは「アトムも図形もない行」で、Word で見える文字が残らない行（隠し文字だけが残る行も含む）。ところが、6 章の文「行の文字がすべて削除されていたので」と、ooxml.py 26 行・docx_reader.py 7 行の docstring・model.DeletedRow の docstring は、「文字がすべて削除されている」と書いている。",
+            "evidence": "架空の p27（gen_p4.py）で確かめた。削除の印のある行に、削除されていない文字スタイル gHid の隠し文字「〔隠しだけ残る〕」と、削除した文字を置いた。この行は読み飛ばされ（deleted_rows=[['t2', 2, '区分']]）、6 章には「行の文字がすべて削除されていたので、…出力していません」と出る。隠し文字の一覧は空になる（行ごと記録される）。出力は Word で承諾した状態と同じで正しい。DESIGN.md 4.1 は「行のどの段落にも文字（画像・数式・注の参照も）がなく、図形も読まなかった行」と正確に書いている。",
+            "fix": "6 章の文を「行に Word で表示される文字・画像などが残っていなかったので」のように直す。ooxml・docx_reader・model の docstring も DESIGN.md 4.1 の言い方にそろえる。"
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/report.py",
+            "line": 1024,
+            "problem": "文書とコードの食い違い。_newline_action の docstring は「これらの文脈は <break/> を置けないので（J-STAGE の修飾タグ許容一覧でも ×）」と書いている。しかし同梱の DTD では、article-title に break を置ける（article-title-elements が %break.class; を含む）。置けないのは著者名・所属（institution）・mixed-citation だけ。理由は J-STAGE の許容一覧の ×（決定事項 13(2)）で、docs/JSTAGE_NOTES.md と DESIGN.md の表は正しく書いている。",
+            "evidence": "src/jasme_jats/dtd/JATS-common1.ent の 2173 行（article-title-elements = \"%simple-phrase; | %break.class;\"）。institution-elements（JATS-journalpubcustom-models1.ent 469 行）と citation-elements（381 行）には break がない。",
+            "fix": "docstring を「題目・副題（DTD では置けるが J-STAGE の修飾タグ許容一覧で ×）・著者名・所属・引用文献（DTD でも置けない）なので」のように直す。"
+          },
+          {
+            "severity": "nit",
+            "file": "docs/FIX_PLAN.md",
+            "line": 608,
+            "problem": "文書とコードの食い違い（G の節の「文書とコードの食い違い」に入っていないもの）。\n(a) 608 行「docx_reader._textboxes / _read_nested_paragraph: … G（D5 で戻り値が None になる段落の扱い…）」。コードでは read_paragraph は None を返さない。呼ぶ側（read_block・_textboxes）が、連鎖の後ろの段落（self.later）を飛ばす。\n(b) 635 行「G の関連で、削除されたセル（w:tcPr/w:cellDel）の扱いは確かめていない。隠し文字のレポートは w:t とタブしか記録しない」。今のコードは cellDel を出力して警告し、_plain_of_run_child は w:br・w:sym・w:noBreakHyphen なども記録する。\n(c) DEVELOPMENT.md 98 行「HiddenRule の 21 通り」。tests/test_reader.py の U8_CASES は、plain を含めて 22 件。",
+            "evidence": "docx_reader.py の read_block（210 行の `if el in self.later: return []`）と _textboxes（521 行の `continue`）、_plain_of_run_child（789 行〜）、CELL_DELETED_MSG（31 行）、U8_CASES（u01〜u21 と plain）を読んで確かめた。",
+            "fix": "G の節の末尾の「文書とコードの食い違い」に (a)〜(c) を足すか、608・635 行を今のコードに合わせて直す。DEVELOPMENT.md は「22 通り（21 通りと、指定のない plain）」にする。"
+          }
+        ]
+      },
+      {
+        "checked": "作業ツリー（c35defd の上に積んだ G の差分。仕上げ済みの 0.26.0）を、0.25.0（scratchpad/g/base0250_src）と比べて点検した。ファイルは変えていない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/review/regression/ の下。\n\n- 読んだ差分: ooxml（HiddenRule・paragraph_mark_deleted・_join_target・joined_paragraphs・unjoined_deleted_marks・canonical_texts・canonical_text）、fidelity.source_texts、pdfdocx（_chains・paragraph_units・write_fixed_docx）、docx_reader（_set_joins・read_block・read_table の削除行・read_paragraph の連鎖・_record_join・_textboxes・_read_nested_*・_plain_of_run_child）、emit（Ctx.breaks・newline_label・write_inline の flush・span の Newline）、builder（newline_warnings・all_rows_deleted）、structure.joined_styles、report（6 章・_newline_action・_deleted_row_where）、model・pipeline。\n  - HiddenRule は、確かめの担当が指摘した LibreOffice 寄りの規則から、FIX_PLAN の XOR の規則に戻っている（para_state = dd ^ (style is True)、rStyle が真なら not ps）。\n  - 確かめの担当の nit のうち、読み飛ばした行の自動番号（counters を戻す）、すべての行を削除した表の警告と 6 章のキャプション表示、行の中の隠し文字（records を切り詰める）は直っている。\n- pytest: 3.13 は全件合格（失敗 0）、3.10（venv310）は 945 passed。\n- ruff: 201 件。ファイルとコードの組で HEAD（verify/ruff_head.txt）と同じ。\n- golden（23 件）: すべて ok=[True, True, True, 0]。19 件は 0.25.0 と同じ。違う 4 件は本体を diff して確かめた。\n  - sample_edge_manual・split: レポートだけ。10 章の警告が 1→2 件になり、「本文などの段落の中の改行 1 か所…d14」が 1 行増える。\n  - sample_reader_manual・split: make_reader で作り直した fixture による違い。つないだ段落、セルの <break/>\\n、太字をいったん閉じる、リンク（uri）の中は文字のまま、消えた削除行、題目・引用文献の改行。\n  - 作業ツリーの make_reader で作り直した docx は、リポジトリの sample_reader.docx とすべての部品が同じ。git diff --stat tests/fixtures で変わったのは sample_reader.docx だけ。\n- td1〜3 をルート1・ルート2 で、0.25.0 と比べた（td_cmp.json。文字は記録していない）。\n  - td1・td2: XML・レポート・ZIP の中身の名前が同じ。直した docx も、w:date を除いてすべての部品が同じ。\n  - td3: XML は <break/> が 41→58 個（増えた 17 個は、どれも直後が「\\n」）になるだけで、<break/> を取り除くと 0.25.0 と同じ。レポートは、警告が 4→6 件、セル 17 か所・題目など 2 か所の行、要確認（冒頭・14 章）が増えた。直した docx は同じ。\n  - どれも不変性・DTD・J-STAGE のチェックは合格。終了コードは 1 で、0.25.0 と同じ（AI の手動の待ち）。\n- 出版版 PDF 7 本（realpdf の check.py。--before-src base0250 --after-src 作業ツリー）: results の jobs は 7 本とも同じで、XML とレポートも同じ。\n- 独立の反例 oracle/run_g.py: OK 29 / FAIL 0（0.25.0 は 4 件）。\n- 足したテストが 0.25.0 で落ちるか（pytest_src.sh で base0250 の src を指定）。\n  - test_pipeline の 7 件と test_fidelity の 1 件は、すべて FAILED。\n  - test_reader・test_pdfmatch は、新しい名前（NO_RULE・paragraph_mark_deleted）の ImportError で、集める段階で落ちる。\n- 規則の条件を外す・境界を動かす崩し（mut/mutate.py。48 通り。作業ツリーの写しを 1 か所だけ直し、本体のテストを -x で流した）: 43 通りがテストで見つかった。\n  - D5: moveFrom、段落記号の vanish、目印を飛ばす、sdt・customXml の境目、書式（先頭・末尾）、番号を毎回数える、警告の有無・空の段落の警告、JoinInfo、joined、テキストボックスの二重読み、注のつなぎ、検証の欠番、ルート2 の前処理、ルート2 のつなぎ。\n  - U8: dd、段落スタイル、既定の段落スタイル、直接の指定、specVanish、rStyle の反転、basedOn、最も派生した側、ルート2 の規則（確かめの担当の should 2 は、test_route2_fixes_paragraphs_with_style_hidden_text[one] が見つけるようになった）、検証の規則。\n  - U3: 全文脈の break、セルの break なし、tail なし、引用文献の label、Action、10 章の行。\n  - N8: 削除でない空の行、文字の残る行、図形の条件、番号を戻す、記録の切り詰め、DeletedRow、残した行・cellDel・すべての行の警告。\n  - d_movefrom と r_counters は、4 並列のとき test_template_emf_conversion（LibreOffice の EMF 変換）で落ちた。この落ち方は、LibreOffice を並列に動かしたことによる環境の不安定さで、G とは関係ない。1 並列で流し直すと、どちらも本来のテストで見つかった。\n  - 見つからなかったのは 6 通り: d_sect_first・h_reader_pstate_first・h_nested_pstate・b_in_link（findings の nit）、d_notes_norestore（注は本文の後に読むので、同じ結果になる崩し）、h_pdf_rawstyles（styles.xml に mc:AlternateContent はまずないので、実質同じ）。\n- ルート2 の直した docx: make_pdfcheck(split=True) と、split=True・hidden=True の版をルート2 で変換した。\n  - どちらも 44 件直り、直さなかったものは 0。不変性・最終・DTD は合格。\n  - 直した docx は、LibreOffice（soffice --headless --convert-to pdf）と python-docx で開けた（23 段落）。\n  - 既存のテスト（paragraphs(reject=True) で元に戻る）も合格。\n- 文書とコードの食い違い:\n  - (1) FIX_PLAN の「同じファイルを触る順」の docx_reader._textboxes の行に「D5 で戻り値が None になる段落」「F の TextBox.paras」とある。コードは `el in self.later` で読み飛ばしており、model.TextBox には段落の一覧がない（nit。G の節の「食い違い」は TextBox の段落一覧には触れているが、「戻り値が None」には触れていない）。\n  - (2) DESIGN.md 4.1・7 章、DEVELOPMENT.md（21 通りの U8_CASES は 21 件で一致）、CLAUDE.md、README、JSTAGE_NOTES、STYLE_MAPPING、fix_plan_repro_tests.py の冒頭は、実装と合っていた。\n  - (3) 確かめの担当が挙げた食い違い（U8 の規則、label を呼ぶ時点、TextBox の段落一覧、split の fixture、古い参照、暫定の注記、実装済みの印、CLAUDE.md、cellDel の判断、版、ノートブック）は、仕上げで直っていることを確かめた。\n- 後片付け:\n  - 大きな出力（td の変換結果、直した docx、PDF、realpdf の run_*・docx、golden の xml、mut の写し）は消し、JSON・ログ・スクリプトは残した。\n  - tests/__pycache__ は消した。git status で、未追跡のファイルが増えていないことを確かめた。\n  - ディスクの空きは 23G。",
+        "findings": [
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/docx_reader.py",
+            "line": 328,
+            "problem": "「連鎖の後ろの段落の隠し文字は、その段落自身の段落スタイルで決める」（DESIGN.md 7 章・ooxml の docstring）という規則を確かめるテストがない。読み取りの段落の状態を連鎖の最初の段落のもので通しても、945 件すべて合格のまま。",
+            "evidence": "崩し h_reader_pstate_first（`self._pstate = self.hidden_rule.para_state(chain[0])` に変えたもの。mut/mutate.py）で、本体のテスト 945 件がすべて合格した（mut/results.json）。sample_reader.docx と test_reader の小さな例には、隠す段落スタイルと隠さない段落スタイルをつないだ連鎖がない。検証の側（canonical_texts）は段落ごとに para_state を取るので、こうした docx があれば不変性チェックが食い違いを見つけるが、テストでは確かめていない。0.25.0 にはこの規則がない（G で入った）。",
+            "fix": "test_reader の D5 のパラメータか小さな例に、「本文の段落（記号を削除）＋隠す段落スタイルの段落」と「隠す段落スタイルの段落（記号を削除）＋本文」の 2 つを足す。読み取りの文字が canonical_texts と同じで、後ろ（前）の段落の文字だけが隠れることを確かめる。"
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/docx_reader.py",
+            "line": 308,
+            "problem": "つないだ段落のセクションの区切り（section_break）を連鎖の最後の段落から取る規則を確かめるテストがない。最初の段落から取るように崩しても、テストは落ちない。",
+            "evidence": "崩し d_sect_first（`last = chain[0].find(...)`）で、本体のテスト 945 件がすべて合格した。section_break は structure.py:748 で、題目の後のセクションの区切りを和文の書誌の終わりとみなすのに使う。そのため、書誌の領域の境目の段落でつながると、領域の分け方が変わりうる。0.25.0 には連鎖がない。",
+            "fix": "test_reader の連鎖の例に、sectPr を持つ段落を連鎖の最後（と最初）に置く場合を足し、Para.section_break が最後の段落のものになることを確かめる。"
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/emit.py",
+            "line": 215,
+            "problem": "表のセルで、書き込み先が jx:span のときだけ <break/> を入れる条件（parent.tag == SPAN。リンクの中には入れない）を確かめるテストがない。今のテストの「リンクの中の改行」は <uri>（PCDATA の経路で、write_inline を通らない）なので、この条件を通らない。",
+            "evidence": "崩し b_in_link（`parent.tag == SPAN and` を外したもの）で、本体のテスト 945 件がすべて合格した。write_inline に span 以外の書き込み先が渡るのは、セルでは <xref> だけ（emit.link_element。CELL の link は uri）。docs/JSTAGE_NOTES.md のとおり、<xref> の中の <break/> は DTD に合わない。実行のときには DTD の検証が見つけるので、黙った誤りにはならない。0.25.0 には <break/> を補う処理がない。",
+            "fix": "test_cell_breaks_in_emitter に、LinkSpec(kind=\"xref\") を付けた「\\n」を含むアトムを CELL で書き出す例を足す。<xref> の中に <break/> がなく、改行の文字がそのまま残り、Newline.breaks が数えないことを確かめる。"
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/docx_reader.py",
+            "line": 570,
+            "problem": "テキストボックスの中の段落を読んだ後に、外側の段落の隠し文字の状態（_pstate）を戻す処理を確かめるテストがない。",
+            "evidence": "崩し h_nested_pstate（退避する値を None にしたもの）で、本体のテスト 945 件がすべて合格した。問題になるのは、隠す段落スタイルの段落の中に、テキストボックスと、その後ろのランがある場合だけ。0.25.0 にはスタイルの隠し文字がない。",
+            "fix": "test_hidden_text_from_styles か test_reader の小さな例に、隠す段落スタイルの段落の中に「テキストボックス＋その後ろのラン」を置く例を足す。後ろのランが隠れたままになることを確かめる。"
+          },
+          {
+            "severity": "nit",
+            "file": "docs/FIX_PLAN.md",
+            "line": 608,
+            "problem": "「同じファイルを触る順」の docx_reader._textboxes の行に「G（D5 で戻り値が None になる段落の扱い…）」「F の TextBox.paras を『つないだ後に残った段落』から作る」とあり、コードと合わない。",
+            "evidence": "コードでは、連鎖の後ろの段落は read_block が [] を返し、_textboxes が `if el in self.later: continue` で読み飛ばす（None は返さない）。model.TextBox には段落の一覧（paras）がなく、段落の側の textbox_id で指す。G の節の「文書とコードの食い違い」は「F の TextBox の段落一覧」には触れているが、この行の「戻り値が None」には触れていない。",
+            "fix": "この行を「G（D5 で、つないだ段落の後ろの段落を self.later で読み飛ばす。U8 で段落の隠し文字の状態を退避して戻す）」に直し、TextBox.paras の文は消す。または、G の節の「文書とコードの食い違い」にこの行も挙げる。"
+          }
+        ]
+      },
+      {
+        "checked": "利用者への見え方と文書の観点で、作業ツリー（c35defd の上の G の差分。ファイルは変えていない）を点検した。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/review/user/ に置いた（run.sh・boxes.py・loc.py・gen_u.py。大きな出力は消した）。\n\n測ったこと:\n- pytest は 3.13 も 3.10（venv310）も 945 passed。ruff は 201 件で、HEAD と同じ件数（--statistics の合計で数えた）。\n- ノートブックは、make_notebook.render() の結果が notebooks/*.ipynb とバイト単位で同じだった（作り直してある）。版は `__init__.py`・pyproject.toml・ノートブックとも 0.26.0。\n- golden 23 件は確かめの担当と仕上げの担当が測ったものを使い、私は流していない。\n\ntd1〜3（ルート1・ルート2）を 0.25.0（base0250_src）と作業ツリーで変換し、レポートを読んだ。\n- td1・td2 の違いはツールの版の行だけで、XML・レポート・標準エラーは同じだった。\n- td3 は、両方のルートで XML の `<break/>` が 17 個増えた。`<break/>\\n` を取り除くと 0.25.0 と同じになる。\n- td3 のレポートは次のように変わった。\n  - 1 章の警告が 4 件から 6 件になった。\n  - 10 章に、セルの改行（17 か所・11 段落）と題目・英文題目の改行（2 か所）の行が増えた。\n  - 冒頭と 14 章、標準エラーに、改行の要確認が増えた。\n- ルート2 で直した docx は、3 本ともすべての部品がバイト単位で同じ。13 章も同じ。\n- 終了コードはどれも 1 で、0.25.0 と同じ（AI の手動の待ち）。\n\nsample_reader のレポート（4・6・10・14 章）、Colab の赤い枠（colab.result_boxes）、標準エラーを読んだ。\n- 4 章には M-006〜008 が出る。スタイルの違う段落をつないだこと、どちらのスタイルにしたか、Word では未確認であることが書いてある。\n- 6 章には次のものが出る。\n  - つないだ 12 か所（「ほか 2 か所」の形）。\n  - 読み飛ばした削除行 2 行（表の冒頭の文字で場所を示す）。\n  - 隠し文字（⏎・α・‑ も）。\n- 10 章には、次の警告が出る。どれも、何が起きたか・どの段落の文字か・Word で承諾して保存し変換し直すことが書いてある。\n  - つなげなかった 6 か所（段落の冒頭 20 字と理由）。\n  - 文字の残る削除行。\n  - cellDel の行。\n- 10 章には改行の 3 種類も出る。本文などの行にも「改行が要らなければ、Word で消して変換し直してください」が入っている。\n- 要確認の文言は、冒頭・14 章・赤い枠・標準エラーの 4 か所にそろって出る。level は要確認、key は newline。\n- 確かめの担当の nit（「、ほか」・本文の行の対処・すべての行を削除した表の警告・6 章でキャプションで示すこと）は直っていた。\n\n架空の docx を 1 本作り（gen_u.py）、0.25.0 と比べた。中身は、著者名と所属の改行、引用文献 6 件の改行、本文・見出し・キャプションの改行。\n- XML は 0.25.0 と同じ（セル以外には `<break/>` を入れない）。\n- 要確認の段落の数は 8 で、「、ほか」も付く。著者名・所属の文脈の名前も出る。\n- DTD・不変性とも合格。\n\n文書と実装を突き合わせた。\n- CLAUDE.md の追加行は実装と合っている（joined_paragraphs・HiddenRule を 3 か所で共有すること）。\n- README の「できないこと・注意点」の追加は実装と合っている。\n- DESIGN.md の 4.1・4.3・4.4・6 章の表・7 章は、実装と合っている。次の点を確かめた。\n  - HiddenRule は FIX_PLAN の XOR の規則に戻してある。docstring と DESIGN の 4.1・7 章に、LibreOffice と違う 3 つの形と「暫定」が書いてある。\n  - 削除行の中の自動番号は数えず、隠し文字も一覧に載せない。\n  - すべての行を削除した表は、キャプションと空の表を出して警告する。\n- DEVELOPMENT.md は実装と合っている（表・守るべき原則の 5・テストの節・残っている課題の 0.26.0 の行）。\n- STYLE_MAPPING・JSTAGE_NOTES（`<break/>` の根拠）・fix_plan_repro_tests.py（PROBLEM テストを取り除いた記録）も実装と合っている。\n- FIX_PLAN は実装と合っている。反映の順序の表の「（実装済み）」、G の節の「実装した内容」（暫定・設計の要点・確かめた数・残る限界・食い違いの扱い）、「同じファイルを触る順」の G の行、決定事項 13(1)(2) を確かめた。項目の表の D5・U8・U3・N8 の行には印がないが、E・F の行も同じなので、既存の書き方どおり。\n\n文書とコードの食い違い（直さなかったもの。どれも仕上げの担当の deviations にある）:\n- (1) FIX_PLAN の G の計画の本文。label を呼ぶ時点、「F の TextBox の段落一覧」、rvz_u8_fixed.py・d5_row.py・test_review.py・行番号、「16 か所で一致」を残している。G の節の末尾に「この節のとおりコードに合わせた」と書いてある。\n- (2) 付録 D5 の「sample_pdfcheck_split.docx を作る」。実装は make_pdfcheck(split=True) でテストの中で作る。G の節に書いてある。\n- (3) 「同じファイルを触る順」の docx_reader._textboxes の行の「F の TextBox.paras」。model.TextBox には段落の一覧がない。G の節に書いてある。\n- (4) 標準エラーは「docx で改行を消して」、冒頭は「Word でその改行を消して」と言い方が違う。ほかの要確認・要対応の cli= の文言もすべて「docx で…こと」の形なので、既存のコードの書き方どおり。直さなくてよい。\n\n実際の論文の文字の確かめ:\n- td1〜3 の docx の文字から作った 12 文字の並びを、git diff の足した行と照らした。一致は 0。\n- sample_reader.docx との一致は 26 件あった。HEAD の sample_reader.docx も同じ 26 件で、新しく入ったものは 0（テンプレートの定型の文字）。\n- 未追跡のファイルはない。自分の実行でできた tests/__pycache__ は消した。ディスクの空きは 23G。",
+        "findings": [
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/builder.py",
+            "line": 152,
+            "problem": "10 章の「表のセルの段落の中の改行…`<break/>` を入れました（改行の文字も残しています）」の行には、利用者が何をすればよいかが書いていない。言い方も「XML の改行の要素（`<break/>`）」「改行の文字も残しています」と技術寄りになっている。さらに、テキストボックスの中の表などの段落は場所が出ず、ID だけになる。J-STAGE の画面での td・th の `<break/>` の表示は、まだ確かめていない（DESIGN 6 章の表・JSTAGE_NOTES）。それでも、プレビューで確かめるようにとは知らせていない。",
+            "evidence": "td3 のルート1 のレポートの 10 章では、11 段落のうち場所が付いたのは 2 段落だけで、残りの 9 段落は「d312・d328…」と ID だけだった（loc.py で、それらの段落に plan.locations がないことを確かめた）。0.25.0 にはこの行がなく、G で新しく足した文言。sample_reader の 10 章の行も同じ形。",
+            "fix": "行の最後に「J-STAGE のプレビューで、表のセルの中の改行の位置を確かめてください」のような一言を足す。場所のない段落には表のキャプションか表の冒頭の文字（docx_reader.table_where）を添える。画面の文言を利用者が後でまとめて直すときでもよい。"
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/report.py",
+            "line": 1438,
+            "problem": "6 章の「段落記号が削除された段落を、次の段落とつないで 1 段落として出力しました（12 か所: d64＋d65、…）」は ID だけで、編集委員は Word のどこの段落かを探せない。4 章の M-006〜008（スタイルの違う段落をつないだ判断）は「Word で承諾した後のスタイルと同じかは確かめていない」で終わっていて、何を見ればよいか（見出しか本文かを Word で確かめる、など）が書いていない。",
+            "evidence": "sample_reader のルート1 のレポートの 6 章・4 章で確かめた。10 章のつなげなかった段落の警告は段落の冒頭 20 字を出しているが、6 章の一覧は ID だけ。0.25.0 にはない、G で足した文言。",
+            "fix": "6 章の一覧に、連鎖の最初の段落の冒頭の文字を添える（「d64「…」＋d65」など）。4 章の判断に「見出しと本文のどちらになるべきかを Word で確かめ、違えば Word で承諾して保存してから変換し直す」の一言を足す。画面の文言をまとめて直すときに合わせてもよい。"
+          },
+          {
+            "severity": "nit",
+            "file": "README.md",
+            "line": 158,
+            "problem": "README の「要対応」「要確認」の例の一覧（「たとえば次のものです」）に、G で足した要確認「題目・著者・所属・引用文献の中に改行があります」がない。D・E・F で足した知らせは、どれもこの一覧に項目がある。G のこの知らせは「できないこと・注意点」にだけ書いてある。",
+            "evidence": "README.md の 133〜165 行の一覧を、report.actions() の key と見比べた。newline の項目だけがない。td3（実際の原稿）でもこの要確認が出る。",
+            "fix": "一覧に「**要確認「題目・著者・所属・引用文献の中に改行があります」** — XML では改行の文字のまま出力しています（10 章）。要らない改行なら Word で消して（英文なら空白に置き換えて）、変換し直してください。」を足す。"
+          }
+        ]
+      }
+    ],
+    "failedFirst": [],
+    "firstFindings": [
+      {
+        "lens": "principle",
+        "severity": "should",
+        "file": "src/jasme_jats/report.py",
+        "line": 1224,
+        "problem": "G で、HiddenRule が文字スタイル・段落スタイル・既定の書式（docDefaults）の w:vanish でも文字を隠すようになった。この規則は暫定で、Word では確かめておらず、LibreOffice とも 11 通りの形で違う。不変性チェックの docx 側（fidelity.source_texts）も同じ規則を使うので、規則が Word と違えば、Word で見える文字が XML から消えても不変性チェックは合格する。そのとき利用者に知らせるのは、6 章の隠し文字の一覧の 1 行だけで、report.actions() に Action がない（冒頭・14 章・Colab の赤い枠・標準エラーのどれにも出ない）。README は「この判定は暫定です。Word の表示と違うときは知らせてください」と書いているが、利用者には隠したことが目に入らないので、確かめるきっかけがない。",
+        "evidence": "(1) golden の sample_reader_manual のレポート（作業ツリー）: スタイルで隠した 8 か所（〔文字スタイルで隠す〕など）は、6 章の「隠し文字（Word で非表示に設定された文字）: …」の 1 行にしか出ない。冒頭と 14 章の要確認は改行の 1 件だけ。\n(2) 作業ツリーの写しで、共有の規則だけをわざと誤らせた（HiddenRule.run_hidden の文字スタイルの判定を `style_value(rs) is not None` にして、偽を指定した文字スタイルでも反転させる。scratchpad の mut/m3。消した）。この写しで sample_reader を変換すると、「表示を指定した派生の文字スタイルの見える文字。」が XML から消える。それでも不変性・最終・DTD は合格し、actions() は ['newline'] だけになる（消えた文字は 6 章の一覧にだけ載る）。\n(3) 0.25.0 は直接の w:vanish・w:specVanish だけを隠していた。これは Word の表示と確実に一致する。0.25.0 では、p02・p21 の隠し段落スタイルの文字〔…〕を出力していた。\n(4) td1〜3 と本誌 7 本には、スタイルの隠し文字は 0 件なので、今の利用者の出力は変わらない。",
+        "fix": "report.actions() に、要確認（TO_CHECK）の Action を 1 つ足す。対象は、HiddenRule がスタイル・既定の書式（直接の w:vanish・specVanish 以外）で隠した文字があるとき。文言の例:「Word のスタイルの設定で隠し文字になっている文字が N か所あり、XML に出力していません（6 章）。Word で表示されない文字か確かめてください」。そのために、読み取り（docx_reader._run の hidden の枝）で、直接の指定かスタイルかを記録する（例: HiddenRule に、直接の指定のときだけ真を返す関数を足す）。表示の仕組みは変えず、Action を足すだけにする。sample_reader で Action が出ること、直接の w:vanish だけの docx（sample_edge）では出ないことをテストで確かめる。"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "src/jasme_jats/docx_reader.py",
+        "line": 623,
+        "problem": "隠し文字のランの中の図形の扱いが、画像とテキストボックスで違う。画像は隠して出力しない（ImageRef.hidden。DESIGN.md 147 行）。これに対して、テキストボックス（行内・浮動配置）は、_graphic が hidden にかかわらず _textboxes を呼ぶので、中の段落を読んで <boxed-text> などに出力する（脚注の参照も同じく xref として出す）。検証側（canonical_texts）は、テキストボックスの段落を別の段落として、アンカーのランの隠し文字を見ずに数えるので、両側が一致して合格する。G は「Word で表示される文字（隠し文字を隠した状態）」を 3 か所の共通の規則にしたが、この経路はその規則の外にあり、文書にも書かれていない。",
+        "evidence": "架空の p26（gen_p3.py）で、行内のテキストボックスのランを 3 通りにした: 隠さない、直接の w:vanish、文字スタイル gHid。3 本とも、作業ツリーと 0.25.0 の両方で、囲みの 2 段落が <boxed-text> に出て、6 章の隠し文字の一覧にも載らない（hidden_text は空）。同じ文字スタイル gHid のランの中の行内の画像（p23）は、作業ツリーでは隠され、6 章・9 章に載る（0.25.0 は rStyle を見ないので出力していた）。浮動配置のテキストボックス（p03）も出力する。隠し段落スタイルの段落の中の脚注の参照（p20）は、文字のない <p><xref …>2)</xref></p> として出る。0.25.0 から同じ形（直接の w:vanish でも出力）で、G で悪くなってはいない。",
+        "fix": "どちらかにする。(a) 読み取り（_graphic が hidden のとき）・検証（canonical_texts で、隠し文字のランの中の w:txbxContent の段落を隠す）・ルート2 の 3 か所で同じ規則にする。規則は ooxml に関数として置き、隠した段落は 6 章に載せる。(b) DESIGN.md 4.1・7 章と README に限界として書き、DEVELOPMENT の残っている課題（利用者が Word で確かめる項目）に足す。行内の図形は Word では隠れるはずで、浮動配置は確かめていない。"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "src/jasme_jats/emit.py",
+        "line": 215,
+        "problem": "U3 の「リンクの中には <break/> を入れない」を、どのテストも確かめていない。条件は `parent.tag == SPAN` で、書き込み先が jx:span そのもののときだけ break を入れる。この条件が崩れると、表のセルの xref（図表・引用文献・注へのリンク）の中に break が入り、DTD に合わなくなる（xref の中身は link-elements で、break を含まない）。",
+        "evidence": "作業ツリーの写しで、条件から `parent.tag == SPAN and` を外した（mut/m1。pytest_src.sh の WHICH で写しが使われていることを確かめた。消した）。それでも本体のテスト 945 件がすべて合格した。その写しで、CELL の span に xref の LinkSpec の付いた「試験\\n2024」を書くと（xref_break.py）、`<xref ref-type=\"bibr\" rid=\"B1\">試験<break/>\\n2024</xref>` になる。作業ツリーでは xref の中に break は入らない。sample_reader の「リンクの中の改行」は Word のハイパーリンク（文字だけの uri の経路）なので、この条件を通らない。0.25.0 にはこの機能がない。",
+        "fix": "tests/test_pipeline.py の test_cell_breaks_in_emitter に、xref の LinkSpec の付いた、改行のあるアトムを足す。確かめること: xref の中に break がない。xref の外の改行の前には break がある。Newline.breaks がリンクの中の改行を数えない。"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "src/jasme_jats/report.py",
+        "line": 1447,
+        "problem": "文書とコードの食い違い（コードに合わせて文書を直す側）。読み飛ばす削除行は、コードでは「アトムも図形もない行」で、Word で見える文字が残らない行（隠し文字だけが残る行も含む）。ところが、6 章の文「行の文字がすべて削除されていたので」と、ooxml.py 26 行・docx_reader.py 7 行の docstring・model.DeletedRow の docstring は、「文字がすべて削除されている」と書いている。",
+        "evidence": "架空の p27（gen_p4.py）で確かめた。削除の印のある行に、削除されていない文字スタイル gHid の隠し文字「〔隠しだけ残る〕」と、削除した文字を置いた。この行は読み飛ばされ（deleted_rows=[['t2', 2, '区分']]）、6 章には「行の文字がすべて削除されていたので、…出力していません」と出る。隠し文字の一覧は空になる（行ごと記録される）。出力は Word で承諾した状態と同じで正しい。DESIGN.md 4.1 は「行のどの段落にも文字（画像・数式・注の参照も）がなく、図形も読まなかった行」と正確に書いている。",
+        "fix": "6 章の文を「行に Word で表示される文字・画像などが残っていなかったので」のように直す。ooxml・docx_reader・model の docstring も DESIGN.md 4.1 の言い方にそろえる。"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "src/jasme_jats/report.py",
+        "line": 1024,
+        "problem": "文書とコードの食い違い。_newline_action の docstring は「これらの文脈は <break/> を置けないので（J-STAGE の修飾タグ許容一覧でも ×）」と書いている。しかし同梱の DTD では、article-title に break を置ける（article-title-elements が %break.class; を含む）。置けないのは著者名・所属（institution）・mixed-citation だけ。理由は J-STAGE の許容一覧の ×（決定事項 13(2)）で、docs/JSTAGE_NOTES.md と DESIGN.md の表は正しく書いている。",
+        "evidence": "src/jasme_jats/dtd/JATS-common1.ent の 2173 行（article-title-elements = \"%simple-phrase; | %break.class;\"）。institution-elements（JATS-journalpubcustom-models1.ent 469 行）と citation-elements（381 行）には break がない。",
+        "fix": "docstring を「題目・副題（DTD では置けるが J-STAGE の修飾タグ許容一覧で ×）・著者名・所属・引用文献（DTD でも置けない）なので」のように直す。"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "docs/FIX_PLAN.md",
+        "line": 608,
+        "problem": "文書とコードの食い違い（G の節の「文書とコードの食い違い」に入っていないもの）。\n(a) 608 行「docx_reader._textboxes / _read_nested_paragraph: … G（D5 で戻り値が None になる段落の扱い…）」。コードでは read_paragraph は None を返さない。呼ぶ側（read_block・_textboxes）が、連鎖の後ろの段落（self.later）を飛ばす。\n(b) 635 行「G の関連で、削除されたセル（w:tcPr/w:cellDel）の扱いは確かめていない。隠し文字のレポートは w:t とタブしか記録しない」。今のコードは cellDel を出力して警告し、_plain_of_run_child は w:br・w:sym・w:noBreakHyphen なども記録する。\n(c) DEVELOPMENT.md 98 行「HiddenRule の 21 通り」。tests/test_reader.py の U8_CASES は、plain を含めて 22 件。",
+        "evidence": "docx_reader.py の read_block（210 行の `if el in self.later: return []`）と _textboxes（521 行の `continue`）、_plain_of_run_child（789 行〜）、CELL_DELETED_MSG（31 行）、U8_CASES（u01〜u21 と plain）を読んで確かめた。",
+        "fix": "G の節の末尾の「文書とコードの食い違い」に (a)〜(c) を足すか、608・635 行を今のコードに合わせて直す。DEVELOPMENT.md は「22 通り（21 通りと、指定のない plain）」にする。"
+      },
+      {
+        "lens": "regression",
+        "severity": "nit",
+        "file": "src/jasme_jats/docx_reader.py",
+        "line": 328,
+        "problem": "「連鎖の後ろの段落の隠し文字は、その段落自身の段落スタイルで決める」（DESIGN.md 7 章・ooxml の docstring）という規則を確かめるテストがない。読み取りの段落の状態を連鎖の最初の段落のもので通しても、945 件すべて合格のまま。",
+        "evidence": "崩し h_reader_pstate_first（`self._pstate = self.hidden_rule.para_state(chain[0])` に変えたもの。mut/mutate.py）で、本体のテスト 945 件がすべて合格した（mut/results.json）。sample_reader.docx と test_reader の小さな例には、隠す段落スタイルと隠さない段落スタイルをつないだ連鎖がない。検証の側（canonical_texts）は段落ごとに para_state を取るので、こうした docx があれば不変性チェックが食い違いを見つけるが、テストでは確かめていない。0.25.0 にはこの規則がない（G で入った）。",
+        "fix": "test_reader の D5 のパラメータか小さな例に、「本文の段落（記号を削除）＋隠す段落スタイルの段落」と「隠す段落スタイルの段落（記号を削除）＋本文」の 2 つを足す。読み取りの文字が canonical_texts と同じで、後ろ（前）の段落の文字だけが隠れることを確かめる。"
+      },
+      {
+        "lens": "regression",
+        "severity": "nit",
+        "file": "src/jasme_jats/docx_reader.py",
+        "line": 308,
+        "problem": "つないだ段落のセクションの区切り（section_break）を連鎖の最後の段落から取る規則を確かめるテストがない。最初の段落から取るように崩しても、テストは落ちない。",
+        "evidence": "崩し d_sect_first（`last = chain[0].find(...)`）で、本体のテスト 945 件がすべて合格した。section_break は structure.py:748 で、題目の後のセクションの区切りを和文の書誌の終わりとみなすのに使う。そのため、書誌の領域の境目の段落でつながると、領域の分け方が変わりうる。0.25.0 には連鎖がない。",
+        "fix": "test_reader の連鎖の例に、sectPr を持つ段落を連鎖の最後（と最初）に置く場合を足し、Para.section_break が最後の段落のものになることを確かめる。"
+      },
+      {
+        "lens": "regression",
+        "severity": "nit",
+        "file": "src/jasme_jats/emit.py",
+        "line": 215,
+        "problem": "表のセルで、書き込み先が jx:span のときだけ <break/> を入れる条件（parent.tag == SPAN。リンクの中には入れない）を確かめるテストがない。今のテストの「リンクの中の改行」は <uri>（PCDATA の経路で、write_inline を通らない）なので、この条件を通らない。",
+        "evidence": "崩し b_in_link（`parent.tag == SPAN and` を外したもの）で、本体のテスト 945 件がすべて合格した。write_inline に span 以外の書き込み先が渡るのは、セルでは <xref> だけ（emit.link_element。CELL の link は uri）。docs/JSTAGE_NOTES.md のとおり、<xref> の中の <break/> は DTD に合わない。実行のときには DTD の検証が見つけるので、黙った誤りにはならない。0.25.0 には <break/> を補う処理がない。",
+        "fix": "test_cell_breaks_in_emitter に、LinkSpec(kind=\"xref\") を付けた「\\n」を含むアトムを CELL で書き出す例を足す。<xref> の中に <break/> がなく、改行の文字がそのまま残り、Newline.breaks が数えないことを確かめる。"
+      },
+      {
+        "lens": "regression",
+        "severity": "nit",
+        "file": "src/jasme_jats/docx_reader.py",
+        "line": 570,
+        "problem": "テキストボックスの中の段落を読んだ後に、外側の段落の隠し文字の状態（_pstate）を戻す処理を確かめるテストがない。",
+        "evidence": "崩し h_nested_pstate（退避する値を None にしたもの）で、本体のテスト 945 件がすべて合格した。問題になるのは、隠す段落スタイルの段落の中に、テキストボックスと、その後ろのランがある場合だけ。0.25.0 にはスタイルの隠し文字がない。",
+        "fix": "test_hidden_text_from_styles か test_reader の小さな例に、隠す段落スタイルの段落の中に「テキストボックス＋その後ろのラン」を置く例を足す。後ろのランが隠れたままになることを確かめる。"
+      },
+      {
+        "lens": "regression",
+        "severity": "nit",
+        "file": "docs/FIX_PLAN.md",
+        "line": 608,
+        "problem": "「同じファイルを触る順」の docx_reader._textboxes の行に「G（D5 で戻り値が None になる段落の扱い…）」「F の TextBox.paras を『つないだ後に残った段落』から作る」とあり、コードと合わない。",
+        "evidence": "コードでは、連鎖の後ろの段落は read_block が [] を返し、_textboxes が `if el in self.later: continue` で読み飛ばす（None は返さない）。model.TextBox には段落の一覧（paras）がなく、段落の側の textbox_id で指す。G の節の「文書とコードの食い違い」は「F の TextBox の段落一覧」には触れているが、この行の「戻り値が None」には触れていない。",
+        "fix": "この行を「G（D5 で、つないだ段落の後ろの段落を self.later で読み飛ばす。U8 で段落の隠し文字の状態を退避して戻す）」に直し、TextBox.paras の文は消す。または、G の節の「文書とコードの食い違い」にこの行も挙げる。"
+      },
+      {
+        "lens": "user",
+        "severity": "nit",
+        "file": "src/jasme_jats/builder.py",
+        "line": 152,
+        "problem": "10 章の「表のセルの段落の中の改行…`<break/>` を入れました（改行の文字も残しています）」の行には、利用者が何をすればよいかが書いていない。言い方も「XML の改行の要素（`<break/>`）」「改行の文字も残しています」と技術寄りになっている。さらに、テキストボックスの中の表などの段落は場所が出ず、ID だけになる。J-STAGE の画面での td・th の `<break/>` の表示は、まだ確かめていない（DESIGN 6 章の表・JSTAGE_NOTES）。それでも、プレビューで確かめるようにとは知らせていない。",
+        "evidence": "td3 のルート1 のレポートの 10 章では、11 段落のうち場所が付いたのは 2 段落だけで、残りの 9 段落は「d312・d328…」と ID だけだった（loc.py で、それらの段落に plan.locations がないことを確かめた）。0.25.0 にはこの行がなく、G で新しく足した文言。sample_reader の 10 章の行も同じ形。",
+        "fix": "行の最後に「J-STAGE のプレビューで、表のセルの中の改行の位置を確かめてください」のような一言を足す。場所のない段落には表のキャプションか表の冒頭の文字（docx_reader.table_where）を添える。画面の文言を利用者が後でまとめて直すときでもよい。"
+      },
+      {
+        "lens": "user",
+        "severity": "nit",
+        "file": "src/jasme_jats/report.py",
+        "line": 1438,
+        "problem": "6 章の「段落記号が削除された段落を、次の段落とつないで 1 段落として出力しました（12 か所: d64＋d65、…）」は ID だけで、編集委員は Word のどこの段落かを探せない。4 章の M-006〜008（スタイルの違う段落をつないだ判断）は「Word で承諾した後のスタイルと同じかは確かめていない」で終わっていて、何を見ればよいか（見出しか本文かを Word で確かめる、など）が書いていない。",
+        "evidence": "sample_reader のルート1 のレポートの 6 章・4 章で確かめた。10 章のつなげなかった段落の警告は段落の冒頭 20 字を出しているが、6 章の一覧は ID だけ。0.25.0 にはない、G で足した文言。",
+        "fix": "6 章の一覧に、連鎖の最初の段落の冒頭の文字を添える（「d64「…」＋d65」など）。4 章の判断に「見出しと本文のどちらになるべきかを Word で確かめ、違えば Word で承諾して保存してから変換し直す」の一言を足す。画面の文言をまとめて直すときに合わせてもよい。"
+      },
+      {
+        "lens": "user",
+        "severity": "nit",
+        "file": "README.md",
+        "line": 158,
+        "problem": "README の「要対応」「要確認」の例の一覧（「たとえば次のものです」）に、G で足した要確認「題目・著者・所属・引用文献の中に改行があります」がない。D・E・F で足した知らせは、どれもこの一覧に項目がある。G のこの知らせは「できないこと・注意点」にだけ書いてある。",
+        "evidence": "README.md の 133〜165 行の一覧を、report.actions() の key と見比べた。newline の項目だけがない。td3（実際の原稿）でもこの要確認が出る。",
+        "fix": "一覧に「**要確認「題目・著者・所属・引用文献の中に改行があります」** — XML では改行の文字のまま出力しています（10 章）。要らない改行なら Word で消して（英文なら空白に置き換えて）、変換し直してください。」を足す。"
+      }
+    ],
+    "rounds": [
+      {
+        "round": 1,
+        "fix": {
+          "changed_files": [
+            "src/jasme_jats/ooxml.py",
+            "src/jasme_jats/docx_reader.py",
+            "src/jasme_jats/model.py",
+            "src/jasme_jats/pipeline.py",
+            "src/jasme_jats/report.py",
+            "src/jasme_jats/builder.py",
+            "src/jasme_jats/structure.py",
+            "tests/make_fixtures.py",
+            "tests/fixtures/sample_reader.docx",
+            "tests/test_reader.py",
+            "tests/test_pipeline.py",
+            "tests/test_lost_images.py",
+            "docs/DESIGN.md",
+            "docs/DEVELOPMENT.md",
+            "docs/FIX_PLAN.md",
+            "README.md"
+          ],
+          "summary": "点検 1 回目の指摘（should 1 件と nit）をすべて直した。版は 0.26.0 のまま。ノートブックは作り直したが、内容は同じだった。コミットはしていない。\n\nshould（スタイルの隠し文字の知らせ）:\n- `ooxml.HiddenRule.run_hidden_by(r, ps)` を足した。隠した理由を返す（\"direct\"＝ランに直接付けた w:vanish・w:specVanish、\"style\"＝文字スタイル・段落スタイル・既定の書式、\"\"＝隠さない）。`run_hidden` はこれから作るので、規則は 1 か所のまま。前の `run_hidden` と全 2250 通りで一致した。\n- 読み取り（docx_reader._walk/_run/_graphic）で、理由を `hidden` 引数として下へ渡す。スタイルで隠した文字は `Document.style_hidden`、画像は `ImageRef.hidden_style` に記録する。読み飛ばした削除行の中の分は記録から外す。\n- pipeline: `Result.style_hidden` と `style_hidden_images` を足した。\n- report: `_style_hidden_action`（要確認・TO_CHECK）を `actions()` の lost_action の後ろに足した。段落ごとに数え、空白だけの段落は数えない。画像も数える。文面は、何が起きたか・Word でどう確かめるか・表示されたら開発者に知らせることを書いた。冒頭・14 章・Colab の枠・標準エラーには、既存の仕組みのまま出る。\n- 6 章に「上の隠し文字のうち、文字に直接付けた隠し文字ではなく、スタイル…で隠し文字になっているもの」の 1 行を足した。\n- テスト: sample_reader では要確認が出る（8 段落）。直接の w:vanish だけの sample_edge では出ない。\n- わざと規則を誤らせた写し（点検の m3 と同じ崩し）でも、不変性チェックは合格したままだが、消えた文字が要確認と 6 章に出ることを確かめた。\n\nnit:\n- テキストボックス: 隠し文字のランの中のテキストボックスの段落は (b) にした。読み取り・検証・ルート2 の 3 か所とも隠さない（0.25.0 と同じ。画像は隠す）。限界として DESIGN 4.1・7 章、README、DEVELOPMENT の残っている課題 (4)、FIX_PLAN の暫定の判断、ooxml・docx_reader の docstring に書いた。隠し文字の中の脚注参照の番号が出ることも 7 章に書いた。\n- 崩し 4 つを殺すテストを足した:\n  - test_cell_breaks_in_emitter に xref を足した（xref の中に break がなく、Newline.breaks に数えない）。\n  - test_joined_paragraph_section_break（セクション区切りは連鎖の最後の段落のもの）。\n  - test_textbox_keeps_outer_hidden_state（テキストボックスの後ろのランの隠し文字の状態）。\n  - sample_reader.docx に D5×U8 の連鎖 2 つ（見える段落＋隠す段落、隠す段落＋見える段落）を足した（make_reader だけで作り直した）。\n- 文書とコードの食い違い:\n  - 削除行の説明（6 章・ooxml・docx_reader・model.DeletedRow・テストの docstring）を DESIGN 4.1 の言い方にそろえた。\n  - _newline_action の docstring を、DTD と J-STAGE の区別が正しく分かる書き方にした。\n  - FIX_PLAN の docx_reader._textboxes の行と、G の関連の行をコードに合わせた。\n  - DEVELOPMENT の「21 通り」を「22 通り」にした。\n- 利用者向け:\n  - 10 章のセルの改行の行: 技術寄りの言い方をやめ、J-STAGE のプレビューで確かめる一言を足した。セルの段落は、表のキャプションか表の最初の文字で示す（`docx_reader.table_where(head, caption)` と `table_head`、builder の `_cell_tables`）。\n  - 6 章のつないだ段落の一覧に、文字の冒頭を添えた。\n  - 4 章の判断に、Word で確かめる手順を足した。\n  - README の要確認の例に、スタイルの隠し文字と、題目などの改行の 2 項目を足した。",
+          "tests_added": [
+            "tests/test_reader.py::test_hidden_rule_cause（run_hidden_by の direct・style、run_hidden と一致。U8_CASES の 22 通り×docDefaults の有無）",
+            "tests/test_reader.py::test_joined_paragraph_section_break（sectPr は連鎖の最後の段落のもの。崩し d_sect_first を殺す）",
+            "tests/test_reader.py::test_textbox_keeps_outer_hidden_state（隠す段落の中のテキストボックスの後ろのランも隠す。崩し h_nested_pstate を殺す）",
+            "tests/test_lost_images.py::test_style_hidden_image_is_noticed[direct]・[style]（文字スタイルで隠した画像は要確認、直接の w:vanish の画像は知らせない）",
+            "tests/test_pipeline.py::test_style_hidden_action_counts_paragraphs（段落ごとに数える、空白だけは数えない、「ほか」、画像は最後）",
+            "拡張: test_pipeline.py::test_cell_breaks_in_emitter（セルの <xref> の中の改行。崩し b_in_link を殺す）",
+            "拡張: test_reader.py::test_hidden_text_from_styles（Document.style_hidden、D5×U8 の連鎖 2 つ。崩し h_reader_pstate_first は test_reader_matches_canonical・test_fidelity でも殺す）",
+            "拡張: test_reader.py::test_joined_paragraph_shapes_and_notes（JoinInfo が 5 件）、test_deleted_row_numbering_and_hidden_text（読み飛ばした行のスタイルの隠し文字を記録しない）",
+            "拡張: test_pipeline.py::test_reader_report_and_notices（要確認 style_hidden と newline、6 章・10 章・4 章・14 章・Colab の枠・標準エラー・終了コード 0）、test_body_line_break_is_only_listed（sample_edge では style_hidden が出ない）"
+          ],
+          "pytest_result": "python -m pytest -q -p no:cacheprovider: 951 passed（3.13）。venv310（PYTHONPATH=src）: 951 passed（3.10）。修正前は 945 件、0.25.0 は 891 件。ruff check src tests tools: 201 件で HEAD と同じ（git worktree で HEAD と比べ、ファイル×規則の内訳も同じ）。崩し 19 個（点検で生き残った 4 個と、この回の処理の 15 個）はすべてテストで殺した（結果は scratchpad の g/fix1/mut/results.json）。",
+          "measures": "- golden（23 件）: すべて ok（不変性・最終・DTD 合格、J-STAGE の問題 0）。\n  - 0.25.0 と比べると 19 件が同じ。違う 4 件は sample_edge の manual/split（10 章の改行の行。修正前と同じ）と、作り直した sample_reader の manual/split。\n  - 修正前（同じ新しい fixture）と比べると、XML は 23 件とも同じ。違うのは sample_reader のレポートと AI依頼文 だけで、どれも意図したもの（冒頭と 14 章の要確認、4 章の判断の言い方〈AI依頼文の推定の行も同じ文〉、6 章の 3 か所、10 章のセルの行）。\n- td1〜3（ルート1・ルート2。最終のコードで流し直した）:\n  - 0.25.0 と比べると、td1・td2 は XML・レポート・直した docx（日時を除く）が同じ。td3 は `<break/>` が 41→58 になるだけで、`<break/>` を取り除くと同じ。レポートは改行の行と要確認が増えただけ。\n  - 修正前と比べると、XML は同じ。td3 のレポートのセルの改行の行の言い方が変わっただけ（場所のない段落にも表の手がかりが付いた）。\n  - どの変換も不変性・最終・DTD・J-STAGE は合格。XML に入らなかった画像は 0 件。スタイルの隠し文字の要確認は出ない（td1〜3 にスタイルの隠し文字はない）。\n- 出版版 PDF 7 本（ルート2）: 0.25.0 とすべて同じ（見つからない段落 0→0、直した箇所 2→2、想定外 0→0、チェックはすべて合格）。\n- 独立の反例（G の oracle 29 件）: 29/29 合格（0.25.0 は 4 件）。\n- 点検の反例（gen_p〜gen_p4。ルート1 で 23 件、ルート2 で 3 件）: すべて合格し、3 か所の文字の不一致は 0。XML は修正前と同じ。\n  - 要確認は p02・p18・p20・p21・p23 で出た（p23 は画像 1 件）。\n  - p26（隠し文字の中のテキストボックス）の 3 通りと、直接の指定だけの例では出ない（テキストボックスの段落は出力するので、隠した文字がない）。",
+          "deviations": "設計・指摘と違えたこと:\n1. テキストボックスの nit は (b)（文書に限界として書く）にした。(a) は 3 か所の共通の規則を変え、F の囲みの判定（空の囲み）にも関わるので小さくない。動作は 0.25.0 と同じ。\n2. should の要確認は、指摘の「文字」に加えて画像（ImageRef.hidden_style）も数える。数え方は「か所」ではなく「段落」で、空白だけの段落は数えない。6 章は今の一覧を分けずに、スタイルで隠したものの 1 行を足した（直接の指定だけの docx の 6 章は変わらない）。\n3. 直接の指定だけを真にする関数ではなく、理由を返す `run_hidden_by` にした。run_hidden はこれから作る（全 2250 通りで修正前と一致）。\n4. 10 章のセルの段落は、場所のない段落だけでなく、すべて表のキャプションか表の最初の文字で示した（本文の場所の代わりにした）。\n5. D5×U8 の連鎖 2 つは sample_reader.docx に足した（golden の sample_reader が変わる。許された範囲）。sectPr とテキストボックスの例は、本文のセクション区切りや囲みの置き場所が fixture に混ざらないように、テストの中で作る小さな docx にした。\n6. 崩しを並列で流したとき、b_in_link が先に test_template_emf_conversion で落ちた（LibreOffice の並列実行による不安定さとみられる）。その崩しだけを流し直して、test_cell_breaks_in_emitter で落ちることを確かめた。\n\n見つけて直した文書とコードの食い違い:\n- 読み飛ばす削除行の説明の「文字がすべて削除」（report の 6 章・ooxml.py の冒頭・docx_reader.py の冒頭・model.DeletedRow・test_deleted_table_rows の docstring）を、DESIGN 4.1 の言い方（Word で表示される文字・画像などが残らない行）に合わせた。\n- report._newline_action の docstring（題目・副題は DTD では `<break/>` を置けるが、J-STAGE の許容一覧で ×。著者名・所属・引用文献は DTD でも置けない）。\n- FIX_PLAN「同じファイルを触る順」の docx_reader._textboxes の行（「戻り値が None」「TextBox.paras」をコードに合わせた）。\n- FIX_PLAN「計画全体で足した作業」の G の関連の行（cellDel と隠し文字のレポートは G で扱った、と書いた）。\n- DEVELOPMENT.md の「HiddenRule の 21 通り」を「22 通り（u01〜u21 と plain）」にした。\n- README の要確認の例に newline の項目がなかったので足した。\n- FIX_PLAN の G の節に、この回の修正・数・暫定の判断を書き足した。\n\n見つけたが直さなかったもの:\n- tests/test_reader.py の STYLES_U8 のコメント「LibreOffice と比べた 21 通りの実験」は、実験の数としては正しいので残した。\n- FIX_PLAN の G の計画の文（label を呼ぶ時点など）は、G の節の「実装した内容」に違いがすでに書いてあるので、計画の文はそのまま残した。\n- AI依頼文の推定の行には 4 章の判断の文がそのまま入るので、新しく足した利用者向けの一言も AI依頼文に出る。ほかの判断も同じ書き方なので変えていない。",
+          "open_issues": "- 利用者が Word で確かめることが 1 つ増えた: 隠し文字のランの中のテキストボックス（行内・浮動配置）の文字が Word で隠れるか。本ツールは 3 か所とも隠さずに出力する（0.25.0 と同じ）。DEVELOPMENT の残っている課題 (4) と FIX_PLAN の暫定の判断に入れた。\n- 隠し文字のランの中の脚注・文末脚注の参照は、番号を出す。隠し段落スタイルの段落では、文字のない <p> に参照の番号だけが出る（0.25.0 から同じ）。限界として DESIGN 7 章に書いた。\n- スタイルの隠し文字の要確認の文面と見え方（［ホーム］の［編集記号の表示/非表示］の案内を含む）は、利用者が画面の文言をまとめて直すときに見直す。td1〜3 と本誌 7 本ではこの要確認は出ないので、今の利用者の出力は変わらない。\n- 削除の変更履歴の中のテキストボックスについて、読み取りが読み飛ばすのに検証が数えて食い違わないかを試した。中の文字も削除扱いになっていて、0.25.0 と 0.26.0 のどちらでも不変性チェックは合格した（問題なし）。\n- 実験の結果・ログ・スクリプトは scratchpad の g/fix1 に残した（golden の manifest、td の比較 JSON、崩しの results.json、oracle のログ、実際の PDF の summary・results JSON）。docx・pdf・xml・zip・画像と、td・実際の PDF の変換出力は消した。tests/__pycache__・src/jasme_jats/__pycache__・tools/__pycache__ も消した。一時的な git worktree は消してあり、ディスクの空きは 23GB。"
+        },
+        "findings": [
+          {
+            "lens": "principle",
+            "severity": "nit",
+            "file": "src/jasme_jats/docx_reader.py",
+            "line": 466,
+            "problem": "読み取りの _run の隠し文字の枝が w:ruby を記録しない。そのため、スタイル（段落スタイル・文字スタイル）で隠したランの中のルビの親文字は、XML から消えても、6 章の隠し文字の一覧にも Document.style_hidden にも載らない。新しい要確認（report._style_hidden_action）も出ない。G の修正で作った安全網（規則が暫定で不変性チェックでは見つからない、スタイルで隠した文字を利用者に知らせる）を、この経路だけが通らない。_plain_of_run_child は w:t・タブ・改行・記号などしか扱わず、ルビには空を返す。不変性チェックは両側で同じに隠すので合格する。",
+            "evidence": "架空の q01（scratchpad の g/review/principle/r2/gen_r2.py）で確かめた。段落スタイル gHidP の段落にルビだけ（親文字「〔隠架空〕」）を置いた d12 と、本文の中で文字スタイル gHid のランにルビ（親文字「〔隠語〕」）を置いた d13 がある。\n- 作業ツリー: d12 は空、d13 は「見える前見える後。」になった。hidden_text=[]、style_hidden=[]、actions=[] で、レポートのどこにも隠した親文字が出ない（d12 は空白だけの段落として除外され、6 章の表にも載らない）。不変性・最終・DTD は合格で、3 か所の不一致は 0。\n- 0.25.0: d12「〔隠架空〕」と d13「見える前〔隠語〕見える後。」を出力していた。つまり、黙って消えるのは G で増えた経路。\n- 直接の w:vanish のランのルビ（d14）は、0.25.0 から記録されない（前からの形）。\n- 外側のランは見え、親文字の中のランだけを gHid にした q07 は、正しく記録され、要確認も出る。\n- 写しで、_run の hidden の枝を w:ruby のとき `self._walk(rubyBase, para, fmt, h, hidden, deleted)` にした。q01 で hidden_text が 3 件、style_hidden が 2 件（d12・d13）になり、要確認が出た。XML・不変性・3 か所の一致は変わらず、tests/test_reader.py・test_fidelity.py・test_pipeline.py の 149 件は合格した。\n- td1〜3・出版版 PDF 7 本・fixture には、ルビと w:vanish がない（今の利用者の出力は変わらない）。",
+            "fix": "_run の `if hidden:` の前に、w:ruby のときは w:rubyBase を同じ hidden（\"direct\"・\"style\"）で _walk する枝を足す。中のランは `hidden or …` で外側の理由を継ぐので、_plain_of_run_child がその理由で記録する。w:rt は今までどおり読まない。ルビの警告（10 章）を隠したルビに出すかは、出さない側にそろえる。\nテストは test_reader か sample_reader の「スタイルの隠し文字」の節に足す。確かめること:\n- 隠す段落スタイルの段落の中のルビ、文字スタイルで隠したランのルビ、直接の w:vanish のランのルビの親文字が、hidden_text に載ること。\n- このうちスタイルで隠した 2 つだけが style_hidden に載り、要確認が出ること。\nあわせて、_plain_of_run_child の docstring と、DESIGN 4.1・README・FIX_PLAN の G の「6 章に記録する要素」の書き方を、コードにそろえる。"
+          },
+          {
+            "lens": "regression",
+            "severity": "nit",
+            "file": "src/jasme_jats/builder.py",
+            "line": 194,
+            "problem": "`builder._cell_tables` was added in this round and also collects the tables of B3 table-figures (`plan.figures` / `f.tables`). No test checks that part. If it were dropped, a newline in a table-figure cell would quietly lose its 10 章 table hint and fall back to the body location (or the bare ID).",
+            "evidence": "Mutant u_celltab_nofig (`+ [(tb, f.caption) for f in self.plan.figures for tb in f.tables]` removed, r2/mut/mutate.py): all 951 tests still pass. In the same run, u_celltab_none (no hint at all) is killed by test_reader_report_and_notices. That test only covers ordinary tables (sample_reader's table 7). The code is new in this round and does not exist in 0.25.0. Only 10 章 wording is affected; XML and checks do not change.",
+            "fix": "Add one assertion to test_reader_report_and_notices or a small sample_b3_tablefig example: when a table-figure cell has a newline, the 10 章 line names it as キャプション「図…」の表."
+          },
+          {
+            "lens": "regression",
+            "severity": "nit",
+            "file": "README.md",
+            "line": 246,
+            "problem": "Docs and code disagree (fix the docs to match the code). README says text hidden by character, paragraph or default styles is hidden \"Word と同じく\" (the same way Word does). The code treats this rule as provisional: the TO_CHECK notice says \"この判定は暫定で、Word の表示と違うことがあります\". The next sentence in README also says the rule is provisional, so this bullet contradicts itself.",
+            "evidence": "README.md:246 \"文字スタイル・段落スタイル・既定の書式で隠し文字になっている文字も、Word と同じく隠して出力しません\", followed by \"この判定は暫定なので…\". The how text of report._style_hidden_action and DESIGN.md 4.1 (provisional, not checked in Word) say otherwise. The same wording was already in the pre-fix G README (g/fix1/pre_README.md:239); 0.25.0 does not have it.",
+            "fix": "Change it to something like \"文字スタイル・段落スタイル・既定の書式で隠し文字になっている文字も、隠して出力しません（Word の表示と同じかの判定は暫定です。レポートの 6 章に記録します）\"."
+          }
+        ],
+        "failedLens": []
+      }
+    ],
+    "remaining": [
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "src/jasme_jats/docx_reader.py",
+        "line": 466,
+        "problem": "読み取りの _run の隠し文字の枝が w:ruby を記録しない。そのため、スタイル（段落スタイル・文字スタイル）で隠したランの中のルビの親文字は、XML から消えても、6 章の隠し文字の一覧にも Document.style_hidden にも載らない。新しい要確認（report._style_hidden_action）も出ない。G の修正で作った安全網（規則が暫定で不変性チェックでは見つからない、スタイルで隠した文字を利用者に知らせる）を、この経路だけが通らない。_plain_of_run_child は w:t・タブ・改行・記号などしか扱わず、ルビには空を返す。不変性チェックは両側で同じに隠すので合格する。",
+        "evidence": "架空の q01（scratchpad の g/review/principle/r2/gen_r2.py）で確かめた。段落スタイル gHidP の段落にルビだけ（親文字「〔隠架空〕」）を置いた d12 と、本文の中で文字スタイル gHid のランにルビ（親文字「〔隠語〕」）を置いた d13 がある。\n- 作業ツリー: d12 は空、d13 は「見える前見える後。」になった。hidden_text=[]、style_hidden=[]、actions=[] で、レポートのどこにも隠した親文字が出ない（d12 は空白だけの段落として除外され、6 章の表にも載らない）。不変性・最終・DTD は合格で、3 か所の不一致は 0。\n- 0.25.0: d12「〔隠架空〕」と d13「見える前〔隠語〕見える後。」を出力していた。つまり、黙って消えるのは G で増えた経路。\n- 直接の w:vanish のランのルビ（d14）は、0.25.0 から記録されない（前からの形）。\n- 外側のランは見え、親文字の中のランだけを gHid にした q07 は、正しく記録され、要確認も出る。\n- 写しで、_run の hidden の枝を w:ruby のとき `self._walk(rubyBase, para, fmt, h, hidden, deleted)` にした。q01 で hidden_text が 3 件、style_hidden が 2 件（d12・d13）になり、要確認が出た。XML・不変性・3 か所の一致は変わらず、tests/test_reader.py・test_fidelity.py・test_pipeline.py の 149 件は合格した。\n- td1〜3・出版版 PDF 7 本・fixture には、ルビと w:vanish がない（今の利用者の出力は変わらない）。",
+        "fix": "_run の `if hidden:` の前に、w:ruby のときは w:rubyBase を同じ hidden（\"direct\"・\"style\"）で _walk する枝を足す。中のランは `hidden or …` で外側の理由を継ぐので、_plain_of_run_child がその理由で記録する。w:rt は今までどおり読まない。ルビの警告（10 章）を隠したルビに出すかは、出さない側にそろえる。\nテストは test_reader か sample_reader の「スタイルの隠し文字」の節に足す。確かめること:\n- 隠す段落スタイルの段落の中のルビ、文字スタイルで隠したランのルビ、直接の w:vanish のランのルビの親文字が、hidden_text に載ること。\n- このうちスタイルで隠した 2 つだけが style_hidden に載り、要確認が出ること。\nあわせて、_plain_of_run_child の docstring と、DESIGN 4.1・README・FIX_PLAN の G の「6 章に記録する要素」の書き方を、コードにそろえる。"
+      },
+      {
+        "lens": "regression",
+        "severity": "nit",
+        "file": "src/jasme_jats/builder.py",
+        "line": 194,
+        "problem": "`builder._cell_tables` was added in this round and also collects the tables of B3 table-figures (`plan.figures` / `f.tables`). No test checks that part. If it were dropped, a newline in a table-figure cell would quietly lose its 10 章 table hint and fall back to the body location (or the bare ID).",
+        "evidence": "Mutant u_celltab_nofig (`+ [(tb, f.caption) for f in self.plan.figures for tb in f.tables]` removed, r2/mut/mutate.py): all 951 tests still pass. In the same run, u_celltab_none (no hint at all) is killed by test_reader_report_and_notices. That test only covers ordinary tables (sample_reader's table 7). The code is new in this round and does not exist in 0.25.0. Only 10 章 wording is affected; XML and checks do not change.",
+        "fix": "Add one assertion to test_reader_report_and_notices or a small sample_b3_tablefig example: when a table-figure cell has a newline, the 10 章 line names it as キャプション「図…」の表."
+      },
+      {
+        "lens": "regression",
+        "severity": "nit",
+        "file": "README.md",
+        "line": 246,
+        "problem": "Docs and code disagree (fix the docs to match the code). README says text hidden by character, paragraph or default styles is hidden \"Word と同じく\" (the same way Word does). The code treats this rule as provisional: the TO_CHECK notice says \"この判定は暫定で、Word の表示と違うことがあります\". The next sentence in README also says the rule is provisional, so this bullet contradicts itself.",
+        "evidence": "README.md:246 \"文字スタイル・段落スタイル・既定の書式で隠し文字になっている文字も、Word と同じく隠して出力しません\", followed by \"この判定は暫定なので…\". The how text of report._style_hidden_action and DESIGN.md 4.1 (provisional, not checked in Word) say otherwise. The same wording was already in the pre-fix G README (g/fix1/pre_README.md:239); 0.25.0 does not have it.",
+        "fix": "Change it to something like \"文字スタイル・段落スタイル・既定の書式で隠し文字になっている文字も、隠して出力しません（Word の表示と同じかの判定は暫定です。レポートの 6 章に記録します）\"."
+      }
+    ],
+    "incomplete": null
+  },
+  "workflowProgress": [
+    {
+      "type": "workflow_phase",
+      "index": 1,
+      "title": "Design"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 2,
+      "title": "Implement"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 3,
+      "title": "Verify"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 4,
+      "title": "Finalize"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 5,
+      "title": "Review"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 6,
+      "title": "Fix"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 7,
+      "title": "Recheck"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 1,
+      "label": "design",
+      "phaseIndex": 1,
+      "phaseTitle": "Design",
+      "agentId": "a68c9d6a8115b82df",
+      "model": "opus",
+      "state": "done",
+      "startedAt": 1793554934859,
+      "lastProgressAt": 1793554934859,
+      "cached": true,
+      "resultPreview": "{\"design_doc\":\"/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/DESIGN_G.md\",\"decisions\":\"D5 (deleted paragraph marks):\\n- New functions in ooxml: paragraph_mark_deleted(p) is true only for w:pPr/w:rPr with w:del or w:moveFrom. A w:vanish on the paragraph mark (style separator) and w:ins on it are never joined. joined_paragraphs(root) returns {first w:p: …",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「G（0.26.0）: 読み取りの文字ポリシー（段落記号の削除・スタイルの隠し文字・セルの改行・削除された表の行。D5・U8・U3・N8）」を作るチームの一員です。\nHEAD は main の c35defd（0.25.0。detached HEAD）。作業ツリーはコミットと同じで、G の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。G では pdfmatch.py の照合の規則には触らない（ルート2 の pdfdocx.paragraph_units / ra…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 2,
+      "label": "oracle_g",
+      "phaseIndex": 1,
+      "phaseTitle": "Design",
+      "agentId": "a30bfe966e75ad7b1",
+      "model": "opus",
+      "state": "done",
+      "startedAt": 1793554934859,
+      "lastProgressAt": 1793554934859,
+      "cached": true,
+      "resultPreview": "{\"dir\":\"/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/oracle/ （生成器 gen_g.py、比べる道具 run_g.py、期待 cases.json、原稿 cases/*.docx 29 件、文字の一致の確かめ overlap.py、結果 out/base0250/・out/wt0250/〈ケースごとの facts の JSON と summary.json〉、ログ log_base0250.txt・log_wt0250.txt）\",\"cases\":\"29 件（比べる相手 1 件を含む）。docx は make_fixtures の部品（Builder・front_ja・front_en・tail・para・run・cell・table・t…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「G（0.26.0）: 読み取りの文字ポリシー（段落記号の削除・スタイルの隠し文字・セルの改行・削除された表の行。D5・U8・U3・N8）」を作るチームの一員です。\nHEAD は main の c35defd（0.25.0。detached HEAD）。作業ツリーはコミットと同じで、G の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。G では pdfmatch.py の照合の規則には触らない（ルート2 の pdfdocx.paragraph_units / ra…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 3,
+      "label": "impl",
+      "phaseIndex": 2,
+      "phaseTitle": "Implement",
+      "agentId": "aa371d4809f4b3c24",
+      "model": "opus",
+      "state": "done",
+      "startedAt": 1793554934860,
+      "lastProgressAt": 1793554934860,
+      "cached": true,
+      "resultPreview": "{\"changed_files\":[\"src/jasme_jats/ooxml.py\",\"src/jasme_jats/docx_reader.py\",\"src/jasme_jats/fidelity.py\",\"src/jasme_jats/pdfdocx.py\",\"src/jasme_jats/emit.py\",\"src/jasme_jats/builder.py\",\"src/jasme_jats/model.py\",\"src/jasme_jats/structure.py\",\"src/jasme_jats/pipeline.py\",\"src/jasme_jats/report.py\",\"tests/make_fixtures.py\",\"tests/fixtures/sample_reader.docx\",\"tests/test_reader.py\",\"tests/test_pipeli…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「G（0.26.0）: 読み取りの文字ポリシー（段落記号の削除・スタイルの隠し文字・セルの改行・削除された表の行。D5・U8・U3・N8）」を作るチームの一員です。\nHEAD は main の c35defd（0.25.0。detached HEAD）。作業ツリーはコミットと同じで、G の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。G では pdfmatch.py の照合の規則には触らない（ルート2 の pdfdocx.paragraph_units / ra…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 4,
+      "label": "verify",
+      "phaseIndex": 3,
+      "phaseTitle": "Verify",
+      "agentId": "a782d17620f589b7f",
+      "model": "opus",
+      "state": "done",
+      "startedAt": 1793554934861,
+      "lastProgressAt": 1793554934861,
+      "cached": true,
+      "resultPreview": "{\"passed_all\":false,\"measures\":\"作業ツリー（c35defd の上に積んだ G の差分。ファイルは変えていない）を、0.25.0（scratchpad/g/base0250_src）と比べて測った。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/verify/ の下。\\n- pytest: 3.13 は 940 passed、3.10（venv310）も 940 passed（verify/pytest313.txt・pytest310.txt）。\\n- ruff check src tests tools: HEAD（git worktree で取り出したもの。確かめた後に消した）も作業ツリーも 201 件。ファイル…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「G（0.26.0）: 読み取りの文字ポリシー（段落記号の削除・スタイルの隠し文字・セルの改行・削除された表の行。D5・U8・U3・N8）」を作るチームの一員です。\nHEAD は main の c35defd（0.25.0。detached HEAD）。作業ツリーはコミットと同じで、G の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。G では pdfmatch.py の照合の規則には触らない（ルート2 の pdfdocx.paragraph_units / ra…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 5,
+      "label": "fix_verify",
+      "phaseIndex": 3,
+      "phaseTitle": "Verify",
+      "agentId": "a26f91cd3f4786df5",
+      "model": "opus",
+      "state": "done",
+      "startedAt": 1793554934861,
+      "lastProgressAt": 1793554934861,
+      "cached": true,
+      "resultPreview": "{\"changed_files\":[\"/home/user/jstgxmlcng_JASME/src/jasme_jats/ooxml.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/docx_reader.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/model.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/builder.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/report.py\",\"/home/user/jstgxmlcng_JASME/tests/make_fixtures.py\",\"/home/user/jstgxmlcng_JASME/tests/fixtures/sample…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「G（0.26.0）: 読み取りの文字ポリシー（段落記号の削除・スタイルの隠し文字・セルの改行・削除された表の行。D5・U8・U3・N8）」を作るチームの一員です。\nHEAD は main の c35defd（0.25.0。detached HEAD）。作業ツリーはコミットと同じで、G の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。G では pdfmatch.py の照合の規則には触らない（ルート2 の pdfdocx.paragraph_units / ra…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 6,
+      "label": "finalize",
+      "phaseIndex": 4,
+      "phaseTitle": "Finalize",
+      "agentId": "a943546018e88d0eb",
+      "model": "sonnet",
+      "state": "done",
+      "startedAt": 1793554934862,
+      "lastProgressAt": 1793554934862,
+      "cached": true,
+      "resultPreview": "{\"changed_files\":[\"src/jasme_jats/__init__.py\",\"pyproject.toml\",\"notebooks/JASME_docx_to_JSTAGE_XML.ipynb\",\"docs/FIX_PLAN.md\",\"CLAUDE.md\",\"README.md\"],\"summary\":\"仕上げを行った。版を 0.26.0 に上げ（`__init__.py` と `pyproject.toml`）、`python tools/make_notebook.py` でノートブックを作り直した。FIX_PLAN の反映の順序の表で G に「（実装済み）」を付けた。G の節に、設計の要点・テスト・確かめた数・暫定の判断・残る限界・文書とコードの食い違いの扱いを足した。「同じファイルを触る順」の節に G で触ったファイルを入れた。CLAUDE.md の「最優先の原則…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「G（0.26.0）: 読み取りの文字ポリシー（段落記号の削除・スタイルの隠し文字・セルの改行・削除された表の行。D5・U8・U3・N8）」を作るチームの一員です。\nHEAD は main の c35defd（0.25.0。detached HEAD）。作業ツリーはコミットと同じで、G の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。G では pdfmatch.py の照合の規則には触らない（ルート2 の pdfdocx.paragraph_units / ra…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 7,
+      "label": "review:principle",
+      "phaseIndex": 5,
+      "phaseTitle": "Review",
+      "agentId": "a4f53a6a6fef98fbb",
+      "model": "opus",
+      "state": "done",
+      "startedAt": 1793554934874,
+      "lastProgressAt": 1793554934874,
+      "cached": true,
+      "resultPreview": "{\"checked\":\"作業ツリー（c35defd の上の G の差分）を、0.25.0（scratchpad/g/base0250_src）と比べて点検した。リポジトリのファイルは変えていない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/review/principle/ の下で行った（gen_p.py〜gen_p4.py、run_p.py、cmp_td.py、run_td.sh、xref_break.py。結果の JSON とログは out/・td/・realpdf/out/・oracle/out/wt/ に残した）。\\n\\n【読んだもの】FIX_PLAN の G の節・D5/U3/U8/N8・同じファイルを触る順・毎回の共通作業、DESI…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「G（0.26.0）: 読み取りの文字ポリシー（段落記号の削除・スタイルの隠し文字・セルの改行・削除された表の行。D5・U8・U3・N8）」の実装を点検する担当です。\nHEAD は main の c35defd（0.25.0。detached HEAD）。作業ツリーはコミットと同じで、G の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。G では pdfmatch.py の照合の規則には触らない（ルート2 の pdfdocx.paragraph_units / r…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 8,
+      "label": "review:regression",
+      "phaseIndex": 5,
+      "phaseTitle": "Review",
+      "agentId": "a3f8768608c87f0af",
+      "model": "opus",
+      "state": "done",
+      "startedAt": 1793554934875,
+      "lastProgressAt": 1793554934875,
+      "cached": true,
+      "resultPreview": "{\"checked\":\"作業ツリー（c35defd の上に積んだ G の差分。仕上げ済みの 0.26.0）を、0.25.0（scratchpad/g/base0250_src）と比べて点検した。ファイルは変えていない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/review/regression/ の下。\\n\\n- 読んだ差分: ooxml（HiddenRule・paragraph_mark_deleted・_join_target・joined_paragraphs・unjoined_deleted_marks・canonical_texts・canonical_text）、fidelity.source_texts、pdfdocx（_cha…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「G（0.26.0）: 読み取りの文字ポリシー（段落記号の削除・スタイルの隠し文字・セルの改行・削除された表の行。D5・U8・U3・N8）」の実装を点検する担当です。\nHEAD は main の c35defd（0.25.0。detached HEAD）。作業ツリーはコミットと同じで、G の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。G では pdfmatch.py の照合の規則には触らない（ルート2 の pdfdocx.paragraph_units / r…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 9,
+      "label": "review:user",
+      "phaseIndex": 5,
+      "phaseTitle": "Review",
+      "agentId": "aa4bc1671bef9f3e0",
+      "model": "opus",
+      "state": "done",
+      "startedAt": 1793554934875,
+      "lastProgressAt": 1793554934875,
+      "cached": true,
+      "resultPreview": "{\"checked\":\"利用者への見え方と文書の観点で、作業ツリー（c35defd の上の G の差分。ファイルは変えていない）を点検した。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/review/user/ に置いた（run.sh・boxes.py・loc.py・gen_u.py。大きな出力は消した）。\\n\\n測ったこと:\\n- pytest は 3.13 も 3.10（venv310）も 945 passed。ruff は 201 件で、HEAD と同じ件数（--statistics の合計で数えた）。\\n- ノートブックは、make_notebook.render() の結果が notebooks/*.ipynb とバイト単位で同じだった…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「G（0.26.0）: 読み取りの文字ポリシー（段落記号の削除・スタイルの隠し文字・セルの改行・削除された表の行。D5・U8・U3・N8）」の実装を点検する担当です。\nHEAD は main の c35defd（0.25.0。detached HEAD）。作業ツリーはコミットと同じで、G の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。G では pdfmatch.py の照合の規則には触らない（ルート2 の pdfdocx.paragraph_units / r…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 10,
+      "label": "fix:1",
+      "phaseIndex": 6,
+      "phaseTitle": "Fix",
+      "agentId": "aee6a7fb212823b2b",
+      "model": "opus",
+      "state": "done",
+      "startedAt": 1793554934876,
+      "lastProgressAt": 1793554934876,
+      "cached": true,
+      "resultPreview": "{\"changed_files\":[\"src/jasme_jats/ooxml.py\",\"src/jasme_jats/docx_reader.py\",\"src/jasme_jats/model.py\",\"src/jasme_jats/pipeline.py\",\"src/jasme_jats/report.py\",\"src/jasme_jats/builder.py\",\"src/jasme_jats/structure.py\",\"tests/make_fixtures.py\",\"tests/fixtures/sample_reader.docx\",\"tests/test_reader.py\",\"tests/test_pipeline.py\",\"tests/test_lost_images.py\",\"docs/DESIGN.md\",\"docs/DEVELOPMENT.md\",\"docs/FI…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「G（0.26.0）: 読み取りの文字ポリシー（段落記号の削除・スタイルの隠し文字・セルの改行・削除された表の行。D5・U8・U3・N8）」を作るチームの一員です。\nHEAD は main の c35defd（0.25.0。detached HEAD）。作業ツリーはコミットと同じで、G の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。G では pdfmatch.py の照合の規則には触らない（ルート2 の pdfdocx.paragraph_units / ra…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 11,
+      "label": "review:principle",
+      "phaseIndex": 7,
+      "phaseTitle": "Recheck",
+      "agentId": "ad49d9a9eb2df670d",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793554934927,
+      "queuedAt": 1793554934878,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "点検（原則・2 回目。1 回目の修正の後）。作業ツリー（c35defd…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「G（0.26.0）: 読み取りの文字ポリシー（段落記号の削除・スタイルの隠し文字・セルの改行・削除された表の行。D5・U8・U3・N8）」の実装を点検する担当です。\nHEAD は main の c35defd（0.25.0。detached HEAD）。作業ツリーはコミットと同じで、G の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。G では pdfmatch.py の照合の規則には触らない（ルート2 の pdfdocx.paragraph_units / r…",
+      "promptFramed": true,
+      "lastProgressAt": 1793556269322,
+      "tokens": 466274,
+      "toolCalls": 110,
+      "durationMs": 1334392,
+      "resultPreview": "{\"checked\":\"点検（原則・2 回目。1 回目の修正の後）。作業ツリー（c35defd の上のコミットしていない差分）を読み、修正の前の写し（scratchpad の g/fix1/pre_src）と 0.25.0（g/base0250_src）とを比べた。リポジトリのファイルは変えていない（git status は始めと同じ 28 ファイル。作った worktree は消した。自分の実行で増えた tests/__pycache__・src/jasme_jats/__pycache__ は消した）。実験と結果は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/review/principle/r2/ にある（gen_r2.py・gen_r2b.py…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 12,
+      "label": "review:regression",
+      "phaseIndex": 7,
+      "phaseTitle": "Recheck",
+      "agentId": "a679b2bf4620d33dc",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793554934928,
+      "queuedAt": 1793554934879,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Second review, after the first round of fixes (regression a…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「G（0.26.0）: 読み取りの文字ポリシー（段落記号の削除・スタイルの隠し文字・セルの改行・削除された表の行。D5・U8・U3・N8）」の実装を点検する担当です。\nHEAD は main の c35defd（0.25.0。detached HEAD）。作業ツリーはコミットと同じで、G の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。G では pdfmatch.py の照合の規則には触らない（ルート2 の pdfdocx.paragraph_units / r…",
+      "promptFramed": true,
+      "lastProgressAt": 1793555513089,
+      "tokens": 224892,
+      "toolCalls": 59,
+      "durationMs": 578153,
+      "resultPreview": "{\"checked\":\"Second review, after the first round of fixes (regression and tests lens). I changed no repository files. Experiments are in /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/g/review/regression/r2/.\\n\\n(1) Reading. I read the diff between the pre-fix source (g/fix1/pre_src) and the working tree: ooxml.HiddenRule.run_hidden_by; docx_reader._walk/…"
+    }
+  ],
+  "totalTokens": 691166,
+  "totalToolCalls": 169
+}
