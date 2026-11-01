@@ -1,16 +1,19 @@
 """浮動配置の図表（テキストボックス・グループ図形）: 機械的な配置、AI による位置と組み合わせの指定、AI が必要なときの中止、
-位置を決められない図表の仮の位置（アンカー段落の後ろ・本文の最後）、途中で切れた AI の回答の位置の指定の反映。"""
+位置を決められない図表の仮の位置（アンカー段落の後ろ・本文の最後）、途中で切れた AI の回答の位置の指定の反映。
+文字だけのテキストボックスの判定（floats.textbox_kind のしきい値）と、本文の外の段落に結び付いた図形（修正計画の N7）。"""
 import json
 
 import pytest
 from lxml import etree
 
 import make_fixtures as mf
-from conftest import DATA, FLOAT, FLOAT_TEXT, META_EXAMPLE, PLACE
+from conftest import DATA, FLOAT, FLOAT_TEXT, FULL, META_EXAMPLE, OUTSIDE, PLACE
 from jasme_jats.ai_assist import AIOutcome, build_request, float_placements
 from jasme_jats.cli import main as cli_main
+from jasme_jats.docx_reader import read_docx
 from jasme_jats.model import Atom, Float, Layout, Para
 from jasme_jats.pipeline import AIRequiredError, Options, _mechanical, convert
+from jasme_jats.report import TO_CHECK, actions
 from jasme_jats.structure import FigNode, PNode, Sec, TableNode
 
 RESPONSE = (DATA / "ai_response_sample_float.json").read_text(encoding="utf-8")
@@ -367,14 +370,16 @@ FIRST = "この項目に図1のテキストボックスが結び付いている�
     ("list_image", [FIRST, "二つ目の項目には画像と文字がある。", "箇条書きの三つ目の項目である。"], "箇条書きの三つ目の項目である。", 1),
     ("list_math", [FIRST, "箇条書きの二つ目の項目である。"], "箇条書きの二つ目の項目である。", 2),
     ("list_textbox", [FIRST, "箇条書きの二つ目の項目である。"], "箇条書きの二つ目の項目である。", 1),
+    ("list_box", [FIRST, "箇条書きの二つ目の項目である。", "箇条書きの三つ目の項目である。"], "箇条書きの三つ目の項目である。", 1),
     ("other_list", ["箇条書きの一つ目の項目である。", FIRST], FIRST, 2)])
 def test_unplaced_float_does_not_split_list_or_quote(journal, meta, tmp_path, variant, items, last, groups):
     """アンカー段落が、続いた箇条書きの項目・引用の段落の途中にあるときは、その箇条書き・引用の最後の段落の後ろに仮に置く
     （箇条書き・引用を 2 つに分けない。分けると、図表を手作業で移しても分かれたまま残る）。空のアンカー段落が箇条書きの
     項目の間にあるときも同じ。間の空の段落は飛ばし（quote_blank）、別の番号の定義の箇条書き（other_list）、箇条書き・引用で
     ない段落（two_lists の本文の段落）、見出しと推定する段落（list_heading）、画像だけの項目（list_image。図になる）、
-    別行数式だけの項目（list_math。数式になる）、浮動配置でないテキストボックスの中の段落（list_textbox。XML に出さない）の
-    前で止める。画像と文字が同じ段落の項目は、箇条書きの項目として数える。AI が指定した位置はずらさない。"""
+    別行数式だけの項目（list_math。数式になる）の前で止める。文字だけのテキストボックスの段落（囲み・図の注記として別に扱い、
+    その位置には出力しない。list_textbox・list_box）は飛ばし、後ろに同じ箇条書きの項目が続けば、その終わりまでずらす（list_box）。
+    画像と文字が同じ段落の項目は、箇条書きの項目として数える。AI が指定した位置はずらさない。"""
     path = tmp_path / f"place_{variant}.docx"
     mf.make_b3_place(path, variant=variant)
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False))
@@ -487,15 +492,210 @@ def test_correct_placement_after_back_matter_one_is_used(journal, meta, tmp_path
     assert after(captions_sequence(load(res)), "図2と図3は同じ段落") == ["図1"]
 
 
-def test_float_anchored_outside_body_is_kept_as_before(journal, meta, tmp_path):
-    """本文の外（注）の段落に結び付いた図形は、今までどおり、その領域の段落として扱う（位置を決められない図表にはしない）。
-    本文の外に結び付いた図形を位置を決められない図表にするのは、修正計画の F（N7）。"""
+def test_float_anchored_outside_body_becomes_unplaced(journal, meta, tmp_path):
+    """本文の外（注）の段落に結び付いた図形は、注の段落にせず「位置を決められない図表」にする（修正計画の N7。決定事項 10）。
+    AI を使わない設定では止める。手動モードで AI の回答を貼り戻す前は、本文の最後に仮に置く（決定事項 21 の後半）。AI が本文の
+    段落の後ろを指定すれば、そこに置く。注の段落の後ろを指定したものは採用せず、本文の最後に仮に置いて要対応にする。"""
     path = tmp_path / "outside.docx"
     mf.make_b3_place(path, outside=True)
+    with pytest.raises(AIRequiredError) as e:
+        convert(path, meta, journal, Options(out_dir=tmp_path / "none", convert_metafiles=False))
+    assert "s5" in [f.float.fid for f in e.value.floats] and "図形が本文の外（注）の段落に結び付いている" in str(e.value)
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False))
-    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
-    assert res.plan.unplaced_floats == ["s1", "s2", "s3", "s4"] and "s5" not in res.plan.floats
-    assert "図5\u3000注に結び付いた図" in "".join(load(res).find(".//fn-group").itertext())
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == [] and res.lost_images == []
+    fi = res.plan.floats["s5"]
+    assert res.plan.unplaced_floats == ["s1", "s2", "s3", "s4", "s5"]
+    assert (fi.mode, fi.where, fi.end_why) == ("unplaced", "end", "anchor")
+    assert fi.reason == "図形が本文の外（注）の段落に結び付いている"
+    root = load(res)
+    assert "図5" not in "".join(root.find(".//fn-group").itertext())          # 注の段落にしない
+    last = root.find("body")[-1]
+    assert last[-1].tag == "fig" and "".join(last[-1].find("caption").itertext()) == "図5\u3000注に結び付いた図"
+    assert last[-1].find("graphic") is not None
+    # AI が本文の段落の後ろを指定すれば、その後ろに置く
+    _, first, _ = _mechanical(path, journal)
+    cap = src_of(first, "図5\u3000注に結び付いた図")
+    body = [q.src for q in first.floats["s5"].paras if q.images]
+
+    def answer(head):
+        return json.dumps({"placements": [{"float": "s5", "after": src_of(first, head), "items": [
+            {"kind": "fig", "caption": [cap], "body": body}], "reason": "試験の回答", "confidence": "低"}],
+            "operations": [], "notes": []}, ensure_ascii=False)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "ai", ai_mode="manual", ai_response=answer("以上のように，図の"),
+                                               convert_metafiles=False))
+    assert res.plan.floats["s5"].mode == "ai" and res.fidelity.ok and res.dtd_valid and res.lost_images == []
+    assert ("place_float", "s5") in [(op["op"], op["src"]) for op, _ in res.ai.accepted]
+    assert after(captions_sequence(load(res)), "以上のように，図の") == ["図5"]
+    # 注の段落の後ろを指定したものは採用せず、本文の最後に仮に置く（手作業で移す要対応）
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "fn", ai_mode="manual", ai_response=answer("1) 架空の注"),
+                                               convert_metafiles=False))
+    fi = res.plan.floats["s5"]
+    assert (fi.mode, fi.where, fi.end_why) == ("unplaced", "end", "ai") and res.fidelity.ok and res.dtd_valid
+    [why] = [w for op, w in res.ai.rejected if op["src"] == "s5"]
+    assert "本文の段落ではない" in why and "本文の最後に仮に置いた" in why
+    assert any(x.startswith("「図5\u3000注に結び付いた図」: XML の本文の最後にある") for x in res.forced_floats)
+    assert "forced" in [a.key for a in actions(res)] and res.needs_action
+
+
+def test_shapes_outside_body(journal, meta, tmp_path):
+    """sample_outside: 引用文献・注・英文要旨の段落に結び付いた図形（修正計画の N7）。図表の入った図形（図3・表1）は位置を
+    決められない図表として本文の最後に仮に置き、文字だけの囲みは本文の最後の boxed-text（位置を推定。要確認）にする。
+    どれも引用文献・注・英文要旨には入れない。資料の中の囲みは今までどおり資料の中に出す。引用文献の段落そのものにある画像は、
+    今までどおり XML に入らなかった画像（要対応。修正計画の N1）として知らせる。"""
+    with pytest.raises(AIRequiredError) as e:
+        convert(OUTSIDE, meta, journal, Options(out_dir=tmp_path / "none", convert_metafiles=False))
+    assert sorted(f.float.fid for f in e.value.floats) == ["s1", "s3"]
+    res = convert(OUTSIDE, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
+    plan = res.plan
+    assert {fid: (fi.mode, fi.where, fi.end_why) for fid, fi in plan.floats.items()} == {
+        "s1": ("unplaced", "end", "anchor"), "s3": ("unplaced", "end", "anchor")}
+    assert "（引用文献）" in plan.floats["s1"].reason and "（注）" in plan.floats["s3"].reason
+    # 引用文献は 3 件のまま（図形の中の段落を引用文献にしない）
+    assert [r.para.plain()[:4] for r in plan.refs] == ["試験六郎", "試験七郎", "試験八郎"]
+    root = load(res)
+    citations = "".join("".join(m.itertext()) for m in root.iter("mixed-citation"))
+    assert "図3" not in citations and "問4" not in citations
+    assert "表1" not in "".join(root.find(".//fn-group").itertext())
+    assert ["".join(p.itertext()) for p in root.findall(".//trans-abstract/p")] == ["Outside abstract text."]
+    # 本文の最後: 表1・図3（番号順）、囲み 2 つ（docx の順）
+    last = root.find("body")[-1]
+    assert [el.tag for el in last][-4:] == ["table-wrap", "fig", "boxed-text", "boxed-text"]
+    assert "".join(last[-2].itertext()).startswith("問4\u3000架空の補足の問題である。")
+    assert "".join(last[-1].itertext()) == "Box: a fictional supplementary task for the abstract."
+    assert last[-3].find("graphic") is not None
+    boxes = {bi.outside: bi for bi in plan.textboxes.values() if bi.outside}
+    assert set(boxes) == {"refs", "front_en"}
+    assert all((bi.kind, bi.where, bi.estimated) == ("box", "end", True) for bi in boxes.values())
+    acts = {a.key: a for a in actions(res)}
+    assert acts["textbox_place"].level == TO_CHECK and "位置を推定して置いた囲み 2 件" in acts["textbox_place"].cli
+    # 資料の中の囲みは、今までどおり資料の中に出す（本文の外として扱わない）
+    app = "".join(root.find(".//app").itertext())
+    assert "資料の囲み：架空のワークシートの問いである。" in app and root.find(".//app//boxed-text") is None
+    # XML に入らなかった画像は、引用文献の段落そのものにある行内の画像だけ（図3 の画像は図に入る）
+    assert [(li.location, li.text[:4]) for li in res.lost_images] == [("引用文献 3件目", "試験八郎")]
+
+
+def _refs_group(path, inner):
+    """引用文献の段落に結び付いた、浮動配置のグループ図形（画像と、inner を入れたテキストボックス。2 cm 下）がある小さな論文。"""
+    cm = 360000
+
+    def refs(b):
+        rid = b.add_image("refgroup.png", mf.png_bytes("Group figure", size=(300, 200)))
+        return [mf.para(mf.S["ref"], "試験九郎（2023）．「グループの図」．『架空誌』，第4巻．",
+                        mf.group(rid, 5 * cm, 3 * cm, inner, 971, 6 * cm, 4 * cm, v=("paragraph", 2 * cm),
+                                 wrap="wrapTopAndBottom"))]
+
+    def body(b):
+        return [mf.para(mf.S["sec1"], "１．はじめに"), mf.para(mf.S["body"], "試験（2024）の図を引用文献の後ろに置いた。"),
+                mf.para(mf.S["body"], "以上である。")]
+    mf.make_article(path, "引用文献のグループ図形の検証用文書", body, refs=refs)
+    return path
+
+
+def test_group_shape_on_reference_keeps_its_image(journal, meta, tmp_path):
+    """引用文献の段落に結び付いたグループ図形の画像は、アンカー段落（引用文献の段落）から集めて図に入れる（修正計画の N7。
+    XML に入らなかった画像にしない）。画像と図キャプションのグループ図形は、AI の回答の前でも本文の最後の図（画像あり）に仮に
+    置く。画像と注記のグループ図形を AI が図として組んだときは、注記の段落は図の後ろに 1 回だけ出る（図表の入った図形の中の
+    テキストボックスは、文字だけのテキストボックスとして別に扱わない。Classifier.text_only）。"""
+    path = _refs_group(tmp_path / "cap.docx", mf.para(mf.S["fig_cap"], "図2　架空のグループの図"))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "cap", ai_mode="manual", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.lost_images == []
+    assert res.plan.unplaced_floats == ["s1"] and len(res.images) == 1
+    fig = load(res).find("body")[-1][-1]
+    assert fig.tag == "fig" and "".join(fig.find("caption").itertext()) == "図2　架空のグループの図"
+    assert fig.find("graphic") is not None
+    path = _refs_group(tmp_path / "label.docx", mf.para(mf.S["body"], "点Ｐ"))
+    _, first, _ = _mechanical(path, journal)
+    [img] = first.floats["s1"].images
+    resp = json.dumps({"placements": [{"float": "s1", "after": src_of(first, "以上である。"), "items": [
+        {"kind": "fig", "caption": [], "body": [img.image_id]}], "reason": "試験の回答", "confidence": "低"}],
+        "operations": [], "notes": []}, ensure_ascii=False)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "label", ai_mode="manual", ai_response=resp,
+                                               convert_metafiles=False))
+    fid = res.fidelity
+    assert fid.ok and fid.final_ok and fid.conflicts == [] and res.dtd_valid and res.lost_images == []
+    assert res.plan.floats["s1"].mode == "ai" and res.plan.textboxes == {}
+    root = load(res)
+    texts = ["".join(el.itertext()) for el in root.find("body").iter("p")]
+    assert texts.count("点Ｐ") == 1 and root.find(".//fig/graphic") is not None
+    assert "点Ｐ" not in {t for _, _, t in fid.excluded}
+
+
+def test_classify_twice_for_shapes_outside_body(journal, monkeypatch):
+    """本文の外の段落に結び付いた図形があるときだけ、構造の組み立てを 2 回行う（1 回目で見つけ、2 回目で本文の最後に回す）。
+    判断の番号は重複せず、同じ doc で classify を 2 回呼んでも同じ結果（1 回目が段落に書き込んだものを戻している）。"""
+    import jasme_jats.structure as st
+    runs = []
+    orig = st.Classifier.run
+
+    def run(self):
+        runs.append(dict(self.outside))
+        return orig(self)
+    monkeypatch.setattr(st.Classifier, "run", run)
+    st.classify(read_docx(FULL), journal)
+    assert runs == [{}]                         # 本文の外の図形がない原稿は 1 回だけ（0.24.1 と同じ）
+    runs.clear()
+    doc = read_docx(OUTSIDE)
+    plan = st.classify(doc, journal)
+    assert runs == [{}, {"s1": "refs", "s2": "refs", "s3": "fn", "s4": "front_en"}]
+    dids = [d.did for d in plan.decisions]
+    assert len(dids) == len(set(dids)) and len({d.message for d in plan.decisions}) == len(dids)
+    again = st.classify(doc, journal)
+    assert [(d.did, d.message) for d in again.decisions] == [(d.did, d.message) for d in plan.decisions]
+    assert again.region == plan.region and again.locations == plan.locations
+    assert [(e.src, e.reason) for e in again.exclusions] == [(e.src, e.reason) for e in plan.exclusions]
+
+
+LAYOUT = Layout(text_width_cm=20.0, column_width_cm=10.0, columns=2, chars_per_line=25.0, line_pitch_cm=0.5)
+
+
+@pytest.mark.parametrize("chars, width, lines, near, group, kind", [
+    (1, 0.5, 1, True, True, "label"),           # テストデータ3 のグループ図形の中の注記（1〜11 字・段の 0.05〜0.37）
+    (11, 3.7, 1, True, True, "label"),
+    (16, 5.0, 1, True, True, "undecided"),      # グループの中の長い文字
+    (40, 14.0, 3, False, False, "box"),         # (a) 幅の広い囲み
+    (2, 1.2, 1, True, False, "label"),          # (b) 画像の近くの小さな「A 点」
+    (25, 9.0, 1, False, False, "box"),          # (c) 行内の囲み
+    (5, 9.0, 1, False, False, "undecided"),     # (d) 幅が広く短い「（ヒント）」
+    (25, 9.0, 1, True, False, "undecided"),     # 画像の近くの 1 行
+    (40, 9.0, 2, True, False, "box"),           # 画像の近くの 2 行以上
+    (8, 8.0, 1, True, False, "undecided"),      # 画像の近くの幅広の短い文字（図の題を枠に入れたもの）
+    (1, 1.9, 1, False, False, "undecided"),     # 画像から遠い小さな枠「注」
+    (5, None, 1, False, False, "undecided"),    # 幅を読めない短い文字は label に倒れない
+    (5, None, 1, True, False, "undecided"),     # 画像の近くでも（VML の幅が cm・% など。修正計画の付録の D1）
+    (5, None, 1, True, True, "label"),          # グループの中は幅を使わない
+    (30, None, 1, False, False, "box"),
+    (30, 5.0, 3, False, False, "undecided"),    # 幅の狭い長い文字
+    (17, 9.0, 1, False, False, "undecided"),    # 16〜19 字
+    (15, 4.0, 1, True, False, "label"),         # 境界: 15 字・0.40 段
+    (16, 4.0, 1, True, False, "undecided"),
+    (15, 4.1, 1, True, False, "undecided"),
+    (20, 6.0, 1, False, False, "box"),          # 境界: 20 字・0.60 段
+    (19, 6.0, 1, False, False, "undecided"),
+    (20, 5.9, 1, False, False, "undecided"),
+    (0, None, 0, False, False, "blank"),
+])
+def test_textbox_kind_boundaries(chars, width, lines, near, group, kind):
+    """文字だけのテキストボックスの判定（floats.textbox_kind）のしきい値の境界（docs/DESIGN.md の 6.2 の表）。"""
+    from jasme_jats.floats import textbox_kind
+    got, why = textbox_kind(chars, width, lines, near, group, LAYOUT)
+    assert got == kind
+    if kind != "blank":
+        assert f"文字 {chars} 字" in why and ("幅は読めない" if width is None else f"幅 {width:.1f} cm") in why
+    # 段組みの設定がなければ（1 段の幅に対する割合を求められない）、囲みの規則では幅の条件を使わず、注記の規則は当てはめない
+    assert textbox_kind(5, 1.0, 1, True, False, None)[0] == "undecided"
+    assert textbox_kind(30, 1.0, 1, False, False, Layout())[0] == "box"
+
+
+def test_box_lines():
+    """囲みの行数の推定（floats.box_lines）: 幅が分かれば 1 行の字数で文字のある段落ごとに割って足し（全角 1・半角 0.5）、
+    分からなければ文字のある段落の数。"""
+    from jasme_jats.floats import box_lines
+    paras = [Para(src="a", atoms=[Atom(kind="text", text="全" * 25)]), Para(src="b", atoms=[Atom(kind="text", text="\u3000")]),
+             Para(src="c", atoms=[Atom(kind="text", text="abcdefghij")])]
+    assert box_lines(paras, 4.0, LAYOUT) == 3 + 1          # 1 行 10 字: 25 字は 3 行、半角 10 字は 1 行。空白だけの段落は数えない
+    assert box_lines(paras, None, LAYOUT) == 2 and box_lines(paras, 4.0, None) == 2
 
 
 def cut_float_response(at):

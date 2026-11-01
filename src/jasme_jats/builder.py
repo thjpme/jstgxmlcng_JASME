@@ -16,7 +16,7 @@ from . import emit as E
 from .config import ArticleMeta, JournalConfig, keyword_problem
 from .model import Exclusion, Para
 from .ooxml import is_ws
-from .structure import (ArticlePlan, BackSec, FigNode, FnNode, FormulaNode, ListNode, PNode, QuoteNode,
+from .structure import (ArticlePlan, BackSec, BoxNode, FigNode, FnNode, FormulaNode, ListNode, PNode, QuoteNode,
                         RefNode, Sec, TableNode, _para_text)
 from .tracking import AI, GEN, IMPLICIT, JX_NS, ORDER, SPAN
 
@@ -364,6 +364,7 @@ class Builder:
 
     # ------------------------------------------------------------------ 本文
     def nodes(self, parent, nodes, top=False):
+        """本文の要素を書き出す。top は本文の最上位（最初の章見出しの前。<body> の直下）か。"""
         for node in nodes:
             if isinstance(node, Sec):
                 self.sec(parent, node)
@@ -382,6 +383,14 @@ class Builder:
                 self.table_wrap(parent, node)
             elif isinstance(node, FormulaNode):
                 self.formula(parent, node)
+            elif isinstance(node, BoxNode):
+                # J-STAGE の <body> の子は <p> と <sec> だけで、<boxed-text> は <sec>・<p> の子に置く（全文 XML 作成マニュアル
+                # 3.5.4。docs/JSTAGE_NOTES.md）。本文の最上位（最初の章見出しの前）では <p> で包む
+                self.boxed_text(_sub(parent, "p") if top else parent, node)
+
+    def boxed_text(self, parent, node: BoxNode):
+        """囲み（文字だけのテキストボックス）の <boxed-text>。中身は本文と同じ要素（<p>・<list>・<disp-quote>・<disp-formula>）。"""
+        self.nodes(_sub(parent, "boxed-text"), node.children)
 
     def sec(self, parent, node: Sec):
         s = _sub(parent, "sec")

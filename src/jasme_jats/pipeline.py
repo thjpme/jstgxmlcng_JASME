@@ -43,9 +43,10 @@ from .model import Decision, LostImage
 from .package import article_dir, make_zip, unzipped_files, write_package, zip_image_names, zip_problems
 from .pdfdocx import DocxFix, make_fixed_docx
 from .pdfmatch import PdfCheck, check_pdf
-from .report import NEEDS_ACTION, actions, figure_body_detail, images_to_prepare, render, render_ai_only
+from .report import (BOX_PENDING_NOTE, NEEDS_ACTION, actions, figure_body_detail, images_to_prepare, render,
+                     render_ai_only)
 from .report import pdf_fallback as report_pdf_fallback
-from .structure import classify, float_caption, float_targets
+from .structure import _para_text, classify, float_caption, float_targets
 from .tracking import SPAN
 from .validate import validate
 
@@ -350,6 +351,8 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
                     output_note += ("位置を決められない図表（3 章）は、AI の回答を反映するまで、図が結び付いている段落"
                                     "（アンカー段落）のすぐ後ろ（箇条書き・引用の途中なら、その終わり。アンカー段落が本文で"
                                     "なければ本文の最後）に仮に置いています。")
+                if plan.undecided_boxes:
+                    output_note += BOX_PENDING_NOTE
         if data is not None:
             ops = split_ops(data)
             outcome.notes = [str(n) for n in data.get("notes", []) if str(n).strip()]
@@ -362,6 +365,13 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
             for sid, spec in placements.items():
                 if sid in plan.float_decisions:
                     outcome.accepted.append((spec["op"], plan.float_decisions[sid]))
+                elif "kind" in spec:
+                    # 文字だけのテキストボックスへの kind の指定で、組み直した後に使えなくなったもの（同じ回答の set_role で中の段落を
+                    # 図表キャプション・除外にして文字だけのテキストボックスでなくなった、kind box の置く位置の段落が本文の段落で
+                    # なくなった）。黙って捨てずに、不採用として 2 章に示す
+                    why = (f"テキストボックス {sid} は、AI の役割の指定（set_role）を反映して組み直した後に文字だけのテキストボックスで"
+                           "なくなったか、置く位置の段落が本文の段落でなくなったので、kind の指定は使わなかった")
+                    outcome.rejected.append((spec["op"], why))
             apply_ops(ops, plan, doc, outcome)
             cited = cited_refs(plan)
             plan.uncited_refs = [r.rid for r in plan.refs if r.rid not in cited]
@@ -454,6 +464,21 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
             forced_floats.append(f"{float_caption(fi)}: {where.rstrip()}")
         # 場所の欄はアンカー段落の場所（空の段落なら、その前の段落の場所）
         unresolved_after.append(("float", _located(plan, fi.float.anchor_src), float_caption(fi), detail))
+    # 文字だけのテキストボックス: 囲みか図の注記か決められなかったもの（除外。要確認）と、位置を推定して置いた囲み（要確認）
+    for xid in plan.undecided_boxes + plan.estimated_boxes:
+        bi = plan.textboxes[xid]
+        head = next((_para_text(q).strip()[:20] for q in bi.paras if not q.is_blank), "")
+        if bi.kind == "undecided" and pending_ai:
+            detail = (f"囲みか図の注記か決められない（{bi.why}）。AI の回答を反映すると判断される（今は XML に出力して"
+                      "いない）")
+        elif bi.kind == "undecided":
+            detail = (f"囲みか図の注記か決められない（{bi.why}）。XML に出力していない。AI による補完を使って変換し直すか、"
+                      "Word で確かめ、本文に必要な囲みなら文字をテキストボックスの外（本文の段落）に出して変換し直す")
+        else:
+            detail = (f"囲み（boxed-text）を{plan.box_place(xid)}に置いた（位置は推定: {bi.place_why}）。PDF と見比べ、"
+                      "違えば XML の中で boxed-text を正しい位置に移す")
+        # 場所の欄はアンカー段落の場所（空の段落なら、その前の段落の場所。本文の外なら「引用文献 3件目」など）
+        unresolved_after.append(("box", _located(plan, bi.box.anchor_src), f"テキストボックス {xid}「{head}」", detail))
     # 画像のない図キャプションで、近くの表を図の本体にできなかったもの（structure.Classifier.table_for_figure）
     for src, why in plan.figure_issues:
         unresolved_after.append(("figbody", src, _head(plan, src), figure_body_detail(why)))

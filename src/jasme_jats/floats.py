@@ -6,6 +6,11 @@ docx には、Word で表示したときの位置（どの行が図の左上に�
 AI に位置を判断させるための説明・行数の推定を作る。
 
 図を置く位置の規則: Word で表示したときに、図の左上の直上にある本文の文章を含む段落の直後。
+
+文字だけのテキストボックス（画像・表・図表キャプションを含まないもの）が、囲み（問題文・ヒントなど。本文の <boxed-text>）か、
+図に重ねた注記（矢印・点・辺の名前など。本文に出さない）かも、ここで機械的に判定する（textbox_kind。決められないものは
+除外して要確認にし、AI か人に任せる）。しきい値は、手元の実際の論文 3 本（テストデータ1〜3）で確かめた（判定の対象になった
+実例は図の注記だけで、囲みの側は架空の境界の例でしか確かめていない。docs/DESIGN.md の 6.2）。
 """
 from __future__ import annotations
 
@@ -19,6 +24,15 @@ FROM_JA = {"column": "アンカー段落の段", "margin": "本文の領域", "p
            "line": "アンカーのある行", "character": "アンカーの文字", "leftMargin": "左余白", "rightMargin": "右余白",
            "topMargin": "上余白", "bottomMargin": "下余白", "insideMargin": "内側の余白", "outsideMargin": "外側の余白"}
 WRAP_JA = {"wrapTopAndBottom": "上下", "wrapSquare": "四角", "wrapTight": "外周", "wrapThrough": "内部", "wrapNone": "なし（前面・背面）"}
+
+
+# 文字だけのテキストボックスの判定（textbox_kind）のしきい値。文字数は空白を除いた文字の数（数式・脚注の参照は 1 字）、幅は
+# 1 段の幅に対する割合（幅を読めないとき〈VML の pt 以外の単位など〉は、囲みの規則では幅の条件を使わず、注記の規則は当てはめない）
+BOX_CHARS = 20        # 囲みとみなす文字数の下限
+BOX_WIDTH = 0.6       # 囲みとみなす幅の下限
+LABEL_CHARS = 15      # 図に重ねた注記とみなす文字数の上限
+LABEL_WIDTH = 0.4     # 図に重ねた注記とみなす幅の上限（グループ図形の中では使わない）
+NEAR_PARAS = 2        # 「画像の近く」: アンカー段落の前後 2 段落以内（図形の外の段落・表で数える。structure.Classifier.near_image）
 
 
 def pitch(layout: Optional[Layout]) -> float:
@@ -81,6 +95,69 @@ def para_lines(p: Para, layout: Optional[Layout]) -> int:
         else:
             width += 2.0
     return max(1, math.ceil(width / cpl))
+
+
+def column_cm(layout: Layout | None) -> float | None:
+    """1 段の幅（cm）。段組みの設定がなければ本文の幅、それもなければ None（幅の割合を求めない。textbox_kind）。"""
+    if layout and layout.column_width_cm:
+        return layout.column_width_cm
+    if layout and layout.text_width_cm:
+        return layout.text_width_cm
+    return None
+
+
+def box_lines(paras, width_cm: float | None, layout: Layout | None) -> int:
+    """テキストボックス（囲み）の中の行数の推定。
+
+    幅が分かれば、1 行の字数（幅 / 1 字の幅〈1 段の幅 / 1 行の字数〉）で、文字のある段落ごとに割って足す（para_lines と同じく
+    全角 1・半角 0.5）。幅か 1 段の幅が分からなければ、文字のある段落の数。
+    """
+    texts = [p for p in paras if p.plain().strip()]
+    col = column_cm(layout)
+    if width_cm is None or not col:
+        return len(texts)
+    cpl = layout.chars_per_line if layout and layout.chars_per_line else 24.0
+    per = max(1.0, width_cm / (col / cpl))
+    lines = 0
+    for p in texts:
+        n = sum(0.5 if unicodedata.east_asian_width(ch) in ("Na", "H") else 1.0 for ch in p.plain())
+        lines += max(1, math.ceil(n / per))
+    return lines
+
+
+def textbox_kind(chars: int, width_cm: float | None, lines: int, near_image: bool, group: bool,
+                 layout: Layout | None) -> tuple:
+    """文字だけのテキストボックスを、囲み（box）・図に重ねた注記（label）・決められない（undecided）・空白だけ（blank）に分ける。
+
+    chars: 空白を除いた文字の数（数式・脚注の参照は 1 字）。width_cm: 幅（読めなければ None）。lines: 行数の推定（box_lines）。
+    near_image: 画像の近く（structure.Classifier.near_image）。group: グループ図形・描画キャンバスの中。
+    戻り値: (種類, 根拠の説明)。根拠は判断の一覧・レポートの 3 章・AI 依頼文に出す。規則（上から順に）:
+      1. 文字がない（空白だけ）→ blank
+      2. グループ図形の中: 15 字以下なら label（図そのものの中の文字）、それより長ければ undecided（幅は使わない）
+      3. 15 字以下・画像の近く・幅が 1 段の 0.4 以下 → label（幅か 1 段の幅を読めなければ当てはめない。黙って除外する label に
+         倒さず、undecided にして知らせる。修正計画の付録の D1「VML の width が pt 以外のとき、label に倒れない」）
+      4. 20 字以上・幅が 1 段の 0.6 以上（幅を読めなければ問わない）で、画像から離れているか推定 2 行以上 → box
+      5. それ以外 → undecided（迷ったら、図の注記を本文に混ぜないよう除外して知らせる）
+    """
+    if chars <= 0:
+        return "blank", "空白だけ"
+    col = column_cm(layout)
+    ratio = width_cm / col if (width_cm is not None and col) else None
+    if width_cm is None:
+        size = "幅は読めない"
+    elif ratio is None:
+        size = f"幅 {width_cm:.1f} cm"
+    else:
+        size = f"幅 {width_cm:.1f} cm（1 段の {ratio:.2f} 倍）"
+    where = "グループ図形の中" if group else ("画像の近く" if near_image else "画像から離れている")
+    why = f"文字 {chars} 字・{size}・{where}・推定 {lines} 行"
+    if group:
+        return ("label" if chars <= LABEL_CHARS else "undecided"), why
+    if chars <= LABEL_CHARS and near_image and ratio is not None and ratio <= LABEL_WIDTH:
+        return "label", why
+    if chars >= BOX_CHARS and (ratio is None or ratio >= BOX_WIDTH) and (not near_image or lines >= 2):
+        return "box", why
+    return "undecided", why
 
 
 def estimate_top_left(fl: Float, layout: Optional[Layout], seq: list, prev_src: str = "") -> Optional[tuple]:

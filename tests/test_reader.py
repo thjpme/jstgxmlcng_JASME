@@ -131,3 +131,65 @@ def test_images_and_math_detected():
     assert [i.target for i in doc.images] == ["word/media/fig1.png", "word/media/fig2.png", "word/media/eq1.png"]
     displays = [a for p in doc.all_paragraphs() for a in p.atoms if a.kind == "math" and a.display]
     assert len(displays) == 1
+
+
+def test_textboxes_are_recorded(tmp_path):
+    """テキストボックス（w:txbxContent）ごとの TextBox（修正計画の D1）: 浮動配置（wp:anchor）・行内（wp:inline）・VML（pt の大きさ、
+    position:absolute の有無、pt 以外の単位は読めない）・グループ図形の中（拡大率を掛けた幅）。中の段落・表・表のセルの段落に
+    textbox_id が付き、入れ子の内側の段落は外側の ID を継ぐ。"""
+    import make_fixtures as mf
+    S, cm = mf.S, 360000
+    group = ('<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="7200000" cy="1800000"/>'
+             '<wp:docPr id="951" name="グループ"/><a:graphic><a:graphicData '
+             'uri="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"><wpg:wgp><wpg:cNvGrpSpPr/>'
+             '<wpg:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="7200000" cy="1800000"/><a:chOff x="0" y="0"/>'
+             '<a:chExt cx="3600000" cy="900000"/></a:xfrm></wpg:grpSpPr>'
+             '<wps:wsp><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="360000" cy="180000"/></a:xfrm></wps:spPr>'
+             f'<wps:txbx><w:txbxContent>{mf.para(S["body"], "P")}</w:txbxContent></wps:txbx><wps:bodyPr/></wps:wsp>'
+             '</wpg:wgp></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>')
+    inner = mf.textbox(mf.para(S["body"], "内側の札"), 953, cx=2 * cm, cy=cm)
+    nested = mf.para(S["body"], "外側の一つ目。") + mf.para(S["body"], "外側の二つ目。", inner)
+    tbl = mf.table([[mf.cell("セルの文字")]])
+
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"),
+                mf.para(S["body"], "浮動配置。", mf.textbox(mf.para(S["body"], "浮動配置の囲み"), 941, cx=12 * cm, cy=2 * cm)),
+                mf.para(S["body"], "行内。", mf.textbox_inline(mf.para(S["body"], "行内の囲み"), 942, cx=10 * cm, cy=cm)),
+                mf.para(S["body"], "VML。", mf.vml_textbox(mf.para(S["body"], "VML の囲み"), width="300pt", height="72pt")),
+                mf.para(S["body"], "位置指定。", mf.vml_textbox(mf.para(S["body"], "位置を指定した囲み"), absolute=True)),
+                mf.para(S["body"], "単位。", mf.vml_textbox(mf.para(S["body"], "インチの囲み"), width="3in", height="1in")),
+                mf.para(S["body"], "グループ。", group),
+                mf.para(S["body"], "入れ子。", mf.textbox(nested, 952, cx=12 * cm, cy=3 * cm)),
+                mf.para(S["body"], "表。", mf.vml_textbox(tbl + mf.para(S["body"], "表の後ろ")))]
+    path = tmp_path / "boxes.docx"
+    mf.make_article(path, "テキストボックスの読み取りの検証用文書", parts)
+    doc = read_docx(path)
+    assert not hasattr(doc, "textbox_excluded")
+    paras = {p.text_only(): p for p in doc.all_paragraphs()}
+    boxes = {tb.xid: tb for tb in doc.textboxes}
+
+    def box(text):
+        return boxes[paras[text].textbox_id]
+    fl = box("浮動配置の囲み")
+    assert (fl.source, fl.inline, fl.absolute, fl.group) == ("wps", False, False, False)
+    assert fl.float_id == paras["浮動配置の囲み"].float_id != "" and fl.anchor_src == paras["浮動配置。"].src
+    assert round(fl.width_cm, 2) == 12.0 and round(fl.height_cm, 2) == 2.0
+    il = box("行内の囲み")
+    assert (il.inline, il.float_id, round(il.width_cm, 2)) == (True, "", 10.0)
+    vml = box("VML の囲み")
+    assert (vml.source, vml.inline, vml.absolute) == ("vml", True, False)
+    assert round(vml.width_cm, 2) == round(300 / 72 * 2.54, 2) and round(vml.height_cm, 2) == 2.54
+    ab = box("位置を指定した囲み")
+    assert (ab.inline, ab.absolute) == (False, True)
+    assert box("インチの囲み").width_cm is None and box("インチの囲み").height_cm is None   # pt 以外の単位は読めない
+    gr = box("P")
+    assert gr.group and gr.inline and round(gr.width_cm, 2) == 2.0 and round(gr.height_cm, 2) == 1.0   # 拡大率 2 倍
+    # 入れ子の内側の段落は、外側のテキストボックスの ID を継ぐ（内側の TextBox は作らない）
+    outer = paras["外側の一つ目。"].textbox_id
+    assert paras["内側の札"].textbox_id == paras["外側の二つ目。"].textbox_id == outer
+    assert len(doc.textboxes) == 8 and outer in boxes
+    # テキストボックスの中の表と、そのセルの段落にも付く。テキストボックスの外の段落には付かない
+    t = table_with(doc, "セルの文字")
+    assert t.textbox_id == paras["セルの文字"].textbox_id == paras["表の後ろ"].textbox_id != ""
+    assert paras["表。"].textbox_id == "" and paras["浮動配置。"].textbox_id == ""
+    assert [tb.xid for tb in doc.textboxes] == [f"x{k}" for k in range(1, 9)]

@@ -1,4 +1,5 @@
-"""論文の構造: 領域（和文の冒頭・本文・後付け・英文の部分）の分け方と、英文要旨の後ろの資料（付録）の見出し（修正計画の D3）。"""
+"""論文の構造: 領域（和文の冒頭・本文・後付け・英文の部分）の分け方、英文要旨の後ろの資料（付録）の見出し（修正計画の D3）、
+文字だけのテキストボックス（囲み・図に重ねた注記。修正計画の D1）。"""
 import dataclasses
 import functools
 from types import SimpleNamespace
@@ -11,7 +12,7 @@ from conftest import STRUCTURE
 from jasme_jats.docx_reader import read_docx
 from jasme_jats.model import Atom, Cell, Para, Row, Table
 from jasme_jats.pipeline import Options, _mechanical, convert
-from jasme_jats.report import TO_CHECK, actions
+from jasme_jats.report import NEEDS_ACTION, TO_CHECK, actions
 from jasme_jats.structure import RE_APPENDIX, Classifier, appendix_heading, appendix_sentence
 
 S = mf.S
@@ -47,7 +48,7 @@ def test_textbox_paragraphs_do_not_switch_regions(journal, meta, tmp_path):
     got = outline(res)
     assert got == outline(ref)
     last = f"{str(len(mf.STRUCTURE_SECTIONS) + 1).translate(mf.ZEN_DIGITS)}．おわりに"      # 最後の章（節を足すと番号が変わる）
-    assert last == "３．おわりに" and last in got["sec"] and got["ref"] == 1
+    assert last == "４．おわりに" and last in got["sec"] and got["ref"] == 1
     assert got["trans-abstract"] == ["Structure abstract."]
     # テキストボックスの段落は、結び付いている段落と同じ本文の領域に入る
     srcs = {p.plain(): p.src for p in res.plan.paras.values() if p.in_textbox}
@@ -507,3 +508,373 @@ def test_appendix_after_references_is_warned(journal, meta, tmp_path):
     report = res.report_path.read_text(encoding="utf-8")
     assert "> **要確認: 引用文献などの後ろに、資料の見出しと思われる段落があります（10 章）。**" in report.split("## 2.")[0]
     assert "- [ ] **引用文献などの後ろの資料の見出し**（3 件。10 章）" in report.split("## 14.")[1]
+
+
+# ----------------------------------------------------------------------------- 文字だけのテキストボックス（修正計画の D1）
+def boxes(root):
+    """boxed-text ごとの (親の要素名, 直前の要素の文字, 直後の要素の文字, 中の要素の名前の並び)。"""
+    out = []
+    for bt in root.iter("boxed-text"):
+        prev, nxt = bt.getprevious(), bt.getnext()
+        out.append((bt.getparent().tag, text(prev) if prev is not None else None, text(nxt) if nxt is not None else None,
+                    [c.tag for c in bt]))
+    return out
+
+
+def excluded(res):
+    return {t: reason for _, reason, t in res.fidelity.excluded}
+
+
+def _convert_structure(journal, meta, tmp_path, **kw):
+    res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False, **kw))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
+    return res
+
+
+def test_box_at_anchor_becomes_boxed_text(journal, meta, tmp_path):
+    # (a) 図の左上がアンカー段落の左上にある幅の広い囲みは、アンカー段落の前の <boxed-text>。中の自動番号の段落は <list>、
+    # 「(1)」の付いた別行数式は FD1（本文の「式(1)」からリンク）、全角空白だけの段落は空白の除外
+    res = _convert_structure(journal, meta, tmp_path)
+    root = load(res)
+    [a] = [b for b in boxes(root) if b[2] == "試験（2025）の問題を次に示す。"]
+    assert a == ("sec", "３．囲みと図の注記", "試験（2025）の問題を次に示す。", ["p", "list", "p", "disp-formula"])
+    bt = next(bt for bt in root.iter("boxed-text") if text(bt).startswith("問1"))
+    assert bt.get("id") is None and bt.find("disp-formula").get("id") == "FD1"
+    assert text(bt.find("disp-formula/label")) == "(1)"
+    assert [text(li) for li in bt.findall("list/list-item/p")] == ["底辺と高さを測る。", "面積の式に当てはめる。"]
+    assert [(x.text, x.get("rid")) for x in root.iter("xref") if x.get("ref-type") == "disp-formula"] == [("式(1)", "FD1")]
+    assert excluded(res)["　"] == "空白のみの段落"
+    assert not any(t.startswith("問1") for t in excluded(res))
+    # (c) 段落の末尾の行内の囲みは、アンカー段落の後ろ。どちらも知らせない（位置は docx から決まる）
+    [c] = [b for b in boxes(root) if b[1] == "次の囲みを読む。"]
+    assert c == ("sec", "次の囲みを読む。", "囲みの後の段落である。", ["p", "p"])
+    info = {x: bi for x, bi in res.plan.textboxes.items()}
+    assert sorted((bi.kind, bi.where, bi.estimated) for bi in info.values() if bi.kind == "box") == [
+        ("box", "after", False), ("box", "after", True), ("box", "before", False)]
+    assert "| 囲み・図の注記（テキストボックス） |" in res.report_path.read_text(encoding="utf-8").split("## 4.")[1]
+
+
+def test_label_and_undecided_textboxes_are_excluded(journal, meta, tmp_path, capsys):
+    # (b) 画像・図キャプションの次の段落の小さな「A 点」は、図に重ねた注記として除外し、10 章に警告を出す（要確認にはしない）。
+    # (d) 幅が広く短い「（ヒント）」と、N2 の「注」「Area model」は、囲みか注記か決められないので除外し、要確認で知らせる
+    # （AI による補完を勧める。止めない。終了コードは 0）。空のテキストボックスと全角空白だけのテキストボックスは何も知らせない
+    from jasme_jats.structure import TEXTBOX_LABEL_EXCLUDED, TEXTBOX_UNDECIDED_EXCLUDED
+    res = _convert_structure(journal, meta, tmp_path)
+    ex = excluded(res)
+    assert ex["A 点"] == TEXTBOX_LABEL_EXCLUDED
+    assert ex["（ヒント）"] == ex["注"] == ex["Area model"] == TEXTBOX_UNDECIDED_EXCLUDED
+    assert any("図に重ねた注記と判断したテキストボックス" in w for w in res.warnings)
+    root = load(res)
+    assert "A 点" not in text(root) and "（ヒント）" not in text(root)
+    kinds = sorted(bi.kind for bi in res.plan.textboxes.values())
+    assert kinds.count("blank") == 2 and kinds.count("undecided") == 3 and kinds.count("label") == 1
+    acts = {a.key: a for a in actions(res)}
+    assert acts["textbox_undecided"].level == TO_CHECK and "label" not in acts
+    assert not any(a.level == NEEDS_ACTION for a in actions(res)) and not res.needs_action
+    report = res.report_path.read_text(encoding="utf-8")
+    top, ch14 = report.split("## 2.")[0], report.split("## 14.")[1]
+    ch3 = report.split("## 3.")[1].split("## 4.")[0]
+    assert ("**要確認: 囲み（問題文・ヒントなど）か図の注記か決められなかったテキストボックスが 3 件あり、その文字を XML に"
+            "出力していません（3 章・6 章）。**") in top and "AI による補完を使うと" in top
+    assert "| テキストボックスの文字（3 章・4 章・6 章・10 章） | 囲み 3 件（boxed-text。うち位置を推定 1 件・要確認）、図の注記として除外 1 件、" \
+           "決められずに除外 3 件（要確認） |" in top
+    assert "- [ ] **囲みか図の注記か決められなかったテキストボックス 3 件**" in ch14
+    assert "| 囲み・図の注記 |" in ch3 and "テキストボックス" in ch3 and "「（ヒント）」" in ch3
+    # 暫定の知らせ（0.19.0〜0.24.1）は出さない
+    assert "テキストボックスの中の文字" not in report
+    # コマンドライン: 要確認なので終了コード 0、標準エラーに出す
+    from jasme_jats.cli import main
+    m = tmp_path / "meta.toml"
+    m.write_text('[article]\nvolume = "31"\nissue = "1"\nfpage = "1"\npeer_review = "あり"\n', encoding="utf-8")
+    assert main([str(STRUCTURE), "--meta", str(m), "--out", str(tmp_path / "cli"), "--no-metafile-conversion"]) == 0
+    err = capsys.readouterr().err
+    assert "要確認: 囲みか図の注記か決められなかったテキストボックス 3 件の文字を XML に出力していません" in err
+    assert "要確認: 位置を推定して置いた囲み 1 件" in err
+
+
+def test_vml_absolute_box_and_caption_textbox(journal, meta, tmp_path):
+    # (e) VML だけの、位置を指定した（position:absolute）囲みは、位置を推定してアンカー段落の後ろに置き、要確認（3 章の
+    # 「囲み・図の注記」）。(f) 図キャプションだけのテキストボックスは、今までどおり隣の画像と組んだ図のキャプション
+    res = _convert_structure(journal, meta, tmp_path)
+    root = load(res)
+    [e] = [b for b in boxes(root) if b[1] == "枠の中の問題を考える。"]
+    assert e[0] == "sec" and e[3] == ["p", "p"]
+    [bi] = [bi for bi in res.plan.textboxes.values() if bi.estimated]
+    assert bi.box.source == "vml" and bi.box.absolute and "position:absolute" in bi.place_why
+    assert res.plan.box_place(bi.box.xid) == "段落「枠の中の問題を考える。」の後ろ"
+    acts = {a.key: a for a in actions(res)}
+    assert acts["textbox_place"].level == TO_CHECK and "段落「枠の中の問題を考える。」の後ろ" in acts["textbox_place"].top
+    [row] = [u for u in res.unresolved_after if u[0] == "box" and "問3" in u[2]]
+    assert "位置は推定" in row[3] and "boxed-text を正しい位置に移す" in row[3]
+    fig = next(f for f in root.iter("fig") if text(f.find("caption")) == "図2　テキストボックスのキャプション")
+    assert fig.find("graphic") is not None
+
+
+def test_vml_width_in_cm_near_image_is_undecided(journal, meta, tmp_path):
+    # VML の幅が pt 以外（cm・%）で読めないときは、画像の近くの短い文字でも図の注記（黙って除外）に倒さず、決められないもの
+    # （要確認）にする（修正計画の付録の D1「VML の width が pt 以外のとき、label に倒れない」）。幅を pt で書けば注記になる
+    def parts(width):
+        def make(b):
+            rid = b.add_image("vmlcm.png", mf.png_bytes("Figure"))
+            return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "試験（2024）の図を示す。"),
+                    mf.para(S["body"], mf.drawing(rid, 1800000, 1080000, 3201)),
+                    mf.para(S["body"], "画像の後ろの段落に札が付く。",
+                            mf.vml_textbox(mf.para(S["body"], "（ヒント）"), width=width, height="1cm")),
+                    mf.para(S["body"], "札の後ろの本文である。")]
+        return make
+    kinds = {}
+    for width in ("14cm", "40%", "20pt"):
+        path = tmp_path / f"vml_{width.replace('%', 'pct')}.docx"
+        mf.make_article(path, "VML の札の検証用文書", parts(width))
+        res = convert(path, meta, journal, Options(out_dir=tmp_path / path.stem, convert_metafiles=False))
+        assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
+        [bi] = res.plan.textboxes.values()
+        kinds[width] = (bi.kind, bi.box.width_cm is None, bi.near)
+        if bi.kind == "undecided":
+            assert "textbox_undecided" in [a.key for a in actions(res)] and "幅は読めない" in bi.why
+    assert kinds == {"14cm": ("undecided", True, True), "40%": ("undecided", True, True), "20pt": ("label", False, True)}
+
+
+def test_box_at_body_top_is_wrapped_in_p(journal, meta, tmp_path):
+    # 本文の最上位（最初の章見出しの前）の囲みは <p> で包む（J-STAGE の <body> の子は <p> と <sec> だけ。DTD にも合う）
+    tb = mf.textbox(mf.para(S["body"], "問1　架空の冒頭の問題である。答えを一つ書け。") + mf.para(S["body"], "ヒント　図をかく。"),
+                    901, cx=12 * 360000, cy=2 * 360000)
+    path = tmp_path / "top.docx"
+    mf.make_article(path, "冒頭の囲みの検証用文書", lambda b: [mf.para(S["body"], "冒頭の段落に囲みを結び付けた。", tb),
+                                                         mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "試験（2024）の本文。")])
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.dtd_valid and res.jstage_issues == []
+    root = load(res)
+    assert root.find("body/boxed-text") is None
+    bt = root.find("body/p/boxed-text")
+    assert [text(p) for p in bt.findall("p")] == ["問1　架空の冒頭の問題である。答えを一つ書け。", "ヒント　図をかく。"]
+    assert text(bt.getparent().getnext()) == "冒頭の段落に囲みを結び付けた。"
+
+
+def test_text_only_textbox_becomes_boxed_text(journal, meta, tmp_path):
+    """囲み（テキストボックス）に入れた問題文の文字を XML の <boxed-text> に出す（docs/fix_plan_repro_tests.py の
+    test_PROBLEM_text_only_textbox_is_dropped_from_xml の逆。0.24.1 までは除外して 6 章に載るだけだった）。囲みとして位置を
+    機械的に決めた浮動配置のテキストボックスの段落への set_role p は、機械的に決めたので変更できないとして採用しない
+    （placements でも変えられないので、placements は案内しない）。"""
+    import json
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"),
+                mf.para(S["body"], "次の問題を扱う。", mf.textbox(
+                    mf.para(S["body"], "問1　次の二次方程式を解きなさい。")
+                    + mf.para(S["body"], "ヒント: 因数分解を使う。"), 401, cx=5000000, cy=800000)),
+                mf.para(S["body"], "以上が問題である。")]
+    path = tmp_path / "box.docx"
+    mf.make_article(path, "囲みの検証用文書", parts)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.dtd_valid
+    bt = load(res).find(".//boxed-text")
+    assert [text(p) for p in bt.findall("p")] == ["問1　次の二次方程式を解きなさい。", "ヒント: 因数分解を使う。"]
+    assert not any("二次方程式" in t for t in excluded(res))
+    _, plan, _ = _mechanical(path, journal)
+    src = next(s for s, p in plan.paras.items() if "二次方程式" in p.plain())
+    resp = {"operations": [{"op": "set_role", "src": src, "text": "", "occurrence": 1, "target": "", "role": "p",
+                            "image": "", "mathml": "", "surname": "", "given": "", "reason": "x", "confidence": "高"}],
+            "placements": [], "notes": []}
+    res2 = convert(path, meta, journal, Options(out_dir=tmp_path / "ai", ai_mode="manual", convert_metafiles=False,
+                                                ai_response=json.dumps(resp, ensure_ascii=False)))
+    assert res2.ai.rejected and res2.ai.rejected[0][1].endswith("は囲み（boxed-text）として扱いと位置を機械的に決めたので、変更できない")
+    assert text(load(res2).find(".//boxed-text")).startswith("問1　次の二次方程式を解きなさい。")
+
+
+BOX_Q = "問Ａ　架空の町の二つの公園の間の道のりを，地図の縮尺を使って求めなさい。"
+BOX_H = "考え方　縮尺の分母をかけると実際の長さになることを使い，単位をそろえてから比べること。"
+BOX_Q2 = "問Ｂ　架空の電車が一定の速さで進むとき，進んだ時間と道のりの関係を式に表しなさい。"
+
+
+def _box_between(variant):
+    """画像と図キャプション（または表キャプションと表）の間に囲みがある本文（test_boxes_do_not_split_figures）。"""
+    cm = 360000
+    box1 = mf.para(S["body"], BOX_Q) + mf.para(S["body"], BOX_H)
+    box2 = mf.para(S["body"], BOX_Q2) + mf.para(S["body"], "答えは一つの式にまとめ，理由を表で説明すること。")
+
+    def parts(b):
+        out = [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "試験（2024）の地図を次に示す。")]
+        if variant == "table":
+            # 本文スタイルの表キャプションの段落に行内の囲み、続いて表
+            tbl = mf.table([[mf.cell("区分"), mf.cell("人数")], [mf.cell("一組"), mf.cell("三十人")]])
+            return out + [mf.para(S["body"], "表1　架空の集計", mf.textbox_inline(box1, 3301, cx=8 * cm, cy=3 * cm)), tbl,
+                          mf.para(S["body"], "表1のとおりである。")]
+        rid = b.add_image("between.png", mf.png_bytes("Fictional map", size=(300, 200)))
+        if variant == "inline":
+            # 画像の段落の中の行内の囲み 1 つと、本文スタイルの図キャプション（キャプションの推定が隣の画像を見る）
+            out += [mf.para(S["body"], mf.drawing(rid, 1800000, 1200000, 3302),
+                            mf.textbox_inline(box1, 3303, cx=8 * cm, cy=3 * cm)),
+                    mf.para(S["body"], "図1　架空の地図")]
+        else:
+            # キャプションのスタイルの図キャプションの段落に、左上がそろった囲みが 2 つ（画像とキャプションの間に囲みが 2 つ）
+            out += [mf.para(S["body"], mf.drawing(rid, 1800000, 1200000, 3304)),
+                    mf.para(S["fig_cap"], "図1　架空の地図",
+                            mf.textbox(box1, 3305, cx=8 * cm, cy=3 * cm, wrap="wrapTopAndBottom"),
+                            mf.textbox(box2, 3306, cx=8 * cm, cy=3 * cm, wrap="wrapTopAndBottom"))]
+        return out + [mf.para(S["body"], "図1から道のりが分かる。")]
+    return parts
+
+
+@pytest.mark.parametrize("variant", ["inline", "two_boxes", "table"])
+def test_boxes_do_not_split_figures(variant, journal, meta, tmp_path):
+    """囲み（boxed-text）は、図表の組み立てで隣の要素として数えない（点検の指摘。0.24.1 までは囲みの文字を除外していたので、
+    画像と図キャプション、表キャプションと表の間に囲みがあっても組めていた）。画像の段落の行内の囲みと本文スタイルの図キャプション
+    （inline）、図キャプションの段落の左上の囲み 2 つ（two_boxes）、本文スタイルの表キャプションの段落の行内の囲みと表（table）の
+    どれでも、図・表に ID とキャプションが付き、本文の「図1」「表1」がリンクになる。囲みは組み立てた図表の隣に出る。"""
+    path = tmp_path / f"{variant}.docx"
+    mf.make_article(path, "囲みと図の検証用文書", _box_between(variant))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
+    assert res.lost_images == [] and actions(res) == []
+    root = load(res)
+    sec = root.find("body/sec")
+    tags = [el.tag for el in sec if el.tag != "title"]
+    bts = list(root.iter("boxed-text"))
+    assert [text(bt.find("p")) for bt in bts] == ([BOX_Q] if variant != "two_boxes" else [BOX_Q, BOX_Q2])
+    assert all(bt.getparent() is sec for bt in bts)
+    if variant == "table":
+        assert tags == ["p", "table-wrap", "boxed-text", "p"]
+        tw = root.find(".//table-wrap")
+        assert tw.get("id") == "T1" and text(tw.find("caption")) == "表1　架空の集計" and tw.find("table") is not None
+        assert [(x.text, x.get("rid")) for x in root.iter("xref") if x.get("ref-type") == "table"] == [("表1", "T1")]
+        return
+    assert tags == ["p"] + ["boxed-text"] * len(bts) + ["fig", "p"]
+    [fig] = root.iter("fig")
+    assert fig.get("id") == "F1" and text(fig.find("caption")) == "図1　架空の地図" and fig.find("graphic") is not None
+    assert [(x.text, x.get("rid")) for x in root.iter("xref") if x.get("ref-type") == "fig"] == [("図1", "F1")]
+
+
+SOURCE_NOTE = "出典：架空の町の資料（2020）をもとに作成した。"
+
+
+def _figure_textbox(floating):
+    """図の画像・図キャプション・出典の文を入れたテキストボックス（行内。floating なら、位置を決められない浮動配置）。"""
+    def parts(b):
+        rid = b.add_image("figtb.png", mf.png_bytes("Fictional town", size=(300, 200)))
+        inner = (mf.para(S["body"], mf.drawing(rid, 1800000, 1200000, 3402)) + mf.para(S["fig_cap"], "図1　架空の町の地図")
+                 + mf.para(S["body"], SOURCE_NOTE))
+        tb = (mf.textbox(inner, 3401, cx=8 * 360000, cy=5 * 360000, v=("paragraph", 2 * 360000), wrap="wrapTopAndBottom")
+              if floating else mf.textbox_inline(inner, 3401, cx=8 * 360000, cy=5 * 360000))
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "試験（2024）の地図を図1に示す。", tb),
+                mf.para(S["body"], "図1から町の様子が分かる。")]
+    return parts
+
+
+def test_text_in_figure_textbox_is_notified(journal, meta, tmp_path):
+    """図表の入ったテキストボックスの中の、キャプションでも図の本体でもない文字（出典など）は、今までどおり図の一部とみなして
+    出力しないが、要確認で知らせる（点検の指摘。0.24.1 では暫定の知らせが数えていたが、0.25.0 の最初の実装では 6 章に載るだけ
+    だった）。AI の placements では戻せず、set_role も fig_caption・table_caption・exclude 以外は採用しない（理由で placements を案内しない）。"""
+    from jasme_jats.structure import TEXTBOX_TEXT_EXCLUDED
+    path = tmp_path / "figtb.docx"
+    mf.make_article(path, "図のテキストボックスの検証用文書", _figure_textbox(False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "none", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.lost_images == []
+    assert excluded(res)[SOURCE_NOTE] == TEXTBOX_TEXT_EXCLUDED
+    fig = load(res).find(".//fig")
+    assert fig.get("id") == "F1" and fig.find("graphic") is not None and res.plan.textboxes == {}
+    [act] = actions(res)
+    assert (act.level, act.key) == (TO_CHECK, "textbox_figure_text") and not res.needs_action
+    src = next(s for s, p in res.plan.paras.items() if p.plain() == SOURCE_NOTE)
+    report = res.report_path.read_text(encoding="utf-8")
+    top, ch14 = report.split("## 2.")[0], report.split("## 14.")[1]
+    assert ("> **要確認: 図表の入ったテキストボックス・グループ図形の中の文字 1 段落を、XML に出力していません（6 章）。**"
+            in top) and f"対象の段落: {src}「出典：架空の町の資料（2020…」" in top
+    assert "Word でその文字をテキストボックスの外（本文の段落）に出してから、変換し直してください" in top
+    assert "- [ ] **図表の入ったテキストボックス・グループ図形の中の文字 1 段落**（6 章。XML に出力していない）" in ch14
+    assert "図表の入ったテキストボックスの中の文字 1 段落を、XML に出力していません（要確認）" == act.box_title
+    assert "docx でその文字をテキストボックスの外（本文の段落）に出して変換し直すこと" in act.cli
+    # AI の set_role p は採用しない。placements の kind box・label の対象でもないので、理由で placements を案内しない
+    _, plan, _ = _mechanical(path, journal)
+    xid = plan.paras[src].textbox_id
+    import json
+    resp = {"placements": [{"float": xid, "after": next(s for s, p in plan.paras.items() if p.plain().startswith("図1から")),
+                            "items": [{"kind": "box", "caption": [], "body": []}], "reason": "x", "confidence": "中"}],
+            "operations": [{"op": "set_role", "src": src, "text": "", "occurrence": 1, "target": "", "role": "p", "image": "",
+                            "mathml": "", "surname": "", "given": "", "reason": "x", "confidence": "高"}], "notes": []}
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "ai", ai_mode="manual", convert_metafiles=False,
+                                               ai_response=json.dumps(resp, ensure_ascii=False)))
+    why = {op["op"]: w for op, w in res.ai.rejected}
+    assert why["set_role"] == (f"テキストボックス {xid} は囲み・図の注記の判断の対象でない（図表の入ったテキストボックス・本文の外の"
+                               "テキストボックスなど）ので、段落に指定できる役割は fig_caption・table_caption・exclude だけ")
+    assert "placements" not in why["set_role"] and why["place_float"].startswith(f"{xid} は「位置を決められなかった図表」")
+    assert "textbox_figure_text" in [a.key for a in actions(res)] and excluded(res)[SOURCE_NOTE] == TEXTBOX_TEXT_EXCLUDED
+
+
+def test_text_in_unplaced_figure_textbox_is_notified_after_answer(journal, meta, tmp_path):
+    """位置を決められない図表（浮動配置）の中の出典の文は、手動モードで AI の回答を貼り戻す前は知らせない（AI が図を組めば、
+    図の後ろに本文の段落として出る）。AI が位置を答えず、図の一部として除外したままなら、要確認で知らせる。"""
+    import json
+    path = tmp_path / "figfloat.docx"
+    mf.make_article(path, "浮動配置の図の検証用文書", _figure_textbox(True))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "pending", ai_mode="manual", convert_metafiles=False))
+    assert res.plan.unplaced_floats and res.fidelity.ok and res.dtd_valid
+    assert excluded(res)[SOURCE_NOTE] == "テキストボックス内の文字（図の一部とみなして本文から除外）"
+    assert "textbox_figure_text" not in [a.key for a in actions(res)]
+    empty = json.dumps({"placements": [], "operations": [], "notes": []})
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "ans", ai_mode="manual", ai_response=empty,
+                                               convert_metafiles=False))
+    keys = [a.key for a in actions(res)]
+    assert "forced" in keys and "textbox_figure_text" in keys and res.fidelity.ok and res.dtd_valid
+
+
+def test_caption_shaped_paragraph_in_inline_textbox_stays_caption(journal, meta, tmp_path):
+    """浮動配置でないテキストボックスの、本文スタイルの「図1　…」（キャプションの形。「。」で終わらない）は、文字だけの
+    テキストボックスとして囲み・注記の判定に回さず、今までどおり隣の画像の図のキャプションにする（Classifier.text_only）。"""
+    def parts(b):
+        rid = b.add_image("vmlcap2.png", mf.png_bytes("Figure"))
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "試験（2024）の図を示す。"),
+                mf.para(S["body"], mf.drawing(rid, 1800000, 1080000, 3501)),
+                mf.para(S["body"], mf.vml_textbox(mf.para(S["body"], "図1　架空の図形"), width="200pt", height="20pt")),
+                mf.para(S["body"], "以上が図1である。")]
+    path = tmp_path / "vmlcap.docx"
+    mf.make_article(path, "VML のキャプションの検証用文書", parts)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
+    assert res.plan.textboxes == {} and actions(res) == []
+    fig = load(res).find(".//fig")
+    assert fig.get("id") == "F1" and text(fig.find("caption")) == "図1　架空の図形" and fig.find("graphic") is not None
+
+
+def test_links_inside_box(journal, meta, tmp_path):
+    """囲み（boxed-text）の中の引用文献の引用と図の参照も、本文と同じくリンクにする（linker.body_paragraphs の囲みの枝）。"""
+    def parts(b):
+        rid = b.add_image("boxlink.png", mf.png_bytes("Figure"))
+        box = (mf.para(S["body"], "問1　試験（2024）にならい，図1の二つの点の間の道のりを求めなさい。")
+               + mf.para(S["body"], "答えは一つに決まる。"))
+        return [mf.para(S["sec1"], "１．はじめに"),
+                mf.para(S["body"], "次の問題を読む。", mf.textbox_inline(box, 3602, cx=12 * 360000, cy=2 * 360000)),
+                mf.para(S["body"], "囲みの後の一つ目の段落である。"), mf.para(S["body"], "囲みの後の二つ目の段落である。"),
+                mf.para(S["body"], "図1を次に示す。"), mf.para(S["body"], mf.drawing(rid, 1800000, 1080000, 3601)),
+                mf.para(S["fig_cap"], "図1　架空の地図")]
+    path = tmp_path / "boxlink.docx"
+    mf.make_article(path, "囲みの中のリンクの検証用文書", parts)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
+    [bt] = load(res).iter("boxed-text")
+    assert [(x.get("ref-type"), x.get("rid"), x.text) for x in bt.iter("xref")] == [("bibr", "B1", "2024"),
+                                                                                  ("fig", "F1", "図1")]
+
+
+@pytest.mark.parametrize("between, kind", [([], "label"), (["p"], "label"), (["p", "p"], "undecided"),
+                                           (["table", "p"], "undecided")])
+def test_near_image_counts_two_elements(between, kind, journal, meta, tmp_path):
+    """「画像の近く」（Classifier.near_image）は、アンカー段落の前後 2 つ（図形の外の段落と表で数える。floats.NEAR_PARAS）まで。
+    画像の段落から 3 つ離れた（間に段落 2 つ、または表と段落）小さな札は、図の注記にせず、決められないもの（要確認）にする。"""
+    def parts(b):
+        rid = b.add_image("near.png", mf.png_bytes("Figure"))
+        mid = [mf.table([[mf.cell("区分"), mf.cell("人数")], [mf.cell("一組"), mf.cell("三十人")]]) if x == "table"
+               else mf.para(S["body"], f"間の段落{k + 1}である。") for k, x in enumerate(between)]
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], mf.drawing(rid, 1800000, 1080000, 3701)), *mid,
+                mf.para(S["body"], "図に名前を付けた。", mf.textbox(mf.para(S["body"], "点Ｔ"), 3702, cx=360000, cy=216000,
+                                                            h=("column", 720000), v=("paragraph", -720000))),
+                mf.para(S["body"], "以上である。")]
+    path = tmp_path / "near.docx"
+    mf.make_article(path, "画像の近さの検証用文書", parts)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    [bi] = res.plan.textboxes.values()
+    assert (bi.kind, bi.near) == (kind, kind == "label")
+    # 1 章の「テキストボックスの文字」の行は、中身のある章だけを示す（図の注記だけなら 3 章を示さない）
+    row = ("| テキストボックスの文字（4 章・6 章・10 章） | 図の注記として除外 1 件 |" if kind == "label"
+           else "| テキストボックスの文字（3 章・4 章・6 章） | 決められずに除外 1 件（要確認） |")
+    assert row in res.report_path.read_text(encoding="utf-8").split("## 2.")[0]

@@ -18,12 +18,15 @@ tests/fixtures/sample_float_text.docx : テキストボックスの中で、画�
                                    キャプションのない図形）。位置は機械的に決まる
 tests/fixtures/sample_structure.docx : 論文の構造（領域の分け方など）の境界ケース（本文中のテキストボックスにある
                                    「英文要旨」スタイルの段落や「注」だけの段落、Word の脚注と文末脚注〈ID の重なり・削除された
-                                   参照・記号を自分で付けた文末脚注・脚注の中からの参照・参照のない脚注〉、英文要旨の後ろの
+                                   参照・記号を自分で付けた文末脚注・脚注の中からの参照・参照のない脚注〉、文字だけのテキストボックス
+                                   〈囲み・図に重ねた注記・決められないもの・VML・行内・空のもの〉、英文要旨の後ろの
                                    「資料（授業プリント）」）
 tests/fixtures/sample_b3_cells.docx : 表のセルに画像とキャプションが並ぶ図形（AI なしで図に組める形）。位置は機械的に決まる
 tests/fixtures/sample_b3_tablefig.docx : 画像のない図キャプションと、その隣のキャプションのない表（表で組んだ図）
 tests/fixtures/sample_b3_place.docx : 位置を決められない図表の仮の置き場所（同じ段落に結び付いた 2 つの図形、空の段落に
                                    結び付いた図形、引用文献の後ろの注）。AI 補完が必要（ALL_DOCS には入れない）
+tests/fixtures/sample_outside.docx : 本文の外（引用文献・注・英文要旨）の段落に結び付いた図形と囲み、資料の中の囲み、
+                                   引用文献の段落の中の画像。AI 補完が必要（ALL_DOCS には入れない）
 
 make_article() は小さな論文を作る。テストの中で、境界ケースの docx をその場で作るのにも使う。
 
@@ -154,6 +157,22 @@ def textbox(inner, pid, cx=2000000, cy=500000, **pos):
                '</a:graphicData></a:graphic>')
     fallback = f'<w:pict><v:shape><v:textbox><w:txbxContent>{inner}</w:txbxContent></v:textbox></v:shape></w:pict>'
     return anchored(graphic, fallback, pid, cx, cy, **pos)
+
+
+def textbox_inline(inner, pid, cx=3600000, cy=1080000):
+    """行内（wp:inline）のテキストボックス（段落の中に文字と同じように並ぶ図形。DrawingML の代替の VML は付けない）。"""
+    graphic = ('<a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">'
+               f'<wps:wsp><wps:txbx><w:txbxContent>{inner}</w:txbxContent></wps:txbx><wps:bodyPr/></wps:wsp>'
+               '</a:graphicData></a:graphic>')
+    return (f'<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="{cx}" cy="{cy}"/>'
+            f'<wp:docPr id="{pid}" name="テキスト ボックス {pid}"/>{graphic}</wp:inline></w:drawing></w:r>')
+
+
+def vml_textbox(inner, width="300pt", height="60pt", absolute=False):
+    """VML だけのテキストボックス（DrawingML のない古い形式）。absolute なら position:absolute（位置を指定した浮動配置）。"""
+    style = ("position:absolute;margin-left:0;margin-top:0;" if absolute else "") + f"width:{width};height:{height}"
+    return (f'<w:r><w:pict><v:shape style="{style}"><v:textbox><w:txbxContent>{inner}</w:txbxContent></v:textbox>'
+            '</v:shape></w:pict></w:r>')
 
 
 def group(rid, pic_cx, pic_cy, inner, pid, cx, cy, **pos):
@@ -901,11 +920,53 @@ def structure_word_notes(b: Builder):
     ]
 
 
+def structure_textboxes(b: Builder):
+    """文字だけのテキストボックス（tests/test_structure.py・tests/test_ai.py。修正計画の D1）。
+
+    (a) 図の左上がアンカー段落の左上にある、幅の広い囲み（問題文・自動番号の 2 項目・ヒント・全角空白だけの段落・「(1)」の付いた
+    別行数式。後ろの本文に「式(1)」）。(c) 段落の末尾にある行内の囲み。(d) 幅が広く短い「（ヒント）」（囲みか注記か決められない）。
+    (e) VML だけの、位置を指定した（position:absolute）囲み。空のテキストボックスと、全角空白だけのテキストボックス。
+    (b) 画像・図キャプションの次の段落に結び付いた、上にずらした小さな注記「A 点」（図に重ねた注記）。(f) 画像の段落の後ろの段落に
+    結び付いた、図キャプションだけのテキストボックス（今までどおり図のキャプション）。(a)〜(e) は画像から 3 段落以上離す。
+    """
+    cm = 360000
+    tri = b.add_image("structure_tri.png", png_bytes("Fictional triangle", size=(400, 240)))
+    tri2 = b.add_image("structure_tri2.png", png_bytes("Second triangle", size=(400, 240)))
+    formula = para(S["body"], omathpara(mr("S=") + mfrac(mr("1"), mr("2")) + mr("ah")), tab(), "(1)", jc="center")
+    box_a = (para(S["body"], "問1　架空の三角形の面積を求めよ。底辺と高さは図に示す。")
+             + list_item(S["body"], "底辺と高さを測る。") + list_item(S["body"], "面積の式に当てはめる。")
+             + para(S["body"], "ヒント　架空の補助線をひく。") + para(S["body"], "　") + formula)
+    box_c = para(S["body"], "問2　架空の問いを二つの式で考えよ。") + para(S["body"], "答えは一つに決まる。")
+    box_e = para(S["body"], "問3　架空の数の列の規則を説明せよ。") + para(S["body"], "一つ目の数は二である。")
+    return [
+        para(S["body"], "試験（2025）の問題を次に示す。", textbox(box_a, 621, cx=12 * cm, cy=3 * cm, wrap="wrapTopAndBottom")),
+        para(S["body"], "式(1)より面積が分かる。"),
+        para(S["body"], "次の囲みを読む。", textbox_inline(box_c, 622, cx=10 * cm, cy=2 * cm)),
+        para(S["body"], "囲みの後の段落である。"),
+        para(S["body"], "ヒントを付けた。", textbox(para(S["body"], "（ヒント）"), 623, cx=10 * cm, cy=int(0.8 * cm),
+                                             v=("paragraph", int(1.5 * cm)), wrap="wrapTopAndBottom")),
+        para(S["body"], "枠の中の問題を考える。", vml_textbox(box_e, width="300pt", height="60pt", absolute=True)),
+        para(S["body"], "空の囲みを置いた。", textbox(para(S["body"], ""), 624, cx=10 * cm, cy=cm),
+             textbox(para(S["body"], "　"), 625, cx=10 * cm, cy=cm)),
+        para(S["body"], "図の前の段落である。"),
+        para(S["body"], drawing(tri, 1800000, 1080000, 626)),
+        para(S["fig_cap"], "図1　架空の三角形"),
+        para(S["body"], "図1の点に名前を付けた。", textbox(para(S["body"], "A 点"), 627, cx=cm, cy=int(0.6 * cm),
+                                                 h=("column", 2 * cm), v=("paragraph", -2 * cm))),
+        para(S["body"], drawing(tri2, 1800000, 1080000, 628)),
+        para(S["body"], "この段落に図2のキャプションのテキストボックスが結び付いている。",
+             textbox(para(S["fig_cap"], "図2　テキストボックスのキャプション"), 629, cx=8 * cm, cy=int(0.7 * cm),
+                     wrap="wrapTopAndBottom")),
+        para(S["body"], "以上で囲みと注記の例を終える。"),
+    ]
+
+
 # sample_structure の節（見出し, 部品を作る関数）。ケースを足すときは、部品を作る関数を足してここに加える。
 # 節の見出しの番号は make_structure が付ける。テストは段落の文字で対象を選ぶ（件数や段落の ID に頼らない）
 STRUCTURE_SECTIONS = [
     ("テキストボックスの中の別の領域のスタイル", structure_textbox_regions),
     ("Word の脚注と文末脚注", structure_word_notes),
+    ("囲みと図の注記", structure_textboxes),
 ]
 # sample_structure の英文要旨の後ろの資料（「資料」の直後がかっこの見出し。tests/test_structure.py）
 STRUCTURE_APPENDIX = [("abs", "資料（授業プリント）"), ("abs", "問1\u3000架空の問題文である。"),
@@ -1037,7 +1098,8 @@ def b3_place_parts(b: Builder, variant=""):
     結び付け、その後ろを次の形にするもの: "two_lists"（2 つ目の項目、本文の段落、同じ番号の定義の 2 項目の箇条書き）、
     "list_heading"（2 つ目の項目、同じ番号の定義で、見出しと推定する太字の「２．…」の段落）、"list_image"（画像と文字が同じ
     段落の項目、3 つ目の項目、画像だけの項目）、"list_math"（2 つ目の項目、別行数式だけの項目、4 つ目の項目）、"list_textbox"
-    （2 つ目の項目、同じ番号の定義の段落を入れた、浮動配置でないテキストボックス）。"other_list" は、2 項目の箇条書きの最後の
+    （2 つ目の項目、同じ番号の定義の段落を入れた、浮動配置でないテキストボックス）、"list_box"（2 つ目の項目、文字だけの浮動配置で
+    ないテキストボックスの段落、3 つ目の項目）。"other_list" は、2 項目の箇条書きの最後の
     項目に s1 を結び付け、すぐ後ろに別の番号の定義の 2 項目の箇条書きを置く。"quote_blank" は、引用の 2 つ目の段落に s1 を
     結び付け、3 つ目の段落との間に空の段落を置く。
     """
@@ -1068,7 +1130,7 @@ def b3_place_parts(b: Builder, variant=""):
         first = [para(S["quote"], "引用の一つ目の段落である。"),
                  para(S["quote"], "この引用の段落に図1のテキストボックスが結び付いている。", s1),
                  para(S["body"], ""), para(S["quote"], "引用の三つ目の段落である。")]
-    elif variant in ("two_lists", "list_heading", "list_image", "list_math", "list_textbox"):
+    elif variant in ("two_lists", "list_heading", "list_image", "list_math", "list_textbox", "list_box"):
         first = [list_item(S["body"], "この項目に図1のテキストボックスが結び付いている。", s1)]
         if variant == "two_lists":
             first += [list_item(S["body"], "一つ目の箇条書きの二つ目の項目である。"),
@@ -1087,6 +1149,10 @@ def b3_place_parts(b: Builder, variant=""):
             first += [list_item(S["body"], "箇条書きの二つ目の項目である。"),
                       list_item(S["body"], omathpara(mr("y=") + mfrac(mr("1"), mr("2")) + mr("x"))),
                       list_item(S["body"], "数式の後ろの項目である。")]
+        elif variant == "list_box":
+            first += [list_item(S["body"], "箇条書きの二つ目の項目である。"),
+                      para(S["body"], vml_textbox(para(S["body"], "囲みの中の架空の文である。"))),
+                      list_item(S["body"], "箇条書きの三つ目の項目である。")]
         else:
             vml = ('<w:r><w:pict><v:shape><v:textbox><w:txbxContent>'
                    + list_item(S["body"], "浮動配置でないテキストボックスの中の項目である。")
@@ -1120,6 +1186,43 @@ def make_b3_place(path, outside=False, variant=""):
                  refs=lambda b: b3_place_refs(b, outside))
 
 
+# ----------------------------------------------------------------------------- sample_outside（本文の外の図形。修正計画の N7）
+def make_outside(path):
+    """本文の外の段落に結び付いた図形（AI 補完が必要。ALL_DOCS には入れない。tests/test_floats.py）。
+
+    引用文献の 1 件目に図3 の図形（画像と図キャプション。2 cm 下）、2 件目に文字だけの囲み、3 件目の段落の中に行内の画像
+    （テキストボックスの外。XML に入らない画像として要対応のまま）。注の段落に表1 の図形（表キャプションと表）。英文要旨の段落に
+    文字だけの囲み。英文要旨の後ろの資料の段落に、文字だけの囲み（今までどおり資料の中に出す）。
+    """
+    b = Builder()
+    cm = 360000
+    img = b.add_image("outside_fig.png", png_bytes("Outside figure", size=(300, 200)))
+    logo = b.add_image("outside_ref.png", png_bytes("Ref", size=(120, 60)))
+    fig = textbox(para(S["body"], drawing(img, 1440000, 960000, 831)) + para(S["fig_cap"], "図3　架空の最後のページの図"),
+                  830, cx=8 * cm, cy=4 * cm, v=("paragraph", 2 * cm), wrap="wrapTopAndBottom")
+    box = textbox(para(S["body"], "問4　架空の補足の問題である。三つの数の和を求めよ。")
+                  + para(S["body"], "答えは本文の表で確かめる。"), 832, cx=12 * cm, cy=3 * cm, v=("paragraph", cm),
+                  wrap="wrapTopAndBottom")
+    tbl = textbox(para(S["tab_cap"], "表1　架空の集計") + table([[cell("区分"), cell("人数")], [cell("一組"), cell("30")]]),
+                  833, cx=8 * cm, cy=3 * cm, v=("paragraph", cm), wrap="wrapTopAndBottom")
+    abs_box = textbox(para(S["abs"], "Box: a fictional supplementary task for the abstract."), 834, cx=12 * cm, cy=2 * cm,
+                      v=("paragraph", cm), wrap="wrapTopAndBottom")
+    app_box = textbox(para(S["body"], "資料の囲み：架空のワークシートの問いである。答えを書く。"), 835, cx=12 * cm, cy=2 * cm,
+                      wrap="wrapTopAndBottom")
+    body = front_ja(b, "本文の外の図形の検証用文書", "―引用文献に結び付いた図―", [("架空大学", "試験　八郎")])
+    body += [para(S["sec1"], "１．はじめに"), para(S["body"], "試験（2024）にならい，図3と表1を引用文献の後ろに置いた。"),
+             para(S["sec1"], "２．おわりに"), para(S["body"], "以上のように，本文の外に結び付いた図形も本文に出す。"),
+             para(S["ref_head"], "引用および参考文献"),
+             para(S["ref"], "試験六郎（2024）．「小さな論文」．『架空誌』，第5巻，pp.9-10．", fig),
+             para(S["ref"], "試験七郎（2025）．「補足の問題」．『架空誌』，第6巻，pp.11-12．", box),
+             para(S["ref"], "試験八郎（2026）．「画像のある文献」", drawing(logo, 600000, 300000, 836), "．『架空誌』，第7巻，pp.13-14．"),
+             para(S["fn_head"], "注"), para(S["body"], "1) 架空の注である。", tbl)]
+    body += front_en(b, "Shapes Outside the Body", "For Checking", [("Hachiro SHIKEN", "Fictional University")], [])
+    body.append(para(S["abs"], "Outside abstract text.", abs_box))
+    body += tail(b, appendix=[para(S["abs"], "資料1　架空の授業プリント"), para(S["abs"], "資料の本文である。", app_box)])
+    b.save(path, body)
+
+
 if __name__ == "__main__":
     out = HERE / "fixtures"
     make_full(out / "sample_full.docx")
@@ -1133,10 +1236,11 @@ if __name__ == "__main__":
     make_b3_cells(out / "sample_b3_cells.docx")
     make_b3_tablefig(out / "sample_b3_tablefig.docx")
     make_b3_place(out / "sample_b3_place.docx")
+    make_outside(out / "sample_outside.docx")
     pdf_done = make_pdfcheck_pdf(out / "sample_pdfcheck.pdf")
     print("written:", out / "sample_full.docx", out / "sample_edge.docx", out / "sample_float.docx",
           out / "sample_notes.docx", out / "sample_pdfcheck.docx", out / "sample_reader.docx",
           out / "sample_float_text.docx", out / "sample_structure.docx", out / "sample_b3_cells.docx",
-          out / "sample_b3_tablefig.docx", out / "sample_b3_place.docx",
+          out / "sample_b3_tablefig.docx", out / "sample_b3_place.docx", out / "sample_outside.docx",
           out / "sample_pdfcheck.pdf" if pdf_done else "（LibreOffice がないので sample_pdfcheck.pdf は作り直していない）")
     sys.exit(0)
