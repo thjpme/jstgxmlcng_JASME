@@ -12,7 +12,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .floats import at_anchor, why_not_at_anchor
+from .floats import NEAR_PARAS, at_anchor, box_lines, textbox_kind, why_not_at_anchor
 from .model import Decision, Exclusion, Float, Para, Table, note_key, note_label
 from .ooxml import is_ws
 
@@ -22,11 +22,21 @@ FRONT_EN_ROLES = {"title_en", "subtitle_en", "author_en", "aff_en", "abstract_he
 BACK_HEADINGS = {"notes_heading": "notes", "ack_heading": "ack", "fn_heading": "fn", "ref_heading": "refs"}
 HEADING_LEVEL = {"sec1": 1, "sec2": 2, "sec3": 3}
 
-# 文字だけのテキストボックスの段落を除外したときの理由。レポートは、この理由の除外の件数を、冒頭と 14 章に「要確認」として
-# 出す（文字だけのテキストボックスを XML に出力できるようになるまでの暫定の知らせ。report.provisional_exclusions）
+# 図表の入った図形（キャプション・画像・表のあるテキストボックス・グループ図形）の中の、キャプションでも図表の本体でもない
+# 段落を除外したときの理由（図表の一部とみなす。要確認で知らせる〈report._textbox_figure_text_action〉。文字だけの
+# テキストボックスは Classifier.place_boxes で扱う）
 TEXTBOX_TEXT_EXCLUDED = "テキストボックス内の文字（図の一部とみなして本文から除外）"
+# 文字だけのテキストボックス（Classifier.place_boxes）の文字を出力しないときの理由。どれも「テキストボックス内の文字」で始める
+TEXTBOX_LABEL_EXCLUDED = "テキストボックス内の文字（図に重ねた注記とみなして本文から除外）"
+TEXTBOX_UNDECIDED_EXCLUDED = "テキストボックス内の文字（囲みか図の注記か決められないため本文から除外。要確認）"
+TEXTBOX_AI_LABEL_EXCLUDED = "テキストボックス内の文字（AI による補完で図に重ねた注記と判断し、本文から除外）"
+# 本文の外の領域（図形のアンカー段落がある領域。Classifier.outside の値）の日本語（修正計画の N7）
+OUTSIDE_JA = {"refs": "引用文献", "fn": "注", "notes": "付記", "ack": "謝辞", "back": "後付け", "front_en": "英文の部分"}
 # 位置を決められない図表を仮に置く位置のうち「本文の最後」（本文の領域の最後の要素の後ろ）。place_floats の差し込み位置
 BODY_END = float("inf")
+# 囲み（文字だけのテキストボックス。BoxNode）の置き場所（same_place・Classifier.provisional の値）。図表の組み立てでは、囲みを
+# 図形の外の要素の隣として数えない（build_body）
+BOX_PLACE = "@box"
 # 本文より後ろにある領域（ArticlePlan.region の値）。AI がこれらの段落の後ろを指定した図表は、本文の最後に仮に置く
 # （ai_assist.float_placements。本誌のテンプレートでは、英文の部分・資料も本文より後ろ）
 AFTER_BODY_REGIONS = {"notes", "ack", "fn", "refs", "back", "front_en", "app"}
@@ -213,6 +223,13 @@ class FormulaNode:
 
 
 @dataclass(eq=False)
+class BoxNode:
+    """囲み（文字だけのテキストボックス）。<boxed-text> になる。children は PNode・ListNode・QuoteNode・FormulaNode。"""
+    xid: str
+    children: list = field(default_factory=list)
+
+
+@dataclass(eq=False)
 class FnNode:
     paras: list
     fid: str = ""
@@ -280,6 +297,25 @@ class FloatInfo:
     after_src: str = ""
 
 
+@dataclass(eq=False)
+class BoxInfo:
+    """文字だけのテキストボックス（Classifier.place_boxes が扱ったもの）の扱い。レポート・AI 依頼文・知らせに使う。"""
+    box: object                     # model.TextBox
+    paras: list = field(default_factory=list)      # テキストボックスの段落（出現順。本文の要素の列にあるもの）
+    kind: str = ""                  # box（囲み）/ label（図に重ねた注記）/ undecided（決められない）/ blank（空白だけ）。AI の指定の後は、指定の種類
+    why: str = ""                   # 判定の根拠（floats.textbox_kind）
+    mode: str = ""                  # mechanical / ai
+    # 囲みを置いた位置: before（アンカー段落の前）/ after（アンカー段落〈箇条書き・引用の途中なら、その終わり〉の後ろ）/
+    # end（本文の最後）/ ai（AI の指定の段落の後ろ）。出力しないものは ""
+    where: str = ""
+    estimated: bool = False         # 位置を推定した（要確認）
+    place_why: str = ""             # 位置を推定した理由
+    after_src: str = ""             # 後ろに置いた本文の段落（before ならアンカー段落）
+    outside: str = ""               # アンカー段落が本文の外なら、その領域（OUTSIDE_JA のキー。修正計画の N7）
+    near: bool = False              # 画像の近く（Classifier.near_image）
+    float: object = None            # 浮動配置のテキストボックスなら、その図形（model.Float。AI 依頼文の位置の説明に使う）
+
+
 @dataclass
 class ArticlePlan:
     lang: str = "ja"
@@ -325,10 +361,43 @@ class ArticlePlan:
     app_after_refs: list = field(default_factory=list)   # 引用文献などの後ろの、資料の見出しと思われる段落 ID（暫定で警告だけ）
     # 手で書いた注と Word の脚注・文末脚注の両方にある注の番号（Word の注の番号は 1 から付けるので重なる。要確認）
     note_overlap: list = field(default_factory=list)
+    # 文字だけのテキストボックスの ID -> BoxInfo（Classifier.place_boxes が扱ったもの。空白だけのものも。出現順）
+    textboxes: dict = field(default_factory=dict)
 
     @property
     def unplaced_floats(self) -> list:
         return [fid for fid, info in self.floats.items() if info.mode == "unplaced"]
+
+    @property
+    def undecided_boxes(self) -> list:
+        """囲みか図の注記か決められず、除外した文字だけのテキストボックスの ID（要確認）。"""
+        return [x for x, info in self.textboxes.items() if info.kind == "undecided"]
+
+    @property
+    def estimated_boxes(self) -> list:
+        """位置を推定して置いた囲みの ID（要確認）。"""
+        return [x for x, info in self.textboxes.items() if info.kind == "box" and info.estimated]
+
+    def box_place(self, xid) -> str:
+        """囲みを置いた位置の説明（レポート・Colab・コマンドライン・判断の記録で使う）。例: 段落「…」の前 / 段落「…」の後ろ /
+        本文の最後。後ろに置いた段落に文字がなければ、その前にある、文字のある本文の段落で示す（float_place と同じ）。"""
+        info = self.textboxes[xid]
+        if info.where == "end":
+            return "本文の最後"
+        if info.where == "before":
+            p = self.paras.get(info.after_src)
+            if p is not None and _para_text(p).strip():
+                return f"段落「{_para_text(p).strip()[:20]}」の前"
+        seq = self.body_seq
+        k = seq.index(info.after_src) if info.after_src in seq else -1
+        if info.where == "before":
+            k -= 1      # 空のアンカー段落の前に置いた: その前の、文字のある段落の後ろ
+        while k >= 0:
+            p = self.paras.get(seq[k])
+            if p is not None and _para_text(p).strip():
+                return f"段落「{_para_text(p).strip()[:20]}」の後ろ"
+            k -= 1
+        return "本文の最初"
 
     def float_text_src(self, fid):
         """位置を決められない図表を仮に置いた位置を示す、文字のある本文の段落の ID（本文の最後に置いたもの・見つからないものは
@@ -413,6 +482,18 @@ def _para_text(para: Para) -> str:
     return "".join(a.text for a in para.atoms if a.kind == "text")
 
 
+def _xid_list(xids) -> str:
+    """テキストボックスの ID の並びの短い表記（「x3」「6 件（x3〜x8）」「3 件（x3・x5・x9）」「21 件（x7〜x28 の一部）」）。"""
+    if len(xids) == 1:
+        return xids[0]
+    nums = [int(x[1:]) for x in xids if x[1:].isdigit()]
+    if len(nums) == len(xids) and nums == list(range(nums[0], nums[0] + len(nums))):
+        return f"{len(xids)} 件（{xids[0]}〜{xids[-1]}）"
+    if len(xids) <= 6:
+        return f"{len(xids)} 件（{'・'.join(xids)}）"
+    return f"{len(xids)} 件（{xids[0]}〜{xids[-1]} の一部）"
+
+
 def in_shape(b) -> bool:
     """図形（テキストボックス・グループ図形）の中の段落・表か（Para・Table の in_textbox または float_id）。"""
     return b.in_textbox or bool(b.float_id)
@@ -479,10 +560,11 @@ def same_place(flat, provisional) -> tuple:
     """本文の要素の列 flat の要素ごとに、同じ置き場所の、すぐ前・すぐ後ろの要素の位置（なければ None）。戻り値: (前, 後ろ)。
 
     置き場所は、位置を決められない図表（仮の位置に置いた図形）の中身なら仮に置いた位置（provisional: 要素の id -> 置き場所。
-    同じ位置に仮に置いた図形の中身は同じ値）、それ以外（図形の外の要素と、位置の決まった図形の中身）は ""。仮に置いた図形の
-    中身は本当はそこにないので、図表の組み立てで前後を見るときは、同じ置き場所の要素だけを見る（Classifier.assemble_floats・
-    build_body）。同じ位置に仮に置いた図形の中身どうし（同じ段落に結び付いた、画像だけの図形とキャプションだけの図形など）は
-    隣り合う要素として見る。
+    同じ位置に仮に置いた図形の中身は同じ値）、囲み（BoxNode）なら BOX_PLACE、それ以外（図形の外の要素と、位置の決まった
+    図形の中身）は ""。仮に置いた図形の中身は本当はそこにないので、図表の組み立てで前後を見るときは、同じ置き場所の要素だけを
+    見る（Classifier.assemble_floats・build_body）。同じ位置に仮に置いた図形の中身どうし（同じ段落に結び付いた、画像だけの
+    図形とキャプションだけの図形など）は隣り合う要素として見る。囲みは、図形の外の要素の前後に数えない（間に囲みがあっても、
+    画像と図キャプションは隣り合う要素として見る。0.24.1 までは囲みの文字を除外していて、要素の列になかった）。
     """
     n = len(flat)
     here = [provisional.get(id(b), "") for _, b in flat]
@@ -499,15 +581,22 @@ def same_place(flat, provisional) -> tuple:
 
 # ----------------------------------------------------------------------------- roles
 class Classifier:
-    def __init__(self, doc, journal, overrides=None, placements=None):
+    def __init__(self, doc, journal, overrides=None, placements=None, outside=None):
         self.doc = doc
         self.journal = journal
         self.mapping = journal.styles
         self.overrides = overrides or {}      # src -> role（AI 補完）
-        self.placements = placements or {}    # 浮動配置の図形の ID -> 配置の指定（AI 補完。ai_assist.float_placements）
+        # 浮動配置の図形・文字だけのテキストボックスの ID -> 配置の指定（AI 補完。ai_assist.float_placements）
+        self.placements = placements or {}
         # 仮の位置に置いた図形の中身: 本文の要素（flat）の id -> 置き場所（仮に置いた位置。同じ位置に仮に置いた図形の中身は同じ値。
         # build_body）
         self.provisional = {}
+        # 本文の外（引用文献・注・付記・謝辞・英文の部分）の段落に結び付いた図形: 図形の ID（浮動配置の図形の s1 など、
+        # 文字だけのテキストボックスの x1 など）-> 領域（OUTSIDE_JA のキー）。1 回目の組み立ての build_back・build_front_en が
+        # 記録し、2 回目の組み立て（classify）では split_regions がその中身を本文の最後に回す（修正計画の N7）
+        self.outside = dict(outside or {})
+        self.box_members = {}       # テキストボックスの ID -> その最上位の要素 [(段落・表, 役割)]（run。AI の exclude を除く）
+        self._top, self._top_index = [], {}     # 図形の外の最上位の段落・表の列と、段落 ID -> その位置（near_image）
         self.plan = ArticlePlan(lang=journal.lang)
 
     def style_role(self, para: Para) -> Optional[str]:
@@ -577,6 +666,13 @@ class Classifier:
                 continue
             kept.append((b, role))
         flat = kept
+        # 文字だけのテキストボックスの判定（text_only・near_image）に使う: テキストボックスごとの最上位の要素と、図形の外の
+        # 最上位の段落・表の並び
+        for b, role in flat:
+            if b.textbox_id:
+                self.box_members.setdefault(b.textbox_id, []).append((b, role))
+        self._top = [b for b in self.doc.blocks if not in_shape(b)]
+        self._top_index = {b.src: k for k, b in enumerate(self._top) if isinstance(b, Para)}
         regions = self.split_regions(flat)
         self.build_front_ja(regions["front_ja"])
         self.build_body(regions["body"])
@@ -599,11 +695,17 @@ class Classifier:
         和文の冒頭の最後の段落（セクション区切り）なら、切り替えた後の本文に入る（テンプレートの冒頭に図形はないので、本文の
         中身とみなす）。図形の中の題目の段落は「題目を見た」ことにする（題目をテキストボックスに入れた原稿でも、冒頭の最後の
         セクション区切りで本文に切り替えるため）。
+        本文の外の段落に結び付いた図形（self.outside。2 回目の組み立て）の中身は、その時点の領域にかかわらず、本文の最後に
+        回す（docx の順。領域は変えない。修正計画の N7）。
         """
         regions = {"front_ja": [], "body": [], "back": [], "front_en": []}
         state = "front_ja"
         seen_title = False
         for b, role in flat:
+            if in_shape(b) and self.outside and ((b.float_id and b.float_id in self.outside)
+                                                 or (b.textbox_id and b.textbox_id in self.outside)):
+                regions["body"].append((b, role))
+                continue
             if in_shape(b):
                 seen_title = seen_title or (state == "front_ja" and role == "title")
                 regions[state].append((b, role))
@@ -737,7 +839,13 @@ class Classifier:
     def build_body(self, items):
         plan = self.plan
         order = {id(b): k for k, (b, _) in enumerate(items)}
+        src_index = {b.src: k for k, (b, _) in enumerate(items) if isinstance(b, Para)}
+        boxes_in = list(items)
         items, inserts, raw, prov = self.place_floats(items)
+        # 文字だけのテキストボックス（囲み・図に重ねた注記）。差し込み位置は、place_floats と同じく元の items での位置
+        box_inserts, taken = self.place_boxes(boxes_in, src_index, len(inserts))
+        inserts += box_inserts
+        items = [x for x in items if id(x[0]) not in taken]
         flat = []
         for b, role in items:
             # 位置を決められない図表のうち、中身をそのまま出すものの要素は、役割をここで決めてから、その図表の差し込みに入れる
@@ -750,6 +858,7 @@ class Classifier:
                     tp.role = tp.role or "cell"
                 continue
             plan.region[b.src] = "body"
+            # 図表の入った図形の中の段落（文字だけのテキストボックスの段落は place_boxes で扱ったので、ここには来ない）
             if b.in_textbox and role not in ("fig_caption", "table_caption") and not b.images:
                 cap = self.textbox_caption(b)
                 if cap is None:
@@ -803,6 +912,13 @@ class Classifier:
         # 組にしない（assemble_floats・table_for_figure）。置き場所は仮に置いた位置で、同じ位置に仮に置いた図形の中身どうし
         # （同じ段落に結び付いた、画像だけの図形とキャプションだけの図形など）は組にする
         self.provisional = {id(obj): f"@{target}" for target, entries in prov for _, obj in entries}
+        # 囲み（文字だけのテキストボックス）も、図表を組み立てるときに隣の要素として数えない（0.24.1 までは文字を除外していて、
+        # 要素の列になかった。画像と図キャプション、表キャプションと表などの間に囲みを置いても、0.24.1 と同じく組にする。
+        # 図はキャプションの位置に組み立てるので、画像とキャプションの間にあった囲みは、キャプションが画像の後ろなら図の前、
+        # 前なら図の後ろに出る。表は表キャプションと表の先に来る方の位置に組み立てるので、間の囲みは表の後ろに出る）
+        for _, _, entries in box_inserts:
+            for _, node in entries:
+                self.provisional[id(node)] = BOX_PLACE
 
         # 本文スタイルのまま書かれた図表キャプションの推定（隣は同じ置き場所の要素。仮に置いた図形の中身とその外は隣にしない）
         before, ahead = same_place(flat, self.provisional)
@@ -837,9 +953,13 @@ class Classifier:
           表のセルに画像とキャプションが並ぶ図など。float_mechanical）な場合だけ、機械的にアンカー段落の前に置く。
         - どちらでもなければ「位置を決められない図表」として記録し、仮の位置に置く（利用者が手作業で移す。決定事項 21）。
           仮の位置は、アンカー段落のすぐ後ろ。AI が本文の外（注・引用文献など）の段落の後ろを指定したとき（ai_assist.float_placements
-          の印 where="end"）と、アンカー段落が本文の段落でないとき（今は起きない。修正計画の F）は、本文の最後（provisional_target）。
-          中身が単純なら図の本体とキャプションを組にし、そうでなければ中身をそのまま（これまでの扱いで。役割は build_body で
-          決める）出す。
+          の印 where="end"）と、アンカー段落が本文の段落でないとき（本文の外の段落に結び付いた図形。self.outside）は、本文の最後
+          （provisional_target）。中身が単純なら図の本体とキャプションを組にし、そうでなければ中身をそのまま（これまでの扱いで。
+          役割は build_body で決める）出す。
+        - 本文の外（引用文献・注・付記・謝辞・英文の部分）の段落に結び付いた図形（修正計画の N7。2 回目の組み立てで、中身は
+          split_regions が本文の最後に回している）は、図の左上の位置にかかわらず「位置を決められない図表」にする（決定事項 10）。
+          グループ図形の画像は、アンカー段落（本文の外の段落）から集める。
+        - 文字だけのテキストボックス（図表ではない図形）は、ここでは扱わない（place_boxes）。
         戻り値: (並べ直した items, [(items での位置, 同じ位置での順番, [(役割, 要素)])], 中身をそのまま出す図形の要素の id →
         その図形の差し込みの一覧, [(仮の位置に置いた図形の items での位置, その差し込みの一覧)])。items での位置は「その位置の要素の前」で、
         アンカー段落の後ろは アンカー段落の位置 + 1、本文の最後は BODY_END。同じ位置に置くものはキャプションの番号順（番号が
@@ -848,7 +968,8 @@ class Classifier:
         plan = self.plan
         src_index = {b.src: k for k, (b, _) in enumerate(items) if isinstance(b, Para)}
         plan.layout = getattr(self.doc, "layout", None)
-        plan.body_seq = [b.src for b, _ in items if isinstance(b, Para) and not b.float_id]
+        # 本文の段落（図形の中の段落〈浮動配置の図形・テキストボックス〉を除く。AI の after・行数の推定・仮の位置に使う）
+        plan.body_seq = [b.src for b, _ in items if isinstance(b, Para) and not b.float_id and not b.textbox_id]
         body = set(plan.body_seq)
         members, group_imgs, roles = {}, {}, {}
         for b, role in items:
@@ -862,14 +983,20 @@ class Classifier:
         placed, inserts, raw, prov = set(), [], {}, []
         layout = plan.layout
         for fl in getattr(self.doc, "floats", []):
-            if fl.anchor_src not in src_index:
+            outside = self.outside.get(fl.fid, "")      # アンカー段落が本文の外にある（N7）
+            if fl.anchor_src not in src_index and not outside:
                 continue
             blocks = members.get(fl.fid, [])
+            imgs = group_imgs.get(fl.fid, [])
+            if outside and not imgs:
+                # グループ図形の画像は、アンカー段落（本文の外の段落。items にない）の中にある
+                anchor = plan.paras.get(fl.anchor_src)
+                imgs = [i for i in (anchor.images if anchor is not None else []) if i.float_id == fl.fid]
             info = FloatInfo(float=fl, paras=[b for b in blocks if isinstance(b, Para)],
-                             tables=[b for b in blocks if isinstance(b, Table)], images=group_imgs.get(fl.fid, []))
+                             tables=[b for b in blocks if isinstance(b, Table)], images=imgs)
             groups, others = self.float_captions(info.paras, roles)
             if not (info.images or info.tables or groups or any(q.images for q in info.paras)):
-                continue        # 文字だけのテキストボックスは図表ではない（これまでどおり）
+                continue        # 文字だけのテキストボックスは図表ではない（place_boxes で扱う。text_only と同じ判定）
             plan.floats[fl.fid] = info
             spec = self.placements.get(fl.fid)
             end = bool(spec) and spec.get("where") == "end"     # AI が本文の外の段落の後ろを指定した（本文の最後に仮に置く）
@@ -880,11 +1007,16 @@ class Classifier:
                 target = src_index[spec["after"]] + 1
                 info.mode = "ai"
             else:
-                entries = self.float_mechanical(info, groups, others) if at_anchor(fl, layout) and not end else None
+                mech = at_anchor(fl, layout) and not end and not outside
+                entries = self.float_mechanical(info, groups, others) if mech else None
                 if entries is None:
                     info.mode = "unplaced"
-                    info.reason = (why_not_at_anchor(fl, layout) if not at_anchor(fl, layout)
-                                   else "中身の組み合わせ（図表の本体とキャプション）を機械的に決められない")
+                    if outside:
+                        info.reason = f"図形が本文の外（{OUTSIDE_JA.get(outside, outside)}）の段落に結び付いている"
+                    elif not at_anchor(fl, layout):
+                        info.reason = why_not_at_anchor(fl, layout)
+                    else:
+                        info.reason = "中身の組み合わせ（図表の本体とキャプション）を機械的に決められない"
                     info.where, info.end_why, info.end_after, target = self.provisional_target(
                         fl, spec if end else None, src_index, body)
                     if info.where == "anchor":
@@ -919,13 +1051,226 @@ class Classifier:
         rest = [(b, r) for b, r in items if id(b) not in placed]
         return rest, inserts, raw, prov
 
+    # ----------------------------------------------------------------- 文字だけのテキストボックス（囲み・図に重ねた注記）
+    def text_only(self, xid) -> bool:
+        """テキストボックス xid が文字だけのテキストボックスか（place_boxes の対象。place_floats の「図表ではない」と同じ判定）。
+
+        最上位の要素（self.box_members。AI の exclude を除いたもの）に、表・画像のある段落・図表キャプション（役割が
+        fig_caption・table_caption か、textbox_caption の形）がなく、浮動配置の図形の中なら、その図形が図表の入った図形
+        （plan.floats）でないもの。図表の入った図形（グループ図形を含む）の中のテキストボックスは、今までどおりその図表の
+        一部として扱う（修正計画の F の (9)）。
+        """
+        members = self.box_members.get(xid, [])
+        if not members:
+            return False
+        for b, role in members:
+            if isinstance(b, Table) or b.images or role in ("fig_caption", "table_caption") or self.textbox_caption(b):
+                return False
+        fid = members[0][0].float_id
+        return not (fid and fid in self.plan.floats)
+
+    def outside_key(self, b) -> str:
+        """本文の外の領域（後付け・英文の部分）の要素 b が、その領域の段落として扱わない図形の中身なら、その図形の ID（浮動配置の
+        図形の ID か、浮動配置でない文字だけのテキストボックスの ID）。そうでなければ ''（修正計画の N7）。
+
+        浮動配置でない（行内・VML の）テキストボックスで、キャプション・画像・表のあるものは、今までどおりその領域の段落にする。
+        """
+        if b.float_id:
+            return b.float_id
+        if b.textbox_id and self.text_only(b.textbox_id):
+            return b.textbox_id
+        return ""
+
+    def near_image(self, tb) -> bool:
+        """テキストボックス tb（model.TextBox）が画像の近くにあるか（floats.textbox_kind）。
+
+        グループ図形・描画キャンバスの中なら真。そうでなければ、アンカー段落とその前後 NEAR_PARAS 個の、図形の外の最上位の段落に、
+        画像（行内・浮動配置・Word の図形。隠し文字の画像はアトムにならないので数えない）か、図キャプション（キャプションの
+        スタイル、または「図N」で始まり「。」で終わらない 80 字以下の段落）があるか、画像のある浮動配置の図形が結び付いているとき。
+        """
+        if tb.group:
+            return True
+        k = self._top_index.get(tb.anchor_src)
+        if k is None:
+            return False
+        figs = {img.float_id for img in getattr(self.doc, "images", []) if img.float_id and not img.hidden}
+        fig_anchors = {fl.anchor_src for fl in getattr(self.doc, "floats", []) if fl.fid in figs}
+        for b in self._top[max(0, k - NEAR_PARAS):k + NEAR_PARAS + 1]:
+            if not isinstance(b, Para):
+                continue
+            if b.images or b.src in fig_anchors:
+                return True
+            t = nfkc(_para_text(b)).strip()
+            if self.style_role(b) == "fig_caption" or (RE_FIGCAP.match(t) and len(t) <= 80 and not t.endswith("。")):
+                return True
+        return False
+
+    def box_children(self, paras, roles) -> list:
+        """囲みの中の段落（空白だけの段落を除く）を、本文と同じ要素にする: 引用のスタイルの段落は QuoteNode（続けば 1 つ）、別行数式は
+        FormulaNode、自動番号の段落は同じ番号の定義が続く間 ListNode、それ以外（見出しのスタイルの段落も）は PNode。
+        boxed-text の中に sec は作らない（J-STAGE の boxed-text の子に sec はない）。"""
+        out = []
+        for p in paras:
+            if roles.get(id(p)) == "quote":
+                self._take(p, "quote")
+                if out and isinstance(out[-1], QuoteNode):
+                    out[-1].paras.append(p)
+                else:
+                    out.append(QuoteNode(paras=[p]))
+                continue
+            self._take(p, "p")
+            fnode = self.formula_node(p)
+            if fnode:
+                out.append(fnode)
+            elif p.numbering and p.autonum:
+                if out and isinstance(out[-1], ListNode) and out[-1].items[-1].numbering[0] == p.numbering[0]:
+                    out[-1].items.append(p)
+                else:
+                    out.append(ListNode(items=[p], ordered=not self.doc_numbering_is_bullet(p)))
+            else:
+                out.append(PNode(p))
+        return out
+
+    def place_boxes(self, items, src_index, start=0):
+        """文字だけのテキストボックスの扱いと置き場所を決める（place_floats とは別のパス。doc.textboxes を出現順に回す）。
+
+        items は place_floats に渡したものと同じ本文の要素の列、src_index はその段落 ID -> 位置。種類は floats.textbox_kind
+        （AI の指定〈placements の kind box・label〉があればそれ）で決める:
+        - 空白だけ（blank）: 空白だけの段落を exclude_blank するだけ（判断も知らせも出さない）。
+        - 図に重ねた注記（label）: 文字のある段落を理由付きで除外し、判断の一覧とアンカー段落ごとの警告（10 章。AI の判断なら
+          AI の判断と分かる別の警告）に記録する（本文の文字なら、AI が placements の kind box で囲みに戻せる。
+          ai_assist._box_placement_problem。暫定の判断）。
+        - 決められない（undecided）: 文字のある段落を理由付きで除外し、判断の一覧に記録する（applied=False。要確認の知らせは
+          report._textbox_undecided_action）。
+        - 囲み（box）: BoxNode（<boxed-text>）にして、置く位置（items での位置）に差し込む。図の左上がアンカー段落の左上に
+          ある浮動配置（floats.at_anchor）はアンカー段落の前。行内（wp:inline・位置指定のない VML）はアンカー段落の後ろ。それ以外
+          （位置を指定した浮動配置・VML の position:absolute）は、位置を推定してアンカー段落の後ろ（要確認）。アンカー段落が
+          箇条書き・引用の途中なら、その終わりの後ろ（run_end）。アンカー段落が本文の外（N7）なら本文の最後（要確認）。
+          アンカー段落が本文の要素にない（和文の冒頭の最後のセクション区切りの段落など）なら、テキストボックスの最初の段落の
+          位置（要確認）。AI の指定（kind box）は、指定の段落の後ろ（ずらさない）。
+        どの種類でも、空白だけの段落は exclude_blank する。戻り値: (差し込みの一覧〈place_floats と同じ形。同じ位置の図表の後ろ〉,
+        扱ったテキストボックスの要素の id の集合〈build_body の役割の決め方に流さない〉)。
+        """
+        plan = self.plan
+        layout = plan.layout
+        roles = {id(b): r for b, r in items}
+        pos = {id(b): k for k, (b, _) in enumerate(items)}
+        floats = {fl.fid: fl for fl in getattr(self.doc, "floats", [])}
+        inserts, taken, labels = [], set(), {}     # labels: (アンカー段落, AI の判断か) -> 図に重ねた注記と判断した ID
+        for tb in getattr(self.doc, "textboxes", []):
+            members = [b for b, _ in items if b.textbox_id == tb.xid]
+            if not members or not self.text_only(tb.xid):
+                continue        # 表のセル・冒頭・資料の中など本文の要素にないもの、図表の入った図形の中のもの（今までどおり）
+            taken.update(id(b) for b in members)
+            paras = [b for b in members if isinstance(b, Para)]
+            texts = [p for p in paras if not p.is_blank]
+            for p in paras:
+                plan.region[p.src] = "body"
+                if p.is_blank:
+                    plan.exclude_blank(p)       # 全角空白だけの段落も記録する（文字のまったくない段落は記録しない）
+            fl = floats.get(tb.float_id) if tb.float_id else None
+            info = BoxInfo(box=tb, paras=paras, float=fl,
+                           outside=self.outside.get(tb.float_id, "") if tb.float_id else self.outside.get(tb.xid, ""))
+            plan.textboxes[tb.xid] = info
+            chars = sum(len(re.sub(r"\s", "", p.plain())) for p in paras)
+            if not chars:
+                info.kind, info.why = "blank", "空白だけ"
+                continue
+            spec = self.placements.get(tb.xid)
+            if spec and spec.get("kind") == "box" and spec.get("after") not in src_index:
+                spec = None     # AI の役割の指定で組み直した後に、指定された段落が本文の段落でなくなった
+            info.near = self.near_image(tb)
+            kind, info.why = textbox_kind(chars, tb.width_cm, box_lines(texts, tb.width_cm, layout), info.near, tb.group, layout)
+            info.kind, info.mode = (spec["kind"], "ai") if spec else (kind, "mechanical")
+            head = f"「{_para_text(texts[0]).strip()[:20]}」" + (f"など {len(texts)} 段落" if len(texts) > 1 else "")
+            what = f"テキストボックス {tb.xid}（{head}）"
+            if info.kind == "label":
+                reason = TEXTBOX_AI_LABEL_EXCLUDED if spec else TEXTBOX_LABEL_EXCLUDED
+                for p in texts:
+                    plan.exclude(p, reason)
+                if spec:
+                    plan.float_decisions[tb.xid] = plan.decide(
+                        "ai", "box", tb.anchor_src, f"{what}を図に重ねた注記と判断し、本文から除外した。{spec.get('reason', '')}",
+                        spec.get("confidence", ""))
+                else:
+                    plan.decide("mechanical", "box", tb.anchor_src, f"{what}を図に重ねた注記と判断し、本文から除外した（{info.why}）")
+                labels.setdefault((tb.anchor_src, bool(spec)), []).append(tb.xid)
+                continue
+            if info.kind == "undecided":
+                for p in texts:
+                    plan.exclude(p, TEXTBOX_UNDECIDED_EXCLUDED)
+                plan.decide("mechanical", "box", tb.anchor_src,
+                            f"{what}は、囲みか図の注記か決められない（{info.why}）。本文から除外した（AI による補完の placements で"
+                            " kind box・label を指定できる）", applied=False)
+                continue
+            # 囲み（boxed-text）
+            node = BoxNode(xid=tb.xid, children=self.box_children(texts, roles))
+            anchor = plan.paras.get(tb.anchor_src)
+            anchor_head = _para_text(anchor).strip()[:20] if anchor is not None else tb.anchor_src
+            if spec:
+                target = src_index[spec["after"]] + 1
+                info.where, info.after_src = "ai", spec["after"]
+                after = plan.paras.get(spec["after"])
+                # 機械的な判定を変えたときは、それも書く（図に重ねた注記とみなしたものを、AI が本文の囲みに戻したときなど）
+                was = {"label": "（機械的には図に重ねた注記と判断していた）",
+                       "undecided": "（機械的には囲みか図の注記か決められなかった）"}.get(kind, "")
+                plan.float_decisions[tb.xid] = plan.decide(
+                    "ai", "box", spec["after"],
+                    f"{what}を囲み（boxed-text）として段落「{_para_text(after).strip()[:20] if after else spec['after']}」の後に"
+                    f"置いた{was}。{spec.get('reason', '')}", spec.get("confidence", ""))
+            elif info.outside:
+                target, info.where, info.estimated = BODY_END, "end", True
+                info.place_why = f"アンカー段落が本文の外（{OUTSIDE_JA.get(info.outside, info.outside)}）にある"
+                plan.decide("mechanical", "box", tb.anchor_src,
+                            f"{what}を囲み（boxed-text）とし、{info.place_why}ので、本文の最後に置いた（{info.why}。要確認）")
+            elif tb.anchor_src not in src_index:
+                target, info.where, info.estimated = pos[id(members[0])], "after", True
+                info.place_why = "アンカー段落が本文の段落でない"
+                prev = next((items[j][0].src for j in range(target - 1, -1, -1)
+                             if isinstance(items[j][0], Para) and not in_shape(items[j][0])), "")
+                info.after_src = prev
+                plan.decide("mechanical", "box", tb.anchor_src,
+                            f"{what}を囲み（boxed-text）とし、{info.place_why}ので、テキストボックスの位置（{plan.box_place(tb.xid)}）に"
+                            f"置いた（{info.why}。要確認）")
+            elif fl is not None and at_anchor(fl, layout):
+                target, info.where, info.after_src = src_index[tb.anchor_src], "before", tb.anchor_src
+                plan.decide("mechanical", "box", tb.anchor_src,
+                            f"{what}を囲み（boxed-text）とし、アンカー段落「{anchor_head}」の前に置いた（{info.why}。"
+                            "図の左上がアンカー段落の左上の位置にあるため）")
+            else:
+                last = self.run_end(items, src_index[tb.anchor_src])
+                target, info.where, info.after_src = last + 1, "after", items[last][0].src
+                if tb.inline:
+                    plan.decide("mechanical", "box", tb.anchor_src,
+                                f"{what}を囲み（boxed-text）とし、行内のテキストボックスなので、{plan.box_place(tb.xid)}に置いた"
+                                f"（{info.why}）")
+                else:
+                    info.estimated = True
+                    info.place_why = why_not_at_anchor(fl, layout) if fl is not None else "VML の position:absolute の位置指定"
+                    plan.decide("mechanical", "box", tb.anchor_src,
+                                f"{what}を囲み（boxed-text）とした。位置は docx から決められない（{info.place_why}）ので、"
+                                f"{plan.box_place(tb.xid)}に置いた（{info.why}。要確認）")
+            inserts.append((target, (BODY_END, start + len(inserts)), [("node", node)]))
+        for (src, ai), xids in labels.items():
+            what = _xid_list(xids)
+            what += "" if what.endswith("）") else " "
+            if ai:
+                plan.warnings.append(f"{src}: AI が図に重ねた注記と判断したテキストボックス {what}の文字を、本文から除外しました"
+                                     "（2 章・6 章）。図の注記でなく本文の文字（問題文など）なら、AI に出し直してもらうか、Word で"
+                                     "文字をテキストボックスの外に出して変換し直してください")
+            else:
+                plan.warnings.append(f"{src}: 図に重ねた注記と判断したテキストボックス {what}の文字を、本文から除外しました（6 章）。"
+                                     "図の注記でなく本文の文字（問題文など）なら、AI による補完で囲みに指定するか、Word で文字を"
+                                     "テキストボックスの外に出して変換し直してください")
+        return inserts, taken
+
     @staticmethod
     def provisional_target(fl, end_spec, src_index, body) -> tuple:
         """位置を決められない図表を仮に置く位置（決定事項 21）。戻り値: (where, end_why, end_after, items での差し込み位置)。
 
         - AI が本文の外（注・引用文献など）の段落の後ろを指定した（end_spec。ai_assist.float_placements の印）: 本文の最後
-        - アンカー段落が本文の段落（body。plan.body_seq）でない: 本文の最後。今の place_floats は本文にアンカーのある図形だけを
-          扱うので起きないが、本文の外に結び付いた図形を扱うとき（修正計画の F の N7）にそのまま使えるように分けておく
+        - アンカー段落が本文の段落（body。plan.body_seq）でない（本文の外の段落に結び付いた図形。修正計画の N7。self.outside）:
+          本文の最後
         - それ以外: アンカー段落のすぐ後ろ（AI の指定の after と同じ形）。アンカー段落が箇条書き・引用の途中なら、place_floats が
           その箇条書き・引用の最後の段落の後ろにずらす（run_end）
         """
@@ -968,7 +1313,10 @@ class Classifier:
         段落なら、その前の要素で見る。
         """
         def skip(b):
-            return bool(b.float_id) or (isinstance(b, Para) and b.is_blank)
+            # 文字だけのテキストボックスの段落も、その位置には出力しない（place_boxes）。キャプションなどのある浮動配置でない
+            # テキストボックスの段落は、その位置に出力するので飛ばさない（list_or_quote で止まる）
+            return (bool(b.float_id) or (isinstance(b, Para) and b.is_blank)
+                    or (bool(b.textbox_id) and self.text_only(b.textbox_id)))
 
         prev = next((j for j in range(k, -1, -1) if not skip(items[j][0])), None)
         want = self.list_or_quote(*items[prev]) if prev is not None else None
@@ -1341,7 +1689,9 @@ class Classifier:
         しない（図キャプションと画像、表キャプションと表、キャプションの続き、図の本体の表〈table_for_figure〉）。前後の要素は、
         同じ置き場所の要素（図形の外の要素なら図形の外の要素、仮に置いた図形の中身なら同じ位置に仮に置いた図形の中身）だけで
         数える（間に図形の中身を仮に置いていても、docx で隣り合う画像と図キャプションは組にする。同じ段落に結び付いた、画像だけの
-        図形とキャプションだけの図形は、同じ位置に仮に置くので組にする）。
+        図形とキャプションだけの図形は、同じ位置に仮に置くので組にする）。囲み（BoxNode。置き場所は BOX_PLACE）も前後に数えない
+        （図はキャプションの位置に組み立てるので、画像とキャプションの間の囲みは、キャプションが画像の後ろなら図の前、前なら図の
+        後ろに出る。表は表キャプションと表の先に来る方の位置に組み立てるので、間の囲みは、キャプションが表の上でも下でも表の後ろに出る）。
         """
         plan = self.plan
         out = []
@@ -1620,6 +1970,8 @@ class Classifier:
             return out
         if isinstance(node, FormulaNode):
             return [node.para]
+        if isinstance(node, BoxNode):
+            return [p for c in node.children for p in Classifier.node_paras(c)]
         return []
 
     # ----------------------------------------------------------------- back
@@ -1628,6 +1980,12 @@ class Classifier:
         state = None
         current_fn = None
         for b, role in items:
+            key = self.outside_key(b) if in_shape(b) else ""
+            if key:
+                # 本文の外（引用文献・注など）の段落に結び付いた図形の中身は、その領域の段落にしない（N7）。状態を変えずに飛ばし、
+                # 記録する（classify が組み立て直して、本文の最後に回す）
+                self.outside.setdefault(key, state or "back")
+                continue
             if isinstance(b, Table):
                 if state == "refs":
                     for p in b.paragraphs():
@@ -1729,6 +2087,12 @@ class Classifier:
         pending_name = None
         ai_abstract = False         # AI が abstract を指定した段落があった（後ろで資料が始まっていなければ、そこから英文要旨が続く）
         for b, role in items:
+            key = self.outside_key(b) if app is None and in_shape(b) else ""
+            if key:
+                # 資料が始まる前（英文の題目・著者・要旨）の段落に結び付いた図形の中身は、英文の部分の段落にしない（N7。build_back と
+                # 同じく、状態を変えずに飛ばして記録する）。資料の中の図形は、今までどおり資料の中に出す
+                self.outside.setdefault(key, "front_en")
+                continue
             if isinstance(b, Table):
                 troles = self.table_roles(b)
                 if troles & {"author_en", "aff_en"} and app is None:
@@ -2048,8 +2412,8 @@ class Classifier:
                     tabs.append(node)
                 elif isinstance(node, FormulaNode):
                     forms.append(node)
-                elif isinstance(node, (BackSec, AppNode)):
-                    walk(node.children)
+                elif isinstance(node, (BackSec, AppNode, BoxNode)):
+                    walk(node.children)         # 囲みの中の別行数式にも FD の ID を付ける
         walk(plan.body)
         for extra in (plan.notes, plan.ack):
             if extra:
@@ -2090,4 +2454,27 @@ class Classifier:
 
 
 def classify(doc, journal, overrides=None, placements=None) -> ArticlePlan:
-    return Classifier(doc, journal, overrides, placements).run()
+    """段落の役割を決め、論文の構造を組み立てる。
+
+    本文の外（引用文献・注・付記・謝辞・英文の部分）の段落に結び付いた図形があるときだけ、組み立てを 2 回行う（修正計画の N7）:
+    どの図形が本文の外かは、英文の部分では資料が始まったかどうかで決まり（build_front_en の中でしか分からない）、本文は
+    その前に組み立てるため。1 回目に見つけた図形（Classifier.outside）の中身を、2 回目は本文の最後に回す（split_regions）。
+    1 回目が段落に書き込んだもの（役割・役割の由来・覚え書き）は、2 回目の前に戻す。本文の外の図形がなければ 1 回だけ
+    （0.24.1 と同じ処理・同じ判断の番号）。
+    """
+    saved = [(p, p.role, p.role_origin, p.note) for p in _doc_paragraphs(doc)]
+    first = Classifier(doc, journal, overrides, placements)
+    plan = first.run()
+    if not first.outside:
+        return plan
+    for p, role, origin, note in saved:
+        p.role, p.role_origin, p.note = role, origin, note
+    return Classifier(doc, journal, overrides, placements, outside=first.outside).run()
+
+
+def _doc_paragraphs(doc):
+    """doc のすべての段落（本文・表のセル・テキストボックス・Word の脚注・文末脚注）。"""
+    yield from doc.all_paragraphs()
+    for notes in (doc.footnotes, doc.endnotes):
+        for paras in notes.values():
+            yield from paras

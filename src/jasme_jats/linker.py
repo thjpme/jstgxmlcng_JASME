@@ -14,7 +14,7 @@ import re
 import unicodedata
 
 from .model import OBJ, Atom, LinkSpec, Para
-from .structure import ArticlePlan, FigNode, FormulaNode, ListNode, PNode, QuoteNode, Sec, TableNode
+from .structure import ArticlePlan, BoxNode, FigNode, FormulaNode, ListNode, PNode, QuoteNode, Sec, TableNode
 
 # URL（末尾の句読点・閉じ括弧は含めない）
 RE_URL = re.compile(r"(?:https?://|www\.)[^\s<>\"'「」『』、。，（）［］【】〔〕\u3000]+", re.I)
@@ -104,6 +104,8 @@ def body_paragraphs(plan: ArticlePlan):
 
     docx の表のセルの段落を表の外に出したもの（表のセルの画像とキャプションで組んだ図のキャプションと、画像と同じ段落の文字。
     plan.cell_paras）は、今までどおり cell とする（出版版 PDF との照合で、表のセルとして照合しない・直さない。pdfmatch）。
+    囲み（文字だけのテキストボックス。BoxNode）の段落も cell とする（別行数式は formula。リンクは本文と同じく付ける。出版版 PDF
+    との照合では、テキストボックスの段落として照合しない・ルート2 で直さない。0.24.1 と同じ扱い）。
     """
     cells = plan.cell_paras
 
@@ -135,6 +137,8 @@ def body_paragraphs(plan: ArticlePlan):
                         yield p, "cell"
             elif isinstance(node, FormulaNode):
                 yield node.para, "formula"
+            elif isinstance(node, BoxNode):
+                yield from walk(node.children, "cell")
     yield from walk(plan.body)
     for p in plan.abstract:
         yield p, "abstract"

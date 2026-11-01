@@ -20,6 +20,7 @@ STRUCTURE = FIXTURES / "sample_structure.docx"   # 論文の構造（領域の�
 CELLS = FIXTURES / "sample_b3_cells.docx"   # 表のセルに画像とキャプションが並ぶ図形（AI なしで図に組める）
 TABLEFIG = FIXTURES / "sample_b3_tablefig.docx"   # 画像のない図キャプションと、隣のキャプションのない表
 PLACE = FIXTURES / "sample_b3_place.docx"   # 位置を決められない図表の仮の置き場所（AI 補完が必要。ALL_DOCS には入れない）
+OUTSIDE = FIXTURES / "sample_outside.docx"   # 本文の外の段落に結び付いた図形（AI 補完が必要。ALL_DOCS には入れない）
 ALL_DOCS = [FULL, EDGE, TEMPLATE, NOTES, PDFCHECK, READER, STRUCTURE, CELLS, TABLEFIG]
 
 

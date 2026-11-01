@@ -8,11 +8,15 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .model import Atom, Cell, Document, Float, ImageRef, Layout, Para, Row, Table, note_key
+from .model import Atom, Cell, Document, Float, ImageRef, Layout, Para, Row, Table, TextBox, note_key
 from .numbering import Numbering
-from .ooxml import (A_NS, BR_TEXT_TYPES, O_NS, PIC_NS, R_NS, V_NS, WP_NS, DocxPackage, m,
+from .ooxml import (A_NS, BR_TEXT_TYPES, O_NS, PIC_NS, R_NS, V_NS, WP_NS, WPS_NS, DocxPackage, m,
                     on_off, paragraph_ids, run_hidden, sym_char, w, wval)
 
+WPG_NS = "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"
+WPC_NS = "http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas"
+# テキストボックスを入れる VML の図形（style に大きさ・位置がある）
+VML_BOX_SHAPES = {f"{{{V_NS}}}shape", f"{{{V_NS}}}rect", f"{{{V_NS}}}roundrect"}
 
 
 @dataclass
@@ -82,12 +86,13 @@ class Reader:
         self.images = []
         self.warnings = []
         self.hidden = []
-        self.textbox_excluded = []
         # 削除の変更履歴の中の脚注・文末脚注の参照の注の鍵（参照として数えない。structure.Classifier.attach_word_notes が除外の理由に使う）
         self.deleted_note_refs = set()
         self._img_count = 0
         self.floats = []
         self._float = None      # 読み取り中の浮動配置の図形（Float）
+        self.textboxes = []
+        self._textbox = None    # 読み取り中のテキストボックス（TextBox）。入れ子の内側を読む間も外側のまま
 
     # ------------------------------------------------------------ styles
     def style_chain(self, sid):
@@ -126,8 +131,8 @@ class Reader:
         comments = sum(1 for _ in root.iter(w("commentRangeStart")))
         doc = Document(blocks=blocks, footnotes=footnotes, endnotes=endnotes, media=self.media,
                        styles=self.styles, warnings=self.warnings, hidden_text=self.hidden,
-                       textbox_excluded=self.textbox_excluded, tracked_changes=tracked, comments=comments,
-                       images=self.images, floats=self.floats, layout=read_layout(root, self.pkg),
+                       tracked_changes=tracked, comments=comments,
+                       images=self.images, floats=self.floats, textboxes=self.textboxes, layout=read_layout(root, self.pkg),
                        deleted_note_refs=self.deleted_note_refs)
         return doc
 
@@ -180,7 +185,7 @@ class Reader:
         sid = wval(tpr.find(w("tblStyle"))) if tpr is not None else ""
         t = Table(tid=f"t{self._tcount}", style_id=sid or "",
                   style_name=self.styles[sid].name if sid in self.styles else (sid or ""),
-                  float_id=self._float.fid if self._float else "")
+                  float_id=self._float.fid if self._float else "", textbox_id=self._textbox.xid if self._textbox else "")
         # 行と、行の中のセルは、コンテンツコントロール（w:sdt）や w:customXml に包まれていることがある
         for tr in _children(tbl, (w("tr"),)):
             trpr = tr.find(w("trPr"))
@@ -225,7 +230,7 @@ class Reader:
         para = Para(src=src, style_id=sid, style_name=self.styles[sid].name if sid in self.styles else sid,
                     numbering=numpr if numpr and numpr[0] not in (None, "0") else None,
                     align=align, section_break=sect, in_textbox=in_textbox,
-                    float_id=self._float.fid if self._float else "")
+                    float_id=self._float.fid if self._float else "", textbox_id=self._textbox.xid if self._textbox else "")
         if para.numbering:
             para.autonum = self.numbering.label(*para.numbering)
         self._extra = []
@@ -397,11 +402,20 @@ class Reader:
         self.images.append(img)
         return img
 
-    def _textboxes(self, container, para):
+    def _textboxes(self, container, para, holder=None, inline=False, group=False, vml=False):
+        """container（w:drawing / w:pict / w:object）の中のテキストボックスの段落・表を読み、段落 para の後ろに並べる。
+
+        本文（word/document.xml）のテキストボックスごとに TextBox を記録し（_new_textbox）、中身を読む間だけ self._textbox に
+        する（中の段落・表の textbox_id）。入れ子の内側のテキストボックスは、外側を読んでいる間に読むので、TextBox を作らず、
+        外側の ID を継ぐ。holder・inline・group は DrawingML の wp:inline / wp:anchor と、グループ図形・描画キャンバスの中か。
+        """
         for tx in container.iter(w("txbxContent")):
             # 入れ子のテキストボックスは外側の処理で読む
             if _in_textbox(tx, container):
                 continue
+            outer = self._textbox
+            if outer is None and self.part == "word/document.xml":
+                self._textbox = self._new_textbox(tx, para, holder, inline, group, vml)
             # 段落と表も、コンテンツコントロール（w:sdt）や w:customXml に包まれていることがある
             for el in _children(tx, (w("p"), w("tbl"))):
                 if el.tag == w("p"):
@@ -410,6 +424,45 @@ class Reader:
                     self._extra.extend(extra)
                 elif el.tag == w("tbl"):
                     self._extra.append(self._read_nested_table(el))
+            self._textbox = outer
+
+    def _new_textbox(self, tx, para, holder, inline, group, vml) -> TextBox:
+        """テキストボックス tx（w:txbxContent）の TextBox（種類・大きさ）。文字の読み方には関わらない。
+
+        大きさ: DrawingML は wp:extent（グループ図形・描画キャンバスの中なら、テキストボックスの wps:spPr の a:ext に、一番外側の
+        グループの拡大率〈wp:extent / wpg:grpSpPr の a:chExt。chExt がなければ 1〉を掛ける）。VML は図形の style の width・height
+        （pt のときだけ。ほかの単位〈cm・in・%・グループの座標〉は読めないとして None）。
+        """
+        tb = TextBox(xid=f"x{len(self.textboxes) + 1}", anchor_src=para.src, source="vml" if vml else "wps",
+                     float_id=self._float.fid if self._float else "")
+        if vml:
+            shape = next((a for a in tx.iterancestors() if a.tag in VML_BOX_SHAPES), None)
+            style = re.sub(r"\s", "", shape.get("style", "") if shape is not None else "").lower()
+            tb.width_cm, tb.height_cm = _vml_cm(style, "width"), _vml_cm(style, "height")
+            tb.absolute = "position:absolute" in style
+            tb.inline = not tb.absolute
+            tb.group = any(a.tag == f"{{{V_NS}}}group" for a in tx.iterancestors())
+        else:
+            tb.inline, tb.group = inline, group
+            ext = holder.find(f"{{{WP_NS}}}extent") if holder is not None else None
+            if not group:
+                if ext is not None:
+                    tb.width_cm, tb.height_cm = _emu_cm(ext.get("cx")), _emu_cm(ext.get("cy"))
+            else:
+                wsp = next((a for a in tx.iterancestors() if a.tag == f"{{{WPS_NS}}}wsp"), None)
+                a_ext = wsp.find(f"{{{WPS_NS}}}spPr/{{{A_NS}}}xfrm/{{{A_NS}}}ext") if wsp is not None else None
+                if a_ext is not None:
+                    groups = [a for a in tx.iterancestors() if a.tag in (f"{{{WPG_NS}}}wgp", f"{{{WPC_NS}}}wpc")]
+                    ch = groups[-1].find(f"{{{WPG_NS}}}grpSpPr/{{{A_NS}}}xfrm/{{{A_NS}}}chExt") if groups else None
+                    sx = sy = 1.0
+                    if ch is not None and ext is not None:
+                        sx = _ratio(ext.get("cx"), ch.get("cx"))
+                        sy = _ratio(ext.get("cy"), ch.get("cy"))
+                    w_cm, h_cm = _emu_cm(a_ext.get("cx")), _emu_cm(a_ext.get("cy"))
+                    tb.width_cm = w_cm * sx if w_cm is not None else None
+                    tb.height_cm = h_cm * sy if h_cm is not None else None
+        self.textboxes.append(tb)
+        return tb
 
     def _read_nested_paragraph(self, p):
         saved = (self._extra, self._fields)
@@ -466,7 +519,8 @@ class Reader:
                     if not hidden:
                         para.atoms.append(Atom(kind="image", image=img))
             if has_tx:
-                self._textboxes(el, para)
+                self._textboxes(el, para, holder=holder, inline=inline,
+                                group="wordprocessingGroup" in uri or "wordprocessingCanvas" in uri)
             self._float = outer
             return
         # VML（w:pict / w:object）
@@ -496,8 +550,7 @@ class Reader:
             if not hidden:
                 para.atoms.append(Atom(kind="image", image=img))
         if has_tx:
-            self._textboxes(el, para)
-
+            self._textboxes(el, para, vml=True)
 
     def _new_float(self, holder, para, group) -> Float:
         fl = Float(fid=f"s{len(self.floats) + 1}", anchor_src=para.src, group=group)
@@ -589,6 +642,34 @@ def _children(el, tags):
                 yield from _children(content, tags)
         elif ch.tag == w("customXml"):
             yield from _children(ch, tags)
+
+
+def _emu_cm(v):
+    """EMU の文字列を cm にする（読めなければ None）。"""
+    try:
+        return int(v) / 360000.0
+    except (TypeError, ValueError):
+        return None
+
+
+def _ratio(a, b) -> float:
+    """グループ図形の拡大率 a / b（読めない・0 なら 1）。"""
+    try:
+        a, b = int(a), int(b)
+    except (TypeError, ValueError):
+        return 1.0
+    return a / b if a > 0 and b > 0 else 1.0
+
+
+def _vml_cm(style, prop):
+    """VML の style（空白を除いて小文字にしたもの）の width・height を cm にする。pt のときだけ（ほかの単位は None）。"""
+    mm = re.search(rf"(?:^|;){prop}:([0-9.]+)pt(?:;|$)", style)
+    if not mm:
+        return None
+    try:
+        return float(mm.group(1)) / 72.0 * 2.54
+    except ValueError:
+        return None
 
 
 def _in_textbox(el, container) -> bool:
