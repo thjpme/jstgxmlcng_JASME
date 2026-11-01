@@ -198,11 +198,20 @@ if CONVERT_EMF and not (shutil.which("soffice") or shutil.which("libreoffice")):
 # 版の表示は別のプロセスで行う（ここで読み込むと、次に手順 1 を実行したときに「前の版が残っている」扱いになるため）
 ver = subprocess.run([sys.executable, "-c", "from jasme_jats.pipeline import tool_version; print(tool_version())"],
                      capture_output=True, text=True).stdout.strip()
+if not ver:
+    raise SystemExit("ツールを読み込めませんでした。メニューの「ランタイム」→「セッションを再起動」を選んでから、手順 1 からもう一度実行してください。")
 print("準備ができました。ツールの版:", ver)
-if USE_DEV_VERSION:
+if BRANCH != "main":
     print("※ 開発版（ブランチ", BRANCH, "）を使っています。")
-elif ver and not ver.startswith("{VERSION}"):
-    print("※ このノートブックの説明は版 {VERSION} のものです。ノートブックを開き直してください。")
+if not ver.startswith("{VERSION}"):
+    # ノートブックとツールの版が違うと、後の手順がツールにない機能を呼んで止まる。正式版（main）のときは、ここで止めて開き直してもらう
+    mismatch = "入ったツールの版（" + ver + "）が、このノートブックの版（{VERSION}）と違います。"
+    if BRANCH != "main":
+        print("※ " + mismatch + "手順の説明や画面が合わないことがあります。")
+    else:
+        raise SystemExit(mismatch + "ノートブックを GitHub（https://github.com/{REPO}）の main から開き直して、手順 1 からやり直してください。"
+                         "開発中の版のノートブックを試しているときは、「開発版を使う（USE_DEV_VERSION）」にチェックを入れて、"
+                         "そのブランチ名を入力してください。")
 if globals().get("LO_PROC") is not None and LO_PROC.poll() is None:
     print("LibreOffice を裏でインストールしています（数分）。インストールは裏で続くので、このまま手順 2 に進んでください"
           "（手順 5 の変換は、インストールが終わってから始まります）。")
@@ -609,17 +618,40 @@ display(HTML(next_article_box(globals().get("PREVIOUS", {}).get("docx", ""))))
 
 
 
-def render() -> str:
+BRANCH_LINE = 'BRANCH = "main"'
+
+
+def notebook_branch(text: str) -> str:
+    """ノートブック（JSON の文字列）の手順 1 が、既定でどのブランチからツールを入れるかを読む。"""
+    m = re.search(r'BRANCH = \\"([^\\"]+)\\"', text)
+    return m.group(1) if m else "main"
+
+
+def render(branch: str = "main") -> str:
+    """ノートブックの JSON を作る。branch は手順 1 が既定で入れるブランチ（開発中の版のノートブックは、そのブランチ名で作る）。"""
+    if branch != "main":
+        # 手順 1 の BRANCH = "main" を置き換える（開発版のチェックを入れなくても、そのブランチのツールが入る）
+        assert sum(line.count(BRANCH_LINE) for c in cells for line in c["source"]) == 1
+        cells_out = [dict(c, source=[line.replace(BRANCH_LINE, f'BRANCH = "{branch}"') for line in c["source"]])
+                     for c in cells]
+    else:
+        cells_out = cells
     nb = {
         "nbformat": 4, "nbformat_minor": 0,
         "metadata": {"colab": {"provenance": [], "toc_visible": True},
                      "kernelspec": {"name": "python3", "display_name": "Python 3"}, "language_info": {"name": "python"}},
-        "cells": cells,
+        "cells": cells_out,
     }
     return json.dumps(nb, ensure_ascii=False, indent=1) + "\n"
 
 
 if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser(description="Colab ノートブックを生成する")
+    ap.add_argument("--branch", default="main",
+                    help="手順 1 が既定でツールを入れるブランチ（既定 main）。開発中の版のノートブックを、そのブランチから"
+                         "入れる形で作るときに指定する。main に反映するときは指定しない（main から入れる形に戻す）")
+    a = ap.parse_args()
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(render(), encoding="utf-8")
-    print("written:", OUT)
+    OUT.write_text(render(a.branch), encoding="utf-8")
+    print("written:", OUT, "" if a.branch == "main" else f"（手順 1 はブランチ {a.branch} から入れる）")
