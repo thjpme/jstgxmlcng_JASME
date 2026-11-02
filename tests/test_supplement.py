@@ -12,8 +12,8 @@ import pytest
 import make_fixtures as mf
 from conftest import META_EXAMPLE, PDFCHECK, PDFCHECK_PDF
 from jasme_jats import pdfdocx, pdfmatch, pipeline
-from jasme_jats.fidelity import (NUMBER_WHY, UNIT_WHY, UNTRACKED_WHY, UNWRITTEN_WHY, _pair, source_texts,
-                                 verify_supplement)
+from jasme_jats.fidelity import (NUMBER_WHY, UNIT_WHY, UNTRACKED_WHY, UNWRITTEN_WHY, _pair, _unit_ends, source_texts,
+                                 supplement_targets, verify_supplement)
 from jasme_jats.pipeline import Options, convert
 from test_pdfmatch import (FRONT, N10_TAIL, PUB12, REST, SMALL_FRONT, TALK, body_lines, convert_with_pages,
                            n10_article, n10_pages)
@@ -41,7 +41,8 @@ def test_supplement_passes_on_pdfcheck(journal, meta, tmp_path, capsys):
     assert (sup.typeset, sup.supplied) == (43, 1)
     assert res.ok and not res.needs_action
     head = report(res).split("## 2.")[0]
-    assert SUP_ROW in head and "合格（元の docx から変わった文字 44 箇所" in head
+    row = next(line for line in head.splitlines() if SUP_ROW in line)
+    assert "合格" in row and "不合格" not in row and "43" in row
     from jasme_jats.cli import main
     assert main([str(PDFCHECK), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli"), "--pdf",
                  str(PDFCHECK_PDF), "--no-metafile-conversion"]) == 0
@@ -124,6 +125,61 @@ def test_supplement_detects_untracked_edit(journal, tmp_path):
     assert not sup.ok and [(src, why) for src, _, _, why in sup.problems] == [("d12", UNTRACKED_WHY)]
 
 
+def test_supplement_detects_space_deletion_between_words(journal, meta, tmp_path, monkeypatch):
+    """照合の drops でない空白の削除（英文要旨の語の間の空白）を (A) の直す箇所として書き込む → 不合格（空白の削除を (A) と
+    みなすのは、全角・半角の対のすぐ隣の半角の空白と、段落の先頭の空白だけ）。"""
+    pytest.importorskip("pypdfium2")
+    orig = pdfdocx.plan_fixes
+
+    def extra(plan, check):
+        fixes = orig(plan, check)
+        t = plan.paras["d26"].plain()
+        q = t.index(" ")
+        fixes.append(pdfdocx.Fix("d26", q, q + 1, "", "space", " "))
+        return fixes
+    monkeypatch.setattr(pdfdocx, "plan_fixes", extra)
+    res = route2(tmp_path, meta, journal)
+    assert any(f.src == "d26" and f.applied for f in res.docx_fix.fixes)
+    assert res.fidelity.ok and not res.supplement.ok and not res.ok
+    assert [(src, why) for src, _, _, why in res.supplement.problems] == [("d26", UNIT_WHY)]
+
+
+@pytest.mark.parametrize("d, i, at_start, ok", [
+    (" (", "（", False, True),          # 全角・半角の対のすぐ前の空白
+    (")  ", "）", False, True),         # 対のすぐ後ろの、続いた空白
+    (" ", "", True, True),              # 段落の先頭（自動番号の後ろ）の空白
+    (" ", "", False, False),            # 隣に対のない空白
+    ("\u3000(", "（", False, False),    # 全角の空白
+    ("\t(", "（", False, False),        # タブ
+    ("\n(", "（", False, False),        # 改行
+    (" (", "［", False, False),          # 隣が対でない
+])
+def test_supplement_space_deletion_rule(d, i, at_start, ok):
+    """空白の削除の規則（_unit_ends）: 半角の空白で、d の中のすぐ隣を全角・半角の対として並べたときか、段落の先頭のときだけ (A)。"""
+    assert (_unit_ends(d, i, [], 0, False, at_start) != {}) == ok
+
+
+def test_supplement_case_sources_are_independent(journal, meta, tmp_path, monkeypatch):
+    """大文字・小文字を (A) とする段落は、照合（pdfmatch.case_paragraphs）を通さず plan から作る。照合の側が英文要旨も
+    含めてしまう不具合で、英文要旨の大文字・小文字を組版の違いとして書き込んでも、補完の確かめは不合格にする。"""
+    pytest.importorskip("pypdfium2")
+    orig = pdfmatch.case_paragraphs
+    monkeypatch.setattr(pdfmatch, "case_paragraphs", lambda plan: orig(plan) | {"d26"})
+    orig_pf = pdfdocx.plan_fixes
+
+    def extra(plan, check):
+        fixes = orig_pf(plan, check)
+        fixes.append(pdfdocx.Fix("d26", 0, 1, "t", "glyph", "T"))
+        return fixes
+    monkeypatch.setattr(pdfdocx, "plan_fixes", extra)
+    res = route2(tmp_path, meta, journal)
+    assert [(f.old, f.new, f.applied) for f in res.docx_fix.fixes if f.src == "d26"] == [("T", "t", True)]
+    assert not res.supplement.ok and [(src, why) for src, _, _, why in res.supplement.problems] == [("d26", UNIT_WHY)]
+    # 英文の題目・著者名などは plan から作った集合に入る（英文要旨は入らない）
+    case_srcs, numbers = supplement_targets(res.plan, {})
+    assert {p.src for p in res.plan.title_en} <= case_srcs and "d26" not in case_srcs
+
+
 # ---------------------------------------------------------------------------- 15. 数式の後ろと、段落記号の削除をまたぐ直し
 def test_supplement_with_formula_and_joined_paragraphs(journal, meta, tmp_path, monkeypatch):
     """数式の後ろの直し（読み取りの段落の文字では数式は 1 文字、検証の文字では数式の文字なので、位置がずれる）と、段落記号の
@@ -173,9 +229,7 @@ PAIR_CHARS = ([chr(c) for c in range(0x20, 0x7F)] + [chr(c) for c in range(0xFF0
 def test_supplement_pairs_agree_with_pdfmatch():
     """補完の確かめの対の判定（fidelity._pair。定数だけを共有した別の実装）と、照合の pdfmatch.typeset_pair が、文字の集合の
     すべての対で同じ答えになる（片方だけを直すと落ちる）。"""
-    typeset_pair = getattr(pdfmatch, "typeset_pair", None)
-    if typeset_pair is None:            # 照合の側の述語がまだない（ほかの作業の途中）ときは、比べる相手がない
-        return
+    typeset_pair = pdfmatch.typeset_pair
     chars = sorted(set(PAIR_CHARS))
     bad = [(a, b, case, number) for a in chars for b in chars for case in (False, True) for number in (False, True)
            if _pair(a, b, case, number) != bool(typeset_pair(a, b, case=case, number=number))]

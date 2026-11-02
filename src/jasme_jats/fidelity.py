@@ -519,13 +519,16 @@ def verify_supplement(original_docx, fixed_docx, fixes, case_srcs, numbers_origi
          XML が元の docx と同じ段落は読まない（同じ XML なら同じ文字）
       2. 段落ごと（段落記号の削除でつないだ段落は 1 つ）に、変わっていない文字をはさまずに続く挿入・削除を 1 つの単位にし、
          単位ごとに（消した文字, 足した文字）を作る（位置は変更履歴で決まるので、文字列を並べ直したときのずれは起きない）
-      3. 単位を、1 文字ずつの (A) の対（_pair。大文字・小文字は case_srcs の段落だけ）・空白の削除と、その段落の校正の直しの
+      3. 単位を、1 文字ずつの (A) の対（_pair。大文字・小文字は case_srcs の段落だけ）・空白の削除（全角・半角の対のすぐ隣と、
+         段落の先頭の半角の空白だけ。_unit_ends）と、その段落の校正の直しの
          並びの次のいくつか（old・new が文字列として一致するもの）で説明できるか（_unit_ends）。説明できない単位と、どの単位にも
          当たらずに残った直しは不合格
       4. Word が付ける番号（pdf_numbers。docx の文字ではない）が、元の文字（numbers_original）と同じ長さで、1 文字ずつ同じか
          _pair（number）の対か
 
-    case_srcs: 大文字・小文字の違いを (A) とする段落の ID。numbers_original・pdf_numbers: (種類, ID) -> 番号の文字列。
+    case_srcs: 大文字・小文字の違いを (A) とする段落の ID。numbers_original: Word が付ける番号の元の文字。どちらも照合を通さず
+    plan から作ったもの（supplement_targets）。pdf_numbers: 番号を PDF に合わせたもの（plan.pdf_numbers）。番号の鍵は
+    (種類, ID) -> 文字列。
     """
     res = SupplementResult()
     problems = res.problems
