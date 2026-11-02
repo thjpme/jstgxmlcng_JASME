@@ -320,4 +320,6 @@ Colab で利用者に確かめてもらうこと（5 章の S1〜S4 の読み替
 - 変更: `gr.File` のリンクをやめ、「ZIP を保存」のボタン（`app.download_button_html`）にした。画面の中の JavaScript が
   `gradio_api/file=` から fetch で取り（同じ画面の認証で通る）、ブラウザに保存させる。ファイルは `allowed_paths` の作業フォルダの ZIP。
 - 準備の時間: 利用者は妥協する。削れる余地（2 回目の pip を省く、AI の SDK を選んだ会社の分だけ入れる）は G3 で検討。
+- 利用者の確認（0.26.5）: 取り寄せ（fetch）は通ったが、保存で「URL.createObjectURL is not a function」。onclick の中では名前 `URL` が
+  `document.URL`（文字列）に解決されるため。`window.URL` にして 0.26.6。
 

@@ -323,7 +323,8 @@ def download_button_html(path: "str | Path") -> str:
 
     Colab の出力欄の中では、ファイルのリンクをそのまま開く（新しいタブや、リンク先への移動）と、Colab の中継の認証が
     タブごとに分かれているため開けない。画面の中からの取得（fetch）は同じ画面の認証で通るので、取ってから保存する。
-    URL は画面の場所からの相対（root_path の下）。
+    URL は画面の場所からの相対（root_path の下）。onclick の中では名前 URL が document.URL（文字列）に解決されるので、
+    window.URL と書く（利用者の Colab で「URL.createObjectURL is not a function」になった）。
     """
     import html
     from urllib.parse import quote
@@ -331,7 +332,7 @@ def download_button_html(path: "str | Path") -> str:
     url = "gradio_api/file=" + quote(str(path))
     js = ("const b=this;b.disabled=true;b.textContent='取り出しています…';"
           f"fetch('{url}').then(r=>{{if(!r.ok)throw new Error(r.status);return r.blob();}})"
-          ".then(x=>{const a=document.createElement('a');a.href=URL.createObjectURL(x);"
+          ".then(x=>{const a=document.createElement('a');a.href=window.URL.createObjectURL(x);"
           f"a.download={html.escape(repr(path.name))};document.body.appendChild(a);a.click();a.remove();"
           "b.textContent='保存しました（もう一度押すと再保存）';b.disabled=false;})"
           ".catch(e=>{b.textContent='保存できませんでした: '+e;b.disabled=false;});")

@@ -164,5 +164,6 @@ def test_download_button_fetches_in_page():
     html = app.download_button_html("/content/jasme_work/変換結果_31_1.zip")
     assert "fetch('gradio_api/file=/content/jasme_work/%E5%A4%89%E6%8F%9B%E7%B5%90%E6%9E%9C_31_1.zip')" in html
     # onclick の中の引用符は HTML の実体にする（属性の中なので、JavaScript になる前に戻る）。リンク（<a href>）は出さない
+    assert "window.URL.createObjectURL" in html and "=URL.createObjectURL" not in html
     assert "a.download=&#x27;変換結果_31_1.zip&#x27;" in html and "ZIP を保存（変換結果_31_1.zip）" in html and "<a " not in html
 
