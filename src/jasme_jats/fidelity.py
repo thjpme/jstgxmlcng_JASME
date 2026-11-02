@@ -28,10 +28,11 @@ from dataclasses import dataclass, field
 
 from lxml import etree
 
-from .ooxml import DocxPackage, HiddenRule, canonical_texts, is_ws, paragraph_ids, w
+from .ooxml import (DocxPackage, HiddenRule, canonical_text, canonical_texts, is_ws, joined_paragraphs,
+                    paragraph_ids, w)
+from .omml import MML_NS, math_plain
 from .pdfdocx import AUTHOR, PARTS
 from .pdfmatch import DASHES, FW_FIRST, FW_LAST, HYPHENS, NUMBER_PAIRS, QUOTE_CLASSES
-from .omml import MML_NS, math_plain
 from .tracking import AI, GEN, JX_NS, SPAN
 
 DROP = f"{{{JX_NS}}}drop"
@@ -284,9 +285,7 @@ def _pair(a: str, b: str, case: bool = False, number: bool = False) -> bool:
         return True
     if number and (a, b) in NUMBER_PAIRS:
         return True
-    if case and fa.isascii() and fb.isascii() and fa.isalpha() and fa.lower() == fb.lower():
-        return True
-    return False
+    return case and fa.isascii() and fb.isascii() and fa.isalpha() and fa.lower() == fb.lower()
 
 
 def _mark_runs(el, open_mark: str, close_mark: str):
@@ -332,31 +331,27 @@ def _unwrap(el):
     parent.remove(el)
 
 
-def _marked_texts(fixed_docx, problems) -> dict:
-    """補った docx の段落 ID → 目印付きの文字（canonical_texts。このツールの変更履歴の中の文字を目印で挟む）。
+def _ours(el, old_ids) -> bool:
+    """el がこのツールが今回書き込んだ変更履歴か（作成者が AUTHOR で、元の docx にあった同じ作成者の変更履歴〈w:id〉でない）。"""
+    return el.get(w("author")) == AUTHOR and el.get(w("id")) not in old_ids
 
-    このツールの変更履歴（作成者が AUTHOR の w:ins・w:del）を、中のランの文字を目印で挟んで外し（削除の文字は w:t にする）、
-    canonical_texts で読む。目印の外の文字が変わっていない文字、I_OPEN〜I_CLOSE が足した文字、D_OPEN〜D_CLOSE が消した文字。
-    このツールの変更履歴が段落記号・書式（w:rPr の中）にかかっていれば、problems に足す。
+
+def _marked_text(chain, rule, old_ids, problems, src) -> str:
+    """段落の連鎖 chain（w:p の並び）の目印付きの文字（canonical_text。このツールの変更履歴の中の文字を目印で挟む）。
+
+    w:p を写し、このツールの変更履歴（_ours）を、中のランの文字を目印で挟んで外し（削除の文字は w:t にする）、canonical_text で
+    読む。目印の外の文字が変わっていない文字、I_OPEN〜I_CLOSE が足した文字、D_OPEN〜D_CLOSE が消した文字。このツールの変更履歴が
+    段落記号・書式（w:rPr の中）にかかっていれば、problems に足す。
     """
-    pkg = DocxPackage(fixed_docx)
-    rule = HiddenRule(pkg.xml("word/styles.xml"))
-    out = {}
-    for part, prefix in PARTS.items():
-        src_root = pkg.xml(part)
-        if src_root is None:
-            continue
-        root = copy.deepcopy(src_root)
-        ids = paragraph_ids(root, prefix)
-        for el in list(root.iter(w("ins"), w("del"))):
-            if el.get(w("author")) != AUTHOR:
-                continue
+    out = []
+    for q in chain:
+        q = copy.deepcopy(q)
+        for el in list(q.iter(w("ins"), w("del"))):
             parent = el.getparent()
-            if parent is None:
+            if parent is None or not _ours(el, old_ids):
                 continue
             if parent.tag == w("rPr"):
-                p = next((a for a in el.iterancestors(w("p"))), None)
-                problems.append((ids.get(p, ""), "", "", PARA_MARK_WHY))
+                problems.append((src, "", "", PARA_MARK_WHY))
                 parent.remove(el)
                 continue
             if el.tag == w("ins"):
@@ -364,8 +359,17 @@ def _marked_texts(fixed_docx, problems) -> dict:
             else:
                 _mark_runs(el, D_OPEN, D_CLOSE)
             _unwrap(el)
-        out.update(canonical_texts(root, prefix, rule))
-    return out
+        out.append(canonical_text(q, rule))
+    return "".join(out)
+
+
+def _chains(root, prefix) -> dict:
+    """部品の段落 ID → 段落の連鎖 [w:p, …]（canonical_texts と同じ並び。段落記号の削除でつないだ後ろの段落の ID は入らない）。"""
+    if root is None:
+        return {}
+    joined = joined_paragraphs(root)
+    later = {q for c in joined.values() for q in c[1:]}
+    return {pid: joined.get(p, [p]) for p, pid in paragraph_ids(root, prefix).items() if p not in later}
 
 
 def _split_marked(text: str):
@@ -466,9 +470,10 @@ def verify_supplement(original_docx, fixed_docx, fixes, case_srcs, numbers_origi
     校正の直し（fixes のうち applied で kind text のもの）以外に変わっていないか。照合（pdfmatch）・書き込み（pdfdocx）とは別の
     実装（設計: 定数だけを共有する）。
 
-      1. 補った docx のこのツールの変更履歴を却下した文字が、元の docx の文字（source_texts）と、すべての段落で同じか
-         （報告しない変更・変更履歴でない書き換え・段落の増減がないこと）。承諾した文字が補った docx の文字（source_texts）と
-         同じかも確かめる（変更履歴の読み取りの確かめ）
+      1. 補った docx のこのツールの変更履歴（_ours）を却下した文字が、元の docx の文字（canonical_text。fidelity.source_texts と
+         同じ並び）と、すべての段落で同じか（報告しない変更・変更履歴でない書き換え・段落の増減がないこと）。承諾した文字が
+         補った docx の文字と同じかも確かめる（変更履歴の読み取りの確かめ）。速さのため、書式（styles.xml）が同じで、段落の
+         XML が元の docx と同じ段落は読まない（同じ XML なら同じ文字）
       2. 段落ごと（段落記号の削除でつないだ段落は 1 つ）に、変わっていない文字をはさまずに続く挿入・削除を 1 つの単位にし、
          単位ごとに（消した文字, 足した文字）を作る（位置は変更履歴で決まるので、文字列を並べ直したときのずれは起きない）
       3. 単位を、1 文字ずつの (A) の対（_pair。大文字・小文字は case_srcs の段落だけ）・空白の削除と、その段落の校正の直しの
@@ -482,25 +487,45 @@ def verify_supplement(original_docx, fixed_docx, fixes, case_srcs, numbers_origi
     res = SupplementResult()
     problems = res.problems
     case_srcs = set(case_srcs or ())
-    original = source_texts(original_docx)
-    fixed = source_texts(fixed_docx)
-    marked = _marked_texts(fixed_docx, problems)
+    opkg, fpkg = DocxPackage(original_docx), DocxPackage(fixed_docx)
+    ostyles, fstyles = opkg.xml("word/styles.xml"), fpkg.xml("word/styles.xml")
+    orule, frule = HiddenRule(ostyles), HiddenRule(fstyles)
+    # 書式（styles.xml）が同じなら、XML が同じ段落は文字も同じなので読まない（速さのため。違う段落だけを canonical_text で読む）
+    same_styles = (ostyles is None and fstyles is None) or (
+        ostyles is not None and fstyles is not None and etree.tostring(ostyles) == etree.tostring(fstyles))
+
+    def xml_of(chain):
+        return [etree.tostring(q, with_tail=False) for q in chain]
 
     # 1. 却下した文字が元の docx と同じか（段落の並びも）
     split = {}
-    if set(marked) != set(original):
-        extra = sorted(set(marked) ^ set(original))
-        problems.append((",".join(extra[:5]) + ("…" if len(extra) > 5 else ""), "", "", PARA_SET_WHY))
-    for src, text in marked.items():
-        parts = _split_marked(text)
-        if parts is None or parts[1] != fixed.get(src):
-            problems.append((src, "", fixed.get(src, ""), READ_WHY))
-            continue
-        split[src] = parts
-        rej = parts[0]
-        if src in original and rej != original[src]:
-            old, new = _diff_excerpt(original[src], rej)
-            problems.append((src, old, new, UNTRACKED_WHY))
+    for part, prefix in PARTS.items():
+        oroot, froot = opkg.xml(part), fpkg.xml(part)
+        old_ids = {el.get(w("id")) for el in (oroot.iter(w("ins"), w("del")) if oroot is not None else ())
+                   if el.get(w("author")) == AUTHOR}
+        ochains, fchains = _chains(oroot, prefix), _chains(froot, prefix)
+        if set(ochains) != set(fchains):
+            extra = sorted(set(ochains) ^ set(fchains))
+            problems.append((",".join(extra[:5]) + ("…" if len(extra) > 5 else ""), "", "", PARA_SET_WHY))
+        oids = paragraph_ids(oroot, prefix) if oroot is not None else {}
+        fids = paragraph_ids(froot, prefix) if froot is not None else {}
+        for src, fchain in fchains.items():
+            ochain = ochains.get(src)
+            if ochain is None:
+                continue
+            if (same_styles and [oids[q] for q in ochain] == [fids[q] for q in fchain]
+                    and xml_of(ochain) == xml_of(fchain)):
+                continue
+            parts = _split_marked(_marked_text(fchain, frule, old_ids, problems, src))
+            accepted = "".join(canonical_text(q, frule) for q in fchain)
+            if parts is None or parts[1] != accepted:
+                problems.append((src, "", accepted, READ_WHY))
+                continue
+            split[src] = parts
+            original = "".join(canonical_text(q, orule) for q in ochain)
+            if parts[0] != original:
+                old, new = _diff_excerpt(original, parts[0])
+                problems.append((src, old, new, UNTRACKED_WHY))
 
     # 2.・3. 変更の単位を (A) と (B) に当てる
     queues = defaultdict(list)

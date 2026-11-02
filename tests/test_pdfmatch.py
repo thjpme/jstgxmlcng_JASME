@@ -3232,7 +3232,8 @@ def test_dash_at_line_end_follows_pdf(dash, journal, tmp_path):
     plan, src = n10_article(tmp_path, journal, [("body", text)])
     pc = compare(plan, n10_pages([*SMALL_FRONT, "　架空の研究では pp.11-", "16 の範囲を参照した。", *N10_TAIL]))
     assert changed_paragraphs(plan, pc, {src[text]: DASH_BODY.replace("–", "-")}) == {}
-    assert [(d.docx, d.pdf, d.fixable, d.why) for d in pc.diffs if d.src == src[text]] == [(dash, "-", True, "")]
+    assert [(d.docx, d.pdf, d.fixable, d.why, d.kind) for d in pc.diffs if d.src == src[text]] == \
+        [(dash, "-", True, "", "typeset")]          # 組版の違い（(A)。ダッシュ・ハイフン）
     pc = compare(plan, n10_pages([*SMALL_FRONT, "　架空の研究では pp.11￾", "16 の範囲を参照した。", *N10_TAIL]))
     assert changed_paragraphs(plan, pc, {}) == {} and not [d for d in pc.diffs if d.src == src[text]]
 
@@ -3247,7 +3248,8 @@ def test_hyphen_variant_at_line_end_follows_pdf(docx_hyphen, pdf_hyphen, journal
     plan, src = n10_article(tmp_path, journal, [("body", text)])
     pc = compare(plan, n10_pages([*SMALL_FRONT, f"　架空の研究では pp.11{pdf_hyphen}", "16 の範囲を参照した。", *N10_TAIL]))
     assert changed_paragraphs(plan, pc, {src[text]: DASH_BODY.replace("–", pdf_hyphen)}) == {}
-    assert [(d.docx, d.pdf, d.fixable, d.why) for d in pc.diffs if d.src == src[text]] == [(docx_hyphen, pdf_hyphen, True, "")]
+    assert [(d.docx, d.pdf, d.fixable, d.why, d.kind) for d in pc.diffs if d.src == src[text]] == \
+        [(docx_hyphen, pdf_hyphen, True, "", "typeset")]
     pc = compare(plan, n10_pages([*SMALL_FRONT, "　架空の研究では pp.11￾", "16 の範囲を参照した。", *N10_TAIL]))
     assert changed_paragraphs(plan, pc, {}) == {} and not [d for d in pc.diffs if d.src == src[text]]
 
@@ -3268,6 +3270,7 @@ def test_dash_in_middle_of_line_follows_pdf(docx_dash, pdf_dash, journal, tmp_pa
     plan, src = n10_article(tmp_path, journal, [("body", text)])
     pc = compare(plan, n10_pages([*SMALL_FRONT, f"　架空の研究では pp.11{pdf_dash}16 の範囲を参照", "した。", *N10_TAIL]))
     assert changed_paragraphs(plan, pc, {src[text]: DASH_BODY.replace("–", pdf_dash)}) == {}
+    assert [d.kind for d in pc.diffs if d.src == src[text]] == ["typeset"]
 
 
 NBH = "<w:r><w:noBreakHyphen/></w:r>"      # Word の改行なしハイフン（読み取りでは「‑」）
@@ -3285,12 +3288,16 @@ def test_no_break_hyphen_follows_pdf_in_route2(pdf_lines, journal, meta, tmp_pat
     res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "pdf", docx=tmp_path / "n10.docx")
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     assert [(f.old, f.new, f.applied) for f in res.docx_fix.fixes] == [("‑", "-", True)]
+    assert res.docx_fix.fixes[0].kind == "glyph"            # 組版の違い（(A)。ダッシュ・ハイフン）
     assert "架空の研究では pp.11-16 の範囲を参照した。" in texts(load(res))
     assert "架空の研究では pp.11-16 の範囲を参照した。" in paragraphs(res.docx_fix.path)
     assert "架空の研究では pp.11‑16 の範囲を参照した。" in paragraphs(res.docx_fix.path, reject=True)
     res1 = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "docx", docx=tmp_path / "n10.docx")
     assert "架空の研究では pp.11‑16 の範囲を参照した。" in texts(load(res1))
     assert [(d.docx, d.pdf, d.fixable) for d in res1.pdf_check.diffs] == [("‑", "-", True)]
+    assert res1.pdf_check.diffs[0].kind == "typeset"
+    ch13 = chapters(res1)[1]           # 13.1（文字の違い）ではなく 13.2（組版の違い）に出る
+    assert "‑" not in ch13.split("### 13.2")[0] and "‑" in ch13.split("### 13.2")[1].split("### 13.3")[0]
 
 
 def test_en_dash_in_reference_at_line_end_is_not_deleted(journal, tmp_path):
@@ -3579,3 +3586,251 @@ def test_route2_fixes_paragraphs_with_style_hidden_text(split, journal, meta, tm
     k = shown.index(want[0])
     assert PUBLISHED["d12"] in shown and shown[k:k + len(want)] == want
     assert paragraphs(fx.path, reject=True) == paragraphs(path)
+
+
+# ---------------------------------------------------------------------------- 組版の違い（(A)）と校正の直し（(B)）の分け方（単位 J）
+def test_typeset_pair_table():
+    """組版の違い（(A)）の 1 文字の対の表（pdfmatch.typeset_pair）。引用符は同じ類の中なら向きを問わない（利用者の判断）。
+    Word が付ける番号の字形「●」→「・」は番号でだけ、大文字・小文字は英文の題目・著者名などの段落でだけ (A)。"""
+    from jasme_jats.pdfmatch import typeset_pair, typeset_same
+    typeset = [("２", "2", "width"), ("(", "（", "width"), ("–", "-", "dash"), ("‑", "-", "dash"), ("－", "‐", "dash"),
+               ("—", "−", "dash"), ('"', "“", "quote"), ('"', "”", "quote"), ("'", "’", "quote"), ("”", "“", "quote"),
+               ("＂", "“", "quote"), ("“", '"', "quote"), ("’", "'", "quote"), ("“", "”", "quote"), ("‘", "’", "quote"),
+               ("＇", "'", "width")]
+    for a, b, kind in typeset:
+        assert typeset_pair(a, b) == kind, (a, b)
+    assert typeset_pair("●", "・", number=True) == "number"
+    assert typeset_pair("A", "a", case=True) == "case" and typeset_pair("ａ", "A", case=True) == "case"
+    for a, b in [("●", "・"), ("A", "a"), ("ａ", "A"), ("〜", "～"), ("・", "･"), ("…", "."), ('"', "'"), ("“", "’"),
+                 ("資", "付"), ("2", "3"), ("a", "a")]:
+        assert typeset_pair(a, b) == "", (a, b)
+    assert typeset_pair("・", "●", number=True) == ""          # 番号の字形の対には向きがある
+    assert typeset_pair("é", "É", case=True) == ""              # 大文字・小文字は ASCII の英字だけ
+    assert typeset_same("理論 (ATD)", "理論（ATD）") and typeset_same("pp.11–16", "pp.11-16")
+    assert not typeset_same("理論 (ATD)", "理論（ATE）") and not typeset_same("58", "５８９")
+    assert not typeset_same("The PDF", "the PDF") and typeset_same("The PDF", "the PDF", case=True)
+
+
+MIXED = "本研究では，架空の授業の記録を集め，合計で58件と2回の観察として観点ごとに整理した。"
+
+
+@pytest.mark.parametrize("text, pub, want", [
+    (MIXED, MIXED.replace("58件と2回の観察", "59件と２回の観察記録"),
+     [("8", "9", "text"), ("2", "２", "width"), ("", "記録", "text")]),
+    ("本研究では，架空の授業では 'ratio' の語を用いて，二つの量の関係を説明させた。",
+     "本研究では，架空の授業では ’ratio’ の訳語を用いて，二つの量の関係を説明させた。",
+     [("'", "’", "glyph"), ("'", "’", "glyph"), ("", "訳", "text")]),
+], ids=["width-in-text", "quote-in-text"])
+def test_mixed_diff_is_split(text, pub, want, journal, tmp_path):
+    """1 つの違いに組版の違い（(A)）と校正の直し（(B)）が混ざるとき、直す単位に分ける（pdfmatch.diff_parts）。直した結果の
+    文字は PDF の文字（今までと同じ）で、分けた (A) と (B) は 1 つの組（重なりで (B) を止めると (A) も止まる）。"""
+    plan, src = guard_article(tmp_path, journal, [RATIO, text])
+    s = src[text]
+    pc = compare(plan, guard_pages(*cut_lines("　" + RATIO), *cut_lines("　" + pub)))
+    assert [d.kind for d in pc.diffs if d.src == s] == ["text"]
+    got = [(f.old, f.new, f.kind) for f in plan_fixes(plan, pc) if f.src == s]
+    assert got == want
+    assert changed_paragraphs(plan, pc, {s: pub}) == {}
+    # 校正の直し（置き換え）の位置に、ほかの直す箇所（全角・半角）が重なると、同じ違いから分けた組版の違いも直さない
+    first = next(f for f in plan_fixes(plan, pc) if f.src == s and f.kind == "text")
+    if first.start == first.end:
+        return
+    pc.width.setdefault(s, {})[first.start] = "＠"
+    fixes = [f for f in plan_fixes(plan, pc) if f.src == s and (f.kind != "width" or f.start != first.start)]
+    assert fixes and all(f.reason == "ほかの直す箇所と重なる" for f in fixes)
+
+
+def test_mixed_diff_with_added_digit_is_split(journal, tmp_path):
+    """「58」→「５８９」（1 つの違いにまとまったもの）は、「5」「8」の全角・半角（(A)）と、「９」の追加（(B)。PDF の文字のまま）に
+    分ける（raw の文字で並べると、1 つの置き換えになる）。"""
+    text = "本研究では，架空の授業の記録を合計で58件集め，観点ごとに整理した。"
+    plan, src = guard_article(tmp_path, journal, [text])
+    s = src[text]
+    a = text.index("58")
+    pc = PdfCheck(diffs=[TextDiff(s, "58", "５８９", "", a, a + 2, True)])
+    assert [(f.old, f.new, f.kind, f.reason) for f in plan_fixes(plan, pc)] == \
+        [("5", "５", "width", ""), ("8", "８", "width", ""), ("", "９", "text", "")]
+    assert fixed_texts(plan, pc)[s] == text.replace("58", "５８９")
+
+
+@pytest.mark.parametrize("pdf_lines", [["　架空の研究では pp.11-", "16 の範囲を参照した。"],
+                                       ["　架空の研究では pp.11-16 の範囲を参照", "した。"]], ids=["line-end", "middle"])
+def test_dash_is_typeset_kind(pdf_lines, journal, meta, tmp_path, monkeypatch):
+    """行末の forced と行の途中のダッシュの違いは組版の違い（kind typeset。ルート2 の Fix は glyph）。ルート1 では 13.1（文字の
+    違い）に出ず 13.2（組版の違い）に出て、ほかに違いがなければ要確認（pdf_diff）にならない。"""
+    from jasme_jats.report import actions
+    plan, src = n10_article(tmp_path, journal, [("body", DASH_BODY)])
+    pages = n10_pages([*SMALL_FRONT, *pdf_lines, *N10_TAIL])
+    pc = compare(plan, pages)
+    assert [(d.docx, d.pdf, d.kind) for d in pc.diffs] == [("–", "-", "typeset")]
+    assert pc.text_diffs == [] and pc.typeset_count == 1
+    assert [(f.old, f.new, f.kind) for f in plan_fixes(plan, pc)] == [("–", "-", "glyph")]
+    res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "docx", docx=tmp_path / "n10.docx")
+    assert "pdf_diff" not in [a.key for a in actions(res)]
+    ch13 = chapters(res)[1]
+    assert "–" not in ch13.split("### 13.2")[0] and "–" in ch13.split("### 13.2")[1].split("### 13.3")[0]
+
+
+QUOTE_BODY = "本研究では，架空の授業で 'ratio' の語を用いて，二つの量の関係を説明させた。"
+
+
+@pytest.mark.parametrize("docx_q, pdf_q", [("'", "’"), ("’", "'"), ("‘", "’"), ('"', "“")])
+def test_quotes_follow_pdf_as_typeset(docx_q, pdf_q, journal, meta, tmp_path, monkeypatch):
+    """引用符の字形・向きの違い（同じ類の中。向きは問わない）は組版の違い（Fix は glyph）で、PDF に合わせて直し、要確認に
+    しない。"""
+    from jasme_jats.report import actions
+    text = QUOTE_BODY.replace("'", docx_q)
+    plan, src = n10_article(tmp_path, journal, [("body", text)])
+    pages = n10_pages([*SMALL_FRONT, *body_lines(QUOTE_BODY.replace("'", pdf_q)), *N10_TAIL])
+    pc = compare(plan, pages)
+    assert [d.kind for d in pc.diffs] == ["typeset"]
+    assert [(f.old, f.new, f.kind) for f in plan_fixes(plan, pc)] == [(docx_q, pdf_q, "glyph")] * 2
+    assert changed_paragraphs(plan, pc, {src[text]: QUOTE_BODY.replace("'", pdf_q)}) == {}
+    res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "pdf", docx=tmp_path / "n10.docx")
+    assert [a.key for a in actions(res)] == [] and len(res.docx_fix.applied_typeset) == 2
+
+
+def test_double_to_single_quote_is_text(journal, tmp_path):
+    """二重引用符と一重引用符の違い（類が違う）は校正の直し（(B)。kind text）として直す。"""
+    text = QUOTE_BODY.replace("'", '"')
+    plan, src = n10_article(tmp_path, journal, [("body", text)])
+    pc = compare(plan, n10_pages([*SMALL_FRONT, *body_lines(QUOTE_BODY), *N10_TAIL]))
+    assert [d.kind for d in pc.diffs] == ["text"] and pc.text_diffs == pc.diffs
+    assert {(f.old, f.new, f.kind) for f in plan_fixes(plan, pc)} == {('"', "'", "text")}
+    assert changed_paragraphs(plan, pc, {src[text]: QUOTE_BODY}) == {}
+
+
+def test_case_only_in_english_front(journal, tmp_path):
+    """大文字・小文字の違いは、英文の題目・副題・著者名・所属でだけ組版の違い（glyph）。英文の著者名・所属も照合する（利用者の
+    判断）。英文要旨・本文の同じ違いは校正の直し（text）。"""
+    body = "本研究では，架空の授業で Ratio Table の語を用いて，二つの量の関係を説明させた。"
+    plan, src = n10_article(tmp_path, journal, [("body", body)])
+    en = ["A small article", "For checking", "Rokuro Shiken", "Fictional university", "Abstract", "Small Article abstract."]
+    pub = body.replace("Ratio Table", "ratio table")
+    pc = compare(plan, n10_pages([*SMALL_FRONT, *body_lines(pub), "引用および参考文献", SMALL_REF, *en]))
+    assert {src["Rokuro SHIKEN"], src["Fictional University"]} <= pc.case_srcs
+    assert {src["Rokuro SHIKEN"], src["Fictional University"], src["A Small Article"]} <= \
+        {p.src for p in __import__("jasme_jats.pdfmatch", fromlist=["x"]).target_paragraphs(plan)}
+    kinds = {d.src: d.kind for d in pc.diffs}
+    for s in ("A Small Article", "For Checking", "Rokuro SHIKEN", "Fictional University"):
+        assert kinds[src[s]] == "typeset", s
+    assert kinds[src[body]] == "text" and kinds[src["Small article abstract."]] == "text"
+    fixes = plan_fixes(plan, pc)
+    assert {(f.old, f.new, f.kind) for f in fixes if f.src == src["Rokuro SHIKEN"]} == \
+        {("H", "h", "glyph"), ("I", "i", "glyph"), ("K", "k", "glyph"), ("E", "e", "glyph"), ("N", "n", "glyph")}
+    assert {f.kind for f in fixes if f.src in (src[body], src["Small article abstract."])} == {"text"}
+    assert fixed_texts(plan, pc)[src["Rokuro SHIKEN"]] == "Rokuro Shiken"
+
+
+def test_english_author_case_fix_keeps_name_split(journal, meta, tmp_path, monkeypatch):
+    """英文の著者名の大文字・小文字を直すと姓と名の分け方が変わる（「SHIKEN Rokuro」の姓は前の語、「Shiken Rokuro」の姓は後ろの
+    語）ときは、直さない（pdfdocx._structure の著者の形）。XML の姓は元の docx と同じ。"""
+    def parts(b):
+        return [mf.para(mf.S["sec1"], "１．はじめに"), mf.para(mf.S["body"], TALK)]
+    path = tmp_path / "name.docx"
+    mf.make_article(path, "ページ番号の判定の検証用文書", parts)
+    data = zipfile.ZipFile(path).read("word/document.xml").decode("utf-8")
+    assert data.count("Rokuro SHIKEN") == 1
+    swapped = tmp_path / "swapped.docx"
+    with zipfile.ZipFile(path) as zin, zipfile.ZipFile(swapped, "w") as zout:
+        for item in zin.infolist():
+            blob = zin.read(item.filename)
+            if item.filename == "word/document.xml":
+                blob = data.replace("Rokuro SHIKEN", "SHIKEN Rokuro").encode("utf-8")
+            zout.writestr(item, blob)
+    en = ["A Small Article", "For Checking", "Shiken Rokuro", "Fictional University", "Abstract", "Small article abstract."]
+    pages = n10_pages([*SMALL_FRONT, *body_lines(TALK), "引用および参考文献", SMALL_REF, *en])
+    res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "pdf", docx=swapped)
+    from jasme_jats.pdfdocx import STRUCTURE_REASON
+    name = [f for f in res.docx_fix.fixes if f.old in "HIKEN" and f.new in "hiken" and f.kind == "glyph"]
+    assert name and all(not f.applied and f.reason == STRUCTURE_REASON for f in name)
+    assert [x.text for x in load(res).iter("surname")][-1] == "SHIKEN"
+
+
+BULLETS = ["一つ目の項目として，架空の授業の記録を集めた。", "二つ目の項目として，記録を観点ごとに整理した。"]
+
+
+def bullet_article(tmp_path, journal):
+    """自動番号「●」の箇条書き（2 項目）のある小さな論文の構造と、段落の文字 -> 段落 ID。"""
+    def parts(b):
+        return [mf.para(mf.S["sec1"], "１．はじめに"), mf.para(mf.S["body"], TALK),
+                *[mf.list_item(mf.S["body"], t) for t in BULLETS]]
+    mf.make_article(tmp_path / "n10.docx", "ページ番号の判定の検証用文書", parts, bullet="●")
+    _, plan, _ = _mechanical(tmp_path / "n10.docx", journal)
+    return plan, {p.plain(): p.src for p in plan.paras.values()}
+
+
+def test_autonum_bullet_follows_pdf(journal, meta, tmp_path, monkeypatch):
+    """自動番号の「●」と PDF の「・」は、Word が付ける番号の字形の違い（組版の違い。NUMBER_PAIRS）。ルート2 は番号を「・」に
+    合わせて出力し（plan.pdf_numbers。docx の文字ではないので Fix は作らない）、要確認にしない。ルート1 は XML の番号は「●」の
+    まま（13 章の番号の表に出る）。"""
+    from jasme_jats.report import actions
+    plan, src = bullet_article(tmp_path, journal)
+    assert [plan.paras[src[t]].autonum.strip() for t in BULLETS] == ["●", "●"]
+    pages = n10_pages([*SMALL_FRONT, *body_lines(TALK), *[f"・{t}" for t in BULLETS], *N10_TAIL])
+    pc = compare(plan, pages)
+    assert {k: v.strip() for k, v in pc.number_edits.items()} == {("auto", src[t]): "・" for t in BULLETS}
+    assert pc.diffs == [] and plan_fixes(plan, pc) == []
+    res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "pdf", docx=tmp_path / "n10.docx")
+    xml = res.xml_path.read_text(encoding="utf-8")
+    assert "●" not in xml and xml.count("・") >= 2
+    assert res.docx_fix.fixes == [] and [a.key for a in actions(res)] == []
+    res1 = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "docx", docx=tmp_path / "n10.docx")
+    assert "●" in res1.xml_path.read_text(encoding="utf-8") and "pdf_diff" not in [a.key for a in actions(res1)]
+    assert "●" in chapters(res1)[1]
+
+
+def test_typeset_skipped_is_not_to_check(journal, meta, tmp_path):
+    """組版の違いの直す箇所だけが直せなかったとき（ほかの直す箇所と重なるなど）は要確認（pdf_unfixed）にしない。校正の直しが
+    直せなかったときは、今までどおり要確認。"""
+    pytest.importorskip("pypdfium2")
+    from jasme_jats.report import TO_CHECK, actions
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, pdf_path=PDFCHECK_PDF, route="pdf",
+                                                   convert_metafiles=False))
+    fx = res.docx_fix
+    assert len(fx.applied_text) == 1 and len(fx.applied_typeset) == 43 and actions(res) == []
+    f = fx.applied_typeset[0]
+    f.applied, f.reason = False, "ほかの直す箇所と重なる"
+    assert fx.skipped_typeset == [f] and fx.skipped_text == [] and actions(res) == []
+    g = fx.applied_text[0]
+    g.applied, g.reason = False, "ほかの直す箇所と重なる"
+    assert {a.key: a.level for a in actions(res)} == {"pdf_unfixed": TO_CHECK}
+
+
+def test_unfixable_typeset_diff_is_typeset_fix(journal, tmp_path):
+    """直せない文字にかかる（足す位置を決められないなど。fixable が偽で why のない）組版の違いだけの違いは、理由付きの組版の違いの
+    Fix（glyph・width）にする（要確認の数に入れない）。"""
+    text = "架空の研究では pp.11–16 の範囲を参照した。"
+    plan, src = guard_article(tmp_path, journal, [text])
+    s = src[text]
+    a = text.index("–")
+    pc = PdfCheck(diffs=[TextDiff(s, "–", "-", "", a, a + 1, False, "", "typeset"),
+                         TextDiff(s, "(", "（", "", 0, 1, False, "", "typeset")])
+    assert [(f.kind, bool(f.reason), f.typeset) for f in plan_fixes(plan, pc)] == \
+        [("width", True, True), ("glyph", True, True)]
+
+
+def test_route1_typeset_only_has_no_action(journal, meta, tmp_path, monkeypatch):
+    """組版の違い（全角・半角とダッシュ）だけの論文のルート1 では、要確認（pdf_diff）がなく、違いは 13.2 にだけ載る。"""
+    from jasme_jats.report import actions
+    plan, src = n10_article(tmp_path, journal, [("body", DASH_BODY), ("body", TALK)])
+    pub = DASH_BODY.replace("–", "-").replace("，", ",")
+    pages = n10_pages([*SMALL_FRONT, *body_lines(pub.replace("pp.11-16", "pp.11-16")), *body_lines(TALK.replace("３", "3")),
+                       *N10_TAIL])
+    pc = compare(plan, pages)
+    assert pc.text_diffs == [] and pc.typeset_count == 3
+    res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "docx", docx=tmp_path / "n10.docx")
+    assert "pdf_diff" not in [a.key for a in actions(res)]
+    ch13 = chapters(res)[1]
+    sec1 = ch13.split("### 13.1")[1].split("### 13.2")[0]
+    assert "ありません" in sec1 and "–" not in sec1 and "–" in ch13.split("### 13.2")[1].split("### 13.3")[0]
+
+
+def test_width_only_region_without_why(journal, tmp_path):
+    """全角・半角だけの違いは今までどおり width に入り、kind typeset の違い（TextDiff）にならない（_report_regions の組版の違いの
+    判定を広げても挙動が変わらない）。"""
+    text = "本研究では，架空の授業の記録を合計で58件集め，観点ごとに整理した。"
+    plan, src = guard_article(tmp_path, journal, [text])
+    pc = compare(plan, guard_pages(*cut_lines("　" + text.replace("58", "５８"))))
+    assert pc.diffs == [] and pc.width == {src[text]: {text.index("58"): "５", text.index("58") + 1: "８"}}
+    assert pc.typeset_count == 2

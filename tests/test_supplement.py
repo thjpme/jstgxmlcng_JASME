@@ -15,27 +15,15 @@ from jasme_jats import pdfdocx, pdfmatch, pipeline
 from jasme_jats.fidelity import (NUMBER_WHY, UNIT_WHY, UNTRACKED_WHY, UNWRITTEN_WHY, _pair, source_texts,
                                  verify_supplement)
 from jasme_jats.pipeline import Options, convert
-from test_pdfmatch import (FRONT, N10_TAIL, PUB12, PUBLISHED, REST, SMALL_FRONT, TALK, body_lines, convert_with_pages,
+from test_pdfmatch import (FRONT, N10_TAIL, PUB12, REST, SMALL_FRONT, TALK, body_lines, convert_with_pages,
                            n10_article, n10_pages)
 
 SUP_ROW = "出版版 PDF による補完の確かめ（ルート2）"
 
 
-def route2(tmp_path, docx=PDFCHECK, name="r2"):
-    return convert(docx, mf_meta(), journal_config(), Options(out_dir=tmp_path / name, pdf_path=PDFCHECK_PDF, route="pdf",
-                                                             convert_metafiles=False))
-
-
-def mf_meta():
-    from jasme_jats.config import ArticleMeta
-    return ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "lpage": "12",
-                                  "pub_date": "2026-03-31", "received": "2025-06-01", "accepted": "2025-11-20",
-                                  "peer_review": "あり", "keywords": "proof; 論証; 数学的探究"})
-
-
-def journal_config():
-    from jasme_jats.config import JournalConfig
-    return JournalConfig.load()
+def route2(tmp_path, meta, journal, name="r2"):
+    return convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / name, pdf_path=PDFCHECK_PDF, route="pdf",
+                                                    convert_metafiles=False))
 
 
 def report(res):
@@ -43,11 +31,11 @@ def report(res):
 
 
 # ---------------------------------------------------------------------------- 11. 合格
-def test_supplement_passes_on_pdfcheck(tmp_path, capsys):
+def test_supplement_passes_on_pdfcheck(journal, meta, tmp_path, capsys):
     """sample_pdfcheck のルート2 で合格。組版の違い 43 文字（全角・半角と、その前後の空白）と、補った校正の直し 1 つ
     （「資料」→「付録」）。1 章の行と、コマンドラインの「補完の確かめ: 合格」。"""
     pytest.importorskip("pypdfium2")
-    res = route2(tmp_path)
+    res = route2(tmp_path, meta, journal)
     sup = res.supplement
     assert sup is not None and sup.ok and sup.problems == []
     assert (sup.typeset, sup.supplied) == (43, 1)
@@ -61,7 +49,7 @@ def test_supplement_passes_on_pdfcheck(tmp_path, capsys):
 
 
 # ---------------------------------------------------------------------------- 12〜14. 不合格にする
-def test_supplement_detects_non_typeset_change(tmp_path, monkeypatch, capsys):
+def test_supplement_detects_non_typeset_change(journal, meta, tmp_path, monkeypatch, capsys):
     """(A)（全角・半角）の直す箇所の 1 つの PDF の文字を、組版の違いでない文字（「(」→「［」）にすり替えて書き込む。
     不変性チェックは合格のまま（XML は補った docx と同じ）で、補完の確かめだけが不合格にする。要対応・終了コード 1・13.8 の表。"""
     pytest.importorskip("pypdfium2")
@@ -73,7 +61,7 @@ def test_supplement_detects_non_typeset_change(tmp_path, monkeypatch, capsys):
         f.new = "［"
         return fixes
     monkeypatch.setattr(pdfdocx, "plan_fixes", swapped)
-    res = route2(tmp_path)
+    res = route2(tmp_path, meta, journal)
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     sup = res.supplement
     assert not sup.ok and not res.ok and res.needs_action
@@ -92,7 +80,7 @@ def test_supplement_detects_non_typeset_change(tmp_path, monkeypatch, capsys):
     assert "補完の確かめ: 不合格" in captured.out and "補完の確かめが不合格" in captured.err
 
 
-def test_supplement_detects_unreported_change(tmp_path, monkeypatch):
+def test_supplement_detects_unreported_change(journal, meta, tmp_path, monkeypatch):
     """(B) の直す箇所（「資料」→「付録」）を、書き込んだ後に直す箇所の一覧から消す（報告していない変更）→ 不合格。"""
     pytest.importorskip("pypdfium2")
     orig = pipeline.make_fixed_docx
@@ -102,25 +90,25 @@ def test_supplement_detects_unreported_change(tmp_path, monkeypatch):
         fx.fixes = [f for f in fx.fixes if f.kind != "text"]
         return fx
     monkeypatch.setattr(pipeline, "make_fixed_docx", drop_text)
-    res = route2(tmp_path)
+    res = route2(tmp_path, meta, journal)
     assert res.fidelity.ok and not res.supplement.ok and not res.ok
     assert [(src, why) for src, _, _, why in res.supplement.problems] == [("d13", UNIT_WHY)]
     assert "［資料］" in res.supplement.problems[0][1] and "［付録］" in res.supplement.problems[0][2]
 
 
-def test_supplement_detects_unwritten_fix(tmp_path):
+def test_supplement_detects_unwritten_fix(journal, tmp_path):
     """対照: 報告した (B) の直す箇所が、補った docx に書き込まれていない → 不合格（報告したのに書き込まれていない）。"""
     pytest.importorskip("pypdfium2")
-    fx = pdfdocx.make_fixed_docx(PDFCHECK, PDFCHECK_PDF, tmp_path / "fixed.docx", journal_config())
+    fx = pdfdocx.make_fixed_docx(PDFCHECK, PDFCHECK_PDF, tmp_path / "fixed.docx", journal)
     extra = pdfdocx.Fix("d17", 0, 2, "見本", "text", "試験", applied=True)
     sup = verify_supplement(PDFCHECK, fx.path, fx.fixes + [extra], fx.check.case_srcs, fx.check.original, {})
     assert not sup.ok and sup.problems == [("d17", "試験", "見本", UNWRITTEN_WHY)]
 
 
-def test_supplement_detects_untracked_edit(tmp_path):
+def test_supplement_detects_untracked_edit(journal, tmp_path):
     """補った docx の w:t を変更履歴なしで書き換える → 不合格（このツールの変更履歴を却下した文字が元の docx と違う）。"""
     pytest.importorskip("pypdfium2")
-    fx = pdfdocx.make_fixed_docx(PDFCHECK, PDFCHECK_PDF, tmp_path / "fixed.docx", journal_config())
+    fx = pdfdocx.make_fixed_docx(PDFCHECK, PDFCHECK_PDF, tmp_path / "fixed.docx", journal)
     sup = verify_supplement(PDFCHECK, fx.path, fx.fixes, fx.check.case_srcs, fx.check.original, {})
     assert sup.ok
     edited = tmp_path / "edited.docx"
@@ -137,10 +125,9 @@ def test_supplement_detects_untracked_edit(tmp_path):
 
 
 # ---------------------------------------------------------------------------- 15. 数式の後ろと、段落記号の削除をまたぐ直し
-def test_supplement_with_formula_and_joined_paragraphs(tmp_path, monkeypatch):
+def test_supplement_with_formula_and_joined_paragraphs(journal, meta, tmp_path, monkeypatch):
     """数式の後ろの直し（読み取りの段落の文字では数式は 1 文字、検証の文字では数式の文字なので、位置がずれる）と、段落記号の
     削除をまたぐ直し（前の w:p の最後と後ろの w:p の最初にかかる直し）でも合格する（位置ではなく、変更履歴の単位で当てる）。"""
-    meta, journal = mf_meta(), journal_config()
     prob = ["各回の結果から相対度数を求め，これを試行の確率とよび，", mf.omath(mf.mr("p") + mf.mr("q")),
             "の値の変化を表に記録した。"]
     n10_article(tmp_path, journal, [("body", prob), ("body", TALK)])
@@ -196,9 +183,8 @@ def test_supplement_pairs_agree_with_pdfmatch():
 
 
 # ---------------------------------------------------------------------------- 18. 行わないとき
-def test_supplement_none_on_route1_and_fallback(tmp_path):
+def test_supplement_none_on_route1_and_fallback(journal, meta, tmp_path):
     """ルート1 と、PDF を読めなかったルート2 では補完の確かめを行わず（None）、1 章に行が出ない。"""
-    meta, journal = mf_meta(), journal_config()
     res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "r1", pdf_path=PDFCHECK_PDF,
                                                    convert_metafiles=False))
     assert res.supplement is None and SUP_ROW not in report(res).split("## 2.")[0]
@@ -208,10 +194,10 @@ def test_supplement_none_on_route1_and_fallback(tmp_path):
     assert res.pdf_fallback and res.supplement is None and SUP_ROW not in report(res).split("## 2.")[0]
 
 
-def test_source_texts_unchanged_by_check(tmp_path):
+def test_source_texts_unchanged_by_check(journal, tmp_path):
     """補完の確かめは補った docx を読むだけで、ファイルを変えない（変更履歴を外すのは写しの木の上）。"""
     pytest.importorskip("pypdfium2")
-    fx = pdfdocx.make_fixed_docx(PDFCHECK, PDFCHECK_PDF, tmp_path / "fixed.docx", journal_config())
+    fx = pdfdocx.make_fixed_docx(PDFCHECK, PDFCHECK_PDF, tmp_path / "fixed.docx", journal)
     before = fx.path.read_bytes()
     texts = source_texts(fx.path)
     verify_supplement(PDFCHECK, fx.path, fx.fixes, fx.check.case_srcs, fx.check.original, {})
