@@ -13,12 +13,12 @@ from dataclasses import dataclass, field
 from lxml import etree
 
 from . import emit as E
+from .article import (ArticlePlan, BackSec, BoxNode, FigNode, FnNode, FormulaNode, ListNode, PNode, QuoteNode, RefNode,
+                      Sec, TableNode, _para_text)
 from .config import ArticleMeta, JournalConfig, keyword_problem
 from .docx_reader import table_head, table_where
 from .model import Exclusion, Newline, Para
 from .ooxml import is_ws
-from .structure import (ArticlePlan, BackSec, BoxNode, FigNode, FnNode, FormulaNode, ListNode, PNode, QuoteNode,
-                        RefNode, Sec, TableNode, _para_text)
 from .tracking import AI, GEN, IMPLICIT, JX_NS, ORDER, SPAN
 
 MML_NS = "http://www.w3.org/1998/Math/MathML"

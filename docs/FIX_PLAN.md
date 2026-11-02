@@ -35,7 +35,7 @@
 | U3 | 使い勝手・保守性 | 段落内の改行（w:br）: 表のセルでは <break/> を補い、それ以外は文字のまま残してレポートで知らせる | G |
 | U4 | 使い勝手・保守性 | AI 依頼文の「姓と名の区切りがない氏名」を、メッセージの文言から切り出している | H |
 | U5 | 使い勝手・保守性 | 既定の AI モデル名が複数の場所に直書きされている | H |
-| U6 | 使い勝手・保守性 | structure.py（1263 行）の分割 | I |
+| U6 | 使い勝手・保守性 | structure.py（0.27.0 で 2,498 行。計画を作ったときは 1263 行）の分割 | I |
 | U7 | 使い勝手・保守性 | PDF の柱（ヘッダー）・ページ番号が本文の違いとして報告され、ルート2 で docx に挿入される | B |
 | U8 | 使い勝手・保守性 | 文字スタイル・段落スタイル・既定の書式の w:vanish（隠し文字）も、Word と同じく隠す | G |
 | N1 | 計画づくりで見つけたもの | 引用文献・題目・著者などの段落にある画像が、警告もなく XML と Graphics から消える（画像の出力漏れを検出するしくみがない） | A |
@@ -76,7 +76,7 @@
 | F | 0.25.0 | 文字だけのテキストボックス（囲み）と、本文の外に結び付いた図形（実装済み） | D1、N7 |
 | G | 0.26.0 | 読み取りの文字ポリシー（段落記号の削除・スタイルの隠し文字・セルの改行）（実装済み） | D5、U8、U3、N8 |
 | H | 0.27.0 | リンクの誤検出と AI 依頼文の保守（実装済み） | D2、M5、U4、U5 |
-| I | 0.27.1 | structure.py の分割（動作を変えない） | U6、golden |
+| I | 0.27.1 | structure.py の分割（動作を変えない。第 1 段階だけ）（実装済み） | U6、golden |
 
 A（黙って文字・画像が落ちる不具合と、それを捕まえる検証の強化）を最初に置く。後の大きな変更で同じ種類の誤りが起きても、テストと不変性チェックで捕まえられるようにするため。structure.py の分割（I）は、structure.py を触る A・B3・E・F・G がすべて終わった後に置く。B2・B3 は、計画を作った後に見つかった不具合（N10〜N19）で、B2 は公開本文が出版版 PDF と違う文字になるもの（Colab の初期値のルート2 で起きる）、B3 は利用者が XML の中で図表を手で移す手間が大きいもの（Colab の試験で見つかった）なので、C より先に置く。
 
@@ -162,7 +162,7 @@ A（黙って文字・画像が落ちる不具合と、それを捕まえる検�
    - 案: 外す
    - 案: 今までどおり載せる
    - 推奨: 外す。AI にできないことを頼まない。
-18. **structure.py（1263 行）を分ける、動作を変えないだけの版（0.27.1）を出してよいか。分ける前後で出力が同じかを比べるテスト（golden）を常設するか。**（関係する項目: U6）
+18. **structure.py（0.27.0 で 2,498 行。計画を作ったときは 1263 行）を分ける、動作を変えないだけの版（0.27.1）を出してよいか。分ける前後で出力が同じかを比べるテスト（golden）を常設するか。**（関係する項目: U6）
    - 案: データの部分（article.py）だけを分け、golden は常設する
    - 案: データの部分だけを分け、golden は作業のときだけ使う
    - 案: 分けずに、structure.py の冒頭に目次を書くだけにする
@@ -627,7 +627,16 @@ A（黙って文字・画像が落ちる不具合と、それを捕まえる検�
 
 - U6（反証で revise。第 1 段階だけを推奨）: 新しい article.py に、構造のノード（Sec … FloatInfo。F で足した BoxNode も）、ArticlePlan、_para_text をそのまま移す。structure.py では `from .article import …  # noqa: F401 互換のため` で再 export する（ai_assist は _para_text を、tests は RefNode・FigNode・Sec・ArticlePlan を structure から import している）。structure.py の冒頭の docstring に、処理とメソッドの目次を書く。第 2 段階（図表の組み立ての分割）は任意で、行うなら次の 3 点を守る。(1) 共有の定数・関数（RE_FIGCAP・RE_TABCAP・RE_TEXTBOX_CAP・HEADING_LEVEL・nfkc・num_of）を先に article.py か小さな共通モジュールへ移す（循環 import を避ける）。(2) pipeline.py:67 の `from .structure import RE_FIGCAP, RE_TABCAP` を再 export で保つ。(3) 名前は、assemble_floats が本文のすべての図表を組むことが分かるものにする（例: figures.py / FigureAssembly）。docstring には、使う Classifier のメソッドと属性を列挙する。
 - I の後に残す、structure.py の動作を変える直し（I は動作を変えないので、ここでは直さない）: キャプションの番号の直後の上付きの数字を図の番号の一部として読む形（「図1」＋上付きの「2」が「図12」になる。H の「残る限界」）。
+- **実装した内容（0.27.1。第 1 段階だけ）**:
+  - 移したもの: 新しい src/jasme_jats/article.py に、ノードと記録の 16 のクラス（Sec・PNode・ListNode・QuoteNode・FigNode・TableNode・FormulaNode・BoxNode・FnNode・RefNode・BackSec・AppNode・Author・Aff・FloatInfo・BoxInfo）、ArticlePlan（メソッドごと）、_para_text の計 18 の名前を、本体を 1 文字も変えずに移した（0.27.0 の structure.py の `# ---- nodes` から _para_text の終わりまでの 313 行は、diff で差がない）。article.py が import するのは dataclasses・typing・model だけで、向きは structure → article の一方向。Decision・Exclusion は model.py にあるので動かしていない。
+  - 残したもの: 定数・正規表現・Classifier・classify・float_targets などは structure.py に残した（本体は 1 文字も変えていない）。structure.py では 18 の名前を再 export するので、tests と docs/fix_plan_repro_tests.py は structure からの import のまま通る（tests は RefNode・FigNode・Sec・ArticlePlan のほか FloatInfo・PNode・TableNode も import している）。src の中の import は、linker.py・builder.py・ai_assist.py・pipeline.py で article に向け直した。structure.py の冒頭の docstring に、classify の 2 回の走査と Classifier.run の 9 段階、各段階が呼ぶメソッドの目次を書いた。
+  - 設計（上の U6）と違えたところ: 再 export には `# noqa: F401 互換のため` を付けていない。18 の名前は structure.py の中でも使うので F401 が出ず、付けると ruff の RUF100（使われていない noqa）が 1 件増えるため。理由は import の上のコメントに書いた。また import は ruff の isort の形（1 行に 1 つ）にした。
+  - 設計の食い違い（直したもの）: 上の U6 の「pipeline.py:67 の `from .structure import RE_FIGCAP, RE_TABCAP`」は、0.27.0 の pipeline.py にない（pipeline.py は classify・float_caption・float_targets を import する）。src の structure 以外のモジュールは RE_FIGCAP・RE_TABCAP を import していないので、第 2 段階にこの import を保つ条件は要らない。ただし、定数を移すなら、import している側（上の名前、tests、fix_plan_repro_tests.py）を再 export で保つ。model.py・report.py の docstring と DESIGN.md 6.2 の `structure.BoxNode` などの参照は、article に直した。
+  - 確かめた数: pytest は Python 3.13・3.10 とも 1078 件が通る（新しいテスト 3 件を含む）。ruff check src tests tools は 0.27.0 と同じ 201 件（UP045 の 20 件の場所が structure.py から article.py に移っただけ）。golden は manifest.json が 27 件（ALL_DOCS 11 本 × manual/split の 22 件と、sample_full_ai・sample_float_ai・sample_float_manual・pdfcheck_route1・pdfcheck_route2。計画の「23 件」は誤り）で、0.27.0 とすべて同じ（XML・AI依頼文・レポートのハッシュ）。td1〜3 のルート1・ルート2 は、XML・AI 依頼文・レポート（版と作成日時の行を除く。版を上げる前に測ったので、今は版の行も違う）・ZIP の中身が 0.27.0 とバイト単位で同じ。直した docx は w:date の値（作った日時）を除いて同じ。終了コードは前後とも 1。
+  - 新しいテスト: tests/test_article.py（別プロセスでの import。structure と pipeline を両方の順で、article・linker・builder・ai_assist・report・pdfdocx も。article.py が model のほかの jasme_jats を import しないこと。article の 18 の名前と、structure から同じものが見えること）。article.py に `from .structure import nfkc` を足すと、テストの収集で ImportError になることを確かめた。
+  - 残る作業: 第 2 段階（assemble_floats など図表の組み立ての分割。上の (1)〜(3) を守る）は行っていない（計画は第 1 段階だけを推奨）。tests/test_golden.py（出力の比較の常設）は、利用者の判断待ちで足していない。H の「残る限界」の、キャプションの上付きの数字を図の番号に含める直しも、この単位では行っていない。
 - golden（出力の比較）: 分割の前後で、全 fixture（ALL_DOCS、AI の模擬回答つきの FLOAT と FULL、PDFCHECK のルート1・2）の XML・AI依頼文・レポート（版・日時・コミットの行を除く）が、バイト単位で同じであることを確かめる。比べ方は scratchpad/rvlm/fixdiff.py と同じ形。tests/test_golden.py と作り直しのスクリプトとして常設するかは、利用者が決める。
+- I の点検で残った任意の指摘（nit 2 件。まとめ役がコードに合わせて文書を直した）: (1) この節の「確かめた数」のレポートの比べ方（版の行も除く）。(2) article.py の冒頭の docstring が、ArticlePlan とノードを読み書きするモジュールの一部しか挙げていなかった（refparse・pdfmatch・pdfdocx を足した）。
 
 ## 同じファイルを触る順と、既存テストの書き換え
 
@@ -640,6 +649,7 @@ A（黙って文字・画像が落ちる不具合と、それを捕まえる検�
 - structure.py: 触る順は次のとおり。A（exclude_blank と L390・409・484・676・1022・1079・1101 の置き換え、L472〜474 と L1202〜1205 の空白段落、split_regions L325〜350、float_mechanical L678〜707）→ B3（float_mechanical で表のセルの画像とキャプション・キャプションのない表を図に組む、位置を決められない図表の置き場所〈今は本文の冒頭〉）→ E（attach_word_notes L1179〜1205 を書き直す。A で直した文末脚注の空白段落の処理は、ここで消える。plain() に基づく空白の扱いは新しいコードに引き継ぐ）→ F（build_body L455〜541 の除外分岐 L470〜475、place_boxes、assign_ids L1207〜1259、compute_locations、node_paras、body_seq L557、split_regions の本文の外の図形）→ G（D5 の任意の Decision）→ I（分割）。分割（U6）を A〜G（B3 を含む）のどれかより先にすると、すべての差分が衝突する。
 - G（0.26.0）で触ったファイル: src の ooxml.py・docx_reader.py・fidelity.py・pdfdocx.py・emit.py・builder.py・model.py・structure.py（Decision だけ）・pipeline.py・report.py・__init__.py、pyproject.toml、notebooks（make_notebook.py の再生成）、tests の make_fixtures.py（make_reader と部品、`make_pdfcheck` の split・hidden）・fixtures/sample_reader.docx（make_reader だけで作り直し）・test_reader.py・test_pipeline.py・test_pdfmatch.py・test_fidelity.py、docs の DESIGN.md・DEVELOPMENT.md・JSTAGE_NOTES.md・STYLE_MAPPING.md・FIX_PLAN.md・fix_plan_repro_tests.py、README.md、CLAUDE.md。
 - H（0.27.0）で触ったファイル: src の linker.py・builder.py（BuildInfo.unsplit_names）・pipeline.py・ai_assist.py（DEFAULT_MODEL_INFO・build_request）・__init__.py、pyproject.toml、notebooks（make_notebook.py の再生成。モデル名は ai_assist.py から読む）、tools/make_notebook.py、tests の make_fixtures.py（make_links・make_links_bare）・conftest.py（ALL_DOCS）・fixtures/sample_links.docx・sample_links_bare.docx（新規。make_links・make_links_bare だけで作った）・test_links.py（新規）・test_ai.py・test_notebook.py、docs の DESIGN.md・DEVELOPMENT.md・FIX_PLAN.md・fix_plan_repro_tests.py、README.md（CLAUDE.md は実装と合っていたので直していない）。pdfmatch.py・pdfdocx.py・structure.py には触っていない（ルート2 の注番号の書き方の限界は、H の節の「残る限界」）。
+- I（0.27.1）で触ったファイル: src の article.py（新規）・structure.py（クラスの移動と再 export、冒頭の docstring の目次）・linker.py・builder.py・ai_assist.py・pipeline.py（import の向き先だけ）・model.py・report.py（docstring の参照だけ）・__init__.py、pyproject.toml、notebooks（make_notebook.py の再生成）、tests の test_article.py（新規）、docs の DESIGN.md・DEVELOPMENT.md・FIX_PLAN.md。既存テストの書き換えはない。pdfmatch.py・pdfdocx.py・emit.py・docx_reader.py には触っていない。
 - docx_reader._textboxes / _read_nested_paragraph: A（M3 の _children）→ F（D1 の TextBox・textbox_id の記録）→ G（D5 で、つないだ段落の後ろの段落を読み飛ばす〈read_paragraph は None を返さず、呼ぶ側の read_block が [] を返し、_textboxes が self.later の段落を飛ばす〉。U8 で段落の隠し文字の状態を退避して戻す）。F の TextBox は段落の一覧を持たない（段落の側の textbox_id で指す）ので、つないだ後に残った段落の ID だけが記録される（G で実装したときに、この行を今のコードに合わせて直した）。
 - ai_assist.py: A（M6 で推奨案を採るなら、_placement_problem の body に画像の ID を認める）→ B3（回答の書式で placements を先頭に、途中で切れた回答の案内、_placement_problem の本文の外の段落の扱い）→ E（set_role_problem・REGION_ROLES の app_heading・Word の注の拒否）→ F（_placement_problem に box・label の分岐、テキストボックスの段落の役割の規則、FIELD_GUIDE・manual_prompt・SYSTEM_PROMPT:148）→ H（U4 で build_request に 3 つ組を渡す。D2 の SYSTEM_PROMPT の 1 文は足さなかった〈H の「実装した内容」〉）。D1 の元の設計（in_textbox の段落への set_role をすべて拒否）は、今動いている VML のキャプションへの set_role fig_caption を壊す。反証の規則（fig_caption・table_caption・exclude は受け付ける）を採る。
 - report.py の冒頭・14 章: A（N1 の画像の出力漏れと暫定の知らせを個別に足す。5 章の conflicts・bad_excluded）→ B（13 章の ignored_lines）→ B2（WHY_MARKS の理由の添え書き、13 章で数式を「〓」で示す、ルート2 の 13.2 の足す位置の表示）→ B3（位置を決められない図表の置き場所の文言。今は「本文の冒頭に仮に配置」）→ C（14 章の PDF の行、10 章の not_zipped、12 章の zip_issues）→ D（U2 がこれらをすべて actions() に移す。ルート2 の『docx を直してから変換しました』と『変更履歴を確認する』は固定の部分に残す）→ E（note_label で 8 章・13 章）→ F・G（Action を足すだけ）。D より後の単位は、冒頭・14 章・Colab の枠に個別の表示を足さない。
@@ -892,7 +902,7 @@ tests/test_notebook.py に、手順 4 のセル（cell_source("#@title 4.")）�
 
 点検で足したテスト: test_notebook.py では、手順 4 のセルの `MODEL = "…"` と選択肢の値を、make_notebook の mk.DEFAULT_MODEL ではなく、パッケージから import した jasme_jats.ai_assist.DEFAULT_MODEL と比べる（ファイルから正規表現で読む部分の誤りも捕まえるため）。make_notebook.py では、正規表現が一致しなかったときに「ai_assist.py の DEFAULT_MODEL = "…" の行が見つからない」と分かるエラーを出す（.group(1) の AttributeError だけにしない）。H の実装では、正規表現ではなく ast で「名前 = リテラル」の行を読む形にした（make_notebook.module_constants。DEFAULT_MODEL_INFO の辞書も読むため）。行が見つからないときは、その名前を書いた SystemExit で止める（tests/test_notebook.py の test_module_constants_reports_missing_line）。
 
-### U6 structure.py（1263 行）の分割
+### U6 structure.py（0.27.0 で 2,498 行。計画を作ったときは 1263 行）の分割
 
 新しいテストは不要。全テストと、分割の前後で出力が同じかの比較で確かめる。任意で、将来のリファクタリングのために、fixture ごとの XML を保存して比べる回帰テスト（tests/test_golden.py と、作り直し用のスクリプト）を足すとよい。
 
