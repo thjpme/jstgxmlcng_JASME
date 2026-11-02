@@ -183,7 +183,7 @@ def test_wrong_pdf_changes_nothing(journal, meta, tmp_path):
     assert pc.diffs == [] and pc.unmatched and res.fidelity.ok
     assert paragraphs(fx.path) == paragraphs(NOTES)
     assert "別の記事の PDF ではないか確認" in res.report_path.read_text(encoding="utf-8")
-    # 別の記事の PDF の疑いは、Colab の赤い枠・レポートの冒頭でも知らせる（要確認。終了コードは変えない。修正計画 D の M4）
+    # 別の記事の PDF の疑いは、Colab の黄色い枠・レポートの冒頭でも知らせる（要確認。終了コードは変えない。修正計画 D の M4）
     from jasme_jats.colab import pdf_diff_box
     from jasme_jats.report import TO_CHECK, actions, pdf_suspect
     assert pdf_suspect(res) and "別の記事の PDF かもしれません" in pdf_diff_box(res)
@@ -348,13 +348,13 @@ def test_tracked_changes_replace_no_break_hyphen():
 
 
 def test_colab_box_and_cli_route(journal, meta, tmp_path, capsys):
-    """Colab の赤い枠と、コマンドラインの --route。"""
+    """Colab の枠（ルート1 の文字の違いは要確認なので黄色）と、コマンドラインの --route。"""
     pytest.importorskip("pypdfium2")
     from jasme_jats.cli import main
     from jasme_jats.colab import pdf_diff_box
     res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "1", pdf_path=PDFCHECK_PDF, convert_metafiles=False))
     html = pdf_diff_box(res)
-    assert "#dc2626" in html and "出版版 PDF と文字が違う箇所が 1 件、全角・半角の違いが 25 文字あります" in html
+    assert "#d97706" in html and "出版版 PDF と文字が違う箇所が 1 件、全角・半角の違いが 25 文字あります" in html
     assert "XML は docx の文字のまま" in html and "出版版 PDF に合わせてから作る" in html
     res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "2", pdf_path=PDFCHECK_PDF, route="pdf",
                                                    convert_metafiles=False))

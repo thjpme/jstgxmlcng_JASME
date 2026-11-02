@@ -7,11 +7,13 @@
 import ast
 import json
 import re
+import textwrap
 from pathlib import Path
 
 REPO = "thjpme/jstgxmlcng_JASME"
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "notebooks" / "JASME_docx_to_JSTAGE_XML.ipynb"
+OUT_GRADIO = ROOT / "notebooks" / "JASME_docx_to_JSTAGE_XML_GUI.ipynb"      # 一般の利用者用: Gradio の 1 画面（docs/GUI_PLAN.md）
 VERSION = re.search(r'__version__ = "([^"]+)"', (ROOT / "src" / "jasme_jats" / "__init__.py").read_text()).group(1)
 VERSION_NOTE = "（試用版。正式版は 1.0 から）" if VERSION.startswith("0.") else ""
 try:
@@ -89,124 +91,19 @@ def code(text, form=True):
             "source": text.strip("\n").splitlines(keepends=True)}
 
 
-# 手順 4 の直後に出す、API キーの詳しい説明（Colab のテキストセルで開閉できる）
-API_HELP = f'''<details>
-<summary><b>API キーについての詳細（クリックで開きます）</b></summary>
+DOCS = f"https://github.com/{REPO}/blob/main/docs"      # 説明書（利用者向け）
 
-<p>「API で自動実行」を使うときだけ必要です。手動モード（チャットに貼り付け）なら API キーは要りません。</p>
-<p>1.〜5. は Claude（推奨）の場合の説明です。ChatGPT・Gemini・Sakana AI を使うときは 6. を見てください。</p>
 
-<h4>1. API キーを作る（最初に 1 回だけ）</h4>
-<ol>
-<li>Claude Console（<a href="https://platform.claude.com/" target="_blank">https://platform.claude.com/</a>）にログインします。アカウントがなければ作成します。
-API の料金は、claude.ai の有料プラン（Pro など）とは別にかかります。</li>
-<li>「Settings → Billing」（<a href="https://platform.claude.com/settings/billing" target="_blank">https://platform.claude.com/settings/billing</a>）で、利用料（クレジット）を購入します。
-同じ画面で、1 か月に使う金額の上限を設定できます。使いすぎを防ぐため、上限を設定しておくことをお勧めします。</li>
-<li>「Settings → API keys」（<a href="https://platform.claude.com/settings/keys" target="_blank">https://platform.claude.com/settings/keys</a>）で <b>Create key</b> を押し、名前（例: <code>jasme-colab</code>）を付けて作成します。</li>
-<li>表示されたキー（<code>sk-ant-</code> で始まる長い文字列）をコピーします。<b>キーが表示されるのはこのときだけです。</b>
-控えずに閉じてしまったら、新しいキーを作り直してください。</li>
-</ol>
-
-<h4>2. Colab にキーを登録する（Google アカウントごとに 1 回）</h4>
-<ol>
-<li>画面左端の 🔑（鍵の形）のアイコンを押します。「シークレット」という画面が開きます。</li>
-<li>「<b>＋ 新しいシークレットを追加</b>」を押します。「ノートブックからのアクセス」「名前」「値」「アクション」の欄が並んだ行が 1 行増えます。</li>
-<li>「<b>名前</b>」の欄に <code>ANTHROPIC_API_KEY</code> と入力します（大文字・小文字もこのとおりに。スペースは入れられません）。</li>
-<li>「<b>値</b>」の欄に、コピーしておいた API キー（<code>sk-ant-</code> で始まる文字列）を貼り付けます。
-入力した値は隠して表示されます。「アクション」の目のアイコンを押すと、正しく貼り付けられたか確かめられます。</li>
-<li>行の左端の「<b>ノートブックからのアクセス</b>」のスイッチを押してオンにします（✕ の表示からオンの表示に変わります）。</li>
-<li>保存ボタンはありません。入力した内容がそのまま保存されるので、シークレットの画面は閉じてかまいません。</li>
-<li>上の手順 4 で「API で自動実行」を選び、手順 5 を実行します。シークレットへのアクセスを許可するか聞かれたら、許可します。</li>
-</ol>
-<p>シークレットの画面にある「Gemini API キー」の欄は、Claude を使うときは関係ありません。</p>
-<p>手順 5 で「シークレット ANTHROPIC_API_KEY を読めませんでした」と出たときは、名前の綴りと「ノートブックからのアクセス」がオンになっているかを確認してください。
-キーが間違っている・無効になっているときは、変換レポートの「AI による補完」の章にエラーが表示されます。</p>
-
-<h4>3. キーを安全に扱う</h4>
-<ul>
-<li>キーをノートブックのセルやメール・チャットに直接書かないでください。シークレットに保存した値は非公開で、自分と、アクセスを許可したノートブックからしか見えません。ノートブックを他の人と共有しても、キーは渡りません。</li>
-<li>キーが漏れたおそれがあるときは、Claude Console の「Settings → API keys」でそのキーを削除し、新しく作り直してください。</li>
-</ul>
-
-<h4>4. 料金の目安（Claude）</h4>
-<ul>
-<li>「API で自動実行」で手順 5 を実行するたびに料金がかかります（既定のモデル <code>{DEFAULT_MODEL}</code> は、入力 100 万トークンあたり {DEFAULT_MODEL_INFO["input_usd"]} ドル、出力 100 万トークンあたり {DEFAULT_MODEL_INFO["output_usd"]} ドル）。</li>
-<li>試験に使った論文（AI への依頼文が約 4 万字）では、1 回あたりおおむね 0.3〜1 ドル程度と見込まれます（論文の長さ・図の数で変わります）。</li>
-<li>実際に使ったトークン数は、変換レポートの「AI による補完」の章の最後に表示されます。</li>
-</ul>
-
-<h4>5. API で使うモデルについて</h4>
-<ul>
-<li>手順 4 の「API で使うモデル（MODEL）」の既定は、このツールで動作を確かめた <code>{DEFAULT_MODEL}</code>（{DEFAULT_MODEL_INFO["name"]}）です。
-Anthropic の発表では、このモデルの提供終了は {MODEL_NOT_BEFORE}より前にはならない予定です（<a href="https://platform.claude.com/docs/en/about-claude/model-deprecations" target="_blank">モデルの提供終了の予定</a>）。</li>
-<li>将来このモデルが使えなくなった場合は、ツールが Anthropic のモデル一覧から使える最新の Opus を自動で選んでやり直し、変換レポートの「AI による補完」の章にその旨を表示します。</li>
-<li>はじめから最新の Opus を使いたいときは、「自動（最新の Opus）」を選びます。ただし、動作を確かめていない新しいモデルが選ばれることがあります。</li>
-<li>モデル名を自分で入力することもできます。使えるモデルの名前（Claude API ID）は、Anthropic のモデル一覧（<a href="https://platform.claude.com/docs/en/models/overview" target="_blank">Models overview</a>）で確認できます。</li>
-<li>ChatGPT・Gemini・Sakana AI の API を使うときは、次の 6. を見てください。API キーがなくても、「手動（チャットに貼り付け）」を選べば、
-それぞれのチャット画面に依頼文を貼り付けて使えます。</li>
-</ul>
-
-<h4>6. ChatGPT・Gemini・Sakana AI の API を使うとき</h4>
-<ul>
-<li>「API で自動実行」は、ChatGPT（OpenAI）、Gemini（Google）、Sakana AI（Sakana Namazu・Sakana Fugu）の API にも対応しています。ただし、<b>推奨は Claude です</b>
-（このツールの AI への依頼文と動作の確認は、Claude で行っています）。</li>
-<li>API キーの作り方、利用料の支払い、利用上限の設定などは、<b>各社の案内を自分で調べて行ってください</b>（このノートブックでは説明しません）。</li>
-<li>作った API キーは、上の 2. と同じ手順で Colab のシークレットに登録します。「名前」は、ChatGPT では <code>OPENAI_API_KEY</code>、
-Gemini では <code>GEMINI_API_KEY</code>（<code>GOOGLE_API_KEY</code> という名前で登録したものも使えます）、Sakana AI では <code>SAKANA_API_KEY</code> にします。</li>
-<li>使うモデルの名前は、手順 4 の「Claude 以外のモデル名（OTHER_MODEL）」に自分で入力します（各社の資料で確認してください）。
-<b>Claude Opus と同等以上の性能のモデル（各社の最上位クラスのモデル）を推奨します。</b>
-性能の低いモデルでは、取りこぼしや誤った提案が増えます（誤った提案はプログラムの検証で採用されませんが、補完の効果が下がります）。</li>
-<li>論文の本文は、選んだ会社（OpenAI、Google、Sakana AI）に送信されます。送信した内容の扱いは、各社の利用規約で確認してください。
-無料の利用枠では、送信した内容がサービスの改善に使われる場合があります。<b>Sakana AI は、既定で送信した内容をモデルの学習に使う設定です。</b>
-未公開の原稿を送るので、使う前に Sakana AI の管理画面（Console）の設定で、学習への利用を止めて（オプトアウトして）ください。</li>
-<li>料金は各社の料金表で確認してください。使ったトークン数は、変換レポートの「AI による補完」の章の最後に表示されます。</li>
-</ul>
-</details>'''
-
-cells = [
-    md(f"""
-# 論文 docx → J-STAGE 全文 XML 変換（全国数学教育学会誌『数学教育学研究』）
-
-**ツールの版: {VERSION}**{VERSION_NOTE}　… 手順 1 を実行すると、実際に読み込まれた版（とコミット ID）も表示されます。
-
-このノートブックは、テンプレートで作成された論文の Word ファイル（.docx）を、J-STAGE の全文 XML（JATS 1.1）に変換します。
-パソコンに何かをインストールする必要はありません。**上から順に、各セルの左の ▶ ボタンを押して実行してください。**
-**前の手順の実行が終わってから、次の手順の ▶ を押します**（実行中に次の ▶ を押すと、アップロードのボタンなどが出ないことがあります）。
-前の手順を実行せずに後の手順の ▶ を押すと、「先に手順 ○ を実行してください」と表示されて止まります。
-
-| 手順 | 内容 |
-|---|---|
-| 1 | 準備（最初に 1 回だけ。「準備ができました」と表示されたら、手順 2 に進みます） |
-| 2 | 作り方を選び、論文の docx と PDF をアップロード（ボタンが別々に出ます） |
-| 3 | 書誌情報（巻・号・ページ・査読の有無・キーワード・日付）を入力 |
-| 4 | AI による補完の方法を選ぶ |
-| 5 | 変換を実行（結果のレポートが表示されます） |
-| 6 | （手動モードのときだけ）AI の回答を貼り付けて再変換 |
-| 7 | （画像を用意できなかった図があるときだけ）足りない画像をアップロード |
-| 8 | 結果をダウンロード |
-| 9 | 続けて他の論文を変換するとき: ▶ を押してから、手順 2 に戻る |
-
-- 作り方は 2 通りあり、手順 2 で選びます。
-  - **出版版 PDF に合わせてから作る**（初期値。PDF が必要）: docx の文字を出版版 PDF に合わせて直した docx（Word の変更履歴つき）を先に作り、
-    それを変換します。直した docx も結果に入るので、Word で開いて変更を確かめられます。
-  - **docx から作る**: 本文の文字は 1 文字も変えません。PDF をアップロードすると、docx と PDF の文字を照合して、違う箇所をレポートに出します。
-    PDF がまだないときは、こちらを選びます。
-- どちらでも、変換後に、変換した docx と XML の文字を 1 文字ずつ照合して確かめます（レポートの「文字の不変性チェック」）。
-- アップロードしたファイルは、このノートブックを閉じる（ランタイムが切れる）と Google のサーバーから消えます。
-- 「API で自動実行」を選ぶと、論文の本文が選んだ AI の会社（Claude は Anthropic、ChatGPT は OpenAI、Gemini は Google、Sakana AI は Sakana AI）の API に送信されます。
-- 複数の論文を続けて変換するときは、1 本ごとに手順 8 で結果をダウンロードしてから、手順 9 の ▶ を押し、手順 2 から繰り返します。
-  手順 3 などの入力欄には前の論文の値が残るので、書き換えてから実行します（心配なときは、ノートブックを開き直して手順 1 から）。
-
-ソースコードと説明書: https://github.com/{REPO}
-"""),
-    code(f"""
+# 手順 1（準備）のセルは断片に分けて持つ（1 画面版のノートブックが、順番を変えて同じ断片を使う）
+PREP_PARAMS = f"""
 #@title 1. 準備（最初に 1 回だけ。1 分ほどかかります）
-#@markdown **EMF/WMF の図を変換する（CONVERT_EMF）**: 図が Word の図形（EMF/WMF 形式）で貼られている論文では、画像の変換に LibreOffice を使います。チェックを入れると LibreOffice を**裏で**インストールします（数分かかります。インストールは手順 1 の後も裏で続き、手順 5 の変換はそれが終わってから始まります）。
+#@markdown **CONVERT_EMF**: Word の図形（EMF/WMF）の図を変換するために、LibreOffice を裏でインストールします（通常はチェックのまま。数分かかりますが、手順 2 以降は待たずに進めます）。
 CONVERT_EMF = True  #@param {{type:"boolean"}}
-#@markdown **開発版を使う（USE_DEV_VERSION）**: 開発者向け。開発中の版を試すときだけチェックを入れます（実行するとブランチ名の入力欄が出ます）。
+#@markdown **USE_DEV_VERSION**: 開発者向け。開発中の版を試すときだけチェックします（ブランチ名を尋ねます）。
 USE_DEV_VERSION = False  #@param {{type:"boolean"}}
 
-import shutil, subprocess, sys
+"""      # 見出しと入力欄
+PREP_BRANCH = f"""import shutil, subprocess, sys
 # このランタイムで一度ツールを使っていると、古い版がメモリに残ったままになる（入れ直しても反映されない）
 loaded_before = "jasme_jats" in sys.modules
 BRANCH = "main"
@@ -214,8 +111,9 @@ if USE_DEV_VERSION:
     BRANCH = input("開発版のブランチ名を入力して Enter を押してください: ").strip()
     if not BRANCH:
         raise SystemExit("ブランチ名が入力されていません。開発版を使わないときは、チェックを外して実行してください。")
-url = f"git+https://github.com/{REPO}.git@{{BRANCH}}"
-for args in (["jasme-jats[ai,images] @ " + url],                          # ツールと必要なライブラリ
+"""      # 前の版の読み込みの確認と、入れるブランチ
+PREP_PIP = f"""url = f"git+https://github.com/{REPO}.git@{{BRANCH}}"
+for args in (["jasme-jats[ai,images,colab] @ " + url],                          # ツールと必要なライブラリ
              ["--force-reinstall", "--no-deps", "jasme-jats @ " + url]):  # ツール本体は毎回最新に入れ直す
     r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", *args], capture_output=True, text=True)
     if r.returncode != 0:
@@ -226,14 +124,16 @@ if loaded_before:
     raise SystemExit("ツールを最新の版に入れ替えましたが、このランタイムには前の版が読み込まれたままです。"
                      "メニューの「ランタイム」→「セッションを再起動」（表示によっては「ランタイムを再起動」）を選んでから、"
                      "手順 1 からもう一度実行してください。")
-# LibreOffice はインストールに数分かかるので裏で入れる（手順 5 で終わるのを待つ）
+"""      # ツールのインストール
+PREP_LO = f"""# LibreOffice はインストールに数分かかるので裏で入れる（手順 5 で終わるのを待つ）
 LO_LOG = "/content/libreoffice_install.log"
 if CONVERT_EMF and not (shutil.which("soffice") or shutil.which("libreoffice")):
     if globals().get("LO_PROC") is None or LO_PROC.poll() is not None:
         LO_PROC = subprocess.Popen("apt-get -qq update && (apt-get -qq install -y --no-install-recommends "
                                    "libreoffice-draw-nogui || apt-get -qq install -y libreoffice-draw)",
                                    shell=True, stdout=open(LO_LOG, "w"), stderr=subprocess.STDOUT)
-# 版の表示は別のプロセスで行う（ここで読み込むと、次に手順 1 を実行したときに「前の版が残っている」扱いになるため）
+"""      # LibreOffice を裏でインストール
+PREP_VERSION = f"""# 版の表示は別のプロセスで行う（ここで読み込むと、次に手順 1 を実行したときに「前の版が残っている」扱いになるため）
 ver = subprocess.run([sys.executable, "-c", "from jasme_jats.pipeline import tool_version; print(tool_version())"],
                      capture_output=True, text=True).stdout.strip()
 if not ver:
@@ -253,14 +153,27 @@ if not ver.startswith("{VERSION}"):
 if globals().get("LO_PROC") is not None and LO_PROC.poll() is None:
     print("LibreOffice を裏でインストールしています（数分）。インストールは裏で続くので、このまま手順 2 に進んでください"
           "（手順 5 の変換は、インストールが終わってから始まります）。")
-""" + "DONE = {1}\n"),
+"""      # 入った版の表示と確認
+PREP = PREP_PARAMS + PREP_BRANCH + PREP_PIP + PREP_LO + PREP_VERSION      # 手順 1（準備）のセル
+
+
+cells = [
+    md(f"""
+# 論文 docx → J-STAGE 全文 XML 変換（全国数学教育学会誌『数学教育学研究』）
+
+**ツールの版: {VERSION}**{VERSION_NOTE}
+
+論文の Word ファイル（.docx）を、J-STAGE の全文 XML（JATS 1.1）に変換します。パソコンに何かをインストールする必要はありません。
+**上から順に、各セルの左の ▶ を押してください**（前の手順の実行が終わってから、次の ▶ を押します）。手順 6・7 は必要なときだけ使います。
+
+説明書: [使い方・結果の見方・できないこと]({DOCS}/USAGE.md)　[AI の API キーと手動モード]({DOCS}/USAGE_AI.md)　ソースコード: https://github.com/{REPO}
+"""),
+    code(PREP + "DONE = {1}\n"),
     code("""
 #@title 2. 作り方を選び、論文の docx と PDF をアップロード
-#@markdown **作り方（ROUTE）**: 最初に選びます。
-#@markdown - **docx から作り、出版版 PDF で補う**（初期値）: 受け取った docx が著者校正の前の原稿で、校正の直し（「資料」→「付録」など）が出版版 PDF にしかないことがあるため、校正の直しと、組版の違い（全角・半角、ダッシュ、引用符など）を PDF から補った docx（**Word の変更履歴つき**。スタイル・書式・数式・図・注はそのまま）を作り、それを変換します。表の中・数式・図の中の文字・リンクの文字は直しません。PDF のページ番号・投稿受付日など組版で入る文字や、表・図の中の文字は docx に足しません（足さなかった文字はレポートの 13 章の最後に一覧が出ます。本文が混じっていないか確かめてください）。補った docx が元の docx から組版の違いと報告した直し以外に変わっていないことも確かめます。**PDF のアップロードが必要です。**
-#@markdown - **docx から作る**: docx の本文の文字を 1 文字も変えずに XML にします。PDF をアップロードすると、変換の後に docx の文字と PDF の文字を照合し、違う箇所（「資料」と「付録」などの校正の直しと、全角・半角などの組版の違い）をレポートの 13 章に出します（XML は docx の文字のままです）。PDF がまだないときや、docx が最終版だと分かっているときに選びます。
+#@markdown **ROUTE**（作り方）: 「docx から作り、出版版 PDF で補う」は、Word の文字を正として、出版版 PDF から著者校正の直しと組版の違い（全角・半角・ダッシュ・引用符など）を補った docx（Word の変更履歴つき）を作ってから変換します（PDF が必要）。「docx から作る」は docx の文字のまま変換します（PDF がまだないときはこちら）。違いは説明書の「出版版 PDF との照合と、2 通りの作り方」。
 ROUTE = "docx から作り、出版版 PDF で補う"  #@param ["docx から作り、出版版 PDF で補う", "docx から作る"]
-#@markdown **PDF もアップロードする（UPLOAD_PDF）**: J-STAGE に登載する PDF がまだなければ、チェックを外し、作り方を「docx から作る」にしてから実行してください（PDF 用のボタンは出ません。PDF が用意できたら、この手順 2 から PDF を選んで変換し直します）。
+#@markdown **UPLOAD_PDF**: J-STAGE に登載する PDF もアップロードします。PDF がまだないときはチェックを外し、作り方を「docx から作る」にします。
 UPLOAD_PDF = True  #@param {type:"boolean"}
 """ + guard(1) + """
 from pathlib import Path
@@ -309,43 +222,32 @@ print("PDF :", pdf_path.name if pdf_path else "（なし。J-STAGE への登載�
 """ + mark(2)),
     code("""
 #@title 3. 書誌情報を入力
-#@markdown 各欄の上の説明（日本語）に対応する欄に入力します。巻・号・ページは半角の英数字で入力します（全角の数字は半角にして読みます）。日付は 2026-03-31 の形で（2026/3/31 でもかまいません）、分からなければ空欄にします。
+#@markdown 巻・号・ページは半角の英数字で。日付は 2026-03-31 の形で（2026/3/31 でもかまいません）。分からない項目は空欄にします。
 #@markdown ***
-#@markdown **巻（volume）**（J-STAGE のフォルダ名・ファイル名と DOI に使います）
+#@markdown **巻（volume）・号（issue）・最初のページ（first_page）・最後のページ（last_page）**
 volume = ""  #@param {type:"string"}
-#@markdown **号（issue）**
 issue = ""  #@param {type:"string"}
-#@markdown **最初のページ（first_page）**
 first_page = ""  #@param {type:"string"}
-#@markdown **最後のページ（last_page）**
 last_page = ""  #@param {type:"string"}
 #@markdown ***
-#@markdown **査読の有無（peer_review）**（必須。必ず選んでください）
+#@markdown **査読の有無（peer_review）**（必須）・**最終査読日（last_review_date）**（査読ありで、分かれば）
 peer_review = "（選んでください）"  #@param ["（選んでください）", "査読あり", "査読なし"]
-#@markdown **最終査読日（last_review_date）**（査読ありで、分かれば）
 last_review_date = ""  #@param {type:"string"}
 #@markdown ***
-#@markdown **キーワード（日本語）（keywords_ja）**（任意。「；」または「;」で区切る。例: `数学教育；活動；哲学`）
+#@markdown **キーワード**（任意。「;」か「；」で区切る。日・英あわせて 100 個まで）: **日本語（keywords_ja）・英語（keywords_en）**
 keywords_ja = ""  #@param {type:"string"}
-#@markdown **キーワード（英語）（keywords_en）**（任意。「;」または「；」で区切る。例: `mathematics education; activity; philosophy`）。日・英あわせて 100 個まで
 keywords_en = ""  #@param {type:"string"}
 #@markdown ***
-#@markdown **発行日（pub_date）**
+#@markdown **発行日（pub_date）・J-STAGE 公開日（jstage_release_date）・受付日（received）・受理日（accepted）**
 pub_date = ""  #@param {type:"string"}
-#@markdown **J-STAGE 公開日（jstage_release_date）**
 jstage_release_date = ""  #@param {type:"string"}
-#@markdown **受付日（received）**
 received = ""  #@param {type:"string"}
-#@markdown **受理日（accepted）**
 accepted = ""  #@param {type:"string"}
 #@markdown ***
-#@markdown **DOI（doi）**（空欄なら 10.24529/jasme.巻.号_開始ページ を使います）
+#@markdown **DOI（doi）**（空欄なら 10.24529/jasme.巻.号_開始ページ）・**原稿種別（manuscript_type）**・**その他の原稿種別（subject_other・subject_other_en）**（原稿種別で「その他」を選んだときだけ、日本語・英語で）・**責任著者が何番目の著者か（corresponding_author）**（例: 1。複数なら「1,2」）
 doi = ""  #@param {type:"string"}
-#@markdown **原稿種別（manuscript_type）**
-""" + TYPE_PARAM + """#@markdown **原稿種別（日本語）（subject_other）**・**原稿種別（英語）（subject_other_en）**: 原稿種別で「その他」を選んだときだけ入力します
-subject_other = ""  #@param {type:"string"}
+""" + TYPE_PARAM + """subject_other = ""  #@param {type:"string"}
 subject_other_en = ""  #@param {type:"string"}
-#@markdown **責任著者が何番目の著者か（corresponding_author）**（例: 1。複数なら「1,2」）
 corresponding_author = ""  #@param {type:"string"}
 """ + guard(1, 2) + """if peer_review not in ("査読あり", "査読なし"):
     raise SystemExit("査読の有無（peer_review）を選んでください。")
@@ -393,16 +295,10 @@ if _prev:
 """ + mark(3)),
     code("""
 #@title 4. AI による補完の方法を選ぶ
-#@markdown - **使わない**（推奨しません）: 機械的な変換だけを行います。取りこぼしがあっても補われません。テキストボックスなどに入った図表で、位置を機械的に決められないものがあると、手順 5 で変換を中止します（AI による補完が必要です）。
-#@markdown - **API で自動実行**: AI の API を呼び出して、機械処理で取りこぼした引用・スタイルの誤り・画像の数式などを補完します。**Claude を推奨します**（ChatGPT・Gemini・Sakana AI にも対応）。左の 🔑（シークレット）に API キー（Claude は名前 `ANTHROPIC_API_KEY`）を登録し、「ノートブックからのアクセス」をオンにしてください（API の利用料がかかります）。キーの作り方と登録の手順は、このセルのすぐ下の「**API キーについての詳細**」を開いてください。
-#@markdown - **手動**: AI への依頼文を作ります。claude.ai などのチャットに貼り付け、返ってきた回答を手順 6 で貼り戻します（API キー不要）。
-#@markdown ***
-#@markdown **AI による補完の方法（AI_MODE）**
+#@markdown **AI_MODE**: 「API で自動実行」は、左の 🔑（シークレット）に API キー（Claude は名前 `ANTHROPIC_API_KEY`）を登録し、「ノートブックからのアクセス」をオンにしておきます（利用料がかかります）。「手動」は依頼文をチャットに貼り付け、回答を手順 6 で貼り戻します（API キー不要）。「使わない」は推奨しません。登録のしかた・料金・手動の手順は説明書の [AI の API キーと手動モード](""" + DOCS + """/USAGE_AI.md)。
 AI_MODE = "手動（チャットに貼り付け）"  #@param ["使わない", "API で自動実行（Claude・推奨）", "API で自動実行（ChatGPT）", "API で自動実行（Gemini）", "API で自動実行（Sakana AI）", "手動（チャットに貼り付け）"]
-#@markdown **Claude のモデル（MODEL）**（Claude を使うとき。通常は変更不要。「API キーについての詳細」の 5. を参照）
-""" + MODEL_LINE + """#@markdown **Claude 以外のモデル名（OTHER_MODEL）**（ChatGPT・Gemini・Sakana AI を使うときは必ず入力。**Claude Opus と同等以上の性能のモデル**（各社の最上位クラスのモデル）を推奨します。モデル名は各社の資料で確認してください。「API キーについての詳細」の 6. を参照）
-OTHER_MODEL = ""  #@param {type:"string"}
-#@markdown **図表番号を分ける（SPLIT_LABELS）**: 図表番号（「図1」）を J-STAGE の <label> 要素に分けるか（分けると番号とタイトルの間の空白 1 文字を落とします。既定は分けない）
+#@markdown **MODEL**（Claude のモデル。通常は変更不要）・**OTHER_MODEL**（ChatGPT・Gemini・Sakana AI のときは必ず入力。各社の最上位クラスのモデルを推奨）・**SPLIT_LABELS**（図表番号「図1」を <label> 要素に分ける。既定は分けない）
+""" + MODEL_LINE + """OTHER_MODEL = ""  #@param {type:"string"}
 SPLIT_LABELS = False  #@param {type:"boolean"}
 """ + guard(1, 2, 3) + """AI = "api" if AI_MODE.startswith("API") else {"使わない": "none", "手動（チャットに貼り付け）": "manual"}[AI_MODE]
 PROVIDER = {"API で自動実行（ChatGPT）": "openai", "API で自動実行（Gemini）": "gemini",
@@ -416,7 +312,7 @@ else:
                          "（Claude Opus と同等以上の性能のモデルを推奨します。モデル名は各社の資料で確認してください）。")
 print("AI による補完:", AI_MODE + (f"（モデル: {API_MODEL}）" if AI == "api" else ""))
 if PROVIDER != "claude":
-    print("※ 推奨は Claude です。API キーの作り方・料金などは各社の案内で確かめてください（「API キーについての詳細」の 6.）。")
+    print("※ 推奨は Claude です。API キーの作り方・料金などは各社の案内で確かめてください（説明書 USAGE_AI.md の 6.）。")
 if PROVIDER == "sakana":
     from IPython.display import HTML, display
     from jasme_jats.colab import error_box
@@ -428,13 +324,11 @@ if AI == "none":
     from jasme_jats.colab import no_ai_box
     display(HTML(no_ai_box()))
 """ + mark(4)),
-    md(API_HELP),
     code("""
 #@title 5. 変換を実行
 """ + guard(1, 2, 3, 4) + """import shutil
-from IPython.display import HTML, Markdown, display
-from jasme_jats.colab import ai_required_box, no_ai_box, prompt_box, result_boxes
-from jasme_jats.report import pdf_summary, upload_issues
+from IPython.display import HTML, display
+from jasme_jats.colab import ai_required_box, no_ai_box, prompt_box, report_details, result_boxes, summary_box
 from jasme_jats.config import ArticleMeta, JournalConfig
 from jasme_jats.pipeline import AIRequiredError, Options, add_images, convert
 
@@ -470,18 +364,6 @@ try:
 except AIRequiredError as e:
     display(HTML(ai_required_box(str(e))))
     raise SystemExit("手順 4 で「API で自動実行」か「手動（チャットに貼り付け）」を選び、手順 4 からやり直してください。")
-fid = res.fidelity
-print("文字の不変性チェック:", fid.summary(), f"（段落 {fid.units} 件中 {fid.mapped} 件を出力、{len(fid.excluded)} 件は除外）")
-print("最終出力の再チェック:", "合格" if fid.final_ok else "不合格")
-print("DTD 検証:", "合格" if res.dtd_valid else "不合格")
-print("J-STAGE のアップロード時チェック:", "問題なし" if not upload_issues(res) else f"要対応 {len(upload_issues(res))} 件")
-for mid, msg in upload_issues(res):
-    print("  ", mid, msg)
-print("出版版 PDF との照合:", pdf_summary(res))
-if res.docx_fix is not None:
-    print("PDF に合わせて直した docx（変更履歴つき。手順 8 でダウンロードする ZIP に入ります）:", res.docx_fix.path.name)
-elif res.pdf_fallback:
-    print("出版版 PDF に合わせられませんでした（PDF の文字を読めませんでした）。docx を直さずに変換しています（下の赤い枠）。")
 if globals().get("USER_IMAGES"):
     _again = add_images(res, USER_IMAGES, skip_unneeded=True)
     if _again:
@@ -490,31 +372,23 @@ manual_prompt = None
 if AI == "none":
     display(HTML(no_ai_box()))
 if AI == "manual" and res.prompt_path:
-    # 依頼文は、レポートの前に目立つ枠で出し、レポートの後ろにも同じものをコピーできる枠を出す
+    # 依頼文は、レポートの前に目立つ枠で出す
     attach = OUT / "AI添付画像"
     image_names = sorted(p.name for p in attach.iterdir()) if attach.exists() else []
     for n in image_names:
         files.download(str(attach / n))
     manual_prompt = res.prompt_path.read_text(encoding="utf-8")
     display(HTML(prompt_box(manual_prompt, image_names)))
-# 要対応・要確認の赤い枠（report.actions）。手動モードの「AI の回答をまだ反映していません」は、上の依頼文の枠があるので出さない
+# 要対応（赤）・要確認（黄）の枠（report.actions）。手動モードの「AI の回答をまだ反映していません」は、上の依頼文の枠があるので出さない
 display(HTML(result_boxes(res, skip=("ai_pending",))))
-display(Markdown(res.report_path.read_text(encoding="utf-8")))
-if manual_prompt:
-    display(HTML(prompt_box(manual_prompt, compact=True)))
+display(HTML(summary_box(res)))
+display(HTML(report_details(res.report_path.read_text(encoding="utf-8"))))
 """ + mark(5)),
-    md("""
+    md(f"""
 ### 6.（手動モードのときだけ）AI の回答を貼り付けて再変換
 
-チャットから返ってきた回答は、`json` と書かれたコードブロック（灰色の枠）1 つのはずです。枠の右上の**コピーボタン**でコピーし、
-下のセルの `r'''` と `'''` の間に貼り付けてから ▶ を押してください（コードブロックの外の文章が混じらず、中身がそのままコピーされます）。
-
-- 回答がコードブロックになっていない、またはアーティファクト（別の画面）として返ってきたときは、チャットで
-  「回答の書き方に従って、```json のコードブロック 1 つで出し直してください」と頼んでください。
-- 読めなかったときは、何行目のどこが読めないかが表示されます。
-- 回答が長すぎて途中で切れていたときは、最後まで書かれていた図表の位置だけを反映し、赤い枠で知らせます。チャットで
-  「回答が途中で切れました。同じ形式で最初から出し直してください」と頼み、新しい回答を最初から最後まで貼り付け直してください
-  （続きだけを貼り付けても読めません）。
+チャットの回答（`json` のコードブロック）を右上のコピーボタンでコピーし、下のセルの `r'''` と `'''` の間に貼り付けてから ▶ を押します。
+回答を読めないときの対処: 説明書の [AI の API キーと手動モード]({DOCS}/USAGE_AI.md) の 7.
 """),
     code("""
 AI_RESPONSE = r'''
@@ -535,21 +409,13 @@ if globals().get("USER_IMAGES"):
     _again = add_images(res, USER_IMAGES, skip_unneeded=True)
     if _again:
         print("手順 7 でアップロードした画像を入れ直しました:", "、".join(_again))
-fid = res.fidelity
-print("文字の不変性チェック:", fid.summary(), "/ 最終出力の再チェック:", "合格" if fid.final_ok else "不合格",
-      "/ DTD 検証:", "合格" if res.dtd_valid else "不合格",
-      "/ J-STAGE のアップロード時チェック:", "問題なし" if not upload_issues(res) else f"要対応 {len(upload_issues(res))} 件",
-      "/ 出版版 PDF との照合:", pdf_summary(res))
-display(HTML(result_boxes(res)))      # 要対応・要確認の赤い枠（report.actions）
-display(Markdown(res.report_path.read_text(encoding="utf-8")))
+display(HTML(result_boxes(res)))      # 要対応（赤）・要確認（黄）の枠（report.actions）
+display(HTML(summary_box(res)))
+display(HTML(report_details(res.report_path.read_text(encoding="utf-8"))))
 """, form=False),
     code("""
 #@title 7. 足りない画像をアップロード（画像を用意できなかった図があるときだけ）
-#@markdown Word の図形で描かれた図などは、docx に画像ファイルがないので、変換で画像を作れません（手順 5 の赤い枠「画像ファイルを用意できなかった図」）。そのときだけ ▶ を押します。
-#@markdown 図ごとに「ファイル選択」ボタンが出るので、その図の画像を選んでください。**ファイル名は何でもかまいません**（正しい名前にして入れ、jasme_巻_開始ページ.zip とレポートを作り直します）。PNG・JPEG のほか、図の部分だけの 1 ページの PDF も使えます。
-#@markdown - 画像の作り方の例: 記事の PDF を開いて図の部分を切り取る（スクリーンショットなど）。Word で図を右クリックして「図として保存」を選ぶ。
-#@markdown - 図の題目（「図1　…」）は XML に入っているので、画像には含めません。
-#@markdown - 用意できない図は、ファイルを選ばずに「キャンセル」を押すと飛ばせます（後でこの手順をやり直せます）。
+#@markdown 手順 5 の赤い枠「画像ファイルを用意できなかった図」があるときだけ ▶ を押します。図ごとに「ファイル選択」が出るので、その図の画像（PNG・JPEG か、図の部分だけの 1 ページの PDF。記事の PDF から切り取るか、Word で図を右クリック →「図として保存」。ファイル名は何でもかまいません。図の題目は含めません）を選びます。用意できない図は「キャンセル」で飛ばせます。
 """ + guard(1, 2, 3, 4, 5) + """from IPython.display import HTML, Image, display
 from jasme_jats.colab import error_box, missing_images_box
 from jasme_jats.pipeline import add_images, graphics_path
@@ -587,8 +453,7 @@ if _missing:
 """ + mark(7)),
     code("""
 #@title 8. 結果をダウンロード
-#@markdown 「変換結果_巻_開始ページ.zip」の中に、J-STAGE にアップロードする jasme_巻_開始ページ.zip、XML、変換レポートが入っています。「出版版 PDF に合わせてから作る」では、（PDF の文字を読めたとき）PDF に合わせて直した docx（Word の変更履歴つき）も入っています。
-#@markdown 要対応（赤い枠）が残っているときは、ダウンロードの前に一度止まります。直してから変換し直すか、そのままダウンロードするときは、もう一度 ▶ を押します。
+#@markdown 「変換結果_巻_開始ページ.zip」（J-STAGE にアップロードする jasme_巻_開始ページ.zip、XML、変換レポート。「出版版 PDF に合わせてから作る」では（PDF の文字を読めたとき）PDF に合わせて直した docx も）をダウンロードします。要対応（赤い枠）が残っていると一度止まります（そのままダウンロードするときは、もう一度 ▶）。
 """ + guard(1, 2, 3, 4, 5) + """from IPython.display import HTML, display
 from jasme_jats.colab import result_boxes
 from jasme_jats.report import NEEDS_ACTION, actions, images_to_prepare
@@ -619,10 +484,7 @@ print("続けて他の論文を変換するときは、下の手順 9 の ▶ �
 """ + mark(8)),
     code("""
 #@title 9. 続けて他の論文を変換する
-#@markdown 手順 8 で結果をダウンロードした後、同じ画面のまま次の論文を変換するときに ▶ を押します。
-#@markdown この論文のファイルと入力の記録を片付けて、手順 2 から始められるようにします（手順 1 の準備はやり直しません）。
-#@markdown ▶ を押したら、**手順 2 から順に**実行してください。手順 3 などの入力欄には前の論文の値が残っているので、**今回の論文のものに書き換えます**。
-#@markdown 書き換え漏れが心配なときは、ノートブックを開き直して、手順 1 からやり直すほうが確実です（入力欄が初期の値に戻ります）。
+#@markdown 手順 8 の後に ▶ を押すと、手順 2 から次の論文を始められます（手順 1 はやり直しません）。手順 3 などの入力欄には前の論文の値が残るので、今回の論文のものに書き換えてください。
 """ + guard(1) + """import shutil
 from pathlib import Path
 from IPython.display import HTML, display
@@ -655,6 +517,46 @@ display(HTML(next_article_box(globals().get("PREVIOUS", {}).get("docx", ""))))
 
 
 
+# 1 画面版（Gradio。一般の利用者用）: 準備と画面を 1 つのセルにする。LibreOffice のインストールを先に裏で始めてから pip をし（同時に進む）、
+# 画面を開く。2 回目の実行（画面を開き直すとき）はツールを入れ直さない（入れ直しには、セッションの再起動が要るため）
+_gradio_prep = (PREP_LO + PREP_PIP + PREP_VERSION).replace("（手順 5 で終わるのを待つ）", "（変換のときに終わるのを待つ）")
+for _old, _new in (("手順 1 からもう一度実行", "このセルをもう一度実行"), ("手順 1 からやり直して", "このセルからやり直して"),
+                   ("次に手順 1 を実行したときに", "次にこのセルを実行したときに"),
+                   ("このまま手順 2 に進んでください", "画面を開きます"),
+                   ("（手順 5 の変換は、インストールが終わってから始まります）", "（変換は、インストールが終わってから始まります）")):
+    assert _old in _gradio_prep, _old
+    _gradio_prep = _gradio_prep.replace(_old, _new)
+_gradio_prep = _gradio_prep.replace("jasme-jats[ai,images,colab]", "jasme-jats[ai,images,colab,gui]")
+_GRADIO_CELL = (PREP_PARAMS.replace("#@title 1. 準備（最初に 1 回だけ。1 分ほどかかります）", "#@title 準備して画面を開く（2 分ほどかかります）")
+                .replace("手順 2 以降は待たずに進めます", "画面は待たずに使えます")
+                + PREP_BRANCH
+                + """if loaded_before:
+    print("ツールは入っているので、画面を開き直します（新しい版を入れるときは、メニューの「ランタイム」→「セッションを再起動」を"
+          "選んでから、このセルを実行します）。")
+else:
+"""
+                + textwrap.indent(_gradio_prep, "    ")
+                + """from jasme_jats.app import launch
+if globals().get("_app") is not None:
+    _app.close()                      # 開き直し
+_app = launch()
+""")
+cells_gradio = [
+    md(f"""
+# 論文 docx → J-STAGE 全文 XML 変換（全国数学教育学会誌『数学教育学研究』）
+
+**ツールの版: {VERSION}**{VERSION_NOTE}
+
+論文の Word ファイル（.docx）を、J-STAGE の全文 XML（JATS 1.1）に変換します。パソコンに何かをインストールする必要はありません。
+下のセルの ▶ を押すと、ツールの準備（2 分ほど）のあと、その下に画面が開きます。画面に docx と PDF、書誌情報を入れて「変換する」を押します。
+メニューの「表示」でサイドバーなどを閉じると広く使えます。手順ごとにセルを実行する従来版のノートブックは、説明書の「使い方」にあります。
+
+説明書: [使い方・結果の見方・できないこと]({DOCS}/USAGE.md)　[AI の API キーと手動モード]({DOCS}/USAGE_AI.md)　ソースコード: https://github.com/{REPO}
+"""),
+    code(_GRADIO_CELL),
+]
+
+
 BRANCH_LINE = 'BRANCH = "main"'
 
 
@@ -666,18 +568,25 @@ def notebook_branch(text: str) -> str:
 
 def render(branch: str = "main") -> str:
     """ノートブックの JSON を作る。branch は手順 1 が既定で入れるブランチ（開発中の版のノートブックは、そのブランチ名で作る）。"""
+    return _notebook(cells, branch)
+
+
+def render_gradio(branch: str = "main") -> str:
+    """1 画面版（Gradio）のノートブックの JSON を作る。branch は render と同じ。"""
+    return _notebook(cells_gradio, branch)
+
+
+def _notebook(cell_list, branch: str = "main") -> str:
     if branch != "main":
         # 手順 1 の BRANCH = "main" を置き換える（開発版のチェックを入れなくても、そのブランチのツールが入る）
-        assert sum(line.count(BRANCH_LINE) for c in cells for line in c["source"]) == 1
-        cells_out = [dict(c, source=[line.replace(BRANCH_LINE, f'BRANCH = "{branch}"') for line in c["source"]])
-                     for c in cells]
-    else:
-        cells_out = cells
+        assert sum(line.count(BRANCH_LINE) for c in cell_list for line in c["source"]) == 1
+        cell_list = [dict(c, source=[line.replace(BRANCH_LINE, f'BRANCH = "{branch}"') for line in c["source"]])
+                     for c in cell_list]
     nb = {
         "nbformat": 4, "nbformat_minor": 0,
         "metadata": {"colab": {"provenance": [], "toc_visible": True},
                      "kernelspec": {"name": "python3", "display_name": "Python 3"}, "language_info": {"name": "python"}},
-        "cells": cells_out,
+        "cells": cell_list,
     }
     return json.dumps(nb, ensure_ascii=False, indent=1) + "\n"
 
@@ -692,3 +601,5 @@ if __name__ == "__main__":
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(render(a.branch), encoding="utf-8")
     print("written:", OUT, "" if a.branch == "main" else f"（手順 1 はブランチ {a.branch} から入れる）")
+    OUT_GRADIO.write_text(render_gradio(a.branch), encoding="utf-8")
+    print("written:", OUT_GRADIO)

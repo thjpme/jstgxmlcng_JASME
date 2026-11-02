@@ -9,11 +9,42 @@ def test_prompt_box_escapes_text_and_has_copy_button():
     assert "img3.png" in html and "手順 6" in html
 
 
-def test_compact_box_and_error_box():
-    html = prompt_box("x", compact=True)
-    assert "依頼文をコピー" in html and "手順 6" not in html
+def test_error_box_and_check_box():
+    """要対応は赤い枠、要確認は黄色い枠。どちらも文字をエスケープする。"""
+    from jasme_jats.colab import check_box
     assert prompt_box("x").count("jasme-prompt-") != 0
-    assert "&lt;x&gt;" in error_box("読めません", "<x>")
+    assert "&lt;x&gt;" in error_box("読めません", "<x>") and "#dc2626" in error_box("a", "b")
+    assert "&lt;x&gt;" in check_box("確認", "<x>") and "#d97706" in check_box("a", "b") and "#dc2626" not in check_box("a", "b")
+
+
+def test_summary_box_and_report_details(journal, meta, tmp_path, monkeypatch):
+    """結果の要約の灰色の枠（不合格・要対応の行は赤い文字）と、畳んで出すレポート全文（Markdown の表を HTML にする）。"""
+    import sys
+    from types import SimpleNamespace
+    from conftest import FULL
+    from jasme_jats.colab import report_details, summary_box
+    from jasme_jats.pipeline import Options, convert
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "s", convert_metafiles=False))
+    html = summary_box(res)
+    assert "結果の要約" in html and "文字の不変性チェック: 合格" in html and "DTD 検証: 合格" in html
+    assert "J-STAGE のアップロード時チェック: 問題なし" in html and "出版版 PDF との照合: PDF なし" in html
+    assert "#b91c1c" not in html and "PDF に合わせて直した docx" not in html
+    res.dtd_valid = False
+    assert "color:#b91c1c;font-weight:bold'>DTD 検証: 不合格" in summary_box(res)
+    # ルート2 で直した docx の名前。PDF の文字を読めなかったときは、直せなかったことを赤い文字で
+    res.docx_fix = SimpleNamespace(path=tmp_path / "31_1_PDFに合わせた原稿.docx")
+    assert "PDF に合わせて直した docx: 31_1_PDFに合わせた原稿.docx（変更履歴つき" in summary_box(res)
+    res.docx_fix = None
+    monkeypatch.setattr(type(res), "pdf_fallback", property(lambda self: True))
+    assert "font-weight:bold'>PDF に合わせて直した docx: 作れませんでした" in summary_box(res)
+    md = "# 変換レポート\n\n| 項目 | 結果 |\n|---|---|\n| 不変性 | 合格 |\n\n> **注意** <b>\n"
+    html = report_details(md)
+    assert html.index("<details") < html.index("<summary") and "変換レポートの全文を見る" in html
+    assert "<table>" in html and "<td>合格</td>" in html and "<blockquote>" in html
+    # markdown ライブラリがなければ、そのままの文字で出す
+    monkeypatch.setitem(sys.modules, "markdown", None)
+    html = report_details(md)
+    assert "<details" in html and "<table>" not in html and "| 不変性 | 合格 |" in html
 
 
 def test_no_ai_box_is_red_warning():
@@ -123,7 +154,7 @@ def test_figure_body_box(journal, meta, tmp_path):
 
 
 def test_result_boxes_follow_actions(journal, tmp_path, monkeypatch):
-    """手順 5・6・8 の赤い枠は report.actions からまとめて作る（colab.result_boxes）: J-STAGE のアップロード時チェック、
+    """手順 5・6・8 の枠は report.actions からまとめて作る（colab.result_boxes）: J-STAGE のアップロード時チェック、
     DTD 検証の不合格、AI のエラー（手動モードと API モードで見出しを書き分ける）。"""
     from conftest import FULL
 
@@ -172,7 +203,7 @@ def test_result_boxes_before_answer_in_manual_mode(journal, meta, tmp_path):
 
 def test_result_boxes_show_textbox_notices(journal, meta, tmp_path):
     """文字だけのテキストボックスの知らせ（囲みか図の注記か決められなかったもの・位置を推定した囲み。どちらも要確認）も、
-    report.actions に足しただけで手順 5・6・8 の赤い枠に出る（表示の仕組みは変えない。修正計画の F）。手動モードで回答を
+    report.actions に足しただけで手順 5・6・8 の枠に出る（表示の仕組みは変えない。修正計画の F）。手動モードで回答を
     貼り戻す前は、決められないテキストボックスを AI の回答で判断することを、回答待ちの枠にも書く。"""
     from conftest import STRUCTURE
 
@@ -181,6 +212,7 @@ def test_result_boxes_show_textbox_notices(journal, meta, tmp_path):
     res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "n", convert_metafiles=False))
     html = result_boxes(res, level="要確認")
     assert "囲みか図の注記か決められなかったテキストボックスが 3 件あります（要確認）" in html
+    assert "#d97706" in html and "#dc2626" not in html             # 要確認は黄色い枠
     assert ("手順 4 で AI による補完の方法を「API で自動実行」か「手動（チャットに貼り付け）」にして ▶ を押し、手順 5 から"
             "変換し直すと") in html and "位置を推定して置いた囲みが 1 件あります（要確認）" in html
     assert result_boxes(res, level="要対応") == ""

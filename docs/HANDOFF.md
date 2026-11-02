@@ -12,7 +12,7 @@
   文字列を書き換えるコードは書きません（具体的な決まりは DEVELOPMENT.md の「守るべき原則」）。
 - **正本は GitHub の `main` ブランチです。** 利用者のノートブックは、実行のたびに `main` からツールを入れます。
   つまり **`main` に入れた変更は、その時点で利用者に届きます。** テストを通してから反映してください。
-- 読む順番: README.md → DESIGN.md → DEVELOPMENT.md →（必要に応じて）JSTAGE_NOTES.md・STYLE_MAPPING.md。
+- 読む順番: README.md → USAGE.md（利用者向けの使い方。USAGE_AI.md は API キーと手動モード）→ DESIGN.md → DEVELOPMENT.md →（必要に応じて）JSTAGE_NOTES.md・STYLE_MAPPING.md・GUI_PLAN.md（操作画面の整理計画）。
   Claude Code に頼めば、要点をまとめて説明してくれます（下の 4.）。
 
 ## 1. 必要なもの
@@ -43,7 +43,8 @@
 リポジトリ名は次の場所に書かれています。`git grep -n "thjpme/jstgxmlcng_JASME"` で一覧を出し、新しい名前に直します。
 
 - `tools/make_notebook.py` の `REPO`（ノートブックがツールを入れる先）→ 直したら `python tools/make_notebook.py` でノートブックを作り直す
-- `README.md`（Colab のボタンのリンクと、pip で入れるときの URL）
+- `tools/make_notebook.py` の `DOCS`（ノートブックから説明書へのリンク。`REPO` から作るので、`REPO` を直せばよい）
+- `README.md`（Colab のボタンのリンク 2 つと、pip で入れるときの URL）、`docs/USAGE.md`（Colab のボタンのリンク 2 つ）
 - `docs/DEVELOPMENT.md`、この文書
 
 GitHub は譲渡の後しばらく古い URL から転送しますが、転送に頼らず直してください（古い名前で別のリポジトリが作られると転送が切れます）。
