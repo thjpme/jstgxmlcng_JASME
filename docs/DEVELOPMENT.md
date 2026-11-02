@@ -60,7 +60,7 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
    入る文字（ページ番号・誌名の行・柱・投稿受付日など）と、docx にない図・表の中の文字は docx に足さない（`pdfmatch.pdf_stream()` の印で
    照合に使わず、足さなかった文字はレポートの 13 章に載せる）。docx に足すか・docx の文字を消すかを PDF から決められない違い（分断された
    段落の端、数式など文字として読み取れない部分の隣など）は、足す・消す側に倒さず、理由（`TextDiff.why`）を付けて直さずに 13 章に出す。
-   (A) の直しは、`typeset_pair` の対と、全角・半角の文字のすぐ隣の半角の空白の削除を超えて文字を変えない。`pdfmatch`・`pdfdocx` を直すときは、補完の確かめ
+   (A) の直しは、`typeset_pair` の対と、全角・半角の文字か Word が付ける番号（自動番号・脚注番号）のすぐ隣の半角の空白の削除を超えて文字を変えない。`pdfmatch`・`pdfdocx` を直すときは、補完の確かめ
    （`fidelity.verify_supplement`）を外さず、表の定数を変えるときは `typeset_pair` と補完の確かめの判定が同じ答えになること（テスト）を
    確かめる。表に記号を足すのは実測で出たときだけ。
 7. アップロード用 ZIP に入れるものは `package.upload_entries()` だけで決め（`{aid}.xml`・今回置いた `{aid}.pdf`・状態が ok / converted / user の画像）、
