@@ -51,11 +51,14 @@ def test_gradio_notebook_is_up_to_date_and_cells_compile():
     sources = ["".join(c["source"]) for c in nb["cells"]]
     assert f"ツールの版: {__version__}" in sources[0] and "試作版" in sources[0] and "ZIP をダウンロードできるか" in sources[0]
     codes = [src for c, src in zip(nb["cells"], sources) if c["cell_type"] == "code"]
-    assert len(codes) == 2
-    for src in codes:
-        compile(src, "cell", "exec")
-    assert "jasme-jats[ai,images,colab,gui]" in codes[0] and "DONE" not in codes[0] and "手順 2" not in codes[0]
-    assert "from jasme_jats.app import launch" in codes[1] and "launch()" in codes[1]
+    assert len(codes) == 1                          # 準備と画面を 1 つのセルで
+    compile(codes[0], "cell", "exec")
+    cell = codes[0]
+    assert "jasme-jats[ai,images,colab,gui]" in cell and "DONE" not in cell and "手順 2" not in cell and "手順 1" not in cell
+    assert cell.index("LO_PROC = subprocess.Popen") < cell.index('"pip", "install"')      # LibreOffice を先に裏で始める
+    assert "from jasme_jats.app import launch" in cell and "_app = launch()" in cell
+    # 2 回目（ツールが読み込み済み）は入れ直さずに画面を開き直す
+    assert "if loaded_before:\n    print(" in cell and "_app.close()" in cell
 
 
 def test_step_guard_and_mark():

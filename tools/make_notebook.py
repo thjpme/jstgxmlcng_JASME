@@ -6,6 +6,7 @@
 """
 import json
 import re
+import textwrap
 from pathlib import Path
 
 REPO = "thjpme/jstgxmlcng_JASME"
@@ -55,14 +56,16 @@ def code(text, form=True):
 DOCS = f"https://github.com/{REPO}/blob/main/docs"      # 説明書（利用者向け）
 
 
-PREP = f"""
+# 手順 1（準備）のセルは断片に分けて持つ（試作の Gradio のノートブックが、順番を変えて同じ断片を使う）
+PREP_PARAMS = f"""
 #@title 1. 準備（最初に 1 回だけ。1 分ほどかかります）
 #@markdown **CONVERT_EMF**: Word の図形（EMF/WMF）の図を変換するために、LibreOffice を裏でインストールします（通常はチェックのまま。数分かかりますが、手順 2 以降は待たずに進めます）。
 CONVERT_EMF = True  #@param {{type:"boolean"}}
 #@markdown **USE_DEV_VERSION**: 開発者向け。開発中の版を試すときだけチェックします（ブランチ名を尋ねます）。
 USE_DEV_VERSION = False  #@param {{type:"boolean"}}
 
-import shutil, subprocess, sys
+"""      # 見出しと入力欄
+PREP_BRANCH = f"""import shutil, subprocess, sys
 # このランタイムで一度ツールを使っていると、古い版がメモリに残ったままになる（入れ直しても反映されない）
 loaded_before = "jasme_jats" in sys.modules
 BRANCH = "main"
@@ -70,7 +73,8 @@ if USE_DEV_VERSION:
     BRANCH = input("開発版のブランチ名を入力して Enter を押してください: ").strip()
     if not BRANCH:
         raise SystemExit("ブランチ名が入力されていません。開発版を使わないときは、チェックを外して実行してください。")
-url = f"git+https://github.com/{REPO}.git@{{BRANCH}}"
+"""      # 前の版の読み込みの確認と、入れるブランチ
+PREP_PIP = f"""url = f"git+https://github.com/{REPO}.git@{{BRANCH}}"
 for args in (["jasme-jats[ai,images,colab] @ " + url],                          # ツールと必要なライブラリ
              ["--force-reinstall", "--no-deps", "jasme-jats @ " + url]):  # ツール本体は毎回最新に入れ直す
     r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", *args], capture_output=True, text=True)
@@ -82,14 +86,16 @@ if loaded_before:
     raise SystemExit("ツールを最新の版に入れ替えましたが、このランタイムには前の版が読み込まれたままです。"
                      "メニューの「ランタイム」→「セッションを再起動」（表示によっては「ランタイムを再起動」）を選んでから、"
                      "手順 1 からもう一度実行してください。")
-# LibreOffice はインストールに数分かかるので裏で入れる（手順 5 で終わるのを待つ）
+"""      # ツールのインストール
+PREP_LO = f"""# LibreOffice はインストールに数分かかるので裏で入れる（手順 5 で終わるのを待つ）
 LO_LOG = "/content/libreoffice_install.log"
 if CONVERT_EMF and not (shutil.which("soffice") or shutil.which("libreoffice")):
     if globals().get("LO_PROC") is None or LO_PROC.poll() is not None:
         LO_PROC = subprocess.Popen("apt-get -qq update && (apt-get -qq install -y --no-install-recommends "
                                    "libreoffice-draw-nogui || apt-get -qq install -y libreoffice-draw)",
                                    shell=True, stdout=open(LO_LOG, "w"), stderr=subprocess.STDOUT)
-# 版の表示は別のプロセスで行う（ここで読み込むと、次に手順 1 を実行したときに「前の版が残っている」扱いになるため）
+"""      # LibreOffice を裏でインストール
+PREP_VERSION = f"""# 版の表示は別のプロセスで行う（ここで読み込むと、次に手順 1 を実行したときに「前の版が残っている」扱いになるため）
 ver = subprocess.run([sys.executable, "-c", "from jasme_jats.pipeline import tool_version; print(tool_version())"],
                      capture_output=True, text=True).stdout.strip()
 if not ver:
@@ -109,7 +115,8 @@ if not ver.startswith("{VERSION}"):
 if globals().get("LO_PROC") is not None and LO_PROC.poll() is None:
     print("LibreOffice を裏でインストールしています（数分）。インストールは裏で続くので、このまま手順 2 に進んでください"
           "（手順 5 の変換は、インストールが終わってから始まります）。")
-"""      # 手順 1（準備）のセル。試作の Gradio のノートブックも、一部を言い換えて使う
+"""      # 入った版の表示と確認
+PREP = PREP_PARAMS + PREP_BRANCH + PREP_PIP + PREP_LO + PREP_VERSION      # 手順 1（準備）のセル
 
 
 cells = [
@@ -473,13 +480,29 @@ display(HTML(next_article_box(globals().get("PREVIOUS", {}).get("docx", ""))))
 
 
 
-# 試作: Gradio の 1 画面アプリ。準備は手順 1 とほぼ同じ（pip の extras に gui が加わり、「手順 ○」の案内が変わる）
-_PREP_GRADIO = (PREP.replace("jasme-jats[ai,images,colab]", "jasme-jats[ai,images,colab,gui]")
-                .replace("手順 2 以降は待たずに進めます", "次のセルは待たずに進めます")
-                .replace("（手順 5 で終わるのを待つ）", "（変換のときに終わるのを待つ）")
-                .replace("このまま手順 2 に進んでください", "このまま次のセルに進んでください")
-                .replace("（手順 5 の変換は、インストールが終わってから始まります）", "（変換は、インストールが終わってから始まります）")
-                .replace("手順 1 からもう一度実行", "1. 準備からもう一度実行"))
+# 試作: Gradio の 1 画面アプリ。準備と画面を 1 つのセルにする。LibreOffice のインストールを先に裏で始めてから pip をし（同時に進む）、
+# 画面を開く。2 回目の実行（画面を開き直すとき）はツールを入れ直さない（入れ直しには、セッションの再起動が要るため）
+_gradio_prep = (PREP_LO + PREP_PIP + PREP_VERSION).replace("（手順 5 で終わるのを待つ）", "（変換のときに終わるのを待つ）")
+for _old, _new in (("手順 1 からもう一度実行", "このセルをもう一度実行"), ("手順 1 からやり直して", "このセルからやり直して"),
+                   ("このまま手順 2 に進んでください", "画面を開きます"),
+                   ("（手順 5 の変換は、インストールが終わってから始まります）", "（変換は、インストールが終わってから始まります）")):
+    assert _old in _gradio_prep, _old
+    _gradio_prep = _gradio_prep.replace(_old, _new)
+_gradio_prep = _gradio_prep.replace("jasme-jats[ai,images,colab]", "jasme-jats[ai,images,colab,gui]")
+_GRADIO_CELL = (PREP_PARAMS.replace("#@title 1. 準備（最初に 1 回だけ。1 分ほどかかります）", "#@title 準備して画面を開く（2 分ほどかかります）")
+                .replace("手順 2 以降は待たずに進めます", "画面は待たずに使えます")
+                + PREP_BRANCH
+                + """if loaded_before:
+    print("ツールは入っているので、画面を開き直します（新しい版を入れるときは、メニューの「ランタイム」→「セッションを再起動」を"
+          "選んでから、このセルを実行します）。")
+else:
+"""
+                + textwrap.indent(_gradio_prep, "    ")
+                + """from jasme_jats.app import launch
+if globals().get("_app") is not None:
+    _app.close()                      # 開き直し
+_app = launch()
+""")
 cells_gradio = [
     md(f"""
 # 論文 docx → J-STAGE XML 変換（試作版・Gradio の 1 画面）
@@ -488,17 +511,11 @@ cells_gradio = [
 
 試作版です。確かめること: docx と PDF（10〜30 MB）をアップロードできるか、変換中に進捗が出るか、ZIP をダウンロードできるか、
 API モードでシークレットを読めるか、準備にかかる時間。
-上から順に、各セルの ▶ を押します（1. 準備が終わってから 2. 画面を開く）。
+セルの ▶ を押すと、ツールの準備（2 分ほど）のあと、その下に画面が開きます。メニューの「表示」でサイドバーなどを閉じると広く使えます。
 
 説明書: [使い方・結果の見方・できないこと]({DOCS}/USAGE.md)　[AI の API キーと手動モード]({DOCS}/USAGE_AI.md)　ソースコード: https://github.com/{REPO}
 """),
-    code(_PREP_GRADIO),
-    code("""
-#@title 2. 画面を開く
-#@markdown ▶ を押すと、この下に画面が開きます。メニューの「表示」→「サイドバー」などを閉じると広く使えます。
-from jasme_jats.app import launch
-_app = launch()
-"""),
+    code(_GRADIO_CELL),
 ]
 
 
