@@ -430,8 +430,9 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         # 大文字・小文字を (A) とする段落と番号の元の文字は、照合（pdfmatch）を通さず plan から別に作る（独立の確かめ）
         case_srcs, numbers_original = supplement_targets(
             plan, {wid: m for wid, (_, m) in word_note_marks(plan, journal).items()})
+        autonum_srcs = {src for kind, src in numbers_original if kind == "auto"}   # 自動番号のある段落
         supplement = verify_supplement(original_docx, docx_path, docx_fix.fixes, case_srcs, numbers_original,
-                                       plan.pdf_numbers)
+                                       plan.pdf_numbers, autonum_srcs)
 
     # 画像の出力漏れ（不変性チェックは文字しか見ない）
     lost, hidden_images = lost_images(doc, plan, root, info, plan.exclusions + info.exclusions)

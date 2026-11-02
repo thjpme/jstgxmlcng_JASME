@@ -147,8 +147,8 @@ def test_supplement_detects_space_deletion_between_words(journal, meta, tmp_path
 @pytest.mark.parametrize("d, i, at_start, ok", [
     (" (", "（", False, True),          # 全角・半角の対のすぐ前の空白
     (")  ", "）", False, True),         # 対のすぐ後ろの、続いた空白
-    (" ", "", True, True),              # 段落の先頭（自動番号の後ろ）の空白
-    (" ", "", False, False),            # 隣に対のない空白
+    (" ", "", True, True),              # 番号のすぐ後ろ（自動番号のある段落の先頭・注の番号の後ろ）の空白
+    (" ", "", False, False),            # 隣に対も番号もない空白
     ("\u3000(", "（", False, False),    # 全角の空白
     ("\t(", "（", False, False),        # タブ
     ("\n(", "（", False, False),        # 改行
@@ -157,6 +157,73 @@ def test_supplement_detects_space_deletion_between_words(journal, meta, tmp_path
 def test_supplement_space_deletion_rule(d, i, at_start, ok):
     """空白の削除の規則（_unit_ends）: 半角の空白で、d の中のすぐ隣を全角・半角の対として並べたときか、段落の先頭のときだけ (A)。"""
     assert (_unit_ends(d, i, [], 0, False, at_start) != {}) == ok
+    # 単位の後ろが番号（注の参照のすぐ前）なら、後ろの空白も (A)
+    assert _unit_ends(" ", "", [], 0, False, False, True) != {} and _unit_ends("\t", "", [], 0, False, False, True) == {}
+
+
+NOTE_BODY = ["脚注の付いた文 ", mf.footnote_ref(5), " と後ろの 文のつづきである。"]
+NOTE_PAGES = [("ルート2の脚注\n―検証用の小さな論文―\n１．はじめに\n脚注の付いた文１）と後ろの 文のつづきである。\n"
+               "引用および参考文献\n試験六郎（2024）．「小さな論文」．『架空誌』，第5巻，pp.9-10．\n"
+               "注\n１）脚注の本文であり十分に長い文である。\n")]
+
+
+def note_article(tmp_path):
+    path = tmp_path / "note.docx"
+    mf.make_article(path, "ルート2の脚注", lambda b: [mf.para(mf.S["sec1"], "１．はじめに"), mf.para(mf.S["body"], *NOTE_BODY)],
+                    footnotes=[mf.footnote(5, " 脚注の本文であり十分に長い文である。")])
+    return path
+
+
+def test_supplement_space_next_to_note_reference(journal, meta, tmp_path, monkeypatch):
+    """Word の脚注の参照（本文の番号。canonical_text には出ない）のすぐ前・すぐ後ろの半角の空白を消す直し（照合の drops）は、
+    参照の位置の境目の目印で (A) と認めて合格する。注の段落の番号の後ろの空白も同じ。参照の隣でない空白（「後ろの 文」）を消す
+    直しを足すと不合格。"""
+    path = note_article(tmp_path)
+    res = convert_with_pages(tmp_path, monkeypatch, journal, meta, NOTE_PAGES, "pdf", docx=path)
+    spaces = [f for f in res.docx_fix.fixes if f.kind == "space" and f.applied]
+    assert len(spaces) >= 2
+    assert res.fidelity.ok and res.supplement.ok and res.supplement.problems == []
+    orig = pdfdocx.plan_fixes
+
+    def extra(plan, check):
+        fixes = orig(plan, check)
+        src = next(s for s, p in plan.paras.items() if "後ろの 文" in p.plain())
+        q = plan.paras[src].plain().index("の 文") + 1
+        fixes.append(pdfdocx.Fix(src, q, q + 1, "", "space", " "))
+        return fixes
+    monkeypatch.setattr(pdfdocx, "plan_fixes", extra)
+    (tmp_path / "x").mkdir()
+    res = convert_with_pages(tmp_path / "x", monkeypatch, journal, meta, NOTE_PAGES, "pdf", docx=path)
+    assert res.fidelity.ok and not res.supplement.ok
+    assert [why for _, _, _, why in res.supplement.problems] == [UNIT_WHY]
+    assert "後ろの［ ］文" in res.supplement.problems[0][1]
+
+
+@pytest.mark.parametrize("bullet", [True, False], ids=["autonum", "plain"])
+def test_supplement_space_at_paragraph_start(bullet, journal, meta, tmp_path, monkeypatch):
+    """段落の先頭の半角の空白の削除を (A) と認めるのは、自動番号のある段落だけ（番号のすぐ後ろ）。自動番号の箇条の項目の先頭の
+    空白（PDF「・一つ目…」）は合格し、自動番号のない段落の先頭の空白を消す直しは不合格。"""
+    item = " 一つ目の項目として，架空の授業の記録を集めた。"
+
+    def parts(b):
+        para = mf.list_item(mf.S["body"], item) if bullet else mf.para(mf.S["body"], item)
+        return [mf.para(mf.S["sec1"], "１．はじめに"), mf.para(mf.S["body"], TALK), para]
+    mf.make_article(tmp_path / "b.docx", "ページ番号の判定の検証用文書", parts, bullet="●")
+    pages = n10_pages([*SMALL_FRONT, *body_lines(TALK), f"・{item.strip()}" if bullet else f"　{item.strip()}", *N10_TAIL])
+    orig = pdfdocx.plan_fixes
+
+    def extra(plan, check):
+        fixes = orig(plan, check)
+        src = next(s for s, p in plan.paras.items() if p.plain() == item)
+        if not any(f.src == src and f.start == 0 for f in fixes):
+            fixes.append(pdfdocx.Fix(src, 0, 1, "", "space", " "))
+        return fixes
+    monkeypatch.setattr(pdfdocx, "plan_fixes", extra)
+    res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "pdf", docx=tmp_path / "b.docx")
+    assert any(f.kind == "space" and f.start == 0 and f.applied for f in res.docx_fix.fixes)
+    assert res.fidelity.ok and res.supplement.ok == bullet
+    if not bullet:
+        assert [why for _, _, _, why in res.supplement.problems] == [UNIT_WHY]
 
 
 def test_supplement_case_sources_are_independent(journal, meta, tmp_path, monkeypatch):

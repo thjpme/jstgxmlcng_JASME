@@ -234,7 +234,12 @@ def final_check(tracked_root, final_bytes: bytes, res: FidelityResult):
 # 補った docx のこのツールの変更履歴の中の文字を、canonical_texts の文字の中で見分けるための目印（Unicode の非文字。docx の文字には
 # 出ない）。挿入（w:ins）のランの中の文字を I_OPEN〜I_CLOSE で、削除（w:del）のランの中の文字を D_OPEN〜D_CLOSE で挟む
 I_OPEN, I_CLOSE, D_OPEN, D_CLOSE = "﷐", "﷑", "﷒", "﷓"
-MARKS = I_OPEN + I_CLOSE + D_OPEN + D_CLOSE
+# Word の脚注・文末脚注の参照（本文の番号）と、注の段落の番号（w:footnoteRef・w:endnoteRef）の位置の目印。番号は canonical_text
+# に出ないので、この位置を変更の単位の境目にし、すぐ隣の空白の削除を照合の drops と同じく (A) と認める（却下した文字・承諾した
+# 文字には入れない）
+EDGE = "﷔"
+MARKS = I_OPEN + I_CLOSE + D_OPEN + D_CLOSE + EDGE
+NOTE_MARKS = {w("footnoteReference"), w("endnoteReference"), w("footnoteRef"), w("endnoteRef")}
 SUP_WINDOW = 16          # 1 つの変更の単位に当てる校正の直し（Fix）を探す数（段落の中で、まだ当てていない最初の直しから）
 SUP_CONTEXT = 10         # 問題の箇所の前後に添える文字の数
 # 補完の確かめの不合格の理由
@@ -352,11 +357,19 @@ def _marked_text(chain, rule, old_ids, problems, src) -> str:
 
     w:p を写し、このツールの変更履歴（_ours）を、中のランの文字を目印で挟んで外し（削除の文字は w:t にする）、canonical_text で
     読む。目印の外の文字が変わっていない文字、I_OPEN〜I_CLOSE が足した文字、D_OPEN〜D_CLOSE が消した文字。このツールの変更履歴が
-    段落記号・書式（w:rPr の中）にかかっていれば、problems に足す。
+    段落記号・書式（w:rPr の中）にかかっていれば、problems に足す。Word の注の番号（参照と、注の段落の番号。削除されたものを
+    除く）の位置には、境目の目印 EDGE を入れる。
     """
     out = []
     for q in chain:
         q = copy.deepcopy(q)
+        for ref in list(q.iter(*NOTE_MARKS)):
+            r = ref.getparent()
+            if r is None or r.tag != w("r") or any(True for _ in ref.iterancestors(w("del"), w("moveFrom"))):
+                continue
+            edge = etree.Element(w("t"))
+            edge.text = EDGE
+            r.insert(r.index(ref), edge)
         for el in list(q.iter(w("ins"), w("del"))):
             parent = el.getparent()
             if parent is None or not _ours(el, old_ids):
@@ -385,13 +398,21 @@ def _chains(root, prefix) -> dict:
 
 def _split_marked(text: str):
     """目印付きの文字から (却下した文字, 承諾した文字, 単位の一覧)。単位は (却下した文字の上の位置, 承諾した文字の上の位置,
-    消した文字 D, 足した文字 I)。変わっていない文字をはさまずに続く挿入・削除を 1 つの単位にする。目印の並びがおかしければ None。"""
+    消した文字 D, 足した文字 I, 前が境目か, 後ろが境目か)。変わっていない文字をはさまずに続く挿入・削除を 1 つの単位にする。
+    境目は Word の注の番号の目印 EDGE（単位はそこで切る）。目印の並びがおかしければ None。"""
     rej, acc, units = [], [], []
     state = ""            # "" / "i" / "d"
-    cur = None            # 作っている単位 [rej の位置, acc の位置, D, I]
+    cur = None            # 作っている単位 [rej の位置, acc の位置, D, I, 前が境目か, 後ろが境目か]
+    edge = False          # 直前が境目の目印
     for c in text:
         if c in MARKS:
-            if c == I_OPEN and state == "":
+            if c == EDGE and state == "":
+                if cur is not None:
+                    cur[5] = True
+                    units.append(tuple(cur))
+                    cur = None
+                edge = True
+            elif c == I_OPEN and state == "":
                 state = "i"
             elif c == D_OPEN and state == "":
                 state = "d"
@@ -404,11 +425,12 @@ def _split_marked(text: str):
             if cur is not None:
                 units.append(tuple(cur))
                 cur = None
+            edge = False
             rej.append(c)
             acc.append(c)
             continue
         if cur is None:
-            cur = [len(rej), len(acc), "", ""]
+            cur = [len(rej), len(acc), "", "", edge, False]
         if state == "d":
             cur[2] += c
             rej.append(c)
@@ -422,7 +444,7 @@ def _split_marked(text: str):
     return "".join(rej), "".join(acc), units
 
 
-def _unit_ends(d: str, i: str, queue: list, p: int, case: bool, at_start: bool = False) -> dict:
+def _unit_ends(d: str, i: str, queue: list, p: int, case: bool, at_start: bool = False, at_end: bool = False) -> dict:
     """変更の単位（消した文字 d, 足した文字 i）を、組版の違いと、校正の直しの並び queue の p 番目からのいくつか（どれも 1 回ずつ。
     単位の中の順は問わない）で説明できる、当て終わった後の queue の位置 → (A) の文字の数（最も少ないもの）。
 
@@ -431,9 +453,9 @@ def _unit_ends(d: str, i: str, queue: list, p: int, case: bool, at_start: bool =
     ものだけを答えにする（位置は使わない。数式の後ろでは、Fix の位置と canonical_text の位置が合わないため）。
 
     空白の削除を (A) とするのは、照合の drops と同じく、半角の空白（U+0020）で、d の中のすぐ前かすぐ後ろ（空白が続けば、その
-    並びの前か後ろ）の文字を全角・半角の対（_width）として並べたときと、単位が段落の文字の先頭にある（at_start。自動番号の
-    後ろの空白）ときの、段落の先頭の空白だけ。全角の空白・タブ・改行の削除は (A) にしない。Word の脚注番号（canonical_text
-    には出ない）の隣の空白の削除は、隣の文字が見えないので当てられず、不合格になる（安全側の限界）。
+    並びの前か後ろ）が、全角・半角の対（_width）として並べた文字か、Word が付ける番号のときだけ。番号は canonical_text に
+    出ないので、呼び出し側が単位の端で知らせる: at_start は単位の前が番号（自動番号のある段落の先頭か、Word の注の番号の目印
+    EDGE のすぐ後ろ）、at_end は単位の後ろが番号（EDGE のすぐ前）。全角の空白・タブ・改行の削除は (A) にしない。
 
     限界: 探す直しは、まだ当てていない最初の直しから SUP_WINDOW 個まで。1 つの単位（変わっていない文字をはさまずに続く変更）に
     校正の直しが SUP_WINDOW を超えてかかると、正しい書き込みでも説明できず、不合格になる（安全側）。
@@ -443,7 +465,7 @@ def _unit_ends(d: str, i: str, queue: list, p: int, case: bool, at_start: bool =
     best = {}
     seen = {}
     # 直前の d の文字の扱い: 0 ふつう / 1 全角・半角の対（か、その後ろで消した空白）/ 2 隣が決まっていない、消した空白 /
-    # 3 段落の先頭で消した空白（at_start のとき、d の最初から）
+    # 3 番号のすぐ後ろで消した空白（at_start のとき、d の最初から）
     stack = [(0, 0, 0, 3 if at_start else 0, 0)]   # (d の位置, i の位置, 当てた直しの集合〈window の中のビット〉, 直前, (A) の数)
     while stack:
         a, b, used, last, n = stack.pop()
@@ -451,7 +473,7 @@ def _unit_ends(d: str, i: str, queue: list, p: int, case: bool, at_start: bool =
         if key in seen and seen[key] <= n:
             continue
         seen[key] = n
-        if a == len(d) and b == len(i) and last != 2:
+        if a == len(d) and b == len(i) and (last != 2 or at_end):
             k = 0
             while k < len(window) and used >> k & 1:
                 k += 1
@@ -508,7 +530,8 @@ def supplement_targets(plan, note_marks) -> tuple:
     return case, numbers
 
 
-def verify_supplement(original_docx, fixed_docx, fixes, case_srcs, numbers_original, pdf_numbers) -> SupplementResult:
+def verify_supplement(original_docx, fixed_docx, fixes, case_srcs, numbers_original, pdf_numbers,
+                      autonum_srcs=None) -> SupplementResult:
     """補完の確かめ: ルート2 の補った docx（fixed_docx）が、元の docx（original_docx）から、組版の違い（(A)）と 13.1 に報告した
     校正の直し（fixes のうち applied で kind text のもの）以外に変わっていないか。照合（pdfmatch）・書き込み（pdfdocx）とは別の
     実装（設計: 定数だけを共有する）。
@@ -519,8 +542,9 @@ def verify_supplement(original_docx, fixed_docx, fixes, case_srcs, numbers_origi
          XML が元の docx と同じ段落は読まない（同じ XML なら同じ文字）
       2. 段落ごと（段落記号の削除でつないだ段落は 1 つ）に、変わっていない文字をはさまずに続く挿入・削除を 1 つの単位にし、
          単位ごとに（消した文字, 足した文字）を作る（位置は変更履歴で決まるので、文字列を並べ直したときのずれは起きない）
-      3. 単位を、1 文字ずつの (A) の対（_pair。大文字・小文字は case_srcs の段落だけ）・空白の削除（全角・半角の対のすぐ隣と、
-         段落の先頭の半角の空白だけ。_unit_ends）と、その段落の校正の直しの
+      3. 単位を、1 文字ずつの (A) の対（_pair。大文字・小文字は case_srcs の段落だけ）・空白の削除（全角・半角の対と、Word が
+         付ける番号〈自動番号のある段落の先頭と、Word の注の番号の目印 EDGE〉のすぐ隣の半角の空白だけ。_unit_ends）と、その段落の
+         校正の直しの
          並びの次のいくつか（old・new が文字列として一致するもの）で説明できるか（_unit_ends）。説明できない単位と、どの単位にも
          当たらずに残った直しは不合格
       4. Word が付ける番号（pdf_numbers。docx の文字ではない）が、元の文字（numbers_original）と同じ長さで、1 文字ずつ同じか
@@ -528,11 +552,15 @@ def verify_supplement(original_docx, fixed_docx, fixes, case_srcs, numbers_origi
 
     case_srcs: 大文字・小文字の違いを (A) とする段落の ID。numbers_original: Word が付ける番号の元の文字。どちらも照合を通さず
     plan から作ったもの（supplement_targets）。pdf_numbers: 番号を PDF に合わせたもの（plan.pdf_numbers）。番号の鍵は
-    (種類, ID) -> 文字列。
+    (種類, ID) -> 文字列。autonum_srcs: 自動番号のある段落の ID（段落の先頭の空白の削除を (A) とする段落。省略すれば
+    numbers_original の ("auto", 段落 ID) の鍵から作る）。
     """
     res = SupplementResult()
     problems = res.problems
     case_srcs = set(case_srcs or ())
+    if autonum_srcs is None:
+        autonum_srcs = {k[1] for k in (numbers_original or {}) if isinstance(k, tuple) and k[:1] == ("auto",)}
+    autonum_srcs = set(autonum_srcs)
     opkg, fpkg = DocxPackage(original_docx), DocxPackage(fixed_docx)
     ostyles, fstyles = opkg.xml("word/styles.xml"), fpkg.xml("word/styles.xml")
     orule, frule = HiddenRule(ostyles), HiddenRule(fstyles)
@@ -584,10 +612,11 @@ def verify_supplement(original_docx, fixed_docx, fixes, case_srcs, numbers_origi
         queue = queues.get(src, [])
         case = src in case_srcs
         reach = {0: (0, 0)}            # 当て終わった queue の位置 → ((A) の文字の数, (B) の数)
-        for rpos, apos, d, i in units:
+        for rpos, apos, d, i, left, right in units:
+            at_start = left or (rpos == 0 and src in autonum_srcs)
             nxt = {}
             for p, (na, nb) in reach.items():
-                for q, n in _unit_ends(d, i, queue, p, case, rpos == 0).items():
+                for q, n in _unit_ends(d, i, queue, p, case, at_start, right).items():
                     cand = (na + n, nb + q - p)
                     if q not in nxt or cand < nxt[q]:
                         nxt[q] = cand
