@@ -29,9 +29,10 @@ from pathlib import Path
 from typing import Optional
 
 from . import __version__
-from .ai_assist import (AIOutcome, apply_ops, build_request, call_provider, float_placements, image_blocks,
-                        manual_prompt, parse_cut_response, parse_response, retarget_ops, role_overrides, split_ops,
-                        target_keys)
+from .ai_assist import (DEFAULT_MODEL, AIOutcome, apply_ops, build_request, call_provider, float_placements,
+                        image_blocks, manual_prompt, parse_cut_response, parse_response, retarget_ops, role_overrides,
+                        split_ops, target_keys)
+from .article import _para_text
 from .builder import build, finalize, serialize, word_note_marks
 from .config import ArticleMeta, JournalConfig
 from .docx_reader import read_docx
@@ -46,7 +47,7 @@ from .pdfmatch import PdfCheck, check_pdf
 from .report import (BOX_PENDING_NOTE, NEEDS_ACTION, actions, figure_body_detail, images_to_prepare, render,
                      render_ai_only)
 from .report import pdf_fallback as report_pdf_fallback
-from .structure import _para_text, classify, float_caption, float_targets
+from .structure import classify, float_caption, float_targets
 from .tracking import SPAN
 from .validate import validate
 
@@ -117,7 +118,7 @@ class Options:
     split_labels: Optional[bool] = None       # None なら雑誌の設定に従う
     ai_mode: str = "none"                     # none / api / manual
     ai_provider: str = "claude"               # API モードで使う AI: claude（推奨）/ openai（ChatGPT）/ gemini
-    ai_model: str = "claude-opus-5-5"         # claude 以外では利用者が指定する
+    ai_model: str = DEFAULT_MODEL             # claude 以外では利用者が指定する
     ai_api_key: Optional[str] = None
     ai_response: Optional[str] = None         # 手動モード: AI の回答（JSON）
     pdf_path: Optional[Path] = None
@@ -321,8 +322,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
 
     # ---------------------------------------------------------------- AI 補完
     if opts.ai_mode in ("api", "manual"):
-        unsplit = [(src, msg.split("「", 1)[-1].split("」", 1)[0]) for cat, src, msg in info.notes if cat == "name"]
-        req_text, req_images = build_request(plan, linker, info.exclusions, unsplit)
+        req_text, req_images = build_request(plan, linker, info.exclusions, info.unsplit_names)
         blocks = image_blocks(doc, req_images)
         if opts.ai_mode == "api":
             outcome = call_provider(opts.ai_provider, req_text, blocks, model=opts.ai_model, api_key=opts.ai_api_key)

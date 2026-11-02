@@ -4,6 +4,7 @@
 
 ノートブックを Colab 上で直接編集して GitHub に保存してもよいが、その場合はこのスクリプトにも同じ変更を反映すること。
 """
+import ast
 import json
 import re
 import textwrap
@@ -24,6 +25,43 @@ with open(ROOT / "src" / "jasme_jats" / "data" / "jasme.toml", "rb") as _f:
 TYPE_CHOICES = [f"{ja} / {en}" for ja, en in MANUSCRIPT_TYPES.items()] + ["その他"]
 TYPE_PARAM = (f'manuscript_type = {json.dumps(TYPE_CHOICES[0], ensure_ascii=False)}  '
               f'#@param {json.dumps(TYPE_CHOICES, ensure_ascii=False)}\n')
+
+
+def module_constants(path, names) -> dict:
+    """Python のファイル path の最上位の「名前 = リテラル」の値を、パッケージを import せずに読む（{名前: 値}）。
+
+    版（__init__.py）・原稿種別（jasme.toml）と同じく、リポジトリの src の値を使うため（インストール済みの別の版の jasme_jats を
+    読まない。lxml などの依存を入れずに動く）。行が見つからない・値がリテラルでないときは、分かるエラーで止める。
+    """
+    found = {}
+    for node in ast.parse(Path(path).read_text(encoding="utf-8")).body:
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
+        for t in targets:
+            if isinstance(t, ast.Name) and t.id in names and node.value is not None:
+                try:
+                    found[t.id] = ast.literal_eval(node.value)
+                except ValueError:
+                    pass
+    missing = [n for n in names if n not in found]
+    if missing:
+        path = Path(path)
+        where = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
+        raise SystemExit(f"{where} に {'・'.join(f'{n} = …' for n in missing)} の行が見つかりません（ノートブックの既定の AI モデル"
+                         "などは、この行の値から作ります。名前を変えたなら tools/make_notebook.py も直してください。値は式や"
+                         "ほかの名前を使わず、リテラルだけで書きます）")
+    return found
+
+
+# 既定の AI モデル（手順 4 の MODEL の既定と、「API キーについての詳細」の 4.・5.）は src/jasme_jats/ai_assist.py の値を使う
+_AI = module_constants(ROOT / "src" / "jasme_jats" / "ai_assist.py", ("DEFAULT_MODEL", "DEFAULT_MODEL_INFO"))
+DEFAULT_MODEL, DEFAULT_MODEL_INFO = _AI["DEFAULT_MODEL"], _AI["DEFAULT_MODEL_INFO"]
+if not (isinstance(DEFAULT_MODEL, str) and DEFAULT_MODEL.strip()) or not (
+        isinstance(DEFAULT_MODEL_INFO, dict) and {"name", "input_usd", "output_usd", "not_before"} <= set(DEFAULT_MODEL_INFO)):
+    raise SystemExit("src/jasme_jats/ai_assist.py の DEFAULT_MODEL（モデル名の文字列）か DEFAULT_MODEL_INFO（name・input_usd・"
+                     "output_usd・not_before を持つ辞書）の形が違います")
+_Y, _M, _D = str(DEFAULT_MODEL_INFO["not_before"]).split("-")
+MODEL_NOT_BEFORE = f"{int(_Y)} 年 {int(_M)} 月 {int(_D)} 日"    # 提供終了の予定（この日より前には終わらない）
+MODEL_LINE = (f'MODEL = "{DEFAULT_MODEL}"  #@param ["{DEFAULT_MODEL}", "自動（最新の Opus）"] {{allow-input: true}}\n')
 
 
 def md(text):
@@ -260,8 +298,7 @@ if _prev:
 #@markdown **AI_MODE**: 「API で自動実行」は、左の 🔑（シークレット）に API キー（Claude は名前 `ANTHROPIC_API_KEY`）を登録し、「ノートブックからのアクセス」をオンにしておきます（利用料がかかります）。「手動」は依頼文をチャットに貼り付け、回答を手順 6 で貼り戻します（API キー不要）。「使わない」は推奨しません。登録のしかた・料金・手動の手順は説明書の [AI の API キーと手動モード](""" + DOCS + """/USAGE_AI.md)。
 AI_MODE = "手動（チャットに貼り付け）"  #@param ["使わない", "API で自動実行（Claude・推奨）", "API で自動実行（ChatGPT）", "API で自動実行（Gemini）", "API で自動実行（Sakana AI）", "手動（チャットに貼り付け）"]
 #@markdown **MODEL**（Claude のモデル。通常は変更不要）・**OTHER_MODEL**（ChatGPT・Gemini・Sakana AI のときは必ず入力。各社の最上位クラスのモデルを推奨）・**SPLIT_LABELS**（図表番号「図1」を <label> 要素に分ける。既定は分けない）
-MODEL = "claude-opus-5-5"  #@param ["claude-opus-5-5", "自動（最新の Opus）"] {allow-input: true}
-OTHER_MODEL = ""  #@param {type:"string"}
+""" + MODEL_LINE + """OTHER_MODEL = ""  #@param {type:"string"}
 SPLIT_LABELS = False  #@param {type:"boolean"}
 """ + guard(1, 2, 3) + """AI = "api" if AI_MODE.startswith("API") else {"使わない": "none", "手動（チャットに貼り付け）": "manual"}[AI_MODE]
 PROVIDER = {"API で自動実行（ChatGPT）": "openai", "API で自動実行（Gemini）": "gemini",
