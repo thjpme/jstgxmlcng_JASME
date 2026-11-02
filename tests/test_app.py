@@ -157,3 +157,12 @@ def test_build_app_and_launch_never_share(tmp_path, monkeypatch):
     assert seen["share"] is False and seen["inline"] is False and seen["prevent_thread_lock"] is True
     assert seen["root_path"] == f"https://x-{seen['server_port']}-colab.googleusercontent.com"
     assert embedded == [(seen["server_port"], 1400)]
+
+
+def test_download_button_fetches_in_page():
+    """「ZIP を保存」は、Gradio のファイルの経路を画面の中の fetch で取ってから保存する（Colab の中継はリンク先への移動では開けない）。"""
+    html = app.download_button_html("/content/jasme_work/変換結果_31_1.zip")
+    assert "fetch('gradio_api/file=/content/jasme_work/%E5%A4%89%E6%8F%9B%E7%B5%90%E6%9E%9C_31_1.zip')" in html
+    # onclick の中の引用符は HTML の実体にする（属性の中なので、JavaScript になる前に戻る）。リンク（<a href>）は出さない
+    assert "a.download=&#x27;変換結果_31_1.zip&#x27;" in html and "ZIP を保存（変換結果_31_1.zip）" in html and "<a " not in html
+
