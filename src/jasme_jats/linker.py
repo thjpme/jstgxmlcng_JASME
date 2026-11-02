@@ -47,7 +47,7 @@ OPERATORS = "+-−－＋±×÷^*/／"
 # 「＜用語＞¹」のように日本語の括弧としても使うため）
 COMPARISONS = "=＝<>＜＞≦≧≤≥"
 # 直前がこれなら指数・単位（cm²・x²・10³・π²）。英字・数字（全角も）・ギリシャ文字と、単位の記号（µ〈マイクロ記号〉・Å・′〈プライム〉、
-# 全角の単位の記号 U+3380〜U+33DF の ㎝・㎜・㎞・㎏ など。12㎝²・x′²）
+# 全角の単位の記号 U+3380〜U+33DF の ㎝・㎜・㎞・㎏ など。12㎝²・x′²）。図・表の参照の番号の数字（「図1¹」）は除く（_exponent_like）
 RE_EXP_BEFORE = re.compile(r"[A-Za-zＡ-Ｚａ-ｚ0-9０-９α-ωΑ-Ωµ\u00c5\u212b\u2032\u3380-\u33df]")
 # 「図1」「表1」の直前に来てよい漢字（前掲図1・乃至図2・及表1）。ほかの漢字の直後は語の一部（地図1・付表1・発表1回目）
 FLOAT_REF_OK_BEFORE = "掲至及"
@@ -312,7 +312,10 @@ class Linker:
         リンクする）。語の一部とみなした参照は、先頭の番号の図・表があるときだけ判断の一覧に記録する（applied=False。並びの番号は記録
         せず、図・表がなくても「見つからない」に出さない）。
         番号の数字が途中から上付きの文字になるとき（「図1」の直後に上付きの注番号「1)」が続くと、plain() では「図11)」になる）は、
-        参照を上付きの手前で切る（上付きの数字は fn_marks で注番号として扱う。番号が上付きの文字で始まるときは切らない）。
+        参照を上付きの手前で切る（番号が上付きの文字で始まるときは切らない）。上付きの文字は fn_marks の規則で扱う（図・表の番号の
+        直後なので、直前の数字を指数の底とはみなさない〈_exponent_like〉。「1)」などの形なら注番号で、番号だけの数字は論文の注番号の
+        書き方による）。先頭の番号の途中で切ったときは、上付きの文字の後ろの並びの番号（「図1¹、2」の「、2」）はリンクしない（「図1¹と
+        図2」の「図2」は、上付きの手前から探し直すので、次の参照としてリンクする）。
         """
         plain = p.plain()
         sup = _sup_chars(p)
@@ -520,14 +523,25 @@ def _exponent_like(plain: str, s: int, e: int, text: str) -> bool:
     続きの先頭が符号（s⁻¹）、直前の 1 文字が英字・数字・ギリシャ文字・単位の記号（cm²・x²・10³・π²・12㎝²。RE_EXP_BEFORE）か
     演算の記号（OPERATORS）、直後の 1 文字が演算の記号か比較の記号（(a+b)²+c・x²＜4。COMPARISONS）なら真。前後の空白は飛ばさない
     （「3 cm」＋² の直前は m）。直前が漢字・かな・句読点・括弧（「＜用語＞¹」の「＞」も）・数式などなら、指数とみなさない
-    （「（試験, 2024）²」は注番号の形）。"""
+    （「（試験, 2024）²」は注番号の形）。直前の数字が図・表の参照の番号の終わり（「図1¹」「表2³」「Fig. 2¹」「図1、2³」、キャプションの
+    「図1²」。_after_float_ref）なら、直前の文字では指数とみなさない（図表の番号は指数の底ではない。番号だけの論文では、0.26.0 と同じく
+    注にリンクする）。"""
     if _sign_first(text):
         return True
     before = plain[s - 1] if s > 0 else ""
     after = plain[e] if e < len(plain) else ""
-    if before and (RE_EXP_BEFORE.match(before) or before in OPERATORS):
+    if before and (RE_EXP_BEFORE.match(before) or before in OPERATORS) and not _after_float_ref(plain, s):
         return True
     return bool(after) and (after in OPERATORS or after in COMPARISONS)
+
+
+def _after_float_ref(plain: str, s: int) -> bool:
+    """上付きの続きの手前の文字 plain[:s] が、図・表の参照の番号で終わるか（float_refs と同じ RE_FIGREF・RE_TABREF の形。「図1」
+    「表2」「Fig. 2」「図1、2」。語の一部とみなす「地図1」、キャプションの先頭の「図1」も）。"""
+    if s == 0 or not re.match(NUM, plain[s - 1]):
+        return False
+    head = plain[:s]
+    return any(m.end() == s for rx in (RE_FIGREF, RE_TABREF) for m in rx.finditer(head))
 
 
 def _strong_mark(g: str) -> bool:

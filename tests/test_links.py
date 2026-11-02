@@ -20,7 +20,7 @@ from conftest import LINKS, LINKS_BARE
 from lxml import etree
 
 from jasme_jats.linker import RE_FIGREF, RE_TABREF, Linker, find_in_para
-from jasme_jats.model import Atom, Para
+from jasme_jats.model import Atom, LinkSpec, Para
 from jasme_jats.pipeline import Options, _mechanical, convert
 from jasme_jats.report import actions
 from jasme_jats.structure import ArticlePlan
@@ -300,6 +300,14 @@ def test_note_style_counts_box_and_cell(where, journal, meta, tmp_path):
     ("m s", "-2", "", ["exponent"]), ("", "-1", "", ["exponent"]), ("本文の註", "1", "も", ["after_note"]),
     # 本文の閉じ括弧で補うのは、上付きの続きが数字で終わるときだけ（上付きの「3a」＋本文の「）」は番号だけ）
     ("述べる", "3a", "）", ["bare"]),
+    # 図・表の参照の番号の直後の上付きは、直前の数字を指数の底とみなさない（番号だけ。本文の閉じ括弧があれば番号の形）。英語の参照・
+    # 並びの番号・語の一部の「地図1」も。番号で終わらない直前（「図1-」の「-」・「図1.5」の小数）と、符号で始まる上付き・直後の
+    # 演算の記号は今までどおり指数
+    ("結果は図1", "1", "に示す", ["bare"]), ("表2", "3", "を見る", ["bare"]), ("see Fig. 2", "1", " and", ["bare"]),
+    ("Table 2", "2", "", ["bare"]), ("図１", "１", "", ["bare"]), ("図12", "3", "", ["bare"]), ("図1、2", "3", "", ["bare"]),
+    ("図1～3", "2", "", ["bare"]), ("図1と表2", "3", "", ["bare"]), ("地図1", "2", "", ["bare"]), ("図1", "1", ")", ["strong"]),
+    ("図1", "1, 2", "", ["bare", "bare"]), ("図1-", "2", "", ["exponent"]), ("図1.5", "2", "", ["exponent"]),
+    ("図1", "\u22121", "", ["exponent"]), ("図1", "2", "+c", ["exponent"]),
 ])
 def test_sup_mark_kinds(before, sup, after, kinds):
     """上付きの続きの候補の種類（_sup_marks）: 符号 > 番号の形 > 直前の「注」 > 指数・単位 > 番号だけ。数字と区切りだけの続きは
@@ -404,8 +412,9 @@ def plain_atom(text_):
 
 def test_float_refs_stop_before_superscript():
     """「図1」の直後に上付きの注番号「1)」が続くと、plain() では「図11)」になる。参照は上付きの手前で切り、図1 にリンクする
-    （「図11 に対応する図が見つからない」にしない）。並びの番号（「図1、2」＋上付きの「3)」）も同じ。上付きの数字は、その後の fn_marks
-    で注番号になる。番号が上付きの文字で始まるもの（「図」＋上付きの「12」）は切らない（今までどおり）。"""
+    （「図11 に対応する図が見つからない」にしない）。並びの番号（「図1、2」＋上付きの「3)」）も同じ。上付きの「1)」「3)」は、その後の
+    fn_marks で注番号になる（番号だけの上付きの数字の扱いは test_fn_marks_after_float_number）。番号が上付きの文字で始まるもの
+    （「図」＋上付きの「12」）は切らない（今までどおり）。"""
     lk = Linker(ArticlePlan())
     p = Para(src="d1", atoms=[plain_atom("結果を図1"), sup_atom("1)"), plain_atom("に示す。図1、2"), sup_atom("3)"),
                               plain_atom("と図"), sup_atom("12"), plain_atom("も見る。")])
@@ -422,6 +431,22 @@ def test_float_refs_stop_before_superscript():
     q = Para(src="d2", atoms=[plain_atom("地図1"), sup_atom("1)"), plain_atom("を見る。")])
     lk.float_refs(q, RE_FIGREF, {1: "F1"}, "fig", "図")
     assert [d.message.split("」", 1)[0] for d in plan.decisions] == ["「図1"] and lk.unresolved == []
+    # 番号の図がない「見つからない」（3 章）の文脈も、切った参照（「図51)」ではなく「図5」）
+    lk = Linker(ArticlePlan())
+    r = Para(src="d3", atoms=[plain_atom("図5"), sup_atom("1)"), plain_atom("を見る。")])
+    lk.float_refs(r, RE_FIGREF, {1: "F1"}, "fig", "図")
+    assert lk.unresolved == [("fig", "d3", "図5", "図5 に対応する図が見つからない")]
+    # 先頭の番号の途中で切ったときは、上付きの後ろの並びの番号（「、2」）はリンクしない（今の限界。docs/DESIGN.md の 6 章）。「と図2」
+    # のように「図」の付いたものは、上付きの手前から探し直すので、次の参照としてリンクする。上付きの文字にリンク（Word のハイパー
+    # リンクなど）があっても、上付きの手前で切る（「図23」にしない）
+    lk = Linker(ArticlePlan())
+    href = LinkSpec(kind="uri", attrs={"href": "https://example.org/"}, origin="word")
+    q = Para(src="d4", atoms=[plain_atom("図1"), sup_atom("1"), plain_atom("、2と図2を見る。図2"),
+                              Atom(kind="text", text="3", fmt=frozenset({"sup"}), link=href), plain_atom("も見る。")])
+    lk.float_refs(q, RE_FIGREF, {1: "F1", 2: "F2"}, "fig", "図")
+    assert [(a.text, a.link.attrs["rid"]) for a in q.atoms if a.link is not None and a.link.kind == "xref"] == [
+        ("図1", "F1"), ("図2", "F2"), ("図2", "F2")]
+    assert lk.unresolved == []
 
 
 def test_figure_ref_before_superscript_note_converts(journal, meta, tmp_path):
@@ -441,6 +466,70 @@ def test_figure_ref_before_superscript_note_converts(journal, meta, tmp_path):
     assert same_links(*para_links(load(res), "結果を図1", ("fig", "fn")),
                       [("結果を", "図1", "F1"), ("図1", "1)", "fn1"), ("実験結果", "Fig. 1", "F1")])
     assert [u for u in res.unresolved_after if u[0] == "fig"] == []
+
+
+@pytest.mark.parametrize("bare_notes", [True, False])
+def test_fn_marks_after_float_number(bare_notes):
+    """図・表の参照の番号の直後の番号だけの上付き（キャプションの「図1²　…」・本文の「表2³」）は、直前の数字を指数の底とみなさない
+    （点検 2 回目に直した。それまでは直前が数字なので指数・単位とみなした）: 番号だけの論文では注にリンクし（0.26.0 と同じ）、
+    「1)」の書き方の論文では番号だけの数字として 1 件ずつ記録する（指数・単位の記録にしない）。キャプションの番号は、上付きの数字も
+    含めて読むので、この形の図の番号は「図12」になる（structure.py の限界。修正計画の H の「残る限界」）。"""
+    plan = ArticlePlan()
+    lk = Linker(plan)
+    lk.bare_notes = bare_notes
+    p = Para(src="d1", atoms=[plain_atom("図1"), sup_atom("2"), plain_atom("\u3000架空の図（表2"), sup_atom("3"),
+                              plain_atom("も参照）")])
+    lk.fn_marks(p, {2: "fn2", 3: "fn3"})
+    got = [(a.text, a.link.attrs["rid"]) for a in p.atoms if a.link is not None]
+    msgs = [d.message for d in plan.decisions]
+    if bare_notes:
+        assert got == [("2", "fn2"), ("3", "fn3")] and msgs == []
+    else:
+        assert got == [] and [RE_ITEM.findall(m) for m in msgs] == [[("2", "1")], [("3", "1")]]
+        assert all("番号だけの形" in m and "指数" not in m for m in msgs)
+    assert lk.unresolved == []
+
+
+@pytest.mark.parametrize("marked", [False, True])
+def test_figure_number_then_superscript_note_converts(marked, journal, meta, tmp_path):
+    """変換の全体で、図・表の参照の番号の直後の上付きの注番号（本文の「図1¹」「表1²」、表のセルの「図1³」）は、図・表と注の両方に
+    リンクする（点検 2 回目）。番号だけの論文（marked が偽）では、番号だけの上付きも注にリンクする（0.26.0 と同じ）。「1)」の書き方の
+    論文（marked）では、上付きの「1」＋本文の「)」（「図1¹)」）を注にリンクし、番号だけの「表1²」「図1³」は番号だけの数字として
+    記録する。不変性チェック・DTD・J-STAGE のチェックは合格。"""
+    def parts(b):
+        rid = b.add_image("links_case_fig1.png", mf.png_bytes("Case figure 1"))
+        body = [mf.para(S["body"], "結果は図1", mf.run("1", sup=True), ")に示す。" if marked else "に示す。", "表1",
+                        mf.run("2", sup=True), "も見る。")]
+        if marked:
+            body.append(mf.para(S["body"], "番号の形の注である", mf.run("3)", sup=True), "。"))
+        return [mf.para(S["sec1"], "１．はじめに"), *body,
+                mf.para(S["body"], mf.drawing(rid, 2880000, 1800000, 962), jc="center"),
+                mf.para(S["fig_cap"], "図1\u3000架空の図"), mf.para(S["tab_cap"], "表1\u3000架空の表"),
+                mf.table([[mf.cell("観点"), mf.cell("内容")],
+                          [mf.cell("架空"), mf.cell(mf.para(S["body"], "セルの図1", mf.run("3", sup=True), "を参照"))]]),
+                mf.para(S["fn_head"], "注"), *(mf.para(S["body"], n) for n in NOTES3)]
+    path = tmp_path / "fignum.docx"
+    mf.make_article(path, "リンクの境界の検証用文書", parts)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
+    assert _mechanical(path, journal)[2].bare_notes is not marked
+    root = load(res)
+    kinds = ("fig", "table", "fn")
+    [cell] = [td for td in root.iter("td") if text(td).startswith("セルの図1")]
+    got_cell = xref_positions(cell, kinds)
+    if marked:
+        assert same_links(*para_links(root, "結果は図1", kinds),
+                          [("結果は", "図1", "F1"), ("図1", "1", "fn1"), (")に示す。", "表1", "T1")])
+        assert same_links(text(cell), got_cell, [("セルの", "図1", "F1")])
+        assert [RE_ITEM.findall(m) for m in records(res, "結果は図1")] == [[("2", "1")]]
+        assert [RE_ITEM.findall(m) for m in records(res, "セルの図1")] == [[("3", "1")]]
+        assert all("指数" not in m for m in records(res, "結果は図1") + records(res, "セルの図1"))
+    else:
+        assert same_links(*para_links(root, "結果は図1", kinds),
+                          [("結果は", "図1", "F1"), ("図1", "1", "fn1"), ("に示す。", "表1", "T1"), ("表1", "2", "fn2")])
+        assert same_links(text(cell), got_cell, [("セルの", "図1", "F1"), ("セルの図1", "3", "fn3")])
+        assert records(res, "結果は図1") == [] and records(res, "セルの図1") == []
+    assert [u for u in res.unresolved_after if u[0] in ("fig", "table", "fn")] == []
 
 
 def test_fn_marks_without_run_link_bare_numbers():

@@ -1,0 +1,2650 @@
+[
+ {
+  "id": "C00",
+  "kind": "strong",
+  "desc": "対照: 注・図・表・式の参照がふつうの形だけ（リンクは 0.26.0 と同じ、記録なし）",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/C00.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "架空の調査を行った2)。図1と表1と式(1)を参照する。",
+    "segs": [
+     "架空の調査を行った",
+     [
+      "s",
+      "2)"
+     ],
+     "。図1と表1と式(1)を参照する。"
+    ],
+    "offsets": [
+     0,
+     9,
+     11
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": [
+       "fn2"
+      ]
+     },
+     {
+      "check": "xref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": [
+       "F1",
+       "T1"
+      ]
+     },
+     {
+      "check": "xref",
+      "types": [
+       "disp-formula"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": [
+       "FD1"
+      ]
+     },
+     {
+      "check": "dec",
+      "min": null,
+      "max": 0,
+      "level": "exact",
+      "alts": null,
+      "why": ""
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "S01",
+  "kind": "strong",
+  "desc": "番号の形がはっきりした注番号（上付きの「1)」、上付きの外の閉じ括弧で補う形）はリンクする",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/S01.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "架空の調査を行った1)。",
+    "segs": [
+     "架空の調査を行った",
+     [
+      "s",
+      "1)"
+     ],
+     "。"
+    ],
+    "offsets": [
+     0,
+     9,
+     11
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": [
+       "fn1"
+      ]
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "b",
+    "plain": "架空の結果である2)。",
+    "segs": [
+     "架空の結果である",
+     [
+      "s",
+      "2"
+     ],
+     ")。"
+    ],
+    "offsets": [
+     0,
+     8,
+     9
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "付録 D2 の点検: 本文「である」＋上付き「1」＋本文「)」→ fn1",
+      "rids": [
+       "fn2"
+      ]
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "c",
+    "plain": "別の結果である3）。",
+    "segs": [
+     "別の結果である",
+     [
+      "s",
+      "3"
+     ],
+     "）。"
+    ],
+    "offsets": [
+     0,
+     7,
+     8
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "全角の閉じ括弧でも同じ",
+      "rids": [
+       "fn3"
+      ]
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "S02",
+  "kind": "strong",
+  "desc": "単位・変数の後ろの上付きの数字（cm²・x²+y²）と符号で始まる上付き（s⁻¹・m s⁻²）は注にリンクしない",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/S02.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "底面積は 3 cm2 である。",
+    "segs": [
+     "底面積は 3 cm",
+     [
+      "s",
+      "2"
+     ],
+     " である。"
+    ],
+    "offsets": [
+     0,
+     9,
+     10
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": ""
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "b",
+    "plain": "架空の式 x2+y2 を考える。",
+    "segs": [
+     "架空の式 x",
+     [
+      "s",
+      "2"
+     ],
+     "+y",
+     [
+      "s",
+      "2"
+     ],
+     " を考える。"
+    ],
+    "offsets": [
+     0,
+     6,
+     7,
+     9,
+     10
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": "件数（1 件か 2 件か）は利用者の決定事項 15（段落ごとに 1 行）と H の節（数字ごと）で食い違うので問わない"
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "c",
+    "plain": "面積は 5 cm² である。",
+    "segs": [
+     "面積は 5 cm² である。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "上付きの書式ではない Unicode の ² はもともと対象外",
+      "rids": []
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "d",
+    "plain": "速さの単位は m s−1 とする。",
+    "segs": [
+     "速さの単位は m s",
+     [
+      "s",
+      "−1"
+     ],
+     " とする。"
+    ],
+    "offsets": [
+     0,
+     10,
+     12
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": null,
+      "max": null,
+      "level": "either",
+      "alts": [
+       "any"
+      ],
+      "why": "符号で始まる続きを記録するかは H から一つに決まらない"
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "e",
+    "plain": "加速度は m s-2 である。",
+    "segs": [
+     "加速度は m s",
+     [
+      "s",
+      "-2"
+     ],
+     " である。"
+    ],
+    "offsets": [
+     0,
+     8,
+     10
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": null,
+      "max": null,
+      "level": "either",
+      "alts": [
+       "any"
+      ],
+      "why": ""
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "S04",
+  "kind": "strong",
+  "desc": "数字と区切りの続きに閉じ括弧（1,2)・1-3)）はリンクする",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/S04.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "二つの調査がある1,2)。",
+    "segs": [
+     "二つの調査がある",
+     [
+      "s",
+      "1,2)"
+     ],
+     "。"
+    ],
+    "offsets": [
+     0,
+     8,
+     12
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "付録 D2 (1)「1,2)」の 1 にもリンク",
+      "rids": [
+       "fn1",
+       "fn2"
+      ]
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "b",
+    "plain": "三つの資料もある1-3)。",
+    "segs": [
+     "三つの資料もある",
+     [
+      "s",
+      "1-3)"
+     ],
+     "。"
+    ],
+    "offsets": [
+     0,
+     8,
+     12
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "either",
+      "why": "1 と 3 にリンク（範囲を 1 つの xref にまとめる形も許す）",
+      "alts": [
+       [
+        "fn1",
+        "fn3"
+       ],
+       [
+        "fn1 fn2 fn3"
+       ],
+       [
+        "fn1 fn3"
+       ]
+      ]
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "S05",
+  "kind": "strong",
+  "desc": "「注」「註」の字（上付きの中・外）や括弧の付いた上付きはリンクする",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/S05.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "この点は注3で補う。",
+    "segs": [
+     "この点は注",
+     [
+      "s",
+      "3"
+     ],
+     "で補う。"
+    ],
+    "offsets": [
+     0,
+     5,
+     6
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "続きの直前が「注」",
+      "rids": [
+       "fn3"
+      ]
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "b",
+    "plain": "別の点は註1に記す。",
+    "segs": [
+     "別の点は",
+     [
+      "s",
+      "註1"
+     ],
+     "に記す。"
+    ],
+    "offsets": [
+     0,
+     4,
+     6
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "付録 D2 の点検: 上付き「註1」→ fn1",
+      "rids": [
+       "fn1"
+      ]
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "c",
+    "plain": "第三の点は（2）に記す。",
+    "segs": [
+     "第三の点は",
+     [
+      "s",
+      "（2）"
+     ],
+     "に記す。"
+    ],
+    "offsets": [
+     0,
+     5,
+     8
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "RE_SUP_FN の括弧つき",
+      "rids": [
+       "fn2"
+      ]
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "d",
+    "plain": "第四の点は注3である。",
+    "segs": [
+     "第四の点は",
+     [
+      "s",
+      "注3"
+     ],
+     "である。"
+    ],
+    "offsets": [
+     0,
+     5,
+     7
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": [
+       "fn3"
+      ]
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "S06",
+  "kind": "strong",
+  "desc": "関数の括弧の中の指数（f(x²)）: 閉じ括弧が続いても指数ならリンクしない。記録が残る",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/S06.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "関数 f(x2) の値を求める。",
+    "segs": [
+     "関数 f(x",
+     [
+      "s",
+      "2"
+     ],
+     ") の値を求める。"
+    ],
+    "offsets": [
+     0,
+     6,
+     7
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": "付録 D2 の点検: リンクなし（記録あり）"
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "S07",
+  "kind": "strong",
+  "desc": "数字の後ろの上付き（10³・10^{2,3}・x^{1-3}）は続き全体で指数と判定してリンクしない",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/S07.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "個数は 103 個である。",
+    "segs": [
+     "個数は 10",
+     [
+      "s",
+      "3"
+     ],
+     " 個である。"
+    ],
+    "offsets": [
+     0,
+     6,
+     7
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": ""
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "b",
+    "plain": "組は 102,3 である。",
+    "segs": [
+     "組は 10",
+     [
+      "s",
+      "2,3"
+     ],
+     " である。"
+    ],
+    "offsets": [
+     0,
+     5,
+     8
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": ""
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "c",
+    "plain": "項は x1-3 である。",
+    "segs": [
+     "項は x",
+     [
+      "s",
+      "1-3"
+     ],
+     " である。"
+    ],
+    "offsets": [
+     0,
+     4,
+     7
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": ""
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "S08",
+  "kind": "strong",
+  "desc": "注の一覧にない番号の上付き（5)）はリンクしない。英字の後ろでも「2)」はリンクする",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/S08.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "架空の補足がある5)。",
+    "segs": [
+     "架空の補足がある",
+     [
+      "s",
+      "5)"
+     ],
+     "。"
+    ],
+    "offsets": [
+     0,
+     8,
+     10
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": null,
+      "max": null,
+      "level": "either",
+      "alts": [
+       "any"
+      ],
+      "why": ""
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "b",
+    "plain": "Shiken2) の議論を参照する。",
+    "segs": [
+     "Shiken",
+     [
+      "s",
+      "2)"
+     ],
+     " の議論を参照する。"
+    ],
+    "offsets": [
+     0,
+     6,
+     8
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "閉じ括弧で終わる上付きは番号の形がはっきりした注番号（指数の判定は数字だけの一致にかける）",
+      "rids": [
+       "fn2"
+      ]
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "S09",
+  "kind": "strong",
+  "desc": "「1)」の書き方の論文では、かなの後ろの数字だけの上付き（²・1, 2）もリンクしない。記録が残る",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/S09.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "架空の主張である2。",
+    "segs": [
+     "架空の主張である",
+     [
+      "s",
+      "2"
+     ],
+     "。"
+    ],
+    "offsets": [
+     0,
+     8,
+     9
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": "決定事項 15: 「1)」が 1 つでもあれば数字だけの上付きは注番号にしない"
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "b",
+    "plain": "並べた番号もある1, 2。",
+    "segs": [
+     "並べた番号もある",
+     [
+      "s",
+      "1, 2"
+     ],
+     "。"
+    ],
+    "offsets": [
+     0,
+     8,
+     12
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": ""
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "S10",
+  "kind": "strong",
+  "desc": "記録の文面（text と occurrence）で link_note を貼り戻すと、その上付きにリンクできる",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/S10.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "架空の 2022 年版の面積は 2 m2 である。",
+    "segs": [
+     "架空の 2022 年版の面積は 2 m",
+     [
+      "s",
+      "2"
+     ],
+     " である。"
+    ],
+    "offsets": [
+     0,
+     19,
+     20
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": ""
+     },
+     {
+      "check": "paste",
+      "seg": 1,
+      "target": "fn2",
+      "text": "2",
+      "occurrence": 4,
+      "level": "exact",
+      "why": "「2」は段落の中で 4 回目（2022 の 2 つの 2 と「2 m」の 2 の後）。付録 D2 (4)"
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "TWS",
+  "kind": "strong",
+  "desc": "同じ本文（かなの後ろの ²、m²）を「1)」の書き方の論文で: どちらもリンクしない",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/TWS.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "架空の見解である2。広さは 4 m2 である。",
+    "segs": [
+     "架空の見解である",
+     [
+      "s",
+      "2"
+     ],
+     "。広さは 4 m",
+     [
+      "s",
+      "2"
+     ],
+     " である。"
+    ],
+    "offsets": [
+     0,
+     8,
+     9,
+     17,
+     18
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": ""
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "TWB",
+  "kind": "bare",
+  "desc": "同じ本文を数字だけの書き方の論文で: かなの後ろの ² は fn2、m² はリンクしない",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/TWB.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "架空の見解である2。広さは 4 m2 である。",
+    "segs": [
+     "架空の見解である",
+     [
+      "s",
+      "2"
+     ],
+     "。広さは 4 m",
+     [
+      "s",
+      "2"
+     ],
+     " である。"
+    ],
+    "offsets": [
+     0,
+     8,
+     9,
+     17,
+     18
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": [
+       "fn2"
+      ]
+     },
+     {
+      "check": "offsets",
+      "types": [
+       "fn"
+      ],
+      "offsets": [
+       8
+      ],
+      "level": "exact",
+      "why": ""
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": ""
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "B01",
+  "kind": "bare",
+  "desc": "数字だけの論文: かな・閉じ括弧の後ろの ¹ ² はリンク、m² はしない（付録 D2 (2)）。貼り戻し",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/B01.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "架空の主張である1。（試験, 2020）2。面積は 4 m2。",
+    "segs": [
+     "架空の主張である",
+     [
+      "s",
+      "1"
+     ],
+     "。（試験, 2020）",
+     [
+      "s",
+      "2"
+     ],
+     "。面積は 4 m",
+     [
+      "s",
+      "2"
+     ],
+     "。"
+    ],
+    "offsets": [
+     0,
+     8,
+     9,
+     20,
+     21,
+     29,
+     30
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": [
+       "fn1",
+       "fn2"
+      ]
+     },
+     {
+      "check": "offsets",
+      "types": [
+       "fn"
+      ],
+      "offsets": [
+       8,
+       20
+      ],
+      "level": "exact",
+      "why": ""
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": ""
+     },
+     {
+      "check": "paste",
+      "seg": 5,
+      "target": "fn2",
+      "text": "2",
+      "occurrence": 4,
+      "level": "exact",
+      "why": "「2」は 4 回目（2020 の 2 つの 2、「）²」の後）"
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "B02",
+  "kind": "bare",
+  "desc": "数字だけの論文: 数字と区切りの続き（1-3、1, 2）は続き全体の前後で判定してリンクする",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/B02.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "三つの例がある1-3。",
+    "segs": [
+     "三つの例がある",
+     [
+      "s",
+      "1-3"
+     ],
+     "。"
+    ],
+    "offsets": [
+     0,
+     7,
+     10
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "either",
+      "why": "付録 D2 の点検: 1 と 3 がリンク",
+      "alts": [
+       [
+        "fn1",
+        "fn3"
+       ],
+       [
+        "fn1 fn2 fn3"
+       ],
+       [
+        "fn1 fn3"
+       ]
+      ]
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "b",
+    "plain": "二つの例がある1, 2。",
+    "segs": [
+     "二つの例がある",
+     [
+      "s",
+      "1, 2"
+     ],
+     "。"
+    ],
+    "offsets": [
+     0,
+     7,
+     11
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": [
+       "fn1",
+       "fn2"
+      ]
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "B03",
+  "kind": "bare",
+  "desc": "数字だけの論文: 指数（x²・2³・10³・cm³）と符号で始まる上付き（毎時⁻¹）はリンクしない",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/B03.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "x2 と 23 と 103 と 3 cm3 を比べる。",
+    "segs": [
+     "x",
+     [
+      "s",
+      "2"
+     ],
+     " と 2",
+     [
+      "s",
+      "3"
+     ],
+     " と 10",
+     [
+      "s",
+      "3"
+     ],
+     " と 3 cm",
+     [
+      "s",
+      "3"
+     ],
+     " を比べる。"
+    ],
+    "offsets": [
+     0,
+     1,
+     2,
+     6,
+     7,
+     12,
+     13,
+     20,
+     21
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": ""
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "b",
+    "plain": "減り方は毎時−1である。",
+    "segs": [
+     "減り方は毎時",
+     [
+      "s",
+      "−1"
+     ],
+     "である。"
+    ],
+    "offsets": [
+     0,
+     6,
+     8
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": null,
+      "max": null,
+      "level": "either",
+      "alts": [
+       "any"
+      ],
+      "why": ""
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "B04",
+  "kind": "bare",
+  "desc": "数字だけの論文: 「注」の後ろの上付きはリンク、注の一覧にない番号はリンクしない",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/B04.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "詳しくは注3を見よ。",
+    "segs": [
+     "詳しくは注",
+     [
+      "s",
+      "3"
+     ],
+     "を見よ。"
+    ],
+    "offsets": [
+     0,
+     5,
+     6
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": [
+       "fn3"
+      ]
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "b",
+    "plain": "架空の補足がある7。",
+    "segs": [
+     "架空の補足がある",
+     [
+      "s",
+      "7"
+     ],
+     "。"
+    ],
+    "offsets": [
+     0,
+     8,
+     9
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": null,
+      "max": null,
+      "level": "either",
+      "alts": [
+       "any"
+      ],
+      "why": ""
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "B05",
+  "kind": "bare",
+  "desc": "本文の「注」＋上付き「1」だけの論文は、書き方の判定に使わないので数字だけの論文のまま（² もリンク）",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/B05.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "架空の見解である2。",
+    "segs": [
+     "架空の見解である",
+     [
+      "s",
+      "2"
+     ],
+     "。"
+    ],
+    "offsets": [
+     0,
+     8,
+     9
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "続きの直前が「注」の一致は書き方の判定に使わない",
+      "rids": [
+       "fn2"
+      ]
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "B06",
+  "kind": "bare",
+  "desc": "上付き「1」＋本文「）」がはっきりした注番号になる論文の、かなの後ろの ²（判定に使うかは決めかねる）",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/B06.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "架空の主張である2。",
+    "segs": [
+     "架空の主張である",
+     [
+      "s",
+      "2"
+     ],
+     "。"
+    ],
+    "offsets": [
+     0,
+     8,
+     9
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "either",
+      "why": "",
+      "alts": [
+       [
+        "fn2"
+       ],
+       []
+      ]
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "N01",
+  "kind": "none",
+  "desc": "注の一覧のない論文: 上付きの「1)」も cm² も注にリンクしない（DTD に合う）",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/N01.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "架空の調査である1)。面積は 3 cm2。",
+    "segs": [
+     "架空の調査である",
+     [
+      "s",
+      "1)"
+     ],
+     "。面積は 3 cm",
+     [
+      "s",
+      "2"
+     ],
+     "。"
+    ],
+    "offsets": [
+     0,
+     8,
+     10,
+     19,
+     20
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": null,
+      "max": null,
+      "level": "either",
+      "alts": [
+       "any"
+      ],
+      "why": ""
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "BOX",
+  "kind": "strong",
+  "desc": "囲みの中も同じ規則: 地図1 はリンクせず 図1 はリンク、cm² はリンクせず「2)」はリンク",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/BOX.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "囲みの問い　架空の地図1を見て、図1の面積を求めよ。",
+    "segs": [
+     "囲みの問い　架空の地図1を見て、図1の面積を求めよ。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": [
+       "F1"
+      ]
+     },
+     {
+      "check": "offsets",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "offsets": [
+       16
+      ],
+      "level": "exact",
+      "why": ""
+     },
+     {
+      "check": "boxed",
+      "level": "exact",
+      "why": "F の規則（20 字以上・幅が 1 段の 0.6 以上・画像から離れている）"
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": ""
+     }
+    ],
+    "box": true
+   },
+   {
+    "key": "b",
+    "plain": "底面は 3 cm2、条件は資料による2)。",
+    "segs": [
+     "底面は 3 cm",
+     [
+      "s",
+      "2"
+     ],
+     "、条件は資料による",
+     [
+      "s",
+      "2)"
+     ],
+     "。"
+    ],
+    "offsets": [
+     0,
+     8,
+     9,
+     18,
+     20
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fn"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": [
+       "fn2"
+      ]
+     },
+     {
+      "check": "offsets",
+      "types": [
+       "fn"
+      ],
+      "offsets": [
+       18
+      ],
+      "level": "exact",
+      "why": ""
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": ""
+     }
+    ],
+    "box": true
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "M01",
+  "kind": "strong",
+  "desc": "語の外の参照はリンクする（文の先頭の図1・括弧の中の（図1）・「この図1」・表1のとおり）。「各表1」はしない",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/M01.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "図1に示す架空の形である。",
+    "segs": [
+     "図1に示す架空の形である。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": [
+       "F1"
+      ]
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "b",
+    "plain": "架空の形を示した（図1）。",
+    "segs": [
+     "架空の形を示した（図1）。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": [
+       "F1"
+      ]
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "c",
+    "plain": "この形は表1のとおりである。",
+    "segs": [
+     "この形は表1のとおりである。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": [
+       "T1"
+      ]
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "d",
+    "plain": "この図1と各表1を比べる。",
+    "segs": [
+     "この図1と各表1を比べる。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": [
+       "F1"
+      ]
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": "各 は漢字で 掲至及 にない"
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "M02",
+  "kind": "strong",
+  "desc": "地図1・概念図1・代表1名・本図1はリンクしない（図1・表1 があるので記録あり）",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/M02.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "架空の地図1を配った。",
+    "segs": [
+     "架空の地図1を配った。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": ""
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "b",
+    "plain": "概念図1を描いた。",
+    "segs": [
+     "概念図1を描いた。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": ""
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "c",
+    "plain": "代表1名が答えた。",
+    "segs": [
+     "代表1名が答えた。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": ""
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "d",
+    "plain": "本図1を見る。",
+    "segs": [
+     "本図1を見る。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": "決定事項 16: 掲・至・及 のまま（本 は語の一部とみなす）"
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "M03",
+  "kind": "strong",
+  "desc": "図表1・発表1回目はリンクしない（表1 があるので記録あり）",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/M03.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "図表1を見る。",
+    "segs": [
+     "図表1を見る。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": ""
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "b",
+    "plain": "発表1回目の記録である。",
+    "segs": [
+     "発表1回目の記録である。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": "付録 M5: 発表1回目（表1 あり）にも Decision"
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "M04",
+  "kind": "strong",
+  "desc": "付表1 はリンクせず記録あり、前掲表1・前掲図1 はリンクする",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/M04.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "付表1に示す。",
+    "segs": [
+     "付表1に示す。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": ""
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "b",
+    "plain": "前掲表1に示す。",
+    "segs": [
+     "前掲表1に示す。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": [
+       "T1"
+      ]
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "c",
+    "plain": "前掲図1を見る。",
+    "segs": [
+     "前掲図1を見る。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": [
+       "F1"
+      ]
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "M05",
+  "kind": "strong",
+  "desc": "語の中の一致の後ろから探し直す（図表1と表1・地図1、図2）、続きの番号ごと語の一部（地図1、2）",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/M05.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "図表1と表1を比べる。",
+    "segs": [
+     "図表1と表1を比べる。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": [
+       "T1"
+      ]
+     },
+     {
+      "check": "offsets",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "offsets": [
+       4
+      ],
+      "level": "exact",
+      "why": ""
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": ""
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "b",
+    "plain": "地図1、図2の順に見る。",
+    "segs": [
+     "地図1、図2の順に見る。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": [
+       "F2"
+      ]
+     },
+     {
+      "check": "offsets",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "offsets": [
+       4
+      ],
+      "level": "exact",
+      "why": ""
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": null,
+      "level": "exact",
+      "alts": null,
+      "why": ""
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "c",
+    "plain": "地図1、2を見る。",
+    "segs": [
+     "地図1、2を見る。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": 1,
+      "max": 1,
+      "level": "exact",
+      "alts": null,
+      "why": "付録 M5 の点検: どちらもリンクされない（記録は 1 件）"
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "M06",
+  "kind": "strong",
+  "desc": "前に来てよい漢字（掲・至・及）: 図1乃至図2・図1及図2 は両方リンクする",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/M06.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "図1乃至図2を見る。",
+    "segs": [
+     "図1乃至図2を見る。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "either",
+      "why": "",
+      "alts": [
+       [
+        "F1",
+        "F2"
+       ],
+       [
+        "F1 F2"
+       ]
+      ]
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "b",
+    "plain": "図1及図2を見る。",
+    "segs": [
+     "図1及図2を見る。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "either",
+      "why": "",
+      "alts": [
+       [
+        "F1",
+        "F2"
+       ],
+       [
+        "F1 F2"
+       ]
+      ]
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "M07",
+  "kind": "strong",
+  "desc": "番号の図・表がないとき: 地図3 は記録しない。図3 もリンクしない",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/M07.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "地図3を配った。",
+    "segs": [
+     "地図3を配った。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": null,
+      "max": 0,
+      "level": "exact",
+      "alts": null,
+      "why": "記録は先頭の番号の図・表があるときだけ"
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "b",
+    "plain": "図3を見る。",
+    "segs": [
+     "図3を見る。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "dec",
+      "min": null,
+      "max": null,
+      "level": "either",
+      "alts": [
+       "any"
+      ],
+      "why": ""
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "M08",
+  "kind": "strong",
+  "desc": "H で変えない参照（図1、2・Fig. 1・Table 1・図 1・式(1)・数式(1)・第1表）は 0.26.0 と同じ",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/M08.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "図1、2を見る。",
+    "segs": [
+     "図1、2を見る。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": [
+       "F1",
+       "F2"
+      ]
+     },
+     {
+      "check": "same_ref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": ""
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "b",
+    "plain": "Fig. 1 と Table 1 を見る。",
+    "segs": [
+     "Fig. 1 と Table 1 を見る。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "same_ref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": ""
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "c",
+    "plain": "図 1 を見る。",
+    "segs": [
+     "図 1 を見る。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "same_ref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": ""
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "d",
+    "plain": "式(1)より求める。",
+    "segs": [
+     "式(1)より求める。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "disp-formula"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": [
+       "FD1"
+      ]
+     },
+     {
+      "check": "same_ref",
+      "types": [
+       "disp-formula"
+      ],
+      "level": "exact",
+      "why": ""
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "e",
+    "plain": "数式(1)を使う。",
+    "segs": [
+     "数式(1)を使う。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "same_ref",
+      "types": [
+       "disp-formula"
+      ],
+      "level": "exact",
+      "why": "H は float_refs だけを変える（式の参照は変えない）"
+     }
+    ],
+    "box": false
+   },
+   {
+    "key": "f",
+    "plain": "第1表を見る。",
+    "segs": [
+     "第1表を見る。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [
+     {
+      "check": "xref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": "",
+      "rids": []
+     },
+     {
+      "check": "same_ref",
+      "types": [
+       "fig",
+       "table"
+      ],
+      "level": "exact",
+      "why": ""
+     }
+    ],
+    "box": false
+   }
+  ],
+  "case_checks": []
+ },
+ {
+  "id": "U01",
+  "kind": "strong",
+  "desc": "和文の氏名: 区切りのない「研究次郎」と前後に空白のある「架空四郎　」「　架空五郎」は依頼文に出る（前後の空白は除く）。間に全角・半角の空白のある氏名は出ない",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/U01.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "架空の調査を行った。",
+    "segs": [
+     "架空の調査を行った。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [],
+    "box": false
+   }
+  ],
+  "case_checks": [
+   {
+    "check": "prompt_name",
+    "name": "研究次郎",
+    "level": "exact",
+    "present": true
+   },
+   {
+    "check": "prompt_name",
+    "name": "試験　太郎",
+    "level": "exact",
+    "present": false
+   },
+   {
+    "check": "prompt_name",
+    "name": "試験 三郎",
+    "level": "exact",
+    "present": false
+   },
+   {
+    "check": "prompt_name",
+    "name": "架空四郎",
+    "level": "exact",
+    "present": true,
+    "why": "U4: (段落ID, text.strip(' 　\\t'), lang)。依頼文の「」の中に前後の空白を入れない"
+   },
+   {
+    "check": "prompt_name",
+    "name": "架空五郎",
+    "level": "exact",
+    "present": true
+   },
+   {
+    "check": "prompt_name_count",
+    "level": "exact",
+    "n": 3
+   },
+   {
+    "check": "report_name",
+    "name": "研究次郎",
+    "level": "exact"
+   }
+  ]
+ },
+ {
+  "id": "U02",
+  "kind": "strong",
+  "desc": "英文の 1 語の氏名「KENKYU」: レポートには残る。依頼文に出すかは H の節と決定事項 17 で食い違う",
+  "docx": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/cases/U02.docx",
+  "paras": [
+   {
+    "key": "a",
+    "plain": "架空の調査を行った。",
+    "segs": [
+     "架空の調査を行った。"
+    ],
+    "offsets": [
+     0
+    ],
+    "checks": [],
+    "box": false
+   }
+  ],
+  "case_checks": [
+   {
+    "check": "prompt_name",
+    "name": "KENKYU",
+    "level": "either",
+    "alts": [
+     true,
+     false
+    ],
+    "why": "H の節・付録 U4・まとめ役の指示は「出さない」。FIX_PLAN の決定事項 17 は「今までどおり載せる」"
+   },
+   {
+    "check": "prompt_name",
+    "name": "研究　次郎",
+    "level": "exact",
+    "present": false
+   },
+   {
+    "check": "report_name",
+    "name": "KENKYU",
+    "level": "exact"
+   }
+  ]
+ }
+]

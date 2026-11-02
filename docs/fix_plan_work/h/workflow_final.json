@@ -1,0 +1,933 @@
+{
+  "summary": "単位 H（0.27.0）: リンクの誤検出と AI 依頼文の保守（上付きの指数・単位が注へのリンクになる D2、語の中の「図1」「表1」が図表へのリンクになる M5、依頼文の氏名の切り出し U4、既定のモデル名 U5）。設計と独立の反例 → 実装 → 確かめ → 仕上げ → 3 観点の点検 → 修正と再点検（最大 3 回）",
+  "agentCount": 15,
+  "logs": [
+    "design: ok / oracle: ok",
+    "指摘: blocking 0 / should 2 / nit 13",
+    "1 回目の点検: blocking 0 / should 1",
+    "2 回目の点検: blocking 0 / should 0"
+  ],
+  "result": {
+    "design": {
+      "design_doc": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/DESIGN_H.md",
+      "decisions": "【先に確かめてほしい食い違い】\n(1) U4 の英文 1 語の氏名で、正本どうしが食い違っています。FIX_PLAN の H の節（U4）と付録 U4 の (3) は「build_request で英文を除き、d12 の行は依頼文に出ない」と書いています。一方、FIX_PLAN の「決定事項」17（2026-10-14 の利用者の回答）は「英文 1 語の氏名も今までどおり AI 依頼文に載せる。あわせて、英文の氏名を姓と名に分けられなかったことを警告する」です。H の節はこの回答より前に書かれたもので、回答に合わせて直されていません。\n- 設計は決定事項 17 に従いました。英文の行は外さず、builder で 10 章の警告を 1 つ足します。\n- 別案（H の節どおりにする場合）は、build_request の 1 行 `if lang == \"en\": continue` と、テスト 1 件の期待を逆にするだけです。\n- fixture にも td1〜3 にも英文 1 語の氏名はないので、どちらを選んでも出力は変わりません。\n\n(2) 指示は「利用者に未確認・暫定」としていますが、決定事項 15・16 は利用者がすでに回答しています。\n- 15: 論文ごとに注番号の書き方を判定する。明らかな指数（直前が英数字・演算の記号）は段落ごとに 1 行にまとめて記録する。\n- 16: FLOAT_REF_OK_BEFORE は「掲至及」のまま。\n- 設計は 15・16 をそのまま実装します（暫定ではありません）。\n\n(3) FIX_PLAN の「同じファイルを触る順」にある「D2 の SYSTEM_PROMPT の 1 文」は足さないことにしました。足すと 23 件すべての AI 依頼文が変わります。記録の文面に link_note の text と occurrence を書くので、AI にはそれで足ります。\n\n【D2】\n- 正規表現: RE_SUP_FN = `(?:[注註][\\s　]*)?[(（]?[\\s　]*(NUM)[\\s　]*[)）]?`（FIX_PLAN の式そのまま。今の式に「註」を足しただけ）。\n- 数字と区切りだけの続きは RE_SUP_LIST（区切りは `,，、・-－–‐~～〜`）の fullmatch で見分け、続き全体で種類を 1 つに決めます。\n- 種類と優先順位: sign > strong > after_note > exponent > bare。\n  - sign: 続きの先頭が `SUP_SIGNS = \"-−－‐–+＋±⁻⁺\"`。指数とみなします（「−1)」でも同じ）。\n  - strong: `_strong_mark` が真（一致の文字の前後の空白を除いて、「注・註」で始まる、または閉じ括弧で終わる）。上付きの外の文字でも補います。つまり、続きが数字で終わり、直後の本文の文字が「)」「）」で、`_exponent_like` が偽なら strong です。\n  - after_note: `plain[:s]` が `[注註][\\s　]*$` で終わる。リンクはしますが、書き方の判定には使いません。\n- `_exponent_like` が真になる条件は 3 つで、空白は飛ばしません。\n  - 続きの先頭が符号。\n  - 直前の 1 文字が `[A-Za-zＡ-Ｚａ-ｚ0-9０-９α-ωΑ-Ω]` か OPERATORS（`+-−－＋±×÷=＝<>＜＞≦≧≤≥^*/／`）。\n  - 直後の 1 文字が OPERATORS。\n  - 直前が OBJ・漢字・かな・句読点・閉じ括弧なら指数とみなしません（「（試験, 2024）²」は注になります）。\n- bare_notes:\n  - Linker.__init__ で True に初期化します。\n  - Linker.run で fn_ids を作った直後に、`if fn_ids: self.bare_notes = self.note_style(paras)` とします。\n  - note_style は、ref・fn 以外の段落（囲みの cell を含む）の上付きの続きに strong が 1 つでもあれば False、なければ True です。\n- リンクの規則: strong と after_note は常にリンク、bare は bare_notes が真のときだけ、exponent はリンクしません。\n  - リンクの範囲は前後の空白を除きます（`_trim_span`。今は「1, 2」の「 2」の空白が xref に入ります）。\n- 注がない番号:\n  - exponent 以外は、今までどおり unresolved（3 章）に出します。\n  - exponent は出しません。今は出ていた「対応する注が見つからない」が消えるのは意図した変化です。\n- 記録の条件: その番号の注があるときだけ記録します。Decision は category \"note\"、applied=False（`Linker.note` に applied 引数を足す）。actions() には入りません。\n  - 指数・単位: 段落ごとに 1 件（決定事項 15）。文面は「上付きの数字 「2」（1 回目）、… は、指数・単位（cm²・x² などの形）とみなして注にリンクしなかった（回目は…）。注番号なら、AI による補完の link_note（text は数字、occurrence はその回目）か、XML の手直しでリンクを足す」。\n  - 「1)」の書き方の論文の、番号だけの上付きの数字: 1 件ずつ記録します（暫定。決定事項 15 の対象外）。\n  - text は m.group(1)（数字だけ）、回数は新しい `occurrence_at(p, pos, text)` で数えます（find_in_para と同じ数え方）。\n- 試作で、記録の text と occurrence の link_note を手動モードで貼り戻すと採用されることを確かめました。\n- fn_marks_plain は変えません。\n\n【M5】\n- float_refs を `regex.search(plain, pos)` のループに変えます。\n- 直前の文字が `RE_KANJI = [㐀-鿿々]` で、`FLOAT_REF_OK_BEFORE = \"掲至及\"` に入らなければ語の一部とみなし、`pos = m.end(2)` から探し直します。\n- 記録: 先頭の番号の図・表があるときだけ残します。category は図が \"figure\"、表が \"table\"、applied=False。\n  - 文面: 「「図1」は、直前の「地」と続く語の一部（地図1・付表1 など）とみなし、図 F1 にリンクしなかった。図1 への参照なら、AI による補完の link_figure（text「図1」、occurrence 1）か、XML の手直しでリンクを足す」。\n  - tail の数字は記録しません。図表がなくても unresolved にはしません。\n- 試作での期待どおりの結果:\n  - 図表1と表1 → 後ろの表1 が T1。\n  - 地図1、図2 → F2。\n  - 地図1、2 → リンクなし（記録 1 件）。\n  - 前掲表1 → T1、図1乃至図2 → F1・F2。\n  - 付表1・発表1・代表1・概念図1 → リンクなし（記録あり）。\n- eq_refs は変えません。\n\n【U4】\n- `BuildInfo.unsplit_names: list` を足し、要素は (段落ID, text.strip(' 　\\t'), lang) とします。text の空白の扱いは AI の split_name の検証と同じです。\n- Builder.person_name の `pieces is None` の枝で追加します。notes の文言はそのまま残します。lang は person_name の引数（和文 ja・英文 en）です。\n- 英文なら warnings に 10 章の警告を足します（決定事項 17 の後半）。\n- pipeline の文言からの切り出しを消し、`build_request(plan, linker, info.exclusions, info.unsplit_names)` にします。\n- build_request は 3 つ組を受け取り、英文も載せます（別案は上記 (1)）。\n- 確認済み: 切り出した文字と strip の結果は、全 fixture と td1〜3 で同じです。\n\n【U5】\n- ai_assist に `DEFAULT_MODEL_INFO = {\"name\": \"Claude Opus 5.5\", \"input_usd\": 4, \"output_usd\": 20, \"not_before\": \"2027-09-22\"}` を置きます。\n  - リテラルだけで書きます。\n  - 料金 $4/$20 は claude-api の資料で確かめました。提供終了の日付は資料にないので、今の文のままです。\n- `Options.ai_model` の既定を DEFAULT_MODEL にします。\n- make_notebook.py:\n  - `module_constants(path, names)`（ast.parse と literal_eval）で ai_assist.py をファイルとして読みます。\n  - 見つからなければ、「… に DEFAULT_MODEL = … の行が見つかりません」と分かる SystemExit にします。\n  - ファイルとして読む理由: 版・jasme.toml と同じく、インストール済みの別の版を読まないため、また依存を入れずに動かすためです。\n  - FIX_PLAN は正規表現と書いていますが、辞書を読むので ast にしました（暫定）。\n  - 直書きの 4 か所（API_HELP の料金・既定のモデル・提供終了の日付、手順 4 の MODEL 行）を置き換えます。\n  - 作り直したノートブックは版の表示だけ変わります。\n\n【決めなかったこと・却下した案】\n- SYSTEM_PROMPT の 1 文は足しません。\n- 指数の判定で空白を飛ばす案は却下しました。\n- 指数でも注がなければ 3 章に出す案は却下しました。\n- RE_FN_MARK（未使用）は消しません（範囲外）。\n- 記録の件数の上限は置きません。",
+      "changes": "src/jasme_jats/linker.py（試作の差分: /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/design/proto_linker.diff）\n- 定数を足す: RE_SUP_FN、RE_SUP_LIST、SUP_SIGNS、OPERATORS、RE_EXP_BEFORE、FLOAT_REF_OK_BEFORE、RE_KANJI。\n- Linker.__init__: bare_notes=True を足す。\n- Linker.note: applied 引数を足す。\n- Linker.run: fn_ids の直後で note_style を呼ぶ。\n- 新しいメソッド Linker.note_style。\n- Linker.float_refs: search のループに変え、語の一部の記録を足す。\n- Linker.fn_marks: 書き直す。続きの区切りは _sup_runs で最初に 1 回だけ求め、候補の種類で分け、記録・unresolved を出す。\n- モジュール関数を新しく足す: occurrence_at、_sup_runs、_exponent_like、_sup_marks、_trim_span。\n- docstring を直す。\n\nsrc/jasme_jats/builder.py\n- BuildInfo.unsplit_names を足す。\n- Builder.person_name: 3 つ組を記録し、英文なら 10 章の警告を足す。\n\nsrc/jasme_jats/pipeline.py\n- 文言からの切り出しを消し、info.unsplit_names を渡す。\n- Options.ai_model の既定を DEFAULT_MODEL にする（import に足す）。\n\nsrc/jasme_jats/ai_assist.py\n- DEFAULT_MODEL_INFO を足す。\n- build_request の unsplit_names を (src, text, lang) にし、docstring を直す。\n- SYSTEM_PROMPT は変えない。\n\ntools/make_notebook.py\n- module_constants を足す。\n- 直書きの 4 か所を DEFAULT_MODEL・DEFAULT_MODEL_INFO にする（API_HELP は波括弧がないので f-string でよい。手順 4 の MODEL 行は文字列の連結で作る）。\n\n版とノートブック\n- __init__.py と pyproject.toml を 0.27.0 にする。\n- ノートブックは python tools/make_notebook.py で作り直す。\n\nテストと fixture\n- tests/make_fixtures.py: links_parts(b, bare)、make_links(path, bare=False)、make_links_bare(path) を足す。冒頭の docstring の一覧と、末尾の main・print にも足す（試作は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/design/tools/proto_fixtures.py）。\n- tests/fixtures/sample_links.docx・sample_links_bare.docx を、上の 2 つの関数だけを呼んで作る。\n- tests/conftest.py: LINKS・LINKS_BARE を定義し、ALL_DOCS に足す。\n- tests/test_links.py を新しく書く。\n- tests/test_ai.py と tests/test_notebook.py を直す。\n\n文書\n- docs/fix_plan_repro_tests.py: D2・M5 の PROBLEM テスト 2 件を取り除き、冒頭の説明に記録を足す。\n- docs/DESIGN.md:\n  - 6 章の「注」の行と、図表番号の判断。\n  - 4.4 の (2)「リンクが元の docx と同じに決まるか」を「元のリンクが失われないか（増えるリンクは見ない）」に直す。\n  - 5 章のモデル。\n  - 7 章の既知の限界。\n- docs/DEVELOPMENT.md: テストの節、残っている課題、よくある拡張（モデルの変え方）。\n- docs/FIX_PLAN.md: H の実装の記録、決定事項 15〜17 との対応、暫定の判断、古い行番号。\n\n触らないもの: pdfmatch.py、pdfdocx.py、structure.py、report.py、colab.py、cli.py。",
+      "tests": "fixture（python tests/make_fixtures.py は実行しない。make_links と make_links_bare だけを呼んで作る）\n- sample_links（「1)」の書き方）に入れる上付き:\n  - 「3 cm²」。\n  - 「x²+y²」と「1,2)」。\n  - 「m s」＋上付きの符号「−1」と「1-3)」。\n  - 「註1」「注3」。\n  - 上付きの「1」＋本文の「)」。\n  - 本文の「注」＋上付きの「1」。\n  - 「f(x²)」と、番号だけの上付きの「²」。\n- sample_links_bare（番号だけの書き方）:\n  - 「主張である¹」。\n  - 「（試験, 2024）²」。FIX_PLAN の例の 2020 は引用文献の年と合わず、3 章に知らせが出るので 2024 にした。\n  - 「4 m²」。\n  - 上付きの「1-3」と「1, 2」。上付きの直前に「注」の字を置かない。\n  - 注の一覧は上付きの数字で始まる段落。\n- 共通（M5）: 「地図1・図表1・発表1回目・概念図1・代表1名・付表1」「前掲表1、図1乃至図2、（図1）、図1、2」「図表1と表1、地図1、図2、地図1、2」。\n- 共通の部品: 図1・図2（画像あり）、表1（本体あり）、注の見出し。題目・著者・引用文献・英文要旨は make_article が入れる。\n- 試作の 2 つの docx は strict・split の両方で、不変性・最終チェック・DTD・jstage_issues == []・lost_images == []・hidden_images == [] をすべて満たした。\n\ntests/test_links.py（段落の文字で対象を選ぶ）\n1. sample_links の注の xref（文字, rid, 段落）の集合がちょうど期待どおり。bare_notes は False。\n2. sample_links_bare の注の xref の集合と、bare_notes が True であること。\n3. 記録の件数（指数は段落ごとに 1 件、番号だけの上付きは 1 件ずつ）と文面（text・occurrence）。レポート 4 章と AI依頼文.txt の「推定:」の行にも出る。actions() は増えない。\n4. 記録の text と occurrence の link_note を貼り戻すと accepted になる。\n5. 指数の形で注がないものは 3 章に出ない。番号の形がはっきりした「5)」で注 5 がないものは、今までどおり 3 章に出る。\n6. 境界（parametrize）:\n   - 上付きの「−1)」はリンクしない（符号が先）。\n   - 「x」＋上付きの「2)」は fn2（strong が指数より先）。\n   - 「1)」の書き方の論文の「（…）²」はリンクせず、記録する。\n   - 本文の「注 」＋上付きの「¹」はリンクする。\n   - 直前が「注」の上付き（after_note）だけでは、書き方の判定が「1)」の書き方にならない。\n   - 全角の上付き「２）」は fn2。\n7. 囲み（textbox_inline）の中の「9 cm²」はリンクせず記録し、「1)」は fn1。\n8. M5（sample_links）: 図・表の xref と記録が期待どおり。\n9. float_refs の単体テスト: ArticlePlan() と Para で作れることを試作で確かめた。docs/fix_plan_repro_tests.py の test_PROBLEM_figure_reference_inside_word を逆にしたもので、正規表現ではなく float_refs の結果で確かめる。\n10. 「式(1)」は今までどおり FD1。\n11. test_PROBLEM_superscript_exponent_linked_as_note を逆にしたもの: (\"1)\", \"fn1\") はあり、(\"2\", \"fn2\") はない。\n\nU4（tests/test_ai.py）\n- sample_full の依頼文に「- [d11] 姓と名の区切りがない氏名: 「研究次郎」」がある（回帰）。\n- build() の info.unsplit_names == [(\"d11\", \"研究次郎\", \"ja\")]。\n- build_request に (\"d12\", \"KENKYU\", \"en\") を渡すと、d12 の行がある（決定事項 17）。別案を採るなら、行がないことに逆にする。\n- 英文 1 語の著者名の docx を変換すると、10 章に警告が出て、4 章の記録も今までどおり残る。\n- pipeline.convert のソースに split(\"「\" が残っていない。\n\nU5\n- test_ai.py: 直書きの 4 か所（今の 138・152・190・326 行）を DEFAULT_MODEL に置き換え、Options().ai_model == DEFAULT_MODEL のテストを足す。\n- test_notebook.py: パッケージから import した DEFAULT_MODEL・DEFAULT_MODEL_INFO と、手順 4 のセル・API_HELP・mk.DEFAULT_MODEL を比べる。\n- test_notebook.py: module_constants が、行がないときに分かる SystemExit になる。\n\n既存テスト\n- 試作の linker で 0.26.0 の全テスト 951 件が通った。書き換えが要るのは test_ai の直書きの置き換えだけ。\n- test_fidelity_and_dtd は tests/test_pipeline.py にある（指示の tests/test_fidelity.py ではない）。ALL_DOCS に足した 2 件で 4 ケース増える。",
+      "acceptance": "- pytest: 3.13 と 3.10 の両方ですべて合格。\n- ruff: HEAD の 201 件から増やさない。試作の linker.py は HEAD と同じ 6 件（どれも既存の I001・FURB167）。\n- golden（0.26.0 と同じ名前の 23 件）: すべて同じであること。\n  - 試作の D2・M5 で 23 件の manifest（XML・AI依頼文・レポート・ok）が 0.26.0 と完全に一致した。\n  - 既存の fixture には、上付きの指数、語の中の図表番号、英文 1 語の氏名がないため。\n  - U4（どちらの案でも）と U5 も出力を変えない見込み。違いが出たら意図したものではないので、理由を調べる。\n  - 新しい 2 つの fixture の 4 件は増えるだけ。\n- td1〜3（ルート1・ルート2、手動モード）: 0.26.0 とすべて同じであること。\n  - 試作では、出力フォルダの 70 ファイル（XML・レポート・AI依頼文・ZIP の中の XML）と、ルート2 の直した docx の document.xml がすべて一致した。xref の違いは 0 件。\n  - 不変性・最終・DTD は合格のまま。終了コードはどちらの版も 1（手動モードの要対応）。\n  - XML に入らなかった画像は増えない。\n  - 実装の後で測り直し、xref の違いが 0 件であることを確かめる。\n- AI依頼文: H の「推定:」の行（fixture と td1〜3 には出ない）以外は同じ。SYSTEM_PROMPT は変えない。\n- ノートブック: 作り直したものが版の表示だけ違う。test_notebook_is_up_to_date が通る。\n- 変わってよいもの（新しい fixture と単体テストでだけ現れる）:\n  - 指数・単位、符号で始まる上付き、「1)」の論文の番号だけの上付きが、注にリンクされない。\n  - 「註1」が「註」ごとリンクされる。\n  - 上付きの並びのリンクの範囲に、前後の空白が入らない。\n  - 語の中の「図N」「表N」がリンクされない。\n  - 「図表1と表1」の後ろの表1 が「表1」としてリンクされる（今は tail の「1」だけ）。\n  - それに伴う 4 章の記録と、AI依頼文の「推定:」の行。\n  - 指数の形の上付きと、語の中の図表番号について、3 章の「見つからない」が出なくなる。\n  - 英文 1 語の氏名の 10 章の警告。\n- 文字・段落の構造・不変性チェックは変わらない（リンクは LinkSpec だけで表し、文字は変えない）。",
+      "risks": "- 注番号の書き方は論文全体で 1 つに決める。\n  - 「1)」の論文に混ざった番号だけの注は、リンクされない（記録には出る）。\n  - 番号だけの論文に「1)」の形が 1 つでもあると、その論文の番号だけの注はすべてリンクされない（記録には出る）。\n- 指数の判定は、直前・直後の 1 文字と符号だけで行う。\n  - 番号だけの論文で、英字・数字の直後の注番号（「Piaget¹」など）は指数とみなし、リンクしない。\n  - 「(a+b)²」は指数とみなさず、注 2 があればリンクする。\n  - 数式（OMML）の直後の上付きの数字も、指数とみなさない。\n  - 「脚注」などの「注」の直後の上付きも、リンクする。\n- ルート2 で、PDF に合わせた直しが注番号の形を変えると、書き方の判定が論文全体で変わりうる。\n  - 注のリンクが消える場合は、pdfdocx._lost と _protect がすべての注の番号を守る。それでも崩れればリンクのある段落全体を直さず、最後は何も直さない側に倒れる（pdfdocx は触らない）。\n  - リンクが増える直しは止めない。DESIGN 4.4 の文言を実態に合わせて直す。\n- 記録の件数に上限はない。指数の多い論文では、4 章と AI依頼文の行が、注の番号以下の指数がある段落の数だけ増える。試験運用で件数を見る。\n- 語の中の図表番号の判定は、直前の 1 文字が漢字かだけを見る。\n  - 「本図1」はリンクしない。\n  - 「ヒストグラム図1」はリンクする。\n  - 「第1表」はもともと対象外。\n- 実際の論文（td1〜3）には、指数の上付き、番号だけの注、語の中の図表番号がどれもない。数えた結果:\n  - td1: 手で書いた注 5、上付きの続き 6（すべて「N)」の形でリンク済み）。\n  - td2: 注 4、上付き 4（同じ）。\n  - td3: 注 6、上付き 6（同じ）。\n  - 語の中の図表番号はどれも 0、英文 1 語の氏名も 0。\n  - そのため、新しい規則は架空の fixture でしか確かめていない。\n- 実際の AI が新しい「推定:」の行から link_note・link_figure を提案するかは、確かめていない（模擬回答だけ）。\n\n文書と指示の食い違い（直す側はまとめ役と実装の担当）:\n- 決定事項 17 と、H の節・付録 U4 (3)・指示の暫定の判断が食い違う。\n- 決定事項 15・16 は回答済みなのに、指示と H の節は「未確認」としている。H の節の「行のまとめ方は利用者が決める」も古い。\n- 「同じファイルを触る順」の SYSTEM_PROMPT の 1 文が、H の節にない。\n- 行番号が古い: FIX_PLAN の pipeline.py:205 は今 324 行、float_refs の L267〜278 は今 277 行から、test_ai の 109・123・160・296 は今 138・152・190・326。\n- test_fidelity_and_dtd は tests/test_pipeline.py にあり、指示の tests/test_fidelity.py ではない。\n- FIX_PLAN の例の「（試験, 2020）」は、make_article の引用文献の年 2024 と合わない。\n- DESIGN 4.4 (2) は、コードの _lost（削除・置換だけを見る）と合っていない。\n- linker の RE_FN_MARK は定義だけで、どこからも使われていない。\n- builder の文言は text.strip() で、AI の検証は strip(' 　\\t')。U4 でそろえる。\n- 比較用の base0260_src は jasme_jats の中身そのもので、PYTHONPATH にそのまま渡せない。写しを /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/design/base/jasme_jats に作り、PYTHONPATH には /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/design/base を渡して使った。\n\n後片付け:\n- 試作と計測の結果は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/design に残した（src・base・tools、count_td_base.json、golden_proto/manifest.json）。\n- 大きな出力（docx、td の出力、golden の本体）は消した。リポジトリの作業ツリーは変えていない（git status は空）。"
+    },
+    "oracle": {
+      "dir": "/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/ (生成器 gen_h.py、期待 cases.json、比べる道具 run_h.py、文字の一致チェック overlap.py、結果 out/base0260・out/wt0260（facts の JSON と summary.json）、ログ log_base0260.txt・log_wt0260.txt、試し書き probe/probe1〜3.py。cases/*.docx は片付けで消してあり、run_h.py を実行すると gen_h.py で作り直される)",
+      "cases": "30 件。どの docx も tests/make_fixtures.py の部品（Builder・para・run(sup=True)・front_ja・front_en・tail・table・cell・drawing・textbox・omathpara）を import して gen_h.py で作った。文字はすべて架空。論文の形は 3 種類: strong（本文に上付き「1)」があり、注の一覧は「1)〜3)」）、bare（本文の注番号は数字だけの上付きで、注の一覧も上付きの ¹〜³）、none（注の一覧なし）。どの論文にも、図1・図2（画像あり）、表1（本体あり）、別行数式 (1)、引用文献 1 件、英文要旨を入れた。\n期待の書き方: exact は FIX_PLAN から一つに決まるもの、either は許される結果を並べたもの。xref は段落ごとに見る（rid の並びと位置）。記録とは plan.decisions のうち、category が note・figure・table・xref で、src がその段落のもの。記録があれば、レポートの 4 章と AI 依頼文（[段落ID] と文面の行）にも出ていることを確かめる。\nどのケースにも次を足した: 不変性・最終・DTD・jstage_issues==[]・XML に入らなかった画像なし・report.actions の key が対照 C00 と同じ（H では Action を足さない）。--ref を付けたときは、xref を外した body・back の XML と XML の文字が 0.26.0 と同じことも確かめる（違いが xref の有無にしか出ないこと）。\n\nC00 strong の対照: 上付き「2)」は fn2、「図1と表1と式(1)」は F1・T1・FD1。記録は 0 件。\nS01 strong: 上付き「1)」は fn1。本文「である」+上付き「2」+本文「)」は fn2。全角の「）」でも fn3。\nS02 strong: 「3 cm」+²、「x²+y²」、「m s」+「−1」、「m s」+「-2」は、どれも注にリンクしない。cm² と x² は記録が 1 件以上（件数は問わない）。符号で始まるものの記録は either。上付きでない Unicode の「5 cm²」もリンクしない。\nS04 strong: 上付き「1,2)」は [fn1, fn2]。上付き「1-3)」は either で [fn1, fn3]、「fn1 fn2 fn3」、「fn1 fn3」のどれか。\nS05 strong: 本文「注」+上付き「3」は fn3。上付き「註1」は fn1。「（2）」は fn2。「注3」は fn3。\nS06 strong: 「f(x」+²+「)」はリンクせず、記録は 1 件以上。\nS07 strong: 「10」+³、「10」+「2,3」、「x」+「1-3」は続き全体を指数とみなしてリンクせず、記録は 1 件以上。\nS08 strong: 一覧にない番号の上付き「5)」はリンクしない（記録は either）。「Shiken」+上付き「2)」は fn2（閉じ括弧で終わるので、はっきりした注番号）。\nS09 strong: かなの後の上付き「2」と、上付き「1, 2」はリンクせず、記録は 1 件以上（決定事項 15）。\nS10 strong: 「架空の 2022 年版の面積は 2 m」+²。リンクせず、記録は 1 件以上。記録の文面から読み取った link_note の text・occurrence が (\"2\", 4) で、それを手動モードで貼り戻すと、上付きの位置（offset）に fn2 がつく。貼り戻しの前後で、xref を外した XML は同じ。\nTWS / TWB: 同じ本文「架空の見解である」+²+「。広さは 4 m」+²。strong の論文では [] で記録あり。bare の論文では [fn2] で、位置はかなの後ろの ²。m² はどちらでもリンクしない。\nB01 bare: 「…である¹。（試験, 2020）²。面積は 4 m²。」は [fn1, fn2] で、位置は ¹ と「）」の後の ²。m² はリンクせず記録あり。貼り戻しは (\"2\", 4) で fn2。\nB02 bare: 上付き「1-3」は either で [fn1, fn3] か、まとめた形。上付き「1, 2」は [fn1, fn2]。\nB03 bare: x²・2³・10³・cm³ はリンクせず記録あり。「毎時」+「−1」はリンクしない（記録は either）。\nB04 bare: 本文「注」+上付き「3」は fn3。上付き「7」（一覧にない番号）はリンクしない。\nB05 bare: 前置きの段落は本文「これは注」+上付き「1」だけ。「注」の規則は書き方の判定に使わないので、数字だけの論文のままで、かなの後の ² は fn2。\nB06 bare: 前置きの段落は上付き「1」+本文「）」。かなの後の ² は either（[fn2] か []）。上付きの外の閉じ括弧で補った一致を書き方の判定に使うかは、H から決まらない。\nN01 none: 上付きの「1)」も cm² も fn の xref にならない。記録は either。\nBOX strong: 囲み（テキストボックス 12cm 幅。boxed-text になることも確かめる）の中で、「地図1」はリンクせず、「図1」は F1（位置は「地図1を見て、」の後ろ）、記録あり。「3 cm」+²+「、…資料による」+「2)」は fn2 が 1 つだけで、位置は「2)」。cm² の記録あり。\nM01 strong: 文の先頭の「図1」、「（図1）」、「表1のとおり」は、それぞれ F1・F1・T1。「この図1と各表1」は [F1] だけで、「各表1」の記録あり。\nM02 strong: 地図1・概念図1・代表1名・本図1はリンクせず、それぞれ記録あり（本図1 は決定事項 16 による）。\nM03 strong: 図表1・発表1回目はリンクせず、記録あり。\nM04 strong: 付表1 はリンクせず記録あり。前掲表1 は T1、前掲図1 は F1。\nM05 strong: 「図表1と表1」は T1 が 1 つで、位置は 4（後ろの表1）。「地図1、図2」は F2 が 1 つで、位置は 4。「地図1、2」はリンクせず、記録はちょうど 1 件（付録 M5）。\nM06 strong: 「図1乃至図2」「図1及図2」は F1・F2（まとめた xref も許す）。\nM07 strong: 「地図3」（図3 はない）はリンクせず記録 0 件（exact）。「図3」はリンクせず、記録は either。\nM08 strong: 「図1、2」は [F1, F2]。「Fig. 1 と Table 1」「図 1」「式(1)」（FD1）「数式(1)」「第1表」は、0.26.0 と xref が同じ（same_ref。--ref のときだけ確かめる）。\nU01: 和文の著者 5 人。AI 依頼文の「- [dN] 姓と名の区切りがない氏名: 「…」」の行は、ちょうど 3 行で、「研究次郎」「架空四郎」（元は後ろに全角空白）「　架空五郎」の前の空白を除いた「架空五郎」。間に全角・半角の空白がある「試験　太郎」「試験 三郎」は出ない。レポートに研究次郎の記録あり。\nU02: 英文の著者が 1 語の「KENKYU」。依頼文の行は either（下の notes の食い違いのため）。和文の「研究　次郎」は出ない。レポートに KENKYU の記録が残る。\nU5 は反例を作っていない（指示どおり）。どのケースも 0.26.0 との比較（--ref）で出力の変化を見る。",
+      "runner": "cd /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle && python run_h.py --src <src> [--python <python>] --label <名前> [--ref base0260] [--only ID,...] [--keep]\n- 例（H の作業ツリー）: python run_h.py --src /home/user/jstgxmlcng_JASME/src --label h1 --ref base0260\n- out/base0260 は、0.26.0 の src の写し（/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/base0260_src）で流した結果で、作成済み。--ref を付けると same_ref と「xref 以外同じ」も確かめる。付けなければ、それらは N/A になる。\n- cases/*.docx がなければ、自動で gen_h.py を実行して作り直す（PYTHONDONTWRITEBYTECODE=1 で動かすので、tests/__pycache__ はできない）。\n- 動き方: ケースごとに子のプロセス（PYTHONPATH=<src>）で公開 API の convert(docx, ArticleMeta.load(examples/meta_example.toml), JournalConfig.load(), Options(ai_mode=\"manual\", convert_metafiles=False)) を呼ぶ。Result の xml_path・plan（paras・decisions）・report_path・prompt_path・fidelity・dtd_valid・jstage_issues・lost_images と、report.actions(res) の key だけを読む。貼り戻しの期待があるケースでは、Options.ai_response（回答の JSON の文字列）で 2 回目の変換をする。\n- 出力: ケースごとに [OK]/[FAIL]/[UNSURE] と、FAIL・UNSURE の項目の理由（RUN_H_VERBOSE=1 ならすべての項目）。詳しくは out/<label>/summary.json と <ID>.json。UNSURE は、記録の文面から text・occurrence を読み取れなかったなど、道具の側で決めきれなかったもの。\n- 文字の一致チェック: cd /tmp && python /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/overlap.py（一致した文字は表示しない）。",
+      "base_result": "作業ツリーの今の src（0.26.0）では、30 件中 FAIL が 15 件。0.26.0 の写し（base0260）でもまったく同じ結果だった。--ref base0260 の「xref 以外同じ」は 30 件とも OK。不変性・最終・DTD・J-STAGE・画像・actions の項目も、どのケースも OK（actions はどれも ['ai_pending'] だけ）。\n\nFAIL のケース（どれも H で直すもの）:\n- S02: cm²→fn2、x²+y²→fn2 が 2 つ、s の後の「−1」→fn1、「-2」→fn2。記録は 0 件。\n- S06: f(x²)→fn2。\n- S07: 10³→fn3、10 の後の「2,3」→fn2・fn3、x の後の「1-3」→fn1・fn3。\n- S09: かなの後の ²→fn2、上付き「1, 2」→fn1 と、文字「 2」（空白を含む）の fn2。\n- S10: ²→fn2、記録なしで貼り戻せない。\n- TWS: 2 つとも fn2。TWB: m² まで fn2。\n- B01: m²→fn2（3 つめの xref）、記録なし。\n- B03: x²・2³・10³・cm³ がすべてリンクされる。毎時の後の「−1」→fn1。\n- BOX: 囲みの中の「地図1」→F1、cm²→fn2。\n- M01: 「各表1」→T1。\n- M02: 地図1・概念図1・本図1→F1、代表1名→T1。\n- M03: 図表1・発表1回目→T1。\n- M04: 付表1→T1。\n- M05: 「図表1と表1」は、語の中の「表1」（位置 1）と、続きとして後ろの「1」だけ（位置 5）を T1 にする。「地図1、図2」は「図1」→F1 と「2」→F2。「地図1、2」は F1・F2。どれも記録なし。\n\n0.26.0 でも OK のケース（H で変えてはいけないもの）: C00・S01・S04・S05・S08・B02・B04・B05・B06・N01・M06・M07・M08・U01・U02。U02 の「KENKYU」は 0.26.0 では依頼文に出る（either なので OK）。",
+      "notes": "1. 文書の食い違い（直していない。まとめ役・利用者に確かめてほしい）\n- FIX_PLAN.md の「決定事項」の 17（2026-10-14 の回答）は「U4: 英文 1 語の氏名も、今までどおり AI 依頼文に載せる。あわせて、英文の氏名を姓と名に分けられなかったことを警告する。」と書いている。一方、H の節（「英文を除く処理は build_request の中に置く」）、付録 U4 の点検のテスト（d12「KENKYU」の行が依頼文に出ない）、まとめ役の指示（英文 1 語の氏名を依頼文から外す。暫定）は「外す」。利用者の回答がすでに記録されているので、「利用者にまだ確かめていない暫定の判断」として扱うと、決定事項に反するおそれがある。U02 は either にした。\n- 決定事項 15 は「明らかな指数（直前が英数字・演算の記号）は、段落ごとに 1 行にまとめて記録する（推奨の案）」と決めている。H の節は「数が多い論文での行のまとめ方は、利用者が決める」で、未決のように書いている。決定事項 16（掲・至・及のまま）も H の「前提」では利用者の判断待ちのように書かれている。反例では、記録の件数は 1 件以上だけを求めた（M05 の「地図1、2」は付録どおり 1 件）。\n- 公開 API の Options.ai_response は、回答のファイルのパスではなく回答の文字列（Path を渡すと AttributeError）。CLI の --ai-response はファイル。docstring の有無は確かめていない（pipeline.py は読まない指示のため）。\n\n2. 期待を決めるときに使った読み\n- 「数字だけの一致」と「指数かどうかの判定」は、閉じ括弧で終わる上付き（英字の後の「2)」）にはかけないと読み、S08b を exact にした。\n- 「続きの直前が注」は、書き方の判定に使わないので、B05 の論文は数字だけの論文のままと読み、exact にした。\n- 上付きの外の「）」で補った一致を書き方の判定に使うか（B06）と、範囲の「1-3」を 1 つの xref にまとめてよいかは、either にした。\n- 記録の text・occurrence は、FIX_PLAN の「text は m.group(1)、回数は occurrence_at」と、依頼文の occurrence の説明（その段落で text が何回目に現れるか）から (\"2\", 4) と決めた。文面の書き方は分からないので、run_h.py は「text「2」」「occurrence 4」「4 回目」「「2」」などの形を読む。読めないときは UNSURE にする。xref が正しい位置についたかどうかが最終の判定。\n- 0.26.0 で気づいたこと: 上付き「1, 2」の 2 つめの xref の文字が「 2」で、空白を含む。付録の「記録の text に空白が入らないこと」に当たる形。\n\n3. 確かめたこと・片付け\n- 架空の文字（gen_h.py の文字列の定数と、ケースの段落の文字。12 字以上のもの 126 件）を、tests/private のすべての docx の word/*.xml の文字と PDF の文字（53 件）と比べた。NFKC にして空白を除いた 12 字以上の一致は 0 件。実際の論文の文字は、どこにも表示も記録もしていない。\n- リポジトリの作業ツリーは変えていない（git status は空。make_fixtures.py もそのまま）。\n- tests/__pycache__ は作業の途中に見つけた（18:05 にできたもの。私の実行は PYTHONDONTWRITEBYTECODE=1 で、ほかの担当の pytest でできた可能性が高い）。指示どおり消した。\n- 大きな出力（cases/*.docx、probe の docx・XML・ZIP）は消した。結果の JSON・ログ・スクリプトは残した。ディスクの空きは 23GB。\n- 読んでいないもの（指示どおり）: DESIGN_H.md、linker.py、ai_assist.build_request、pipeline.py の中身。ai_assist.RESPONSE_SCHEMA（回答の形）と report.py の CAT_JA・actions の形は読んだ。"
+    },
+    "impl": {
+      "changed_files": [
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/linker.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/builder.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/pipeline.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/ai_assist.py",
+        "/home/user/jstgxmlcng_JASME/tools/make_notebook.py",
+        "/home/user/jstgxmlcng_JASME/tests/make_fixtures.py",
+        "/home/user/jstgxmlcng_JASME/tests/conftest.py",
+        "/home/user/jstgxmlcng_JASME/tests/test_links.py",
+        "/home/user/jstgxmlcng_JASME/tests/test_ai.py",
+        "/home/user/jstgxmlcng_JASME/tests/test_notebook.py",
+        "/home/user/jstgxmlcng_JASME/tests/fixtures/sample_links.docx",
+        "/home/user/jstgxmlcng_JASME/tests/fixtures/sample_links_bare.docx",
+        "/home/user/jstgxmlcng_JASME/docs/DESIGN.md",
+        "/home/user/jstgxmlcng_JASME/docs/DEVELOPMENT.md",
+        "/home/user/jstgxmlcng_JASME/docs/fix_plan_repro_tests.py"
+      ],
+      "summary": "単位 H（D2・M5・U4・U5）を、設計書 DESIGN_H.md に沿って作業ツリーに実装しました。コミットはしていません。版の番号・FIX_PLAN・README は仕上げの担当に残しています。ノートブックは python tools/make_notebook.py で作り直しましたが、0.26.0 と内容は同じです。\n\nD2（linker.py）\n- 正規表現と定数を足しました: RE_SUP_FN（「註」も認める）、RE_SUP_LIST、RE_NUM_END、SUP_SIGNS、OPERATORS、RE_EXP_BEFORE。\n- 上付きの続きは _sup_runs で段落ごとに 1 回だけ求めます。候補は _sup_marks で次の 4 種類に分けます（SupMark）。\n  - strong: 番号の形がはっきりしたもの。上付きの「1」＋本文の「)」で指数の形でないもの（tail_close）も含む。\n  - after_note: 直前が「注」「註」。\n  - exponent: 符号で始まる、または直前・直後の 1 文字が英数字・ギリシャ文字・演算の記号。\n  - bare: 番号だけ。\n- 優先は「符号 ＞ strong ＞ after_note ＞ exponent ＞ bare」です。数字と区切りだけの続き（「1-3」「1, 2」）は、続き全体で 1 つの種類にします。\n- 論文ごとの書き方は Linker.note_style で決めます。bare_notes は __init__ で True、run では fn_ids があるときに決めます。\n- リンクの範囲から前後の空白を除きます。\n- リンクしなかった数字は、その番号の注があるときだけ Decision に記録します（category note、applied=False）。\n  - 指数・単位の形は段落ごとに 1 件、「1)」の論文の番号だけの数字は 1 件ずつです。\n  - 文面には link_note の text と occurrence を書きます（occurrence_at は find_in_para と同じ数え方）。\n  - 指数・単位の形のものは、注がなくても 3 章に出しません。\n- Linker.note に applied 引数を足しました。\n\nM5（linker.py）\n- float_refs を regex.search のループに変えました。\n- 直前が漢字（FLOAT_REF_OK_BEFORE＝掲至及を除く）なら語の一部とみなし、m.end(2) から探し直します。\n- 記録は、先頭の番号の図・表があるときだけ残します。category は figure / table で、link_figure・link_table の text と occurrence を書きます。\n\nU4\n- builder.BuildInfo.unsplit_names を足しました。要素は (段落 ID, text.strip(' 　\\t'), lang) です。\n- 英文 1 語の氏名は、10 章の警告にも出します（決定事項 17 の後半）。\n- pipeline は notes の文言からの切り出しをやめ、info.unsplit_names を渡します。\n- build_request は 3 つ組を受け取り、英文の氏名も載せます（決定事項 17。下の deviations の 1 番目）。\n\nU5\n- ai_assist.DEFAULT_MODEL_INFO を足しました（Claude Opus 5.5、$4/$20、2027-09-22）。名前と料金は claude-api の資料で確かめました。\n- Options.ai_model の既定を DEFAULT_MODEL にしました。\n- tools/make_notebook.py は module_constants（ast）で ai_assist.py をファイルとして読みます。行がなければ、分かる SystemExit で止めます。直書きしていた 4 か所を置き換えました。\n\nテストと fixture\n- fixture は make_links() と make_links_bare() だけを呼んで作りました。git status で増えたのはこの 2 つの docx だけです。\n- tests/test_links.py を新しく書きました（47 件）。ほかに test_ai に 4 件、test_notebook に 2 件を足しました。\n- docs/fix_plan_repro_tests.py の D2・M5 のテストは取り除き、期待を逆にしたものを test_links.py に移しました。\n\n文書\n- DESIGN.md: 4.4 (2)、5 章、6 章（「本文の図表の参照」「本文の上付きの注番号」の行）、7 章を直しました。\n- DEVELOPMENT.md: コードの構成・テスト・よくある拡張・残っている課題を直しました。",
+      "tests_added": [
+        "tests/test_links.py::test_superscript_notes_with_marks",
+        "tests/test_links.py::test_superscript_notes_bare",
+        "tests/test_links.py::test_unlinked_superscripts_are_recorded",
+        "tests/test_links.py::test_link_note_from_record_is_accepted",
+        "tests/test_links.py::test_exponent_without_note_is_not_unresolved",
+        "tests/test_links.py::test_superscript_boundaries（6 件）",
+        "tests/test_links.py::test_note_marks_inside_box",
+        "tests/test_links.py::test_sup_mark_kinds（20 件）",
+        "tests/test_links.py::test_occurrence_at_matches_find_in_para（4 件）",
+        "tests/test_links.py::test_figure_refs_inside_words",
+        "tests/test_links.py::test_link_figure_from_record_is_accepted",
+        "tests/test_links.py::test_float_refs_skip_words（7 件。fix_plan_repro_tests の test_PROBLEM_figure_reference_inside_word の逆）",
+        "tests/test_links.py::test_eq_refs_unchanged",
+        "tests/test_links.py::test_superscript_exponent_not_linked（test_PROBLEM_superscript_exponent_linked_as_note の逆）",
+        "tests/test_ai.py::test_default_model_is_written_once",
+        "tests/test_ai.py::test_unsplit_names_come_from_build_info",
+        "tests/test_ai.py::test_build_request_lists_unsplit_names_with_language",
+        "tests/test_ai.py::test_english_one_word_name_is_listed_and_warned",
+        "tests/test_notebook.py::test_default_model_comes_from_ai_assist",
+        "tests/test_notebook.py::test_module_constants_reports_missing_line",
+        "tests/test_pipeline.py::test_fidelity_and_dtd（ALL_DOCS に sample_links・sample_links_bare を足したので 4 件増え、すべて合格）",
+        "tests/test_reader.py::test_reader_matches_canonical（ALL_DOCS に足した 2 件）"
+      ],
+      "pytest_result": "python -m pytest -q -p no:cacheprovider の結果:\n- Python 3.13: 1010 passed（34 秒）。\n- Python 3.10（venv310、PYTHONPATH=src）: 1010 passed。\n\n0.26.0 の src で、足したテストを流した結果（pytest_src.sh。src は scratchpad/h/design/base）:\n- base0260_src は jasme_jats の中身そのもので、PYTHONPATH にそのまま渡せません。中身が同じ写し design/base を使いました。\n- test_links.py: 47 件中 45 件が落ちました。通った 2 件は、H で変えない振る舞いを守るものです（test_eq_refs_unchanged と、test_float_refs_skip_words の「前掲表1・乃至・及表1」）。\n- test_ai.py の新しい 4 件はすべて落ちました（AttributeError・ValueError・直書きの検出）。\n- test_notebook.py::test_default_model_comes_from_ai_assist は ImportError（DEFAULT_MODEL_INFO がない）で落ちました。\n- 0.26.0 の tools/make_notebook.py でも確かめました。HEAD の git worktree（確かめた後に消した）に新しい test_notebook.py を写して流すと、新しい 2 件がどちらも落ちました。\n\ndocs/fix_plan_repro_tests.py は、tests に一時的に写して流すと、残った 1 件が通ります。\n\nruff check src tests tools: 201 件で、HEAD と同じです。ファイルごとの内訳も、HEAD と同じです。",
+      "measures": "golden（0.26.0 と同じ名前の 23 件）\n- XML・AI依頼文・レポート・ok がすべて一致しました（違いは 0 件）。\n- 増えた 4 件（sample_links・sample_links_bare の手動モードと split_labels）は、どれも [True, True, True, 0] です。\n\ntd1〜3（CLI、手動モード、ルート1・ルート2。0.26.0 と比べた）\n- 次のものがすべて一致しました: XML、レポート（作成日時・ツールの行を除く）、AI依頼文、ZIP の中身、標準エラー、終了コード（どちらの版も 1）。\n- ルート2 の「PDFに合わせた原稿.docx」は、document.xml の変更履歴の w:date（実行した時刻）だけが違い、ほかは同じです。\n- xref の違いは 0 件です（xref の一覧が完全に一致）。\n  - td1: fn 6、fig 47、table 2、bibr 61。\n  - td2: fn 4、fig 21、table 7、bibr 70。\n  - td3: fn 6、fig 11、bibr 27。\n- 不変性・最終・DTD・J-STAGE のチェックと、XML に入らなかった画像は、レポートが同じなので変わっていません。\n- td には指数の上付き・番号だけの注・語の中の図表番号がない、という設計の数えと合う結果です。\n\n新しい fixture での xref の違い（同じ docx を 0.26.0 と H で変換）。どれも意図した変化です。\n- sample_links:\n  - cm² の 2 → リンクなし（D2 の指数）。\n  - x²+y² の 2 つの ² → リンクなし（D2）。\n  - s⁻¹ の 1 → リンクなし（D2 の符号）。\n  - 「註1」は、0.26.0 では「1」だけ fn1 → H では「註1」ごと fn1（D2 の RE_SUP_FN）。\n  - f(x²) の ² と、番号だけの ² → リンクなし（D2 の指数と、「1)」の論文の bare）。\n  - 地図1・図表1・発表1・概念図1・代表1・付表1 の 6 か所 → リンクなし（M5）。\n  - 「図表1と表1」は、0.26.0 では図表1 の表1 と後ろの「1」 → H では後ろの「表1」（M5 の探し直し）。\n  - 地図1、図2 は、0.26.0 では図1 と 2 → H では図2 だけ。\n  - 地図1、2 は、0.26.0 では図1 と 2 → H ではリンクなし（M5）。\n- sample_links_bare:\n  - 4 m² → リンクなし（D2）。\n  - 「1, 2」の 2 つ目は、0.26.0 では xref「 2」（空白入り） → H では「2」（範囲から空白を除いた）。\n  - M5 の段落は、sample_links と同じ。\n- 2 つの docx とも、xref を外した XML は、隣り合う同じ書式の要素（</sup><sup>）をつなぐと 0.26.0 と同じで、文字も同じです。\n\n独立の反例（run_h.py --ref base0260）\n- 30 件中 24 件が OK です。0.26.0 では 15 件が FAIL でした。\n- FAIL として残った 6 件（S02・S05・S07・S09・B02・B03）は、どれも「xref以外同じ」の項目だけです。\n  - XML の文字は同じです。\n  - 違いは、xref の境目が変わったことで <sup> の分かれ方が変わったことだけです（例: 0.26.0 は <sup>−</sup><sup>1</sup>、H は <sup>−1</sup>）。\n  - 隣り合う同じ書式の要素をつなぐと同じになることを、stripcmp.py で 6 件とも確かめました。反例の物差しが厳しすぎるためで、実装の誤りではありません。\n- S10 の期待 occurrence ('2', 4) は数え違いです。「2022」には 2 が 3 つあるので、正しくは 5 です。記録の 5 で貼り戻すと、上付きの位置に fn2 が付きます（OK）。\n- B01 の貼り戻しも OK です。\n\nほかの確かめ\n- 変異テスト: linker の新しい規則を 1 つずつ壊した 17 個の写しを、test_links.py がすべて捕まえました。\n- ノートブック: 3.13 と 3.10 で作り直しても、0.26.0 と同じでした。\n- 実際の論文との文字の一致: H で足した 12 字以上の文字列 184 件と tests/private の docx・PDF を比べ、一致は 0 件でした。\n- ディスクの空き: 23GB。\n\n結果の置き場（scratchpad/h/impl）\n- golden_h/manifest.json、td_cmp.json、td_logs（終了コードだけ）、oracle_h_impl.log、tools/（比較・変異・照合のスクリプト）。",
+      "deviations": "設計と違えたこと・決めたこと・文書とコードの食い違いを、直したものも直さなかったものも含めて挙げます。\n\n1. U4 の英文 1 語の氏名（いちばん大きい食い違い。設計書と同じ判断）\n- まとめ役の暫定の判断は「H の節どおり AI 依頼文から外す」でした。\n- しかし FIX_PLAN の決定事項 17（2026-10-14 の利用者の回答）は「今までどおり載せる。英文の氏名を姓と名に分けられなかったことを警告する」です。\n- 設計書 DESIGN_H.md も決定事項 17 に従っていたので、そのとおりに実装しました。依頼文に載せ、builder が 10 章の警告を出します。\n- 外すなら、ai_assist.build_request のループの先頭に `if _lang == \"en\": continue` を足し、test_build_request_lists_unsplit_names_with_language と test_english_one_word_name_is_listed_and_warned の依頼文の期待を逆にするだけです。\n- fixture にも td1〜3 にも英文 1 語の氏名はないので、出力は変わりません。\n\n2. 決定事項 15・16 は回答済み\n- 指示と H の節の「前提」は「未確認・暫定」としていますが、FIX_PLAN の決定事項として回答済みです（15: 論文ごとに判定し、明らかな指数は段落ごとに 1 行。16: 掲至及のまま）。\n- 暫定と扱ったのは、「1)」の論文の番号だけの上付きの数字を 1 件ずつ記録すること（決定事項 15 の対象外）だけです。\n- H の節の「数が多い論文での行のまとめ方は、利用者が決める」は古い記述です。\n\n3. SYSTEM_PROMPT の 1 文は足していません\n- FIX_PLAN の「同じファイルを触る順」は「D2 の SYSTEM_PROMPT の 1 文」と書いていますが、H の節にも付録にもありません。\n- 足すと 23 件すべての依頼文が変わるので、設計どおり足していません。\n\n4. 設計の試作から変えたこと\n- (a) 記録の text と occurrence の数字は、上付きの続きの中の一致から取ります。試作は RE_SUP_FN を段落全体の上で一致させ直していたので、上付きの「2」の直後に本文の「3」があると「23」と読みました。\n- (b) リンクの範囲の空白の除き方は str.strip() にしました。試作は \" 　\" だけでした（正規表現の \\s とそろえるため）。\n- (c) SUP_SIGNS に「‑」（U+2011。docx_reader が w:noBreakHyphen を読んだ文字）を、RE_SUP_LIST の区切りに「‑」「−」を足しました。\n- (d) 指数の記録の文面を変えました。\n  - 1 件なら「link_note（text「2」、occurrence 5）」、複数なら「数字ごとに…。最初のものなら text「2」、occurrence 1」と、具体的な値を書きます。\n  - 試作の「text はその数字、occurrence はその回目」は、反例の道具が text を「はその数字」と読み違えました。AI にとっても分かりやすい形にするためです。\n- (e) 同じ段落の記録は、段落の中の位置の順に並べます。試作は、番号だけの記録を指数の記録より先に出していました。\n- (f) U4 の 10 章の警告の文言は、段落 ID と対処（Word で空白を入れて変換し直す。AI では分けられない）を書く形にしました。\n- (g) 注のない番号の 3 章の「本表記」も、前後の空白を除いた文字です。fixture と td では差は出ていません。\n\n5. 文書を直したもの\n- DESIGN 4.4 (2) の「リンクが元の docx と同じに決まるか」を、コード（pdfdocx._lost は消えた・変わったリンクだけを見る）に合わせ、「元のリンクが失われないか（増えるリンクは止めない）」にしました。\n- DESIGN 5 章の既定モデルの直書きを、DEFAULT_MODEL・DEFAULT_MODEL_INFO を指す書き方にしました。\n- DEVELOPMENT の「モデルを変える」は、1 回の変換で変える方法しか書いていなかったので、既定の変え方を足しました。\n\n6. 文書の古い記述（直していません。FIX_PLAN は仕上げの担当）\n- FIX_PLAN の行番号が古いです。pipeline.py:205 は今 324 行付近です。float_refs の L267〜278 は、今は 0.26.0 の 277 行からです。test_ai の 109・123・160・296 行は、138・152・190・326 行でした。\n- FIX_PLAN の付録 U5 は make_notebook が正規表現で読むと書いていますが、辞書を読むので ast.literal_eval にしました（設計書の判断）。\n- FIX_PLAN の例の「（試験, 2020）」は、make_article の引用文献の年 2024 と合いません。fixture では 2024 にしました。\n- 指示の「tests/test_fidelity.py の test_fidelity_and_dtd」は、実際には tests/test_pipeline.py にあります。\n- 指示の「tests/test_linker.py か test_links.py があればそれ」は、どちらもなかったので、test_links.py を新しく作りました。\n- linker.RE_FN_MARK は定義だけで、どこからも使われていません。範囲外なので残しました。\n- builder の 4 章の記録の文言は text.strip()（改行も除く）で、AI の検証は strip(' 　\\t') です。unsplit_names は後者にそろえました。文言はそのままです。\n\n7. ruff とテストの書き方\n- リポジトリのテストは、import make_fixtures と conftest を jasme_jats と同じまとまりに置いていて、どのファイルでも ruff の I001 が出ています。\n- 新しい test_links.py でそう書くと件数が 1 件増えるので、ruff の並べ方に従いました。ほかのテストファイルとは見た目が違います。",
+      "open_issues": "- まとめ役が確かめること: 英文 1 語の氏名を、決定事項 17 のとおり AI 依頼文に載せたままにするか、H の節どおり外すか（deviations の 1 番目）。\n- 仕上げの担当に残したこと:\n  - 版を 0.27.0 にする（__init__.py・pyproject.toml）。その後、ノートブックを作り直す（今は版の表示も含めて 0.26.0 と同じ）。\n  - FIX_PLAN の H の節に、実装の記録・決定事項 15〜17 との対応・暫定の判断（「1)」の論文の番号だけの上付きを 1 件ずつ記録する）・SYSTEM_PROMPT の 1 文を足さなかったこと・古い行番号を書く。「同じファイルを触る順」に、H で触ったファイルを足す。\n  - README の注の説明（285 行目付近）に、上付きの数字の扱いと 4 章の記録を足すかを決める。\n- 残る限界（DESIGN 7 章と DEVELOPMENT の「残っている課題」に書いた）:\n  - 注番号の書き方は論文全体で 1 つに決めます。混ざった原稿では、番号だけの注がリンクされません（記録には出ます）。\n  - 指数の判定は直前・直後の 1 文字と符号だけです。番号だけの論文の「Piaget¹」はリンクしません。\n  - 「(a+b)²」の ² と、数式の直後の上付きは指数とみなしません。\n  - 「脚注」「受注」の直後の上付きも、注にリンクします。\n  - 記録の件数に上限はありません。\n  - 語の中の図表番号の判定は、直前の 1 文字が漢字かだけを見ます（「本図1」はリンクしない、カタカナの後はリンクする）。\n  - ルート2 で注番号の形が変わると、論文全体の書き方の判定が変わりえます。\n- 試験運用で確かめること: 実際の論文に指数の上付き・番号だけの注・語の中の図表番号がない（td1〜3 はどれも 0）ので、規則は架空の docx でしか確かめていません。実際の AI が「推定:」の記録から link_note・link_figure を提案するかも、模擬回答でしか確かめていません。\n- 反例の物差し（run_h.py の「xref以外同じ」）は、<sup> の分かれ方まで比べるので、xref の境目が変わると FAIL になります。次に使うときは、隣り合う同じ書式の要素をつないでから比べるとよいです（反例のファイルは変えていません）。\n- 実際の論文との文字の一致の確かめで、0.26.0 からある make_fixtures・builder・ai_assist の定数 25 件が、12 字以上の一致を持っていました（テンプレート由来と思われる文字）。H で足した文字の一致は 0 件です。必要なら別の作業で確かめてください。"
+    },
+    "verify": {
+      "passed_all": false,
+      "measures": "作業ツリーは 0.26.0（4533222）に H の差分を積んだ状態で測りました。ファイルは変えていません。実験はすべて /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/verify/ に置き、HEAD の git worktree は最後に消しました。\n\n## pytest\n- Python 3.13: 1010 passed。\n- Python 3.10（venv310）: 1010 passed。\n- tests/__pycache__ はできていたので消しました。\n\n## ruff\n- 201 件で、HEAD と同じです。ファイルごと・メッセージごとの件数も一致しました（ruff_head.txt と ruff_new.txt の diff は空）。\n\n## golden\n- 0.26.0 と同じ名前の 23 件で、XML・レポート・AI依頼文・ok のハッシュがすべて一致しました（違いは 0 件。golden_h/manifest.json）。\n- 新しい 4 件（sample_links・sample_links_bare の manual と split）は、どれも [True, True, True, 0] です。\n\n## td1〜3（CLI、手動、ルート1・ルート2、6 通り。0.26.0 と比較）\n- 次のものがすべて一致しました（td/）:\n  - XML のバイト列\n  - AI依頼文\n  - レポート（作成日時・ツールの行を除く）\n  - 標準エラー\n  - ZIP の中身の名前とサイズ\n  - 終了コード（両方とも 1）\n- xref の違いは 0 件です。件数は次のとおりです。\n  - td1: fn 6、fig 47、table 2、bibr 61。\n  - td2: fn 4、fig 21、table 7、bibr 70。\n  - td3: fn 6、fig 11、bibr 27。\n- このため、次のものも変わっていません: 文字、段落、不変性・最終・DTD・J-STAGE のチェック、XML に入らなかった画像。\n- 新しい規則で td の上付きを数えると、どれも strong だけでした（td1 6、td2 4、td3 6）。すべて上付きの中の「1)」の形からで、本文の閉じ括弧で補ったものはありません。\n  - 語の中の図表番号（直前が漢字）は 0 件です。\n  - 数えたのは件数だけで、文字は記録していません（count_td.py・count_td2.py）。\n\n## 独立の反例（oracle/run_h.py --ref base0260）\n- 30 件中 24 件が OK、6 件（S02・S05・S07・S09・B02・B03）が FAIL でした。\n- FAIL はどれも「xref以外同じ」の項目だけです。\n- 自分の比べ方（xcmp.py。xref を外し、隣り合う属性のない同じ書式の要素〈sup など〉をつなぐ）で、30 件すべてを 0.26.0 と比べました。結果は次のとおりで、6 件の FAIL は物差しが &lt;sup&gt; の分かれ方まで比べるためです。\n  - xref を外した XML と、XML の文字は、30 件すべて同じでした。\n  - ok の 4 値、XML に入らなかった画像の数、actions も同じでした。\n- 新しい 2 つの fixture も同じく、xref を外すと同じでした。\n\n## 自分で作った架空の docx 6 件（gen_v.py）\n内容は次のとおりです。\n- V1: 「1)」の書き方の論文。境界を集めたもの（10³、kg m⁻²、空白付きの「 1) 」、上付き＋本文の「）」、（3 cm²)、分割されたランの「1,3)」、「1)2)」、「脚注」＋上付き、Piaget³)、番号だけの ³ ²、y²、「−1)」、注のない 5) と z⁵）。\n- V2: 番号だけの論文（Piaget²、2³、1-3、x² と ² が同じ段落、「注」＋³、注のない 7）。\n- V3: 番号だけの論文に、かっこの中の上付きが 1 つだけあるもの。\n- V4: 図表の参照（全角の地図１・付表１、図表1と表1 の繰り返し、前掲・後掲・及び・乃至、別表1・右図1・同図2・本表1・上図1、（図1，2）、地図1、2、図2、地図3と図3）。\n- V5: 囲みの中（cm²、1)、地図1、図1、番号だけの ²）。\n- V6: 氏名（和文の研究次郎、英文 1 語の KENKYU）。\n\n結果は次のとおりです。\n- 6 件とも、xref を外した XML と文字が 0.26.0 と同じでした。不変性・最終・DTD・J-STAGE は合格し、XML に入らなかった画像は 0、actions は ai_pending だけです。\n- xref の違いは、すべて D2・M5 で意図したものでした（V3 を除く。V3 は problems の 1 番目）。\n  - 指数・単位、符号で始まるもの、「1)」の論文の番号だけの上付きは、リンクされなくなりました。\n  - 語の中の図表番号はリンクされなくなりました。\n  - 「地図1、2、図2」の図2 は、「図2」ごとリンクされるようになりました。\n  - 「 1)」の xref から空白がなくなりました。\n- 4 章の記録と AI 依頼文の「推定:」の text と occurrence を目で確かめ、すべて正しいことを確かめました。\n  - たとえば、図表1と表1 の 2 つ目の語は occurrence 3、y² は 2 回目です。\n- 記録の値で link_note・link_figure・link_table を貼り戻すと、9 件すべてが採用されました。xref は、その上付き・その語の位置に付きました。\n- 3 章は次のように変わりました。\n  - 注のない指数（z⁵）は出なくなりました（意図どおり）。\n  - 地図3 の重複した 2 行は、「図3」の 1 行になりました。\n\n## 変異テスト（pytest_src.sh で src を差し替えたもの）\n- linker の次の 7 つを 1 つずつ壊すと、どれも tests/test_links.py か tests/test_ai.py が落ちました: pos=m.end()、tail_close をなくす、RE_SUP_LIST をなくす、FLOAT_REF_OK_BEFORE から「及」を除く、符号の判定をなくす、note_style に after_note を数える、記録を図表の有無によらず残す。\n- tail_close を note_style に数えない変更（problems の 1 番目の案）は、全テストが通りました。今のテストはこの点を決めていません。\n\n## fixture とノートブック\n- make_links・make_links_bare を scratch で呼び直すと、zip の中身がバイト単位で同じになりました。git status で増えたのは、2 つの docx と test_links.py だけです。\n- ノートブックに差分はありません（test_notebook_is_up_to_date も合格）。\n\n## 後始末\n- docx・xml・pdf・zip・画像は消しました（残りは 9.8MB）。ディスクの空きは 23GB です。\n- run_h.py の結果は oracle/out/verify_h（JSON。1.3MB）に残っています。",
+      "problems": [
+        {
+          "severity": "should",
+          "where": "src/jasme_jats/linker.py の _sup_marks（tail_close）と Linker.note_style",
+          "problem": "番号だけの書き方の論文に、かっこを閉じる直前の上付き（「（…である³）」の ³ と本文の「）」）が 1 つあるだけで、論文全体が「1)」の書き方と判定されます。そのため、ほかの番号だけの注番号がすべてリンクされなくなります。0.26.0 では、これらはリンクされていました。知らせは 4 章の記録（1 件ずつ）と「どこからも参照されていない注」の 1 行だけで、actions には入りません。DESIGN 7 章は「番号だけの論文に『1)』の形の上付きが 1 つでもあると…」と書いていますが、本文の閉じ括弧で補った形もその引き金になることは読み取りにくいです。",
+          "evidence": "V3（番号だけの論文: 「…である¹」「…がある²」「（詳しくは後で述べる³）」。注 1〜3 の番号は上付き）で比べました。\n- 0.26.0: fn の xref は 3 件。\n- H: 1 件（³ だけ）。\n- レポートの 4 章に「番号だけの形なので注 fn1 にリンクしなかった（この論文の注番号は「1)」「注1」のように書かれている）」が 2 件出て、「本文中のどこからも参照（リンク）されていない注: fn1、fn2」が出ました。\n- actions は ['ai_pending'] だけでした。\n- 原因は、_sup_marks の tail_close が strong になり、note_style がそれを数えることです。\n- note_style が上付きの文字そのものの形（_strong_mark）だけを数えるようにする変更では、test_links.py の 47 件を含む全テストが通りました。td1〜3 の strong 16 件はすべて上付きの中の形なので、td の出力も変わりません。",
+          "fix": "note_style では、tail_close で strong にしたものを数えず、上付きの文字そのものが _strong_mark に当たるものだけで判定するのを勧めます（fn_marks で tail_close をリンクする扱いはそのまま）。\nほかの案として、直後の本文の「)」「）」が、同じ段落でそれより前に開いた括弧を閉じているときは tail_close にしない、という形もあります。\nどちらにするかはまとめ役が決め、DESIGN 6 章・7 章と test_links.py に、この形（番号だけの論文の「（…³）」）の期待を足してください。\nFIX_PLAN の H の節は「数字だけの一致が…直後の本文の文字が閉じ括弧で _exponent_like でなければ、番号の形がはっきりした注番号として扱う」と書いています。これをリンクの判定だけに使うのか、書き方の判定にも使うのかは決まっていません（反例の B06 も「決めかねる」としています）。決めたことを、暫定として FIX_PLAN に書いてください。"
+        },
+        {
+          "severity": "should",
+          "where": "src/jasme_jats/ai_assist.py の build_request（U4）、docs/FIX_PLAN.md の H の節",
+          "problem": "英文 1 語の氏名について、指示とまとめ役の暫定の判断は「H の節どおり AI 依頼文から外す（英文を除く処理を build_request に置く）」です。しかし実装は、決定事項 17（今までどおり載せ、警告する）に従って依頼文に載せています。apply_ops は英文の氏名の split_name を必ず不採用にするので、依頼文の行は AI にとって使い道がありません。それなのに 10 章の警告は「AI による補完では、英文の著者名は分けられません」と書いており、依頼文と警告の言い分が食い違います。",
+          "evidence": "V6（著者が「研究次郎」と「KENKYU」）の H の AI依頼文に、次の 2 行があります。\n- 「- [d7] 姓と名の区切りがない氏名: 「研究次郎」」\n- 「- [d21] 姓と名の区切りがない氏名: 「KENKYU」」\n\n依頼文は 0.26.0 と同じです。10 章には、新しい警告「英文の著者名「KENKYU」（段落 d21）に…AI による補完では、英文の著者名は分けられません」が 1 件増えました。\nai_assist.apply_ops の split_name は、lang != 'ja' のとき「英文氏名は空白の位置で姓と名を分けるため、分割の指定は和文氏名だけに使える」として不採用にします。\nFIX_PLAN の H の節（U4）と付録 U4 の (3) は「その行が依頼文に出ず」としていますが、決定事項 17 は「今までどおり AI 依頼文に載せる」です。",
+          "fix": "まとめ役が、決定事項 17（利用者の回答）と H の節のどちらに従うかを決めてください。\n- 決定事項 17 のままにする場合: FIX_PLAN の H の節と付録 U4 の (3) を決定事項 17 に合わせて書き直し、依頼文の行と 10 章の警告の文言の食い違いをどう扱うかも書きます。\n- 外す場合: build_request のループに `if _lang == \"en\": continue` を足し、test_ai の 2 件の期待を逆にします。"
+        },
+        {
+          "severity": "nit",
+          "where": "docs/DESIGN.md の 5 章（モデルの行、661 行付近）",
+          "problem": "既定モデルを ai_assist.DEFAULT_MODEL・DEFAULT_MODEL_INFO の 1 か所で決めるようにしましたが、DESIGN にはまだ直書きが 2 か所あります。「既定は動作確認済みの `claude-opus-5-5`（提供終了は 2027-09-22 以降の予定）」と、660 行の「`ai_assist.DEFAULT_MODEL`（`claude-opus-5-5`）」です。モデルを変えたとき、ここも一緒に直す必要があります（テストは docs を見ません）。",
+          "evidence": "grep -rn 'claude-opus-5-5\\|2027-09-22' の結果は、ai_assist.py の 35・37 行と DESIGN.md の 660・661 行だけでした。",
+          "fix": "661 行の値を「`ai_assist.DEFAULT_MODEL`（表示名・提供終了の予定は `DEFAULT_MODEL_INFO`）」のように、名前を指す書き方にします。660 行のかっこの中のモデル名も、外すか「書いた時点では」と添えます。"
+        },
+        {
+          "severity": "nit",
+          "where": "docs/DESIGN.md の 6 章・7 章（H で足した行）",
+          "problem": "指示は、まとめ役の暫定の判断を設計書と FIX_PLAN に「暫定」と明記するよう求めています。しかし、H で DESIGN に足した行には「暫定」の語がありません。実装の担当が暫定と扱った「『1)』の論文の番号だけの上付きの数字を 1 件ずつ記録する」（決定事項 15 の対象外）と、problems の 1 番目の tail_close を書き方の判定に使うことのどちらにも、暫定の印がありません。",
+          "evidence": "git diff docs/DESIGN.md の追加行を「暫定」で検索すると 0 件でした（決定事項 15〜17 への言及だけがあります）。",
+          "fix": "6 章の「本文の上付きの注番号」の行に、「番号だけのものは 1 件ずつ記録する（暫定。利用者に未確認）」と、書き方の判定に何を数えるか（暫定）を書きます。FIX_PLAN の H の節（仕上げの担当）にも、同じく暫定と書きます。"
+        },
+        {
+          "severity": "nit",
+          "where": "Linker.note・fn_marks・_word_part の記録の文言（4 章と AI 依頼文）",
+          "problem": "利用者は技術に詳しくない編集委員ですが、4 章の記録は 1 件が約 150 字と長く、「link_note（text「3」、occurrence 1）」「XML の中で手作業でリンク（xref）を足す」のように、利用者には分かりにくい語が中心です。指示の「何が起きて、どこを見て、何をすればよいかを短く書く」に対して長すぎます。\n指数の記録の「（回目は、段落の中でその数字が現れる順）」も、1 件のときは要りません。",
+          "evidence": "V1 の 4 章の M-001 は「上付きの数字「3」（1 回目）は、指数・単位（cm²・x² などの形）とみなし、注にリンクしなかった（回目は、段落の中でその数字が現れる順）。注番号なら、AI による補完の link_note（text「3」、occurrence 1）か、XML の中で手作業でリンク（xref）を足す」です。V4 の図表の記録も同じ長さでした。",
+          "fix": "表示の仕組みは変えずに、文言だけを短くする案です: 「上付きの「3」は指数・単位とみなし、注にリンクしなかった。注番号なら AI の補完で link_note（text「3」、occurrence 1）を指定する」。\nAI 向けの text と occurrence は残し、利用者向けの前半を短くします。利用者が後でまとめて直す方針なら、それを FIX_PLAN に書いておきます。"
+        },
+        {
+          "severity": "nit",
+          "where": "docs/FIX_PLAN.md の H の節と付録 D2（仕上げの担当が直すもの）",
+          "problem": "文書とコードの食い違い（直していないもの）を挙げます。\n1. H の D2「数が多い論文での行のまとめ方は、利用者が決める」は、決定事項 15（段落ごとに 1 行）で決まっていて、古い記述です。\n2. 付録 D2 の「（試験, 2020）²」は、fixture では make_article の引用文献に合わせて 2024 です。\n3. U4 の「pipeline.py:205」、M5 の「L267〜278」など、行番号が古いです。\n4. 付録 U5 は「make_notebook.py では、正規表現が一致しなかったときに」と書いていますが、実装は ast.literal_eval（module_constants）です。\n5. 「同じファイルを触る順」の「D2 の SYSTEM_PROMPT の 1 文」は、H の節にも付録にもなく、実装もしていません。\n6. 指示の「tests/test_fidelity.py の test_fidelity_and_dtd」は、実際は tests/test_pipeline.py にあります。\n7. linker.RE_FN_MARK は、0.26.0 から使われていない定義です（H の範囲外）。",
+          "evidence": "sed で FIX_PLAN の 581〜600 行と 694〜870 行、223〜225 行（決定事項 15〜17）を読み、実装と見比べました。\ngrep の結果、RE_FN_MARK は定義の 1 行だけで、ほかからは使われていません。",
+          "fix": "仕上げの担当が FIX_PLAN の H の節に次を書きます: 実装の記録、決定事項 15〜17 との対応、2020→2024、新しい行番号（名前で書く）、ast で読むこと、SYSTEM_PROMPT の 1 文を足さなかった理由。RE_FN_MARK は別の作業で消すか、残す理由をコメントに書きます。"
+        },
+        {
+          "severity": "nit",
+          "where": "src/jasme_jats/linker.py の float_refs（M5）と docs/DESIGN.md の 7 章",
+          "problem": "「右図1」「上図1」「同図2」「本表1」のような、漢字 1 字の後の正しい参照もリンクされなくなります（記録には出ます）。DESIGN 7 章の例は「本図1」だけなので、よくある書き方の「上図1」「同図2」「右図1」も対象になることが読み取れません。決定事項 16（掲・至・及のまま）の範囲での限界です。",
+          "evidence": "V4 の「別表1、右図1、同図2、本表1、上図1。」で比べました。\n- 0.26.0: 5 か所とも xref。\n- H: 0 か所。4 章の記録は 5 件で、それぞれの occurrence で貼り戻すと採用されます（同図2 で確かめました）。",
+          "fix": "DESIGN 7 章の例に「上図1・同図2・右図1」を足し、試験運用で実際の論文の頻度を見る項目として FIX_PLAN に残します。規則は決定事項 16 のままにします。"
+        }
+      ]
+    },
+    "pre": {
+      "changed_files": [
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/linker.py",
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/ai_assist.py",
+        "/home/user/jstgxmlcng_JASME/tests/test_links.py",
+        "/home/user/jstgxmlcng_JASME/tests/test_ai.py",
+        "/home/user/jstgxmlcng_JASME/tests/make_fixtures.py",
+        "/home/user/jstgxmlcng_JASME/tests/fixtures/sample_links_bare.docx",
+        "/home/user/jstgxmlcng_JASME/docs/DESIGN.md",
+        "/home/user/jstgxmlcng_JASME/docs/DEVELOPMENT.md",
+        "/home/user/jstgxmlcng_JASME/docs/FIX_PLAN.md"
+      ],
+      "summary": "確かめの担当の問題を、should 2 件と nit 5 件すべて直しました。コミットはしていません。版の番号・README・ノートブックには触っていません（ノートブックは作り直す必要がなく、test_notebook_is_up_to_date も通ります）。\n\nshould 1: 本文の括弧で補った上付きの注番号が、論文の書き方の判定を引き起こす問題\n- 確かめの担当が勧めた案にしました。linker.SupMark に shaped を足し、Linker.note_style は、上付きの文字だけで形がはっきりした注番号（「注1」「註1」「1)」）だけを数えます。\n- 上付きの「1」＋本文の「)」（tail_close）は今までどおりリンクしますが、書き方の判定には数えません。\n- 反例 V3 の fn の xref は、0.26.0 と同じ 3 件に戻りました。直す前は 1 件でした。\n- sample_links_bare.docx に「（…述べる³）」の段落を足しました。make_links_bare() だけを呼んで作り直し、変わったのはこの docx だけです。\n- 足したテスト:\n  - test_superscript_notes_bare の期待\n  - test_sup_mark_shaped（11 件）\n  - 境界の 1 件（上付きの「1」＋本文の「)」だけの論文）\n- DESIGN 6 章・7 章と FIX_PLAN の H の節に、暫定と書きました。\n\nshould 2: 英文 1 語の氏名\n- まとめ役の暫定の判断（外す）ではなく、利用者が答えた決定事項 17（今までどおり載せる）に従いました。理由は deviations の 1 番目です。\n- 依頼文と警告の言い分の食い違いは、依頼文の側で直しました。英文の行は「- [d21] 姓と名の区切りがない氏名（英文の氏名。split_name は和文の氏名にだけ使えるので、提案しない）: 「KENKYU」」になります。\n- AI がその氏名に split_name を提案しても不採用になり、XML も変わらないことをテストに足しました。\n- FIX_PLAN の H の節（U4）と付録 U4 の (3) を、決定事項 17 に合わせて書き直しました。\n\nnit\n1. DESIGN 5 章のモデル名の直書きをやめ、DEFAULT_MODEL・DEFAULT_MODEL_INFO を指す書き方にしました。\n2. 暫定の印を付けました。\n   - DESIGN 6 章・7 章: 書き方の判定に数えるもの、番号だけの数字を 1 件ずつ記録すること。\n   - FIX_PLAN の H の節に「実装した内容」を新しく作り、暫定の判断・SYSTEM_PROMPT の 1 文を足さなかったこと・試験運用で確かめることを書きました。\n3. 記録の文言を短くしました（約 150〜190 字 → 102〜126 字）。\n   - 利用者向けの前半は「上付きの「2」は、指数・単位（cm²・x² などの形）とみなし、注 fn2 にリンクしなかった。」です。\n   - AI 向けの link_note などの text と occurrence は残しました（指数が複数あれば「／」で並べます）。\n   - 「XML の中で手作業で…」と「回目は…」の説明は削りました。\n4. FIX_PLAN の古い記述を直しました。\n   - 決定事項 15 で決まっていたこと。\n   - 「（試験, 2020）」→ 2024。\n   - 古い行番号（名前で書く形にした）。\n   - 付録 U5 の正規表現 → ast。\n   - 「同じファイルを触る順」の SYSTEM_PROMPT の 1 文。\n   - 使われていない RE_FN_MARK は消しました。\n5. DESIGN 7 章に「上図1」「同図2」「右図1」「本表1」もリンクしない例として足し、FIX_PLAN に試験運用で頻度を見る項目として残しました。\n\n変異テストで、「囲み・セルの上付きも書き方の判定に数える」を守るテストがないことが分かりました。test_note_style_counts_box_and_cell（2 件）を足しました。",
+      "tests_added": [
+        "tests/test_links.py::test_sup_mark_shaped（11 件。shaped が上付きの文字だけの形で決まり、上付きの「1」＋本文の「)」・符号・直前の「注」では偽）",
+        "tests/test_links.py::test_note_style_counts_box_and_cell（2 件: box・cell。囲み・表のセルの中の上付きの「1)」も書き方の判定に数える）",
+        "tests/test_links.py::test_superscript_boundaries の 1 件（上付きの「1」＋本文の「)」だけの論文は番号だけの論文とみなし、番号だけの ² もリンクする）",
+        "tests/test_links.py::test_superscript_notes_bare（期待を足した: sample_links_bare の「（詳しい架空の説明は後で述べる³）」は fn3 にリンクし、bare_notes は True のまま、ほかの番号だけの注もリンクする）",
+        "tests/test_links.py::test_unlinked_superscripts_are_recorded・test_figure_refs_inside_words（記録の新しい文面・1 件 140 字まで）",
+        "tests/test_ai.py::test_build_request_lists_unsplit_names_with_language（英文の行の添え書きの期待に変更）",
+        "tests/test_ai.py::test_english_one_word_name_is_listed_and_warned（添え書きの確認と、英文の氏名への split_name が不採用で XML も同じこと）"
+      ],
+      "pytest_result": "python -m pytest -q -p no:cacheprovider の結果:\n- Python 3.13: 1024 passed（直す前は 1010）。\n- Python 3.10（venv310、PYTHONPATH=src）: 1024 passed。\n\n直す前の src の写しで足したテストを流しました（pytest_src.sh。src は scratchpad/h/fix_verify/pre_src）:\n- test_links.py は 13 件が落ちました（test_superscript_notes_bare、境界の 1 件、test_sup_mark_shaped の 11 件）。\n\n変異テスト（scratchpad/h/fix_verify/mut。確かめた後に消した）:\n- 次の 4 つは、足したテストが捕まえました: 判定に strong を数える、tail_close を shaped にする、並びの shaped を壊す、英文の添え書きを外す。\n- 「判定で cell を飛ばす」は最初は捕まらなかったので、test_note_style_counts_box_and_cell を足して捕まるようにしました。\n\nruff check src tests tools: 201 件です。HEAD と同じで、ファイルごと・規則ごとの内訳も同じです。途中で ISC004 が 2 件増えたので、文字列をかっこで包んで直しました。",
+      "measures": "golden（0.26.0 と同じ名前の 23 件）\n- XML・レポート・AI 依頼文・ok は、0.26.0 とすべて同じです（違いは 0 件）。\n- 新しい 4 件（sample_links・sample_links_bare の手動と split）は、どれも ok が [True, True, True, 0] です。\n- 直す前（実装の版）と比べた違い:\n  - sample_links: XML は同じです。違うのはレポート 4 章の M-001〜M-014 と、AI 依頼文の「推定:」14 行の文面だけです。\n  - sample_links_bare: 段落を 1 つ足しました。直す前のコードでこの docx を変換すると、その段落で論文の書き方が「1)」に変わり、ほかの段落の ¹、²、1-3、1, 2 がリンクされません。直した版では 0.26.0 と同じくリンクされます。足した段落の ³ はどちらでも fn3 です。\n\ntd1〜3（ルート1・ルート2、手動モード、CLI。0.26.0 は h/design/base と比べた）\n- 次のものはすべて同じです: XML、レポート（作成日時・ツールの行を除く）、AI依頼文、ZIP、標準エラー、終了コード（どちらも 1）。\n- ルート2 の「PDFに合わせた原稿.docx」:\n  - td1 はバイト列まで同じです。\n  - td2・td3 は document.xml の w:date だけが違います。\n- xref の違いは 0 件です（一覧が完全に一致しました）:\n  - td1: fn 6、fig 47、table 2、bibr 61\n  - td2: fn 4、fig 21、table 7、bibr 70\n  - td3: fn 6、fig 11、bibr 27\n- 不変性・最終・DTD・J-STAGE のチェックと、XML に入らなかった画像は、レポートが同じなので変わっていません。\n\n独立の反例（run_h.py --ref base0260。写しは scratchpad/h/fix_verify/oracle）\n- 30 件中 24 件が OK で、判定は実装の版と同じです。\n- FAIL として残った 6 件（S02・S05・S07・S09・B02・B03）は、どれも「xref以外同じ」の項目だけです。stripcmp.py で、隣り合う同じ書式の要素をつなぐと 0.26.0 と同じになることを 6 件とも確かめました（<sup> の分かれ方の違いだけ）。\n- B06（上付きの「1」＋本文の「）」のある論文の、かなの後ろの ²）は、直す前はリンクせずに記録していましたが、直した版では 0.26.0 と同じく fn2 です。反例の期待はどちらも許す形です。\n\n確かめの担当の反例 V1〜V6（0.26.0・直す前・直した版で比べた）\n- xref が変わったのは V3 だけです。fn の xref は 0.26.0 が 3 件、直す前が 1 件、直した版が 3 件です（fn1・fn2 が戻った）。\n- V3 の「どこからも参照されていない注」の行は、直した版では消えました。\n- V1・V2・V4・V5・V6 の XML は、直す前と同じです。\n- どの反例も、XML の文字は 0.26.0 と同じです。ok は [True, True, True, 0]、actions は ['ai_pending'] だけ、XML に入らなかった画像は 0 件です。\n- V6 の依頼文では、英文の行に添え書きが付きました。\n- 貼り戻し:\n  - V1 は 4 件、V4 は 3 件が採用されました。\n  - V3 の回答は、直す前の記録から作ったものなので、「すでにリンクが付いている箇所」として 2 件とも不採用になりました（リンクは自動で付いているため）。\n\n実際の論文の文字との一致: 足した行 166 行と tests/private の docx・PDF を比べ、12 字以上の一致は 0 件でした。\n\nディスクの空きは 22GB です。大きな出力（td・docx・xml・変異の写し）は消しました。結果は scratchpad/h/fix_verify の results.json、td_cmp.json、oracle_fixv.log、golden_*/manifest.json、tools/ に残しています。",
+      "deviations": "1. should 2（英文 1 語の氏名）\n- まとめ役の暫定の判断（H の節どおり外す）ではなく、FIX_PLAN の決定事項 17（2026-10-14 の利用者の回答「今までどおり AI 依頼文に載せる。警告する」）に従いました。\n  - まとめ役の判断は「利用者にはまだ確かめていない」ことが前提でしたが、17 はすでに回答があったためです。\n- 依頼文と警告の食い違いは、英文の行に「（英文の氏名。split_name は和文の氏名にだけ使えるので、提案しない）」と添えて解きました。\n  - 「今までどおり」から変わるのは、英文の行の文言だけです。fixture と td1〜3 には英文 1 語の氏名がないので、出力は変わりません。\n- 外す形にするなら、build_request のループで lang == \"en\" を飛ばし、test_ai の 2 件の依頼文の期待を逆にします。\n\n2. should 1\n- 確かめの担当が勧めた案（判定には上付きの文字そのものの形だけを数える）を採りました。\n- もう 1 つの案（同じ段落で前に開いた括弧を閉じる「)」なら tail_close にしない）は採りませんでした。括弧の対応を数える規則が増え、どちらの案でも V3 の結果は同じだからです。\n- この形でだけ注番号を書いた「1)」の論文は、番号だけの論文とみなします（0.26.0 と同じく番号だけの上付きもリンクする）。DESIGN 7 章と FIX_PLAN に暫定と書きました。\n\n3. nit（記録の文言）\n- 「XML の中で手作業で…」の案内は削りました。ほかの判断の記録も、AI の操作だけを案内しているためです。\n- 指数の記録には、確かめの担当の案になかった注の ID（「注 fn2 に」）を足しました（AI の target のため）。\n- 表示の仕組みは変えていません。\n\n4. 使われていない linker.RE_FN_MARK（初版から参照がない）は、H の範囲外という扱いはせず、消しました（コメントを残す案もありました）。\n\n5. 見つけた文書とコードの食い違い（直したもの）\n- DESIGN 5 章: モデル名・提供終了の日の直書き。\n- DESIGN 6・7 章と FIX_PLAN: 暫定の印がない。\n- FIX_PLAN の H の節:\n  - D2「数が多い論文での行のまとめ方は利用者が決める」が、決定事項 15 と食い違う。\n  - D2 の閉じ括弧の規則を、リンクにだけ使うのか書き方の判定にも使うのかが書かれていない（「実装した内容」を指す書き方にした）。\n  - U4 が決定事項 17 と食い違う（「英文を除く」）。\n  - 古い行番号: L267〜278、pipeline.py:205。\n- FIX_PLAN の付録:\n  - D2 の「（試験, 2020）」が、fixture の 2024 と合わない。\n  - U4 の (3) と点検の (3) が、決定事項 17 と食い違う。\n  - U5 の「正規表現」が、実装の ast（module_constants）と合わない。\n- FIX_PLAN の「同じファイルを触る順」:\n  - ai_assist.py の「D2 の SYSTEM_PROMPT の 1 文」は実装していない（足さなかった理由を書いた）。\n  - pipeline.py の「L205」。\n  - 「test_ai.py の 109・123・160・296 行」を、テストの名前で書く形にした。\n- DEVELOPMENT.md: 「とおりAI」の空白が抜けていた。\n\n6. 見つけた食い違い（直していないもの）\n- 指示の「tests/test_fidelity.py の test_fidelity_and_dtd」は、実際には tests/test_pipeline.py にあります。docs は正しい名前で書いています。\n- 指示の「tests/test_linker.py か test_links.py があればそれ」は、どちらももともとありませんでした（test_links.py は実装の担当が作ったもの）。\n- FIX_PLAN の H 以外の節の古い行番号（report.py:424、SYSTEM_PROMPT:148、pipeline.py:67 など）は、H の範囲外です。冒頭の「文中の行番号は 0.18.1 のもの」で断っています。\n- builder の 4 章の記録は text.strip() で、unsplit_names は strip(' 　\\t') です（実装の担当が報告済み。文言はそのまま）。\n- README の注の説明は、仕上げの担当に残しました。",
+      "open_issues": "- まとめ役が決めること:\n  - 英文 1 語の氏名を、決定事項 17 のとおり添え書き付きで依頼文に載せるか、外す形に戻すか（deviations の 1 番目）。\n  - 書き方の判定に、上付きの文字だけの形を数える方針でよいか（暫定）。この 2 つは、利用者に確かめる項目として残ります。\n- 仕上げの担当に残したこと:\n  - 版を 0.27.0 にする（__init__.py・pyproject.toml）。その後、ノートブックを作り直す。\n  - FIX_PLAN の H の「実装した内容」に、確かめた数（pytest 1024 件、ruff 201 件、golden、td、反例）と、H で触ったファイルを「同じファイルを触る順」に足す。\n  - README の注・4 章の記録の説明を足すか決める。\n- 試験運用で確かめること（FIX_PLAN に書いた）:\n  - 実際の論文の上付きの指数・番号だけの注・語の中の図表番号（td1〜3 には 0 件）。\n  - 「上図1」「同図2」「右図1」「本表1」の頻度。\n  - 実際の AI が、短くした記録から link_note・link_figure を提案するか。\n- 反例の物差しの「xref以外同じ」は、<sup> の分かれ方まで比べます。そのため、xref の境目が変わると FAIL になります（S02 など 6 件。stripcmp でつなぐと同じ）。\n- 別のセッションの git worktree（scratchpad/gui/mainwt・wt）は、自分のものではないので残しました。"
+    },
+    "fin": {
+      "changed_files": [
+        "/home/user/jstgxmlcng_JASME/src/jasme_jats/__init__.py",
+        "/home/user/jstgxmlcng_JASME/pyproject.toml",
+        "/home/user/jstgxmlcng_JASME/notebooks/JASME_docx_to_JSTAGE_XML.ipynb",
+        "/home/user/jstgxmlcng_JASME/docs/FIX_PLAN.md",
+        "/home/user/jstgxmlcng_JASME/README.md"
+      ],
+      "summary": "単位 H の仕上げを終えた。コミットはしていない。版を 0.27.0 にし、python tools/make_notebook.py でノートブックを作り直した。生成物のモデル名 claude-opus-5-5 は ai_assist.DEFAULT_MODEL と一致し、test_notebook_is_up_to_date も通る。FIX_PLAN.md の反映の順序の表で H を「実装済み」にし、「同じファイルを触る順」に H で触ったファイルを足した。H の節の「実装した内容」は、先の修正の担当が設計の要点・暫定の判断・足さなかった SYSTEM_PROMPT の 1 文・残る限界まで書いてあったので、そのまま使った。README.md の注の説明に、上付きの指数・単位と語の中の「図1」「表1」はリンクにしないこと、リンクしなかった箇所は対応する注・図表があればレポート 4 章に載ることを足した。CLAUDE.md・DEVELOPMENT.md・DESIGN.md・fix_plan_repro_tests.py の冒頭は実装と合っていたので直していない。",
+      "tests_added": [],
+      "pytest_result": "Python 3.13 は 1024 passed。Python 3.10（venv310、PYTHONPATH=src）も 1024 passed。ruff check src tests tools は 201 件で HEAD と同じ。確認後に tests/__pycache__ を消した。",
+      "measures": "この担当では測り直していない。先の担当の結果を引き継ぐ。golden は 0.26.0 と同じ名前の 23 件で一致した。新しい 4 件は合格。td1〜3 はルート1・2 とも XML・レポート・AI 依頼文・ZIP・終了コードが 0.26.0 と同じで、xref の違いは 0 件。反例は 24/30 で、残る 6 件は &lt;sup&gt; の分かれ方だけの違いで、つなぐと 0.26.0 と同じになる。実際の論文との文字の照合は、git diff の追加行と test_links.py を tests/private/colab の docx と 12 字で突き合わせて、一致は 0 件だった。",
+      "deviations": "- 英文 1 語の氏名は、まとめ役の暫定の判断（AI 依頼文から外す）ではなく、FIX_PLAN の決定事項 17 に従って、添え書きつきで依頼文に載せている。外すなら、build_request のループで lang == \"en\" を飛ばし、test_ai の 2 件の依頼文の期待を逆にするだけで済む。\n- 注番号の書き方の判定に数えるのは、上付きの文字だけで番号の形がはっきりしたもの（「注1」「註1」「1)」）に限った。上付きの「1」＋本文の「)」は、リンクはするが判定には数えない。「1)」の論文の番号だけの上付きの数字を 1 件ずつ記録することと合わせて、暫定として DESIGN と FIX_PLAN に書いてある。\n- 指示の「tests/test_fidelity.py の test_fidelity_and_dtd」は、実際には tests/test_pipeline.py にある。指示の test_linker.py か test_links.py は、もともとなく、test_links.py を新しく作った。\n- 使われていなかった linker.RE_FN_MARK は消した。\n- 先の担当が報告した builder の 4 章の記録（text.strip()）と unsplit_names（strip(' 　\\t')）の食い違いは、文言をそのままにして直していない。\n- FIX_PLAN の H 以外の節の古い行番号は直していない。FIX_PLAN 冒頭に、行番号は古い版のものと断ってある。",
+      "open_issues": "- 利用者に確かめること（暫定）。書き方の判定に数えるもの、「1)」の論文の番号だけの上付きを 1 件ずつ記録すること、記録の件数に上限を置かないこと、掲・至・及のままにする漢字（「上図1」「同図2」「右図1」「本表1」もリンクしなくなる）、英文 1 語の氏名の扱い。\n- 試験運用で確かめること。td1〜3 には上付きの指数・番号だけの注・語の中の図表番号が 0 件なので、規則は架空の docx でしか確かめていない。実際の AI が記録から link_note・link_figure を提案するかも、模擬回答でしか確かめていない。\n- 反例の物差し（run_h.py の「xref以外同じ」）は &lt;sup&gt; の分かれ方まで比べるので、xref の境目が変わると FAIL になる。次に使うときは、隣り合う同じ書式の要素をつないでから比べる。\n- 先の実装担当が報告した、make_fixtures・builder・ai_assist の定数 25 件（テンプレート由来と思われる）の 12 字以上の一致は、別の作業で確かめる。\n- scratchpad/h/chk.py（文字の照合のスクリプト）は残した。"
+    },
+    "reviews": [
+      {
+        "checked": "作業ツリー（4533222 に H の差分を積んだもの）を読み、実験で確かめた。ファイルは変えていない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/review/principle/ に置いた（まとめは results.json）。\n\n## 読んだもの\n- git diff の全体: linker.py・ai_assist.py・builder.py・pipeline.py・make_notebook.py・tests・docs。\n- FIX_PLAN の H の節、付録 D2・M5・U4・U5、決定事項 15〜17、同じファイルを触る順。\n- DESIGN 4.4・5・6・7 の該当箇所。\n- pdfdocx の _mechanical・_lost・_protect（読むだけ）。\n\n## 物差し\n- pytest: Python 3.13 も 3.10（venv310）も 1024 passed。\n- ruff: 201 件で、HEAD と同じ。ファイル・メッセージごとの差も空。\n- golden（自分で作った HEAD の git worktree で流した）:\n  - HEAD の 23 件は、渡された golden_base と同じ。\n  - H の 23 件は、HEAD と同じ。\n  - 新しい 4 件は、どちらの版でも [True, True, True, 0]。\n\n## td1〜3（CLI、手動、ルート1・2、0.26.0 と比べた）\n- 次がすべて同じだった: XML のバイト列、AI依頼文、レポート（日時・ツールの行を除く）、標準エラー、ZIP の中身の名前とサイズ、終了コード（1/1）。\n- xref の一覧も同じ。td1 は fn6・fig47・table2・bibr61、td2 は fn4・fig21・table7・bibr70、td3 は fn6・fig11・bibr27。\n- 不変性・最終・DTD・J-STAGE は合格。XML に入らなかった画像はない。\n- 私的な原稿の文字は、記録していない。報告の後に消した。\n\n## 架空の docx\n- oracle の 30 件と、自分で作った R1〜R7（tools/gen_p.py）、新しい fixture 2 件。\n- どれも次が 0.26.0 と同じだった:\n  - XML の文字。\n  - xref を外し、隣り合う同じ書式の要素をつないだ XML。\n  - ok の 4 値・lost_images・actions。\n- xref の違いは、次のどれかだった:\n  - 指数・単位。\n  - 「1)」の論文の番号だけの上付き。\n  - 語の中の図表番号。\n  - 空白を外した範囲（\" 2)\"→\"2)\"）。\n  - 並びの数字（tail）が「図2」ごとのリンクになった。\n  - 「註1」が「註」ごとになった。\n  - 下の findings の 1〜3。\n\n## 正しいリンクが残ること（R1）\n次はすべて残った。\n- 上付きの注番号: 1)、Smith2)、（試験, 2024）3)、数式の直後の 1)、注＋3、（注1）、注2)。\n- 並び: 1),2)・1)2)・1)-3)・1～3)・1、2)・1・2)。\n- 全角と括弧: １）・注１・(1)・（2）。\n- Word のハイパーリンクの後の 3)。\n- 図表の参照: 前掲・乃至・及・（表1）・並び・と・及び・および・～・-。\n- 「図表1と表1」の後ろの表1。\n- Figure・Fig.・Figs.（漢字の後のものは除く。findings の 3）。\n\n## そのほか\n- 囲み（R4・R5）は本文と同じ規則で動いた。\n- R7: 「注」＋上付きだけの論文は、書き方を変えなかった。\n- 記録（Decision）は 4 章と AI 依頼文の「推定:」に出た。actions は増えない。\n- 原則:\n  - 文字を書き換えるコードはない（apply_span で LinkSpec を付けるだけ）。\n  - Emitter.span は変わっていない。\n  - builder が足したのは info・warnings だけ。\n- 既存のリンク:\n  - URL・DOI・式・Word のハイパーリンクは壊れない。range_linked が守り、処理の順も同じ。\n  - pdfmatch がリンクを見るのは uri・ext-link・pub-id だけ。\n- 確かめの担当の指摘は直っていた: tail_close を書き方の判定に数えない、DESIGN のモデル名、記録の短縮、「暫定」の印、FIX_PLAN の 2024・ast・SYSTEM_PROMPT。\n- 追加行と test_links.py を td1〜3 の docx と 12 字で照合した。一致は 0 件。\n\n## 手順の注意\n- scratchpad/h/base0260_src はパッケージのフォルダそのものです。PYTHONPATH に指定しても、editable install の作業ツリー（0.27.0）が読み込まれます（実測）。\n- 比べる相手は、HEAD の worktree の src で取り直した。worktree は最後に消した。\n\n## 文書とコードの食い違い（直していない）\n1. DESIGN 6 章の「本文の図表の参照」は「図」「表」の直前としているが、コードは Figure・Fig.・Table にも当てる（findings の 3）。\n2. DESIGN 7 章（996 行）と 4.4（533 行）のルート2 の記述は、実際より軽い（findings の 1）。\n3. FIX_PLAN の 622 行は、H で CLAUDE.md を触ったとしているが、触っていない（findings の 8）。\n4. U4: まとめ役の暫定の判断（外す）と違い、実装は決定事項 17（載せる）に従っている。FIX_PLAN の「実装した内容」に記録があるので、指摘は繰り返さない。\n5. 指示にある test_fidelity_and_dtd は、tests/test_fidelity.py ではなく tests/test_pipeline.py にある。\n6. DESIGN 7 章の残る形に、＜＞・㎝・表の注の印がない（findings の 2・5・6）。\n\n## 後始末\n- 大きな出力、私的な原稿から作った出力、worktree、tests/__pycache__ を消した。\n- git status は H の差分と新しい 3 ファイルだけ。",
+        "findings": [
+          {
+            "severity": "should",
+            "file": "src/jasme_jats/linker.py",
+            "line": 208,
+            "problem": "ルート2 で、番号だけの注の docx を「1)」の書き方の出版版 PDF に合わせると、0.26.0 では直せていたものが、H ではすべて直せなくなります。\n\n起きる条件は、注番号を含む段落のうち 1 つでも直さないもの（PDF に見つからない段落・表のセル）があることです。このとき、論文全体の判定（note_style）が切り替わり、直さなかった段落の注のリンクが消えます。\n\npdfdocx の守りはこのリンクの消え方を局所に止められず、注と関係のない誤字の直しを含めて、すべてを「直すと、段落の役割やリンク…が元の docx と同じに決まらなくなる」として直しません。そのうえで要確認（pdf_unfixed）が出ます。\n\nDESIGN 7 章（996 行）の「消えたリンクは 4.4 の守りで直さない側に倒す」と 4.4 の記述は、この影響（論文全体の直しが止まること）を書いていません。",
+            "evidence": "tools/gen_r2.py で架空の docx を作り、出版版 PDF は LibreOffice で作った。番号だけの注 3 つと、段落 d14 の誤字「正し」→「正しい」を入れた。child_r2.py のルート2 で、HEAD の worktree と H を比べた。\n\n直した数（0.26.0 → H）は次のとおり。\n- 段落 2 の文を PDF で別の文にしたもの（partial）: 3/3 → 0/3。\n  - 0.26.0 は d12・d14 に「)」を足し、誤字も直した。\n  - H の注の xref は「1」「2」「3」で、actions に pdf_unfixed が増えた。\n- 2 番目の注番号を表のセルに置いたもの（cell）: 3/3 → 0/3。ルート2 はセルを直さない。\n- PDF の注番号を 1 つだけ「1)」にしたもの: 2/2 → 0/2。\n- 全部を「1)」にしたもの: 4/4 → 4/4（問題なし）。\n\n仕組みは次のとおり。\n- 直した docx に、上付きの形の「1)」ができる。\n- note_style が偽になり、直さない段落の「2」がリンクされなくなる。\n- _lost が注のリンクの消えを返す。\n- _kept は、リンクの直後に足す変更を範囲外とみなす。\n- 守りは、リンク先の段落 → リンクのある段落（直す箇所がない）の順に広がり、広がらなくなった時点で final になる。\n\n試作（proto_route2.diff）では、読み直しで元の docx の bare_notes を使った。4 つの例すべてで直しが反映され、テストは 1023 passed だった（場所に依存する 1 件を除いた）。",
+            "fix": "H では pdfdocx を触らないので、反映前に少なくとも次をしてください。\n- DESIGN 4.4・7 章と FIX_PLAN の H の「残る限界」に、この条件と結果を正確に書く。\n- ルート2 のテスト（extract_pages を差し替えたもの）で、今の振る舞いを固定する。\n- 利用者に確かめる項目に入れる。\n\n直し方の案は次の 2 つです。\n- B2.1 の後: pdfdocx が直した docx を読み直すとき、元の docx の書き方の判定（bare_notes）を使う。試作どおり、Linker と link に上書きの引数を足します。必要なら、最後の変換にも同じ判定を使います。\n- linker だけで直す場合: ほかに参照のない注の、番号だけの上付きはリンクする。ただし決定事項 15 の規則が変わるので、利用者の判断が要ります。"
+          },
+          {
+            "severity": "should",
+            "file": "src/jasme_jats/linker.py",
+            "line": 44,
+            "problem": "全角の「＜」「＞」（日本語の括弧として「＜用語＞」の形でよく使う）は OPERATORS に入っています。そのため、直前が「＞」の上付きの数字は指数とみなされます。\n\n番号だけの論文では、0.26.0 で正しくリンクされていた「＜用語＞¹」がリンクされなくなります。記録の文面も「指数・単位（cm²・x² などの形）」になります。\n\n「〈用語〉²」「「用語」³」はリンクされるので、扱いがそろいません。\n\nもともと、比較の記号の直後に指数が来ることはありません。DESIGN 7 章の残る形にも書いてありません。",
+            "evidence": "R2（番号だけの論文）の「＜架空の用語＞¹と〈架空の語〉²と「架空の語」³を使う。」で比べた。\n- 0.26.0: fn1・fn2・fn3 の 3 つともリンクされる。\n- H: fn1 だけリンクされない。\n- H の記録 d19: 「上付きの「1」は、指数・単位（cm²・x² などの形）とみなし、注 fn1 にリンクしなかった…」。\n\n_sup_marks の単体の確かめでは、直前が「＞」(U+FF1E) のとき exponent になった。",
+            "fix": "_exponent_like の直前の判定から、比較の記号（<>＜＞≦≧≤≥=＝）を外してください（直後の判定〈x²＜4〉には残す）。少なくとも＜＞<> は外します。\n\nあわせて、番号だけの論文の「＜用語＞¹」がリンクされるテストを足し、DESIGN 6 章の行を直します。\n\n規則を変えないなら、DESIGN 7 章と、利用者に確かめる項目に書いてください。"
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/linker.py",
+            "line": 314,
+            "problem": "語の中の図表番号とみなす規則（直前が漢字）が、英語の参照（Figure・Fig.・Figs.・Table）にも当たります。たとえば「実験結果Fig. 1」はリンクされません。\n\nDESIGN 6 章の「本文の図表の参照」の行は「「図」「表」の直前の文字が漢字で…」と書いていて、コードと食い違います。英語の参照は日本語の語の一部にはなりません。",
+            "evidence": "R1 の「これはFigure 1、Fig. 2、Figs. 1を見る。実験結果Fig. 1も見る。」で比べた。\n- 0.26.0: 4 つともリンクされる。\n- H: 「果」の後の「Fig. 1」だけリンクされない。\n- H の記録: 「「Fig. 1」は、直前の「果」と続く語の一部（地図1・付表1 など）とみなし…」。",
+            "fix": "float_refs の判定を m.group(1) が「図」「表」のときだけにしてください。\n\nコードをこのままにするなら、DESIGN 6 章の行（696 行）に、英語の参照にも当てることを書いてください。"
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/builder.py",
+            "line": 432,
+            "problem": "姓と名の区切りがない氏名の文字を、text.strip(' 　\\t') にしました（FIX_PLAN どおり）。このため、改行（w:br）で終わる著者名では、AI 依頼文の行の「」の中に改行が入り、行が 2 つに分かれます。\n\n0.26.0 の依頼文は「研究次郎」の形で 1 行でした。どちらの版でも、AI の split_name は不採用になります。",
+            "evidence": "names_article と同じ形の架空の docx で、和文の著者名「架空次郎」の後ろに w:br を足した（N1）。AI依頼文.txt の行は次のとおり。\n- 0.26.0: 「- [d7] 姓と名の区切りがない氏名: 「架空次郎」」。\n- H: 「- [d7] 姓と名の区切りがない氏名: 「架空次郎\\n」」。\n\nactions は、どちらも ai_pending と newline。",
+            "fix": "build_request で表示するときだけ、改行を除くか記号に置き換えてください（例: text.replace(\"\\n\", \"↵\")）。\n\nそのままにするなら、FIX_PLAN の U4 に、改行のある氏名の扱いを書いてください。"
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/linker.py",
+            "line": 45,
+            "problem": "RE_EXP_BEFORE は、全角の単位の記号（U+3380〜33DF の ㎝・㎜・㎞・㎡・㎏ など）や、Å・°・′ を含みません。そのため、「12㎝²」は番号だけ（bare）とみなされます。\n\n番号だけの論文では、0.26.0 と同じく注へのリンクになります。「1)」の論文では、「番号だけの形なので注 fnN にリンクしなかった」と記録されます。\n\nD2 で直したかった、指数がなおリンクされる経路です（0.26.0 からあり、H で悪くはなっていない）。数学教育の論文では、「㎝²」は使われうる書き方です。",
+            "evidence": "R2（番号だけの論文）の「面積は 12㎝² である。」は、0.26.0 も H も fn2 にリンクされた。\n\n_sup_marks の単体の確かめでは、直前が ㎝・Å・°・′ のとき bare になった。",
+            "fix": "RE_EXP_BEFORE に U+3380〜U+33DF、µ（U+00B5）、Å、′ を足すか、DESIGN 7 章の残る形に書いてください。"
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/linker.py",
+            "line": 364,
+            "problem": "番号だけの論文に、表のセルの中の表の注の印（上付きの「1)」）が 1 つあるだけで、論文全体が「1)」の書き方とみなされます。すると、本文の番号だけの注番号がすべてリンクされなくなります（記録には出ます）。\n\nセルを数えるのは設計どおりで、テスト（test_note_style_counts_box_and_cell）もあります。ただ、表の注の印がこの判定の引き金になることは、DESIGN 7 章からは読み取れません。",
+            "evidence": "R3（R2 に「表3」を足したもの。セルに「12」＋上付きの「1)」、表の下に「1) 架空の表の注」）で比べた。\n- 注の xref: 0.26.0 では、番号だけの注を含めてリンクされていた。H では 14 件が外れ、1 件が増えた（空白を外した範囲）。\n- H の記録: 「番号だけの形なので…（この論文の注番号は「1)」「注1」の形）」が 12 件。\n- actions は変わらない。\n- セルの「1)」は、どちらの版でも fn1 へのリンクになった（誤り）。",
+            "fix": "DESIGN 7 章に、表の注の印で書き方の判定が変わることを書き、暫定の判断（セルを判定に数えるか）として、利用者に確かめる項目に入れてください。"
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/linker.py",
+            "line": 310,
+            "problem": "float_refs は書式を見ずに plain を探します。そのため、「図1」の直後に上付きの注番号「1)」があると、「図11」と読み、「図11 に対応する図が見つからない」になります。図1 にはリンクされません。\n\n0.26.0 からある形で、H で悪くはなっていません。",
+            "evidence": "R1 の「図のすぐ後の注番号 図1」＋上付きの「1)」＋「に示す。」で確かめた。\n- 0.26.0 も H も、未解決に ('fig', 'd22', '図11', '図11 に対応する図が見つからない') が出た。\n- fn1 へのリンクは付いた。",
+            "fix": "float_refs で、番号の数字が上付きのアトムにまたがるときは、上付きの手前で番号を切ってください。\n\n直さないなら、DESIGN 7 章に書いてください。"
+          },
+          {
+            "severity": "nit",
+            "file": "docs/FIX_PLAN.md",
+            "line": 622,
+            "problem": "「H（0.27.0）で触ったファイル」に CLAUDE.md がありますが、CLAUDE.md は変わっていません。仕上げの担当の報告も、CLAUDE.md は直していないとしています。",
+            "evidence": "git diff --name-only -- CLAUDE.md の結果は 0 件だった。FIX_PLAN の 622 行には「README.md、CLAUDE.md」とある。",
+            "fix": "622 行の一覧から CLAUDE.md を外してください。"
+          }
+        ]
+      },
+      {
+        "checked": "作業ツリー（4533222〈0.26.0〉に、コミットしていない H の差分を積んだもの。17 ファイルの変更と、新しい 3 ファイル）を、回帰とテストの観点で点検した。実験はすべて /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/review/regression/ に置いた。比べる相手の 0.26.0 は、HEAD の git worktree（wt_head/src）を使った。worktree は最後に消した。\n\n## 申告（作業中の誤操作。直して確かめ済み）\n- 変異テストの準備で、rsync がなかったために cd が失敗した。その後の sed が、リポジトリの src/jasme_jats/ai_assist.py の 35 行（DEFAULT_MODEL）を約 1 分間書き換えた。\n- 気付いてすぐ、元の 1 行 `DEFAULT_MODEL = \"claude-opus-5-5\"` に戻した。\n- 戻した後に確かめたこと:\n  - git diff --stat は最初と同じ（17 files、588+／113−）。\n  - git status は 20 件で、最初と同じ。\n  - test_notebook・test_ai は 85 passed。\n  - ノートブックは書き換わっていない（make_notebook はエラーで止まり、書き出していない）。\n- その時間に流れた変異 9 件は、結果を捨てて流し直した。\n\n## 測ったもの\n- **pytest**:\n  - Python 3.13 は 1024 passed。\n  - Python 3.10（venv310、PYTHONPATH=src）も 1024 passed。\n- **ruff check src tests tools**: 201 件。HEAD とファイル・メッセージごとに比べた一覧の diff は空。\n- **golden**: 0.26.0 と同じ名前の 23 件は、xml・report・prompt・ok のハッシュがすべて一致した。新しい 4 件（sample_links〈_bare〉の manual・split）は、どれも [True, True, True, 0]。\n- **td1〜3（CLI、手動、ルート1・ルート2 の 6 通り。0.26.0 と比較）**:\n  - XML と AI依頼文は、バイト単位で同じ。\n  - レポートの違いは、ツールの版の行と作成日時の行だけ。\n  - 標準出力・標準エラーは、出力先のパスを除いて同じ。\n  - ZIP の中身は、名前・サイズ・CRC が同じ。\n  - 終了コードは、どれも 1 で同じ。\n  - ルート2 の直した docx の違いは、変更履歴の w:date だけ。\n  - したがって、xref の違いは 0 件。文字・段落・不変性・最終・DTD・J-STAGE のチェック、XML に入らなかった画像、G の文字ポリシー、F の囲み、B3 の図表、E の注、B2 の照合は、どれも 0.26.0 と変わらない。文字は記録していない。\n- **独立の反例（oracle の 30 件）**:\n  - run_h.py --ref base0260 では 24 件が OK、6 件が FAIL（S02・S05・S07・S09・B02・B03）。どれも「xref以外同じ」の項目だけで、物差しが &lt;sup&gt; の分かれ方まで比べるためである（既知の限界）。\n  - 自分の比べ方でも 30 docx を 0.26.0 と新しい版の両方で変換して比べた（cmpall.py。xref を外し、隣り合う同じ書式の要素をつなぐ）。30 件すべてで XML が同じで、終了コードも同じだった。\n  - xref の違いは、1 つずつ D2・M5 で意図したものと確かめた（oc_cmp.txt）。\n    - 指数・単位・符号で始まるもの・「1)」の論文の番号だけの上付きは、リンクされなくなった。\n    - 語の中の図表番号（地図1・概念図1・代表1名・本図1・図表1・発表1回目・付表1・各表1、地図1、2 の 2）は、リンクされなくなった。\n    - 「地図1、図2」は「図2」ごと、「図表1と表1」の後ろの表1 は「表1」ごとリンクされるようになった。\n    - 「註1」は「註」ごとリンクされるようになった。\n    - 「1, 2」の xref から空白がなくなった。\n  - レポートと依頼文の違いは、次のものだけだった。\n    - 4 章と「推定:」の記録\n    - 機械的リンクの件数\n    - 参照されていない注・図の行\n    - 3 章の「図3 に対応する図が見つからない」（地図3 のもの）がなくなったこと\n    - U02 の英文 1 語の氏名の 10 章の警告（決定事項 17）\n- **ルート2 の追加実験（LibreOffice で作った PDF）**:\n  - 番号だけの論文で、PDF ではすべての注番号が「1)」の形のもの: 0.26.0 と同じく 3 か所とも直し、3 か所ともリンクした（m² は意図どおりリンクしない）。\n  - PDF では 1 か所だけが「1)」の形のもの: 下の nit の 1 番目。\n- **英文 1 語の氏名**: 手動モードの回答を貼り戻して変換し直しても、10 章の警告は 1 件のまま（重ならない）。\n- **足したテストが 0.26.0 で落ちるか**（pytest_src.sh で src を 0.26.0 に替えた）:\n  - test_links の新しいテストのうち 58 件が落ちた。通ったのは、0.26.0 と同じ振る舞いを確かめるものだけ（前掲・乃至・及の参照、式の参照）。\n  - test_ai の新しい 4 件と、test_notebook の 2 件も落ちた。\n- **変異テスト（作業ツリーの写しに 1 つずつ置換を当て、test_links・test_ai・test_notebook を流した。68 件）**:\n  - 落ちた（テストが捕まえた）もの:\n    - _exponent_like の直前の英数字と直後の演算記号、U+2212 の符号、kind の符号優先\n    - bare_notes の両方の値（真・偽に固定）、書き方の判定に strong を数えるもの、after_note を数えるもの、tail_close を shaped にするもの\n    - bare の常時リンク・リンクしない、tail_close の除去・指数の条件・全角の閉じ括弧\n    - after_note の除去と rstrip、RE_SUP_LIST、「註」の 3 か所、「）」、リンクの範囲の空白\n    - 3 章に出さない指数、段落ごとのまとめと記録、記録の順、occurrence の 2 種\n    - FLOAT_REF_OK_BEFORE の掲・至・及のそれぞれ、語の判定の除去と「漢字でなくても」、探し直しの位置（m.end()）、記録の有無の両方、「見つからない」に出す変異\n    - unsplit_names の lang・前後の空白、英文の添え書き、英文を飛ばす変異、10 章の警告\n    - Options の直書き 2 種、make_notebook の行が見つからないときのエラー、MODEL_LINE の直書き、モデルの変更、式で書いた DEFAULT_MODEL\n  - 残ったものは下の nit。\n- **fixture**: make_links・make_links_bare を scratch で呼び直すと、zip の中身がバイト単位で同じだった。git status で増えたのは、2 つの docx と test_links.py だけ。\n- **ノートブック**:\n  - 写しで python -I tools/make_notebook.py を実行すると、生成物はリポジトリのものと同じ。HEAD との違いは版の 3 行だけ（モデル名は同じ値）。\n  - DEFAULT_MODEL を式にすると、分かるエラーで止まる（rc=1）。\n- **docs/fix_plan_repro_tests.py**: 写しの tests に置いて流すと 1 passed。\n- **後始末**:\n  - 大きな出力（docx・xml・pdf・zip・画像）と自分の worktree を消した（残りは 6.8MB）。ディスクの空きは 22GB。\n  - リポジトリの tests/__pycache__（自分の実行でできたもの）も消した。\n\n## 先の確かめの担当の指摘への対応（作業ツリーで確かめた）\n- tail_close を書き方の判定に数えない（SupMark.shaped）: 反例 B06・TWB は OK。変異 tail_close_shaped は test_superscript_notes_bare で落ちる。\n- 英文 1 語の氏名は決定事項 17 に従っている（FIX_PLAN の HEAD 版の 225 行は、利用者の回答そのもの）。依頼文の添え書きと 10 章の警告の言い分はそろっている。\n- DESIGN のモデル名の直書きはなくなった（grep で ai_assist.py の 35・37 行だけ）。\n- 暫定の印、記録の文言（140 字以内のテスト）、M5 の例（上図1・同図2・右図1・本表1）、FIX_PLAN の 2020→2024・行番号・ast は直っている。\n\n## 文書とコードの食い違い（すべて）\n1. **FIX_PLAN.md 622 行**（「H（0.27.0）で触ったファイル」）: 最後に CLAUDE.md を挙げているが、CLAUDE.md は変わっていない（git status にない。仕上げの担当の報告も「直していない」）。→ nit の 3 番目。\n2. **DEVELOPMENT.md の「モデルを変える」**: 「tests/test_ai.py・tests/test_notebook.py が、ほかの場所に直書きがないこと…を確かめる」とある。しかしテストが数えるのはモデル名の文字列だけで、DEFAULT_MODEL_INFO の値（表示名・料金・日付）の直書きは捕まえない。→ nit の 4 番目。\n3. **指示文**:\n   - 「tests/test_fidelity.py の test_fidelity_and_dtd」は、実際は tests/test_pipeline.py:20 にある（既に報告済み）。\n   - 指示の「0.26.0 の src の写し」（scratchpad/h/base0260_src）は src ではなく、jasme_jats のパッケージのディレクトリそのものである。PYTHONPATH=<それ> で python -m jasme_jats を実行すると、インストール済み（editable）の作業ツリーの 0.27.0 が読み込まれる。実際に、版の行が 0.27.0 になることを確かめた。この点検では HEAD の worktree の src を使った。oracle の out/base0260 は 0.26.0 で作られていた（S02.json の版の行で確認）。\n4. **_exponent_like の docstring**: 「続きの先頭が符号なら真」は、関数としては正しい。ただし、呼び出し元の _sup_marks が符号を先に判定するので、この分岐は結果に効かない（変異 exp_sign_branch は等価）。直す必要はない。\n\nblocking と should に当たるものは見つからなかった。\n\n次の 3 つは 0.26.0 で正しかったリンクだが、どれも利用者の決定どおりで DESIGN 7 章に限界として書いてあるので、指摘にはしない。\n- 上図1・同図2・本図1・各表1（決定事項 16）\n- 番号だけの論文の「Piaget¹」（決定事項 15 の「直前が英数字」）\n- 「1)」の論文の番号だけの上付き（決定事項 15）",
+        "findings": [
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/pdfdocx.py",
+            "line": 520,
+            "problem": "ルート2 で、PDF に合わせる直しが論文全体の注番号の書き方（Linker.note_style）を変えるとき、0.26.0 では当てていた直しが当たらなくなります。H で起きるようになった変化です。\n例: 番号だけの論文で、PDF では 1 か所だけ「1)」の形になっているもの。直すと書き方が「1)」の形に変わり、ほかの段落の注のリンクが消えるため、pdfdocx._lost の守りが直しを止めます。\nリンクは守られ、要確認にも出ます。しかし、13.2 の「直さなかった理由」が一般的な STRUCTURE_REASON（「段落の役割やリンク（引用文献・図表など）…」）なので、利用者には、注番号の書き方が原因だと分かりません。テストもありません。",
+            "evidence": "架空の docx を作りました（scratchpad/h/review/regression/r2/gen.py）。番号だけの上付き ¹ ² ³ と注 1)〜3) のもので、PDF は 1 つ目だけを上付きの「1)」にした docx から LibreOffice で作りました。\n\n--route pdf で比べた結果:\n- 0.26.0: d13 を「…にする1。」→「…にする1)。」に直し、xref は fn1〈1)〉・fn2・fn3。\n- H: 直しは 0 箇所、「直せなかった 1 箇所（要確認）」。xref は fn1〈1〉・fn2・fn3。XML の文字は 0.26.0 と「)」1 字違います（直した docx と XML は一致し、不変性は合格）。\n  - 13.2 の理由は「直すと、段落の役割やリンク（引用文献・図表など）が元の docx と同じに決まらなくなる」です。\n  - 標準エラーに「要確認: 出版版 PDF に合わせきれなかった箇所があります…」が出ます。\n\n実際にありそうな形（PDF ではすべての注番号が「1)」。gen2.py）では、0.26.0 と同じく 3 か所とも直してリンクしました。\nDESIGN 7 章は「ルート2 で…論文全体の書き方の判定が変わりうる（消えた注のリンクは、4.4 の守りで直さない側に倒す）」と書いており、振る舞いは設計どおりです。",
+            "fix": "H では pdfdocx.py に触らない方針なので、次の 3 つを FIX_PLAN の H の「試験運用で確かめること」か、B2.1・I の課題に書き残すことを勧めます。\n- この形（一部の注番号だけが PDF で「1)」の形）\n- 理由の文言が一般的であること\n- テストがないこと\n\n後で直すなら、案は 2 つです。\n- 書き方の判定が変わったことで注のリンクが消えたときは、NOTE_REASON か専用の文言（「直すと論文の注番号の書き方が変わり、ほかの注のリンクが外れる」）にする。\n- test_pdfmatch に、この形の期待を足す。"
+          },
+          {
+            "severity": "nit",
+            "file": "tests/test_links.py",
+            "line": 275,
+            "problem": "変異テストで、次の規則の境界はテストが捕まえませんでした（規則を変えても全テストが通ります）。\n- _exponent_like の、直前が演算の記号（OPERATORS。例「=²」）\n- 直前がギリシャ文字（π²）・全角の英字\n- SUP_SIGNS の ASCII の「-」（「m s」＋上付きの「-2」）\n- Linker.__init__ の bare_notes=True（run を通らずに fn_marks を呼ぶとき）\n- note_style が注の一覧（fn）・引用文献（ref）の段落を数えないこと\n- tail_close の RE_NUM_END\n- 本文の「註」＋上付き（after_note の「註」）\n- RE_KANJI の「々」\n\nどれも 0.26.0 からの回帰ではなく、反例（oracle の S02 の m s-2 など）では正しく動きます。",
+            "evidence": "scratchpad/h/review/regression/mut/run_mut.py で、作業ツリーの写しに 1 つずつ置換を当て、tests/test_links.py・test_ai.py・test_notebook.py を流しました。68 件の結果は mut.log にあります。\n\n通ってしまった変異（どれも「146 passed」）:\n- exp_before_op、exp_before_greek、exp_before_fwalpha\n- sign_ascii_hyphen\n- style_init_false\n- style_count_fn_region、style_count_ref_region\n- tail_close_no_numend\n- after_note_zhu_only\n- kanji_noma\n\n等価な変異で、捕まえようがないもの:\n- exp_sign_branch（_sup_marks の kind が先に符号を判定するので、_exponent_like の符号の分岐は結果に効かない）\n- strong_no_strip\n- skip_pos_start1\n- after_pos_e\n\nそのほかの規則の変異は、すべて落ちました（checked に列挙）。",
+            "fix": "test_sup_mark_kinds の表に、次の 4 行を足すのを勧めます。\n- (\"π\", \"2\", \"\", [\"exponent\"])\n- (\"x=\", \"2\", \"\", [\"exponent\"])\n- (\"m s\", \"-2\", \"\", [\"exponent\"])\n- (\"本文の註\", \"1\", \"も\", [\"after_note\"])\n\ntest_float_refs_skip_words には (\"同々図1\", …) の行を足します。\nnote_style には、注の一覧の段落だけに上付きの「1)」がある番号だけの論文が、bare_notes=True のままになるテストを足します。\n任意です。"
+          },
+          {
+            "severity": "nit",
+            "file": "docs/FIX_PLAN.md",
+            "line": 622,
+            "problem": "「H（0.27.0）で触ったファイル」の最後に CLAUDE.md を挙げていますが、H では CLAUDE.md を変えていません（文書をコードに合わせる側の食い違い）。",
+            "evidence": "git status --short CLAUDE.md は空です。17 件の変更の一覧にも、CLAUDE.md はありません。\n仕上げの担当の報告も「CLAUDE.md・DEVELOPMENT.md・DESIGN.md…は実装と合っていたので直していない」です（DEVELOPMENT.md・DESIGN.md は実際には変わっています）。\n一方、622 行の末尾は「…README.md、CLAUDE.md。」です。",
+            "fix": "622 行の末尾の「、CLAUDE.md」を消します（CLAUDE.md は実装と合っていたので直していない、と書いてもよい）。"
+          },
+          {
+            "severity": "nit",
+            "file": "tests/test_ai.py",
+            "line": 148,
+            "problem": "test_default_model_is_written_once が数えるのは、モデル名の文字列（\"claude-opus-5-5\"）だけです。DEFAULT_MODEL_INFO の値（表示名「Claude Opus 5.5」、料金、提供終了の予定）を tools/make_notebook.py や src に直書きしても、どのテストも落ちません。DEVELOPMENT.md の「モデルを変える」の「ほかの場所に直書きがないこと…を確かめる」は、表示名・料金については成り立ちません。",
+            "evidence": "変異 nb_info_name_literal で、make_notebook.py の API_HELP の「（{DEFAULT_MODEL_INFO[\"name\"]}）です。」を、直書きの「（Claude Opus 5.5）です。」に替えました。test_links・test_ai・test_notebook は 146 passed でした。今の値と同じ直書きは、test_notebook の比較でも区別できません。\n同じ変異でもモデル名の直書き（nb_model_literal・options_literal）は、test_default_model_is_written_once で落ちました。",
+            "fix": "次のどちらかを勧めます。\n- test_default_model_is_written_once で、DEFAULT_MODEL_INFO[\"name\"] の文字列も、ai_assist.py 以外の src/*.py と make_notebook.py に 0 回であることを数える。\n- DEVELOPMENT.md の文を「モデル名の直書きがないこと」に絞る。"
+          }
+        ]
+      },
+      {
+        "checked": "点検したのは作業ツリー（4533222 に H のコミットしていない差分を積んだもの）で、観点は利用者への見え方と文書。ファイルは変えていない。python tools/make_notebook.py を 1 回走らせたが、生成物は作業ツリーの版とバイト単位で同じで、git diff は変わらなかった。tests/__pycache__ は消した。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/review/user/ に置いた（実際の論文の出力は消し、残りは約 216KB）。\n\n## 測った結果\n- pytest（3.13）: 1024 passed。test_notebook も 16 passed。\n- ruff check src tests tools: 201 件で HEAD と同じ。\n- td1〜3（ルート1・ルート2、手動モード）を H と 0.26.0 で変換して比べた（0.26.0 は base0260_src に symlink を張って版 0.26.0 を確かめてから使った）。\n  - XML のバイト列、AI依頼文、レポート（作成日時・ツールの行を除く）、標準エラー、終了コード（1）がすべて同じ。\n  - xref の違いは 0 件。\n  - 4 章の件数も同じで、td1 は 9、td2 は 6、td3 は 28（ルート1・2 とも）。H で増えた記録は 0 件なので、4 章が読めなくなることはない。\n  - 「姓と名の区切りがない氏名」の行は、どれも 0 件。\n- sample_links・sample_links_bare を H と 0.26.0 で変換し、4 章と AI依頼文を読んだ。\n  - 記録は 14 件と 10 件。どれも、リンクしなかった文字・理由・注や図表の ID・link_note／link_figure／link_table の text と occurrence が書いてある。場所の列も既存の書き方（「１．はじめに / 第8要素」）と同じ。\n  - occurrence は段落の中の数え方と合っていた（x²+y² は 1 と 2、f(x²) と後ろの番号だけの ² は 1 と 2、図表1と表1 の 2 つ目は 3）。\n  - AI依頼文の差分は、段落一覧の «→» の付き方と「推定:」の行だけ。3 章と actions に変わりはない。\n- 実際の論文の文字が入っていないかも確かめた。git diff の追加行・tests/test_links.py・新しい 2 つの docx の文字と、tests/private の td1〜3.docx の文字を、12 字ずつに切って突き合わせた（文字そのものは書き出していない）。\n  - 追加行と test_links.py での一致は 0 件。\n  - docx での一致は 31 件あったが、すべて HEAD の既存の fixture と make_fixtures.py にもある（テンプレート由来）。新しく入った実際の論文の文字は 0 件。\n\n## 文書と実装の照合\n- 版: __init__.py・pyproject・ノートブックとも 0.27.0。\n- モデル名と料金:\n  - ノートブックのモデル名・料金・提供終了の予定の日付は、DEFAULT_MODEL_INFO から作られている（API_HELP を f 文字列にしても、出力の文字は変わらない）。\n  - claude-opus-5-5 を書いているのは src の ai_assist.py だけ。cli は `a.ai_model or DEFAULT_MODEL`。\n  - DESIGN 5 章の直書きはなくなっていた。\n- DESIGN:\n  - 6 章の「本文の上付きの注番号」と 7 章の「本文の図表の参照」の行は、linker の _sup_marks・SupMark.shaped・note_style・float_refs・_word_part と合っていた。上付きの「1」＋本文の「)」をリンクの判定にだけ使うことと、暫定の印も書いてある。\n  - 4.4 で足した `pdfdocx._lost` の説明（消えた・変わったリンクだけを見る）も、コードと合っていた。\n- DEVELOPMENT: モジュールの表、test_links の説明、モデルの変え方、残っている課題の行が、実装と合っていた。\n- FIX_PLAN:\n  - H の「実装した内容」に、決定事項 15〜17 との対応、暫定のもの、SYSTEM_PROMPT の 1 文を足さなかったこと、RE_FN_MARK を消したことが書いてある。\n  - 付録 D2 の 2020 は 2024 に直っている。U5 には ast で読むことが書いてある。\n  - 書き換えたテストの名前（4 か所）と、test_module_constants_reports_missing_line は実在する。\n- fix_plan_repro_tests.py: 冒頭の記述と、残っている 1 件（test_numbering_counter_is_global_across_parts）が合っていた。\n- conftest の ALL_DOCS に 2 つの fixture が入っている。\n- README: 足した文は実装と合っていた（足りない点は nit に書いた）。\n\n## 前の担当の指摘が直っているか\n- 確かめの担当の should 1（tail_close が書き方の判定を決めてしまう）: shaped を足して直っていた。DESIGN と FIX_PLAN に暫定として書いてある。\n- should 2（英文 1 語の氏名）: FIX_PLAN の「利用者に決めてもらったこと」の 17（今までどおり載せ、警告する）に従っていた。英文の行には「split_name は和文の氏名にだけ使えるので、提案しない」と添え、10 章の警告と言い分がそろっている。FIX_PLAN の H の節・付録 U4、DESIGN 5 章も 17 に合わせてある。\n  - まとめ役の暫定の判断（外す）とは違うが、利用者の回答が先にあるので妥当と判断した。採るかどうかはまとめ役が決める。\n  - 英文の警告は 10 章だけで、report.actions には入らない（actions の中に warnings を読む箇所はない）。\n\n## 文書とコードの食い違い（直したもの・直さなかったものを含めてすべて）\n1. FIX_PLAN の「H（0.27.0）で触ったファイル」に CLAUDE.md が入っているが、CLAUDE.md は変わっていない（git status）。直していない（nit 1）。\n2. README は、「1)」の書き方の論文で番号だけの上付きの数字も注にしないことと、英文 1 語の氏名の 10 章の警告に触れていない（nit 2）。\n3. 指示の「tests/test_fidelity.py の test_fidelity_and_dtd」は、実際には tests/test_pipeline.py にある（仕上げの担当が報告済み。直す文書はない）。\n4. 4 章の氏名の記録は text.strip() で、unsplit_names は strip(' 　\\t') を使っている（仕上げの担当が報告済み。直していない）。\n5. FIX_PLAN の H 以外の節の古い行番号は直していない（冒頭に、行番号は古い版のものと断ってある）。\n6. AI依頼文の操作の説明は、link_note の text を「「注4」のように参照の表記全体」としているが、記録では数字だけ（text「2」）を指定している。貼り戻すと採用されること（test_links）は確かめた。SYSTEM_PROMPT を変えない判断として FIX_PLAN に書いてあるので、指摘にはしない。\n7. README の資料の文の終わりの「〉。」は、0.26.0 からある書き方で、H とは関係しない。",
+        "findings": [
+          {
+            "severity": "nit",
+            "file": "docs/FIX_PLAN.md",
+            "line": 622,
+            "problem": "「H（0.27.0）で触ったファイル」の行の最後に CLAUDE.md が書いてあるが、H では CLAUDE.md を変えていない。仕上げの担当の報告にも「CLAUDE.md は実装と合っていたので直していない」とある。",
+            "evidence": "git status --short で変わっているのは README.md・docs 4 件・notebooks・pyproject・src 6 件・tests 5 件・tools と、新しいファイル 3 件で、CLAUDE.md は入っていない。FIX_PLAN の該当の行は「docs の DESIGN.md・DEVELOPMENT.md・FIX_PLAN.md・fix_plan_repro_tests.py、README.md、CLAUDE.md」。",
+            "fix": "その行から「、CLAUDE.md」を消す（G の行は CLAUDE.md を実際に直しているので、そのまま）。"
+          },
+          {
+            "severity": "nit",
+            "file": "README.md",
+            "line": 285,
+            "problem": "利用者向けの README には「上付きの指数・単位（cm²・x²・s⁻¹ など）は注へのリンクにしない」としか書いていない。H で利用者に見える変化があと 2 つあるが、どちらも README に書いていない。(1) 注番号を「1)」で書いた論文では、括弧のない番号だけの上付き（「…である²」）も注にしない。番号だけの論文では、英字の直後の注番号（「Piaget¹」）を指数とみなす。(2) 英文の著者名が 1 語のとき、10 章に新しい警告が出る。",
+            "evidence": "sample_links の 4 章 M-005 に「上付きの「2」は、番号だけの形なので注 fn2 にリンクしなかった（この論文の注番号は「1)」「注1」の形）」が出る。0.26.0 ではこれは fn2 にリンクされていた（AI依頼文の d18 の差分で確かめた）。英文の警告は builder.person_name に足されている（「英文の著者名「…」（段落 …）に姓と名の区切り（空白）がないため…」）。README の 10 章の説明（158〜171 行付近）と 285 行には、どちらも出てこない。DESIGN 6・7 章と DEVELOPMENT には書いてある。",
+            "fix": "README の 285 行の、足した文の後ろに「注番号が「1)」の形の論文では、括弧のない番号だけの上付きの数字も注にしません（4 章に載ります）」と足す。気をつけることの一覧に「英文の著者名が 1 語のとき（10 章）: 名もあるなら Word で姓と名の間に空白を入れて変換し直す」を 1 行足す。表示の仕組みは変えない。"
+          },
+          {
+            "severity": "nit",
+            "file": "src/jasme_jats/linker.py",
+            "line": 411,
+            "problem": "指数・単位の記録は、同じ段落の数字をそのまま並べるので、同じ数字が並ぶと「上付きの「2」「2」は、…」となる。編集委員には、何が 2 つあるのか分かりにくい（x²+y² の 2 つの ² であることが、文面から読み取れない）。",
+            "evidence": "sample_links.docx の 4 章 M-002 と AI依頼文の d14 の行が「上付きの「2」「2」は、指数・単位（cm²・x² などの形）とみなし、注 fn2 にリンクしなかった。…（text「2」、occurrence 1／text「2」、occurrence 2）…」だった。コードは nums = \"\".join(f\"「{d}」\" for _, d, _, _ in exps) で、重なりを除いていない。",
+            "fix": "利用者向けの前半は、同じ数字を 1 回だけにして件数を添える（例: 「上付きの「2」（2 か所）は、…」）。AI 向けの text と occurrence は、今のまま数字ごとに並べる。直さないなら、利用者が後でまとめて文言を直すときの候補として FIX_PLAN の H に書いておく。"
+          }
+        ]
+      }
+    ],
+    "failedFirst": [],
+    "firstFindings": [
+      {
+        "lens": "principle",
+        "severity": "should",
+        "file": "src/jasme_jats/linker.py",
+        "line": 208,
+        "problem": "ルート2 で、番号だけの注の docx を「1)」の書き方の出版版 PDF に合わせると、0.26.0 では直せていたものが、H ではすべて直せなくなります。\n\n起きる条件は、注番号を含む段落のうち 1 つでも直さないもの（PDF に見つからない段落・表のセル）があることです。このとき、論文全体の判定（note_style）が切り替わり、直さなかった段落の注のリンクが消えます。\n\npdfdocx の守りはこのリンクの消え方を局所に止められず、注と関係のない誤字の直しを含めて、すべてを「直すと、段落の役割やリンク…が元の docx と同じに決まらなくなる」として直しません。そのうえで要確認（pdf_unfixed）が出ます。\n\nDESIGN 7 章（996 行）の「消えたリンクは 4.4 の守りで直さない側に倒す」と 4.4 の記述は、この影響（論文全体の直しが止まること）を書いていません。",
+        "evidence": "tools/gen_r2.py で架空の docx を作り、出版版 PDF は LibreOffice で作った。番号だけの注 3 つと、段落 d14 の誤字「正し」→「正しい」を入れた。child_r2.py のルート2 で、HEAD の worktree と H を比べた。\n\n直した数（0.26.0 → H）は次のとおり。\n- 段落 2 の文を PDF で別の文にしたもの（partial）: 3/3 → 0/3。\n  - 0.26.0 は d12・d14 に「)」を足し、誤字も直した。\n  - H の注の xref は「1」「2」「3」で、actions に pdf_unfixed が増えた。\n- 2 番目の注番号を表のセルに置いたもの（cell）: 3/3 → 0/3。ルート2 はセルを直さない。\n- PDF の注番号を 1 つだけ「1)」にしたもの: 2/2 → 0/2。\n- 全部を「1)」にしたもの: 4/4 → 4/4（問題なし）。\n\n仕組みは次のとおり。\n- 直した docx に、上付きの形の「1)」ができる。\n- note_style が偽になり、直さない段落の「2」がリンクされなくなる。\n- _lost が注のリンクの消えを返す。\n- _kept は、リンクの直後に足す変更を範囲外とみなす。\n- 守りは、リンク先の段落 → リンクのある段落（直す箇所がない）の順に広がり、広がらなくなった時点で final になる。\n\n試作（proto_route2.diff）では、読み直しで元の docx の bare_notes を使った。4 つの例すべてで直しが反映され、テストは 1023 passed だった（場所に依存する 1 件を除いた）。",
+        "fix": "H では pdfdocx を触らないので、反映前に少なくとも次をしてください。\n- DESIGN 4.4・7 章と FIX_PLAN の H の「残る限界」に、この条件と結果を正確に書く。\n- ルート2 のテスト（extract_pages を差し替えたもの）で、今の振る舞いを固定する。\n- 利用者に確かめる項目に入れる。\n\n直し方の案は次の 2 つです。\n- B2.1 の後: pdfdocx が直した docx を読み直すとき、元の docx の書き方の判定（bare_notes）を使う。試作どおり、Linker と link に上書きの引数を足します。必要なら、最後の変換にも同じ判定を使います。\n- linker だけで直す場合: ほかに参照のない注の、番号だけの上付きはリンクする。ただし決定事項 15 の規則が変わるので、利用者の判断が要ります。"
+      },
+      {
+        "lens": "principle",
+        "severity": "should",
+        "file": "src/jasme_jats/linker.py",
+        "line": 44,
+        "problem": "全角の「＜」「＞」（日本語の括弧として「＜用語＞」の形でよく使う）は OPERATORS に入っています。そのため、直前が「＞」の上付きの数字は指数とみなされます。\n\n番号だけの論文では、0.26.0 で正しくリンクされていた「＜用語＞¹」がリンクされなくなります。記録の文面も「指数・単位（cm²・x² などの形）」になります。\n\n「〈用語〉²」「「用語」³」はリンクされるので、扱いがそろいません。\n\nもともと、比較の記号の直後に指数が来ることはありません。DESIGN 7 章の残る形にも書いてありません。",
+        "evidence": "R2（番号だけの論文）の「＜架空の用語＞¹と〈架空の語〉²と「架空の語」³を使う。」で比べた。\n- 0.26.0: fn1・fn2・fn3 の 3 つともリンクされる。\n- H: fn1 だけリンクされない。\n- H の記録 d19: 「上付きの「1」は、指数・単位（cm²・x² などの形）とみなし、注 fn1 にリンクしなかった…」。\n\n_sup_marks の単体の確かめでは、直前が「＞」(U+FF1E) のとき exponent になった。",
+        "fix": "_exponent_like の直前の判定から、比較の記号（<>＜＞≦≧≤≥=＝）を外してください（直後の判定〈x²＜4〉には残す）。少なくとも＜＞<> は外します。\n\nあわせて、番号だけの論文の「＜用語＞¹」がリンクされるテストを足し、DESIGN 6 章の行を直します。\n\n規則を変えないなら、DESIGN 7 章と、利用者に確かめる項目に書いてください。"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "src/jasme_jats/linker.py",
+        "line": 314,
+        "problem": "語の中の図表番号とみなす規則（直前が漢字）が、英語の参照（Figure・Fig.・Figs.・Table）にも当たります。たとえば「実験結果Fig. 1」はリンクされません。\n\nDESIGN 6 章の「本文の図表の参照」の行は「「図」「表」の直前の文字が漢字で…」と書いていて、コードと食い違います。英語の参照は日本語の語の一部にはなりません。",
+        "evidence": "R1 の「これはFigure 1、Fig. 2、Figs. 1を見る。実験結果Fig. 1も見る。」で比べた。\n- 0.26.0: 4 つともリンクされる。\n- H: 「果」の後の「Fig. 1」だけリンクされない。\n- H の記録: 「「Fig. 1」は、直前の「果」と続く語の一部（地図1・付表1 など）とみなし…」。",
+        "fix": "float_refs の判定を m.group(1) が「図」「表」のときだけにしてください。\n\nコードをこのままにするなら、DESIGN 6 章の行（696 行）に、英語の参照にも当てることを書いてください。"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "src/jasme_jats/builder.py",
+        "line": 432,
+        "problem": "姓と名の区切りがない氏名の文字を、text.strip(' 　\\t') にしました（FIX_PLAN どおり）。このため、改行（w:br）で終わる著者名では、AI 依頼文の行の「」の中に改行が入り、行が 2 つに分かれます。\n\n0.26.0 の依頼文は「研究次郎」の形で 1 行でした。どちらの版でも、AI の split_name は不採用になります。",
+        "evidence": "names_article と同じ形の架空の docx で、和文の著者名「架空次郎」の後ろに w:br を足した（N1）。AI依頼文.txt の行は次のとおり。\n- 0.26.0: 「- [d7] 姓と名の区切りがない氏名: 「架空次郎」」。\n- H: 「- [d7] 姓と名の区切りがない氏名: 「架空次郎\\n」」。\n\nactions は、どちらも ai_pending と newline。",
+        "fix": "build_request で表示するときだけ、改行を除くか記号に置き換えてください（例: text.replace(\"\\n\", \"↵\")）。\n\nそのままにするなら、FIX_PLAN の U4 に、改行のある氏名の扱いを書いてください。"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "src/jasme_jats/linker.py",
+        "line": 45,
+        "problem": "RE_EXP_BEFORE は、全角の単位の記号（U+3380〜33DF の ㎝・㎜・㎞・㎡・㎏ など）や、Å・°・′ を含みません。そのため、「12㎝²」は番号だけ（bare）とみなされます。\n\n番号だけの論文では、0.26.0 と同じく注へのリンクになります。「1)」の論文では、「番号だけの形なので注 fnN にリンクしなかった」と記録されます。\n\nD2 で直したかった、指数がなおリンクされる経路です（0.26.0 からあり、H で悪くはなっていない）。数学教育の論文では、「㎝²」は使われうる書き方です。",
+        "evidence": "R2（番号だけの論文）の「面積は 12㎝² である。」は、0.26.0 も H も fn2 にリンクされた。\n\n_sup_marks の単体の確かめでは、直前が ㎝・Å・°・′ のとき bare になった。",
+        "fix": "RE_EXP_BEFORE に U+3380〜U+33DF、µ（U+00B5）、Å、′ を足すか、DESIGN 7 章の残る形に書いてください。"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "src/jasme_jats/linker.py",
+        "line": 364,
+        "problem": "番号だけの論文に、表のセルの中の表の注の印（上付きの「1)」）が 1 つあるだけで、論文全体が「1)」の書き方とみなされます。すると、本文の番号だけの注番号がすべてリンクされなくなります（記録には出ます）。\n\nセルを数えるのは設計どおりで、テスト（test_note_style_counts_box_and_cell）もあります。ただ、表の注の印がこの判定の引き金になることは、DESIGN 7 章からは読み取れません。",
+        "evidence": "R3（R2 に「表3」を足したもの。セルに「12」＋上付きの「1)」、表の下に「1) 架空の表の注」）で比べた。\n- 注の xref: 0.26.0 では、番号だけの注を含めてリンクされていた。H では 14 件が外れ、1 件が増えた（空白を外した範囲）。\n- H の記録: 「番号だけの形なので…（この論文の注番号は「1)」「注1」の形）」が 12 件。\n- actions は変わらない。\n- セルの「1)」は、どちらの版でも fn1 へのリンクになった（誤り）。",
+        "fix": "DESIGN 7 章に、表の注の印で書き方の判定が変わることを書き、暫定の判断（セルを判定に数えるか）として、利用者に確かめる項目に入れてください。"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "src/jasme_jats/linker.py",
+        "line": 310,
+        "problem": "float_refs は書式を見ずに plain を探します。そのため、「図1」の直後に上付きの注番号「1)」があると、「図11」と読み、「図11 に対応する図が見つからない」になります。図1 にはリンクされません。\n\n0.26.0 からある形で、H で悪くはなっていません。",
+        "evidence": "R1 の「図のすぐ後の注番号 図1」＋上付きの「1)」＋「に示す。」で確かめた。\n- 0.26.0 も H も、未解決に ('fig', 'd22', '図11', '図11 に対応する図が見つからない') が出た。\n- fn1 へのリンクは付いた。",
+        "fix": "float_refs で、番号の数字が上付きのアトムにまたがるときは、上付きの手前で番号を切ってください。\n\n直さないなら、DESIGN 7 章に書いてください。"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "docs/FIX_PLAN.md",
+        "line": 622,
+        "problem": "「H（0.27.0）で触ったファイル」に CLAUDE.md がありますが、CLAUDE.md は変わっていません。仕上げの担当の報告も、CLAUDE.md は直していないとしています。",
+        "evidence": "git diff --name-only -- CLAUDE.md の結果は 0 件だった。FIX_PLAN の 622 行には「README.md、CLAUDE.md」とある。",
+        "fix": "622 行の一覧から CLAUDE.md を外してください。"
+      },
+      {
+        "lens": "regression",
+        "severity": "nit",
+        "file": "src/jasme_jats/pdfdocx.py",
+        "line": 520,
+        "problem": "ルート2 で、PDF に合わせる直しが論文全体の注番号の書き方（Linker.note_style）を変えるとき、0.26.0 では当てていた直しが当たらなくなります。H で起きるようになった変化です。\n例: 番号だけの論文で、PDF では 1 か所だけ「1)」の形になっているもの。直すと書き方が「1)」の形に変わり、ほかの段落の注のリンクが消えるため、pdfdocx._lost の守りが直しを止めます。\nリンクは守られ、要確認にも出ます。しかし、13.2 の「直さなかった理由」が一般的な STRUCTURE_REASON（「段落の役割やリンク（引用文献・図表など）…」）なので、利用者には、注番号の書き方が原因だと分かりません。テストもありません。",
+        "evidence": "架空の docx を作りました（scratchpad/h/review/regression/r2/gen.py）。番号だけの上付き ¹ ² ³ と注 1)〜3) のもので、PDF は 1 つ目だけを上付きの「1)」にした docx から LibreOffice で作りました。\n\n--route pdf で比べた結果:\n- 0.26.0: d13 を「…にする1。」→「…にする1)。」に直し、xref は fn1〈1)〉・fn2・fn3。\n- H: 直しは 0 箇所、「直せなかった 1 箇所（要確認）」。xref は fn1〈1〉・fn2・fn3。XML の文字は 0.26.0 と「)」1 字違います（直した docx と XML は一致し、不変性は合格）。\n  - 13.2 の理由は「直すと、段落の役割やリンク（引用文献・図表など）が元の docx と同じに決まらなくなる」です。\n  - 標準エラーに「要確認: 出版版 PDF に合わせきれなかった箇所があります…」が出ます。\n\n実際にありそうな形（PDF ではすべての注番号が「1)」。gen2.py）では、0.26.0 と同じく 3 か所とも直してリンクしました。\nDESIGN 7 章は「ルート2 で…論文全体の書き方の判定が変わりうる（消えた注のリンクは、4.4 の守りで直さない側に倒す）」と書いており、振る舞いは設計どおりです。",
+        "fix": "H では pdfdocx.py に触らない方針なので、次の 3 つを FIX_PLAN の H の「試験運用で確かめること」か、B2.1・I の課題に書き残すことを勧めます。\n- この形（一部の注番号だけが PDF で「1)」の形）\n- 理由の文言が一般的であること\n- テストがないこと\n\n後で直すなら、案は 2 つです。\n- 書き方の判定が変わったことで注のリンクが消えたときは、NOTE_REASON か専用の文言（「直すと論文の注番号の書き方が変わり、ほかの注のリンクが外れる」）にする。\n- test_pdfmatch に、この形の期待を足す。"
+      },
+      {
+        "lens": "regression",
+        "severity": "nit",
+        "file": "tests/test_links.py",
+        "line": 275,
+        "problem": "変異テストで、次の規則の境界はテストが捕まえませんでした（規則を変えても全テストが通ります）。\n- _exponent_like の、直前が演算の記号（OPERATORS。例「=²」）\n- 直前がギリシャ文字（π²）・全角の英字\n- SUP_SIGNS の ASCII の「-」（「m s」＋上付きの「-2」）\n- Linker.__init__ の bare_notes=True（run を通らずに fn_marks を呼ぶとき）\n- note_style が注の一覧（fn）・引用文献（ref）の段落を数えないこと\n- tail_close の RE_NUM_END\n- 本文の「註」＋上付き（after_note の「註」）\n- RE_KANJI の「々」\n\nどれも 0.26.0 からの回帰ではなく、反例（oracle の S02 の m s-2 など）では正しく動きます。",
+        "evidence": "scratchpad/h/review/regression/mut/run_mut.py で、作業ツリーの写しに 1 つずつ置換を当て、tests/test_links.py・test_ai.py・test_notebook.py を流しました。68 件の結果は mut.log にあります。\n\n通ってしまった変異（どれも「146 passed」）:\n- exp_before_op、exp_before_greek、exp_before_fwalpha\n- sign_ascii_hyphen\n- style_init_false\n- style_count_fn_region、style_count_ref_region\n- tail_close_no_numend\n- after_note_zhu_only\n- kanji_noma\n\n等価な変異で、捕まえようがないもの:\n- exp_sign_branch（_sup_marks の kind が先に符号を判定するので、_exponent_like の符号の分岐は結果に効かない）\n- strong_no_strip\n- skip_pos_start1\n- after_pos_e\n\nそのほかの規則の変異は、すべて落ちました（checked に列挙）。",
+        "fix": "test_sup_mark_kinds の表に、次の 4 行を足すのを勧めます。\n- (\"π\", \"2\", \"\", [\"exponent\"])\n- (\"x=\", \"2\", \"\", [\"exponent\"])\n- (\"m s\", \"-2\", \"\", [\"exponent\"])\n- (\"本文の註\", \"1\", \"も\", [\"after_note\"])\n\ntest_float_refs_skip_words には (\"同々図1\", …) の行を足します。\nnote_style には、注の一覧の段落だけに上付きの「1)」がある番号だけの論文が、bare_notes=True のままになるテストを足します。\n任意です。"
+      },
+      {
+        "lens": "regression",
+        "severity": "nit",
+        "file": "docs/FIX_PLAN.md",
+        "line": 622,
+        "problem": "「H（0.27.0）で触ったファイル」の最後に CLAUDE.md を挙げていますが、H では CLAUDE.md を変えていません（文書をコードに合わせる側の食い違い）。",
+        "evidence": "git status --short CLAUDE.md は空です。17 件の変更の一覧にも、CLAUDE.md はありません。\n仕上げの担当の報告も「CLAUDE.md・DEVELOPMENT.md・DESIGN.md…は実装と合っていたので直していない」です（DEVELOPMENT.md・DESIGN.md は実際には変わっています）。\n一方、622 行の末尾は「…README.md、CLAUDE.md。」です。",
+        "fix": "622 行の末尾の「、CLAUDE.md」を消します（CLAUDE.md は実装と合っていたので直していない、と書いてもよい）。"
+      },
+      {
+        "lens": "regression",
+        "severity": "nit",
+        "file": "tests/test_ai.py",
+        "line": 148,
+        "problem": "test_default_model_is_written_once が数えるのは、モデル名の文字列（\"claude-opus-5-5\"）だけです。DEFAULT_MODEL_INFO の値（表示名「Claude Opus 5.5」、料金、提供終了の予定）を tools/make_notebook.py や src に直書きしても、どのテストも落ちません。DEVELOPMENT.md の「モデルを変える」の「ほかの場所に直書きがないこと…を確かめる」は、表示名・料金については成り立ちません。",
+        "evidence": "変異 nb_info_name_literal で、make_notebook.py の API_HELP の「（{DEFAULT_MODEL_INFO[\"name\"]}）です。」を、直書きの「（Claude Opus 5.5）です。」に替えました。test_links・test_ai・test_notebook は 146 passed でした。今の値と同じ直書きは、test_notebook の比較でも区別できません。\n同じ変異でもモデル名の直書き（nb_model_literal・options_literal）は、test_default_model_is_written_once で落ちました。",
+        "fix": "次のどちらかを勧めます。\n- test_default_model_is_written_once で、DEFAULT_MODEL_INFO[\"name\"] の文字列も、ai_assist.py 以外の src/*.py と make_notebook.py に 0 回であることを数える。\n- DEVELOPMENT.md の文を「モデル名の直書きがないこと」に絞る。"
+      },
+      {
+        "lens": "user",
+        "severity": "nit",
+        "file": "docs/FIX_PLAN.md",
+        "line": 622,
+        "problem": "「H（0.27.0）で触ったファイル」の行の最後に CLAUDE.md が書いてあるが、H では CLAUDE.md を変えていない。仕上げの担当の報告にも「CLAUDE.md は実装と合っていたので直していない」とある。",
+        "evidence": "git status --short で変わっているのは README.md・docs 4 件・notebooks・pyproject・src 6 件・tests 5 件・tools と、新しいファイル 3 件で、CLAUDE.md は入っていない。FIX_PLAN の該当の行は「docs の DESIGN.md・DEVELOPMENT.md・FIX_PLAN.md・fix_plan_repro_tests.py、README.md、CLAUDE.md」。",
+        "fix": "その行から「、CLAUDE.md」を消す（G の行は CLAUDE.md を実際に直しているので、そのまま）。"
+      },
+      {
+        "lens": "user",
+        "severity": "nit",
+        "file": "README.md",
+        "line": 285,
+        "problem": "利用者向けの README には「上付きの指数・単位（cm²・x²・s⁻¹ など）は注へのリンクにしない」としか書いていない。H で利用者に見える変化があと 2 つあるが、どちらも README に書いていない。(1) 注番号を「1)」で書いた論文では、括弧のない番号だけの上付き（「…である²」）も注にしない。番号だけの論文では、英字の直後の注番号（「Piaget¹」）を指数とみなす。(2) 英文の著者名が 1 語のとき、10 章に新しい警告が出る。",
+        "evidence": "sample_links の 4 章 M-005 に「上付きの「2」は、番号だけの形なので注 fn2 にリンクしなかった（この論文の注番号は「1)」「注1」の形）」が出る。0.26.0 ではこれは fn2 にリンクされていた（AI依頼文の d18 の差分で確かめた）。英文の警告は builder.person_name に足されている（「英文の著者名「…」（段落 …）に姓と名の区切り（空白）がないため…」）。README の 10 章の説明（158〜171 行付近）と 285 行には、どちらも出てこない。DESIGN 6・7 章と DEVELOPMENT には書いてある。",
+        "fix": "README の 285 行の、足した文の後ろに「注番号が「1)」の形の論文では、括弧のない番号だけの上付きの数字も注にしません（4 章に載ります）」と足す。気をつけることの一覧に「英文の著者名が 1 語のとき（10 章）: 名もあるなら Word で姓と名の間に空白を入れて変換し直す」を 1 行足す。表示の仕組みは変えない。"
+      },
+      {
+        "lens": "user",
+        "severity": "nit",
+        "file": "src/jasme_jats/linker.py",
+        "line": 411,
+        "problem": "指数・単位の記録は、同じ段落の数字をそのまま並べるので、同じ数字が並ぶと「上付きの「2」「2」は、…」となる。編集委員には、何が 2 つあるのか分かりにくい（x²+y² の 2 つの ² であることが、文面から読み取れない）。",
+        "evidence": "sample_links.docx の 4 章 M-002 と AI依頼文の d14 の行が「上付きの「2」「2」は、指数・単位（cm²・x² などの形）とみなし、注 fn2 にリンクしなかった。…（text「2」、occurrence 1／text「2」、occurrence 2）…」だった。コードは nums = \"\".join(f\"「{d}」\" for _, d, _, _ in exps) で、重なりを除いていない。",
+        "fix": "利用者向けの前半は、同じ数字を 1 回だけにして件数を添える（例: 「上付きの「2」（2 か所）は、…」）。AI 向けの text と occurrence は、今のまま数字ごとに並べる。直さないなら、利用者が後でまとめて文言を直すときの候補として FIX_PLAN の H に書いておく。"
+      }
+    ],
+    "rounds": [
+      {
+        "round": 1,
+        "fix": {
+          "changed_files": [
+            "/home/user/jstgxmlcng_JASME/src/jasme_jats/linker.py",
+            "/home/user/jstgxmlcng_JASME/src/jasme_jats/ai_assist.py",
+            "/home/user/jstgxmlcng_JASME/tests/test_links.py",
+            "/home/user/jstgxmlcng_JASME/tests/test_ai.py",
+            "/home/user/jstgxmlcng_JASME/docs/DESIGN.md",
+            "/home/user/jstgxmlcng_JASME/docs/DEVELOPMENT.md",
+            "/home/user/jstgxmlcng_JASME/docs/FIX_PLAN.md",
+            "/home/user/jstgxmlcng_JASME/README.md"
+          ],
+          "summary": "点検 1 回目の指摘のうち、should 2 件と nit 14 件を処理した。どれも H の方針の範囲で、pdfmatch.py・pdfdocx.py・structure.py には触っていない。\n\n【should 1: ルート2 で注番号の書き方の判定が切り替わる】\n- コードは直していない。直すには pdfdocx を変えるか、linker の規則（決定事項 15）を変える必要があるため。\n- 指摘が求めた最低限の対応はした。\n  - DESIGN 4.4・7 章に、条件と結果を正確に書いた。\n  - FIX_PLAN の H に「残る限界と、利用者に確かめること」を足した。直し方の案 (a)(b)(c) と推奨（(a)+(b)）も書いた。\n    - 点検の担当の試作では、最後の変換で fn2 のリンクが消える。これも書いた。\n  - DEVELOPMENT の「残っている課題」と README の 13 章の説明にも書いた。\n  - 今の振る舞いを test_route2_note_style_change で固定した（extract_pages を差し替え、all・partial・cell の 3 通り）。\n- extract_pages を差し替えた架空の例で、直した件数を再現した。\n  - 0.26.0: 4/4・3/3・3/3。\n  - H: 4/4・0/3・0/3。\n\n【should 2: 比較の記号】\n- 比較の記号を新しく linker.COMPARISONS とし、指数・単位の直前の判定から外した。直後の判定（x²＜4）には残した。\n- 番号だけの論文の「＜用語＞¹」「<term>²」は、0.26.0 と同じく注にリンクする。\n\n【nit で直したもの】\n- 英語の参照（Fig.・Table）は、語の一部かの判定の対象から外した。DESIGN 6 章の書き方に合わせた。\n- 「図1」＋上付きの「1)」は、参照を上付きの手前で切る（linker._before_sup）。図1 にリンクし、3 章の「図11 が見つからない」も出なくなる。並びの番号も同じ。\n- 指数・単位の直前の文字に、単位の記号を足した（µ・Å・′・U+3380〜33DF）。「°」は足していない。\n- 指数・単位の記録の文面は、同じ数字を 1 回だけ書いて件数を添える（「上付きの「2」（2 か所）は、…」）。\n- AI 依頼文の氏名の中の改行は「⏎」で示す。\n- 変異テストで生き残っていた規則に、テストを足した。今回の規則の変異もすべて落ちる。1 つは等価な変異だったので、その条件をコードから外した。\n- test_default_model_is_written_once は、既定のモデルの表示名・提供終了の予定・料金の直書きも数える。\n- 文書を直した。\n  - README（利用者に見える変化 2 つと、氏名の注意）。\n  - FIX_PLAN（H で触ったファイルの一覧から CLAUDE.md を外した）。\n  - DESIGN 5・6・7 章。\n  - DEVELOPMENT のテストの説明。\n\nノートブックは作り直したが、中身は変わっていない。版は 0.27.0 のまま。",
+          "tests_added": [
+            "tests/test_links.py::test_float_refs_stop_before_superscript（「図1」＋上付きの「1)」、並び「図1、2」＋上付きの「3)」、上付きで始まる「図」＋「12」は切らない、「地図1」＋上付きの記録）",
+            "tests/test_links.py::test_figure_ref_before_superscript_note_converts（変換の全体で図1・注1・「実験結果Fig. 1」をリンクする。不変性チェック・DTD・jstage_issues == []）",
+            "tests/test_links.py::test_fn_marks_without_run_link_bare_numbers（Linker.__init__ の bare_notes=True）",
+            "tests/test_links.py::test_note_style_ignores_note_list_and_references（注の一覧・引用文献の上付きの「1)」を、書き方の判定に数えない）",
+            "tests/test_links.py::test_route2_note_style_change[all/partial/cell]（ルート2 の今の振る舞いを固定。extract_pages を差し替え）",
+            "tests/test_links.py::test_superscript_boundaries に 2 行（番号だけの論文の「＜架空の用語＞¹」「〈架空の語〉²」はリンクする。「12㎝²」はリンクせずに記録する）",
+            "tests/test_links.py::test_sup_mark_kinds に 16 行（π・ｘ・12㎝・µ・Å〈U+00C5・U+212B〉・x′・10−→exponent、＜…＞・<term>・x=→bare、(a+b)²＜c・(a+b)²=c→exponent、ASCII の「-2」「-1」→exponent、本文の註→after_note、「3a」＋「）」→bare）",
+            "tests/test_links.py::test_float_refs_skip_words に 3 行（同々図1、実験結果Fig. 1、実験結果Table 1）",
+            "tests/test_links.py::test_unlinked_superscripts_are_recorded の期待を変更（「上付きの「2」（2 か所）は、」）",
+            "tests/test_ai.py::test_build_request_shows_newline_in_unsplit_name",
+            "tests/test_ai.py::test_default_model_is_written_once を拡張（表示名・提供終了の予定〈2 つの書き方〉・料金の直書きを数える）"
+          ],
+          "pytest_result": "- Python 3.13: 1054 passed（python -m pytest -q -p no:cacheprovider）。\n- Python 3.10: 1054 passed（PYTHONPATH=src venv310）。\n- 修正前の H の src で新しい tests/test_links.py を流すと、14 件が落ちた。新しい規則のテストで、意図どおり。\n- ruff check src tests tools: 201 件。HEAD（git worktree で確かめた）も 201 件で、ファイルと規則ごとの内訳も同じ。\n- 変異テスト（scratchpad/h/fix_r1/mut/run_mut.py、result.json）: 前の点検で生き残っていたものと、今回の規則のものは、すべて落ちた。\n  - 前の点検の生き残り: exp_before_op、exp_before_greek、exp_before_fwalpha、sign_ascii_hyphen、style_init_false、style_count_fn_region、style_count_ref_region、tail_close_no_numend、after_note_zhu_only、kanji_noma、nb_info_name_literal。\n  - 今回の規則: cmp_before、cmp_after_off、unit_cjk_off、unit_micro_off、unit_angstrom_off、unit_prime_off、english_word_part、sup_cut_off、sup_cut_start、sup_cut_tail2、dedupe_off、newline_display_off、nb_info_date_literal、nb_info_price_literal。\n  - sup_cut_tail は等価な変異だった（条件 m.start(3) < end は、切り出しが空になるので不要）。その条件をコードから外した。",
+          "measures": "【golden】\n- 0.26.0 と同じ名前の 23 件は、XML・AI依頼文・レポートのハッシュがすべて一致した。\n- 新しい 4 件（sample_links*）も ok です。\n- 修正前の H と違うのは、sample_links_manual と sample_links_split だけ。違いは 4 章の M-002 と、AI依頼文の d14 の行の文面で、次のとおり。\n  - 修正前: 「上付きの「2」「2」は、」\n  - 修正後: 「上付きの「2」（2 か所）は、」\n\n【td1〜3（ルート1・ルート2）、0.26.0 との比較】\n- XML、レポート、AI依頼文、ZIP の中身、標準エラー、終了コード（どれも 1）が一致した。\n- xref の一覧も 6 通りすべてで一致し、xref の違いは 0 件だった。\n- 違うのは、td3 のルート2 の PDFに合わせた原稿.docx の変更履歴の w:date だけ。2 つの版を同時に流したため、秒が違った。w:date を除けば同じ。\n- 数えた結果（文字は記録していない）:\n  - リンクしていない上付きのうち、直前・直後が比較の記号のもの、直前が単位の記号のもの: 0。\n  - 直前が漢字の英語の参照: 0。\n  - 上付きの手前で切る参照: 0。\n  - bare_notes は 3 本とも偽（注は 5・4・6 件）。\n\n【独立の反例】\n- 自作の C1（番号だけの論文）・C2（「1)」の論文）・C3（著者名の後ろの w:br と、1 語の英文氏名）と、点検の担当の R1〜R7 を使った。\n- 0.26.0・修正前の H・修正後の 3 つで比べた（scratchpad/h/fix_r1/cx/out/summary.json）。\n- 全件で次のとおり。\n  - XML の文字は同じ。xref を外した XML も同じ。\n  - ok・DTD・J-STAGE のチェックはすべて合格。\n  - XML に入らなかった画像は 0。actions も同じ。\n- 修正前の H と比べた xref の違いは、すべて今回の修正の意図どおり。\n  - C1:\n    - 消えた fn: 12㎝²・5㎏³・3 µ²・2 Å³・x′²（単位の記号）。\n    - 増えた fn: ＜…＞¹・<…>²、x≦²・a=³（比較の記号を直前に使わない）。\n    - 増えた fig・table: 図1・図1、2 の「2」・表1・表2（上付きの手前で切る）。前は「図11」「図22」「表11」が 3 章に出ていたが、出なくなった。表2 は「2」だけから「表2」全体へのリンクになった。\n    - 増えた参照: Fig. 1・Table 2・Figure 2（英語の参照）。\n    - 記録: 地図1＋上付きは「図1」の語の一部として記録する。＜用語¹＞ は指数として記録する。\n  - C2: fig・table が 3 件、英語の参照が 3 件増えた。消えたものはない。単位の記号の 5 件は、番号だけの記録 5 件から指数の記録 1 件になった。\n  - R1: 図1＋上付きの「1)」の F1 と、「実験結果Fig. 1」の F1 が増えた。3 章の「図11」は出なくなった。\n  - R2: 12㎝² の fn2 が消えた（指数とみなす）。＜架空の用語＞¹ の fn1 が増えた。\n  - R3: 記録の文面だけ（件数の添え書き、＜用語＞¹ は番号だけの記録に）。\n  - R4〜R7: 違いなし。\n  - C3: AI 依頼文の d7 の行が、修正前の 2 行（「架空次郎」で改行）から「「架空次郎⏎」」の 1 行になった。\n- 0.26.0 と比べた違いは、H の D2・M5 の意図した変化と、上の修正だけ。\n\n【ルート2（extract_pages を差し替えた架空の例。直した件数）】\n| 例 | 0.26.0 | H（修正前・修正後とも） |\n|---|---|---|\n| all | 4/4 | 4/4 |\n| partial | 3/3 | 0/3（STRUCTURE_REASON、pdf_unfixed） |\n| cell | 3/3 | 0/3（STRUCTURE_REASON、pdf_unfixed） |\n\nこれが残る限界で、テストで固定した。",
+          "deviations": "【指摘ごとの扱い】\n1. should 1（ルート2）: コードは直していない。\n   - H では pdfdocx.py に触らない決まり。linker だけで直す案 (c) は、決定事項 15 の規則を変えるので、利用者の判断が要る。\n   - 指摘の「少なくとも」の 3 点はした（文書、今の振る舞いを固定するテスト、利用者に確かめる項目）。README の 13 章の説明にも足した。\n2. should 2: 比較の記号（= ＝ < > ＜ ＞ ≦ ≧ ≤ ≥）を、すべて直前の判定から外した。\n   - 決定事項 15 の「明らかな指数（直前が英数字・演算の記号）」の演算の記号は、四則などの記号と読んだ。暫定で、FIX_PLAN に明記した。\n   - その結果、「x≦²」「a=³」は番号だけとみなす。「＜用語¹＞」は直後の判定で指数とみなす（DESIGN 7 章）。\n3. nit「Fig.」: 文書ではなくコードを直した。CLAUDE.md の「食い違いはコードに合わせる」と逆の向きになるので、理由を書く。\n   - H で入った回帰で、0.26.0 はリンクしていた。M5 の対象は日本語の語の中の図表番号で、点検の第一案もコードを直すことだった。\n   - FIX_PLAN の H の M5 の計画の文（「直前の文字が漢字で…」に図・表の限定がない）は、計画の記録なので残した。点検 1 回目の項に、限定したことを書いた。\n4. nit（氏名の改行）: 改行は消さずに「⏎」で示した。レポートの esc と同じ印。改行のある氏名の split_name は、0.26.0 と同じく不採用のまま。\n5. nit（単位の記号）: 「°」は足していない（DESIGN 7 章に書いた）。\n6. nit（表のセルの表の注の印）: 文書と利用者に確かめる項目だけで、コードは変えていない。\n7. nit（図1＋上付き）: 0.26.0 からある形だが、直した。番号の一部を誤って上付きにしたもの（図1＋上付きの「0」）は、図1 への参照になる。DESIGN 7 章に書いた。\n8. nit（変異テスト）: 点検の提案の行のうち、2 つはそのままでは使えなかった。\n   - (\\\"x=\\\",\\\"2\\\",\\\"\\\",[\\\"exponent\\\"]) は should 2 の修正と逆の期待なので、[\\\"bare\\\"] にして足した。\n   - (\\\"m s\\\",\\\"-2\\\") は直前が英字で変異を落とせないので、(\\\"\\\",\\\"-1\\\") も足した。\n9. nit（pdfdocx の 13.2 の理由が一般的な文言）: 直していない（pdfdocx に触らないため）。FIX_PLAN の残る限界に、案 (b) として書いた。\n\n【見つけた食い違い（直したもの）】\n- DESIGN 6 章「本文の図表の参照」と H のコード（英語の参照にも当てていた）→ コードを直した。\n- linker の冒頭の docstring の「直前が漢字」→「「図」「表」の直前が漢字」にした。\n- FIX_PLAN の「H で触ったファイル」の一覧に CLAUDE.md があった → 外した（同じ指摘が 3 件）。\n- DEVELOPMENT の「モデルを変える」は、表示名・料金にもテストがあるように書いていた → テストを足して、文と合わせた。\n- DESIGN 4.4・7 章の、ルート2 の注番号の書き方の記述があいまいだった → 正確に書いた。\n- DESIGN 6 章の指数・単位の判定の記述（直前に演算の記号）→ OPERATORS と COMPARISONS に分けて書き直した。\n\n【見つけた食い違い（直していないもの）】\n- 作業の指示の基準の写し base0260_src は、パッケージのフォルダ（中身は __init__.py など）そのもの。\n  - PYTHONPATH にそのまま渡すと 0.26.0 を読まず、編集可能インストールの作業ツリーを読む。\n  - 私は scratchpad/h/fix_r1/base/jasme_jats → base0260_src の symlink を作り、版 0.26.0 を確かめてから使った。\n  - ほかの担当の 0.26.0 との比較が、同じ指示で作業ツリー同士の比較になっていないか、まとめ役が確かめてください。\n- 作業の指示の暫定の判断「英文 1 語の氏名を AI 依頼文から外す」と、FIX_PLAN の決定事項 17「外さずに載せる」が食い違う。前の担当が決定事項 17 に従った。今回は変えていない。",
+          "open_issues": "1. ルート2 の注番号の書き方の限界（should 1）がまだ残っている。\n   - 番号だけの注の docx を「1)」の出版版 PDF に合わせると、直さない段落が 1 つでもあれば、直しが全部止まる。\n   - 直すのは B2.1 の後。pdfdocx の読み直しと最後の変換で、元の docx の bare_notes を使う（案 a）。あわせて 13.2 の理由の文言を専用にする（案 b）。\n   - 利用者に、この形の原稿がどのくらいあるかを確かめる。\n2. 暫定で、利用者にまだ確かめていない判断。\n   - 表のセルの中の表の注の印を、書き方の判定に数えること。\n   - 比較の記号・単位の記号の範囲（「＜用語¹＞」は指数、「°」の後ろは番号だけ）。\n   - 前からの暫定（書き方の判定に数えるのは、形がはっきりした注番号だけ。「1)」の論文の番号だけの数字は 1 件ずつ記録する）。\n3. 試験運用で確かめること。\n   - 実際の AI が「推定:」の記録から link_note・link_figure を提案するか。\n   - 実際の論文に、指数・単位、番号だけの注、語の中の図表番号があるか（td1〜3 にはない）。\n4. base0260_src を PYTHONPATH にそのまま渡すと 0.26.0 を読まない（deviations に書いた）。次の担当への指示では、親のフォルダを渡す形に直す。\n\n実験の場所は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/fix_r1/。大きな出力は消し、JSON・ログ・スクリプト・修正前の src の写し（pre/）は残した。tests/__pycache__ と tools/__pycache__ も消した。既存の fixture は作り直していない（git status で確かめた）。"
+        },
+        "findings": [
+          {
+            "lens": "principle",
+            "severity": "should",
+            "file": "src/jasme_jats/linker.py",
+            "line": 528,
+            "problem": "図・表の番号の直後に置いた上付きの注番号が、注にリンクされなくなります。0.26.0 ではリンクされていました。\n\n例は「図1¹」「表2³」「Fig. 2¹」です。_exponent_like は、直前の文字が数字なので、これを指数・単位とみなします。次の場合に、注へのリンクが外れます。\n- 番号だけの論文: 本文・囲み・表のセル・キャプションのどこでも。\n- 「1)」の論文: 上付きの「1」の後ろが本文の「)」のとき（「図1¹)」）。tail_close は、_exponent_like が偽のときにしか働きません。\n\n修正で入った _before_sup によって、「図1」は図1 にリンクされるようになりました。ところが続く上付きの数字は、いまリンクした図の番号の数字を指数の底として扱います。\n\n文書との食い違いも 3 つあります。\n- float_refs の docstring（315 行）とテストの docstring は「上付きの数字は fn_marks で注番号として扱う」と書いていますが、これは「1)」の形にしか当てはまりません。\n- 4 章と AI 依頼文の記録は「指数・単位（cm²・x² などの形）とみなし」になるので、編集委員には理由が分かりません。\n- DESIGN 7 章（1012 行）は番号だけの論文の「図1¹」を書いていますが、0.26.0 ではリンクしていたことと、「1)」の論文の場合を書いていません。FIX_PLAN の H の「残る限界と、利用者に確かめること」にもありません。",
+            "evidence": "架空の docx で全体を変換し、0.26.0（HEAD の worktree）、修正前の H、今の作業ツリーを比べた（r2/tools/cmp3.py）。\n- X2（番号だけの論文）「結果は図1」＋上付き「1」＋「に示す。」:\n  - 0.26.0: fn1 にリンクする（図は「図11 に対応する図が見つからない」）。\n  - 修正前の H: どちらもリンクしない。\n  - 今の H: F1 にリンクし、fn1 はリンクしない。記録は「上付きの「1」は、指数・単位…とみなし」。\n  - 「表2」＋上付き「3」も同じで、fn3 が外れる。\n- X4（囲み）「…図1」＋上付き「2」: fn2 が外れる。\n- X1（「1)」の論文）「図1」＋上付き「1」＋本文の「)」: fn1 が外れる。\n- Z1（番号だけの論文。r2/tools/gen_z.py）: キャプション「図1²　…」「表1³　…」と、表のセル「図1¹を参照」の fn2・fn3・fn1 が外れる（0.26.0 はリンクしていた）。\n- 段落だけの確かめ（r2/unit/probe.py）: 「Fig. 2¹」「図１¹」「図12³」「図1と図2³」「（図1¹）」も同じ。\n\n試作を 2 つ作った。どちらも 1054 passed で、R1〜R7・X3 の xref は今の H と同じ。XML の文字と、xref を外した XML も同じ。ok・DTD・画像の出力漏れも同じ。\n- r2/proto_after_ref.diff: 上付きの続きが図・表の xref の直後から始まるときは、直前の文字の判定をしない。X1・X2・X4 の 4 件は 0.26.0 と同じになる。キャプションとセルは直らない。\n- r2/proto2_float_num_end.diff: plain[:s] が (図|表|Figure|Figs?\\.|Tables?)\\s?NUM で終わるときは、直前の文字の判定をしない。Z1 も含めて、全件が 0.26.0 と同じになる。\n\ntd1〜3 には、図表の参照の直後の上付きがない（0 件）。\n\nblocking にしない理由は 3 つ。決定事項 15 の文言（直前が英数字）のとおりであること。記録の link_note で戻せること。DESIGN 7 章に書かれていること。",
+            "fix": "_exponent_like で、図表の番号の直後なら直前の文字の判定を使わないようにしてください（proto2 の形。直前の 12 文字ほどを見れば足ります）。あわせて、次のテストを足します。\n- 番号だけの論文の「図1¹」「表2³」とキャプションの「図1²」は、注にリンクする。\n- 「1)」の論文の「図1¹)」は、注にリンクする。\n\n直さないなら、次の 4 つをしてください。\n- DESIGN 7 章と FIX_PLAN の H の「残る限界と、利用者に確かめること」に書く。0.26.0 ではリンクしていたことと、「1)」の論文の「図1¹)」も入れる。\n- float_refs の docstring（315 行）を直す。上付きの「1)」は注番号になり、番号だけの数字は直前が数字なので指数とみなす、と書く。\n- test_float_refs_stop_before_superscript の docstring も同じく直す。\n- 記録の文面を、利用者が後でまとめて直すときの候補に入れる。"
+          },
+          {
+            "lens": "principle",
+            "severity": "nit",
+            "file": "src/jasme_jats/linker.py",
+            "line": 332,
+            "problem": "先頭の番号の直後に上付きの注番号があると、参照をその手前で切ったあと、後ろに続く並びの番号をリンクしません。例は「図1」＋上付き「1」＋「、2に示す」の「、2」です。\n\n0.26.0 と修正前の H は、この「2」を図2 にリンクしていました。この修正で新しく起きるようになったもので、記録にも 3 章にも出ないので、利用者は気づけません。\n\nコードのコメントには書いてありますが、DESIGN 6 章の「並びの番号も同じ」は、並びの途中が上付きになる場合（「図1、2」＋上付き「3)」）しか書いていません。",
+            "evidence": "r2/unit/probe.py の fig_sup_tail（番号だけの論文）で比べた。\n- 0.26.0: 上付き「1」→ fn1、「2」→ F2。図は「図11 に対応する図が見つからない」。\n- 修正前の H: 「2」→ F2。\n- 今の H: 「図1」→ F1 だけ。記録も未解決もない。\n\n「1)」の論文の扱い（bare_notes が偽）でも同じだった。番号と並びの間に注番号を置く書き方はまれ。",
+            "fix": "任意です。直すなら、切った後に上付きの続きの後ろから、並びの続き（区切り＋番号）を探してリンクします。\n\n直さないなら、DESIGN 6 章（または 7 章）に書いてください。内容は「先頭の番号の直後に上付きの文字があると、その後ろの並びの番号はリンクしない」です。"
+          },
+          {
+            "lens": "principle",
+            "severity": "nit",
+            "file": "src/jasme_jats/structure.py",
+            "line": 48,
+            "problem": "キャプションの番号の直後に上付きの数字があると、図の番号を誤って読みます。たとえば「図1」＋上付き「2」＋「　架空の図」は、図12 になります。RE_FIGCAP が段落の文字（上付きの文字も含む）で番号を読むためです。\n\nその結果、本文の「図1」「表1」は図・表にリンクされず、「見つからない」になります。\n\n0.26.0 からある形で、H で悪くはなっていません。ただ H では、表のセルの「図1¹」の未解決の文言が「図1 に対応する図が見つからない」になります。図1 がある論文なので、利用者には分かりにくくなります。H では structure.py に触らないので、記録だけの指摘です。",
+            "evidence": "r2/tools/gen_z.py で Z1（番号だけの論文）を作って比べた。\n- 0.26.0 も H も、本文の「図1を見る」「表1のとおりである」は図・表にリンクされない。\n- 表のセルの未解決の文言: 0.26.0 は「図11 に対応する図が見つからない」、H は「図1 に対応する図が見つからない」。\n- ok・DTD・不変性はどちらも合格。\n\nキャプションの番号の直後に注番号を置く書き方はまれ。",
+            "fix": "FIX_PLAN の I 以降の課題に書き残してください。直し方は、キャプションの番号を上付きの文字の手前で切ることです（linker._before_sup と同じ考え方）。"
+          },
+          {
+            "lens": "regression",
+            "severity": "nit",
+            "file": "src/jasme_jats/linker.py",
+            "line": 330,
+            "problem": "_before_sup で番号を切ったあと、3 章の「見つからない」の文脈（unresolved の 3 つ目の要素）を plain[s:end]（切った参照）にしています。この振る舞いを確かめるテストがありません。文脈を m.group(0) に戻す変異は、test_links.py・test_ai.py・test_notebook.py の 176 件がすべて通り、生き残りました。",
+            "evidence": "r2nd/mut/run_mut.py の変異 cut_ctx_group0（self._link_num(..., plain[s:end]) → m.group(0)）の結果は「SURVIVED 176 passed」でした。\n\nr2b/probe の bare_fig（「図5」＋上付きの「2」、図5 はない）で、unresolved の文脈を比べました。\n- 0.26.0: ['fig','d16','図52','図52 に対応する図が見つからない']\n- 修正後: ['fig','d16','図5','図5 に対応する図が見つからない']\n- この変異: 文脈が「図52」、文言が「図5 に対応する…」になり、両者が食い違う。\n\ntest_float_refs_stop_before_superscript は lk.unresolved == [] しか見ていません（図がある場合だけ）。",
+            "fix": "test_float_refs_stop_before_superscript に、ids にない番号（例:「図5」＋上付きの「1)」）を 1 つ足し、lk.unresolved == [(\"fig\", \"d1\", \"図5\", \"図5 に対応する図が見つからない\")] を確かめる行を加えてください。"
+          },
+          {
+            "lens": "regression",
+            "severity": "nit",
+            "file": "src/jasme_jats/linker.py",
+            "line": 315,
+            "problem": "float_refs の docstring は「上付きの数字は fn_marks で注番号として扱う」と書いています。しかし、番号だけの論文では、切った後ろの上付きの数字は直前が数字なので指数とみなし、注にリンクしません（「図1¹」は図1 にだけリンクし、¹ は指数として記録します）。DESIGN 7 章（1012 行付近）にはこの形が正しく書いてあり、docstring だけが言い過ぎです（文書をコードに合わせる側の食い違い）。",
+            "evidence": "r2b/probe の bare_fig（番号だけの論文の「戊の結果を図1」＋上付きの「1」）で比べました。\n- 修正後: xref は fig F1「図1」だけ。記録 d16 は「上付きの「1」「2」は、指数・単位（cm²・x² などの形）とみなし、注 fn1・fn2 にリンクしなかった…」。\n- 0.26.0: fn1・fn2 にリンクし、3 章に「図11」「図52」が出る。\n- 修正前の H: どちらもリンクしない。\n\n「1)」の論文（mk_fig）では、docstring のとおり fn3・fn4 にリンクしました。",
+            "fix": "docstring の当該の文を、たとえば「上付きの数字は fn_marks の規則で扱う（「1)」などの形なら注番号。番号だけの論文の番号だけの数字は、直前が数字なので指数として記録する。docs/DESIGN.md の 7 章）」に直してください。"
+          }
+        ],
+        "failedLens": []
+      },
+      {
+        "round": 2,
+        "fix": {
+          "changed_files": [
+            "/home/user/jstgxmlcng_JASME/src/jasme_jats/linker.py",
+            "/home/user/jstgxmlcng_JASME/tests/test_links.py",
+            "/home/user/jstgxmlcng_JASME/docs/DESIGN.md",
+            "/home/user/jstgxmlcng_JASME/docs/FIX_PLAN.md",
+            "/home/user/jstgxmlcng_JASME/docs/DEVELOPMENT.md",
+            "/home/user/jstgxmlcng_JASME/README.md"
+          ],
+          "summary": "点検 2 回目の指摘（should 1・nit 4）を処理した。版は 0.27.0 のまま。コミットはしていない。\n\nshould（linker.py の _exponent_like）は直した。\n- 新しい関数 linker._after_float_ref を足した。上付きの続きの手前の文字 plain[:s] が、図・表の参照の番号で終わるかを見る。形は float_refs と同じ RE_FIGREF・RE_TABREF で、一致の終わりが s のもの。\n- 図・表の番号で終わるときは、直前の文字では指数とみなさない。例は「図1¹」「表2³」「Fig. 2¹」「図1、2³」「図1～3²」、キャプションの「図1²」、表のセル・囲みの中。\n- 番号だけの論文では、0.26.0 と同じく注にリンクする。\n- 「1)」の書き方の論文では、「図1¹)」（上付きの「1」＋本文の「)」）を注にリンクする。番号だけの「図1¹」は「番号だけの形なので…」として記録する。指数・単位の文面にはしない。\n- 点検の担当の試作 proto2 は「図」の直後の番号しか見ないので、「図1～3²」が指数のままだった。今回の形は並びの番号も含む。\n- 次のものは今までどおり指数とみなす: 符号で始まる上付き（「図1⁻¹」）、直後が演算の記号のもの、番号で終わらない直前（「図1-」「図1.5」）。\n- docstring も直した: float_refs、_exponent_like、RE_EXP_BEFORE のコメント。\n\nnit は次のとおり。\n- nit 2（上付きの後ろの並びの番号「図1¹、2」の「、2」）: コードは直さなかった。DESIGN 6・7 章、FIX_PLAN H の「残る限界」、docstring に書き、テストで今の振る舞いを固定した。「図1¹と図2」の図2 はリンクする。\n- nit 3（キャプションの番号を上付きの数字も含めて読み、「図12」になる。structure.py）: FIX_PLAN に書き残した。場所は H の「残る限界」と I の節（I の後に残す直し）。DESIGN 7 章と DEVELOPMENT.md の「残っている課題」にも書いた。\n- nit 4: 3 章の「見つからない」の文脈が、切った参照（「図5」）になることのテストを足した。\n- nit 5: docstring を直した。\n\n点検の担当の変異テストで生き残っていた変異は 3 つで、今はすべてテストで見つかる。\n- cut_ctx_group0\n- cut_pos_mend（切った後、上付きの手前から探し直すこと）\n- supchars_unlinked（リンクのある上付きの文字でも切ること）\n\n文書は DESIGN.md（6 章の 2 つの行・7 章）、FIX_PLAN.md（H に「点検 2 回目の指摘で直したこと」と残る限界 2 件、I に 1 行）、DEVELOPMENT.md、README.md をコードに合わせた。ノートブックは make_notebook.py で作り直したが、ハッシュは同じだった。\n\n作業ファイルは /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/fix_r2 に置いた。\n- results.json: 結果のまとめ\n- pre/: 修正前の src・docs・tests の写し\n- tools/: スクリプト（run_td.sh、td_cmp.py、cmp3.py、cmp_r2.py、gen_mine.py、gen_mine_r2.py、count_td.py、repl.py）\n- mut/: 変異テスト\n- unit/: probe0.py、perf.py",
+          "tests_added": [
+            "tests/test_links.py::test_sup_mark_kinds（図・表の番号の直後の上付きのパラメータを 16 件追加。bare: 「結果は図1」¹・「表2」³・「see Fig. 2」¹・「Table 2」²・「図１」１・「図12」³・「図1、2」³・「図1～3」²・「図1と表2」³・「地図1」²・「図1」＋「1, 2」。strong: 「図1」¹＋本文「)」。exponent: 「図1-」²・「図1.5」²・「図1」＋「−1」・「図1」²＋「+c」）",
+            "tests/test_links.py::test_fn_marks_after_float_number[True]（キャプションの形の段落「図1²　…（表2³…）」: 番号だけの論文では fn2・fn3 にリンク）",
+            "tests/test_links.py::test_fn_marks_after_float_number[False]（「1)」の書き方の論文: 番号だけの数字として 1 件ずつ記録し、指数の文面にしない）",
+            "tests/test_links.py::test_figure_number_then_superscript_note_converts[False]（変換の全体。番号だけの論文の本文「図1¹」「表1²」と表のセル「図1³」が図・表と注の両方にリンク。不変性・DTD・J-STAGE は合格）",
+            "tests/test_links.py::test_figure_number_then_superscript_note_converts[True]（「1)」の書き方の論文: 「図1¹)」は fn1、「表1²」・セルの「図1³」は記録）",
+            "tests/test_links.py::test_float_refs_stop_before_superscript（拡張: 図がない「図5」＋上付きの「1)」の unresolved の文脈が「図5」になること。「図1¹、2と図2を見る。」の「、2」はリンクせず図2 はリンクすること。リンクのある上付きの「3」でも「図2」の手前で切ること）"
+          ],
+          "pytest_result": "- Python 3.13: 1074 passed（35.4 秒）。\n- Python 3.10（venv310、PYTHONPATH=src）: 1074 passed（36.0 秒）。\n- 修正前は 1054 件。足したのは 20 件。\n- 足したテストは、修正前の src（pytest_src.sh）では 16 件が不合格になる。修正が効いていることを確かめた。\n- test_links.py だけを修正前の src で流した結果は「16 failed, 94 passed」。\n- ruff check src tests tools: 201 件。修正前の作業ツリーと、ファイル・規則・メッセージごとに同じ。HEAD は前回の点検で 201 件。",
+          "measures": "**golden**\n- 0.26.0（golden_base）と同じ名前の 23 件は、manifest がすべて同じ。\n- 27 件すべてが、修正前の H（fix_r1/golden_new）と同じ。fixture には図表の番号の直後の上付きがないため。\n- 全件 ok [True, True, True, 0]。\n\n**td1〜3（ルート1・ルート2、手動モード、0.26.0・修正前・修正後）**\n- 6 回の変換すべてで、次のものが 0.26.0 とも修正前とも同じ。\n  - XML（ハッシュ）\n  - レポート（作成日時・ツールの行を除く）\n  - AI 依頼文\n  - ZIP の中身の一覧\n  - 標準エラー\n  - 終了コード（すべて 1）\n  - 不変性の行\n  - xref を外した XML\n- xref の一覧も全件同じ。\n  - td1: aff 1・bibr 61・fig 47・fn 6・table 2\n  - td2: aff 1・bibr 70・fig 21・table 7・fn 4\n  - td3: aff 1・fig 11・bibr 27・fn 6\n- **xref の違いは 0 件。**\n- ルート2 の「PDFに合わせた原稿.docx」の違いは、w:date と dcterms の時刻だけ。正規化すると同じになる。\n- 標準出力の違いは、出力先のパスだけ。\n- 上付きの続きの数（リンク済みを含む）は 6・5・6。そのうち図表の番号の直後は 0、参照を上付きで切ったものは 0、キャプションの番号の直後の上付きは 0。\n- XML に入らなかった画像は増えていない（レポートが同じ）。\n\n**独立の反例（自作 M1〜M3、点検の担当の X1〜X4・Z1。child.py で変換）**\n- どの例でも、0.26.0・修正前と比べて次のものは変わらない。\n  - ok・DTD・J-STAGE 0 件\n  - XML に入らなかった画像 0\n  - actions\n  - XML の文字、xref を外した XML\n- 修正前と比べて足されたリンク:\n  - M1（番号だけの論文）: 「図1¹」の fn1、「図1、2³」の fn3、「表1⁴」の fn4、「Figure 2²」の fn2、「地図1²」の fn2、「代表1³」の fn3、「図1 ⁴」の fn4（空白は範囲に入れない）、「図1、2、3¹」の fn1、セルの「表1²」の fn2。x²・10³・m²・「図1⁻¹」・「図1-²」は指数のまま記録した。\n  - M2（「1)」の論文）: 「図2²)」の fn2。「表1³」とセルの「表1²」は、指数の記録から「番号だけの形」の記録に変わった。\n  - M3（キャプションの「図1²」）: キャプションの fn2。0.26.0 と差はない。\n  - X1: fn1。\n  - X2: fn1・fn3。\n  - X3: 変化なし。\n  - X4: 囲みの fn2。\n  - Z1: キャプションの fn2・fn3、セルの fn1。\n- 0.26.0 との違いは、D2・M5・点検 1 回目で意図したものだけ。\n  - 指数・単位がリンクされなくなった。\n  - 語の中の図表番号がリンクされなくなった。\n  - 上付きの手前で切った図・表の参照がリンクされた。\n  - 「図11」などの「見つからない」が消えた。\n\n**ルート2**\n- 自作 N1・N2、点検の担当の Y1・Y2・Q_all・Q_one を LibreOffice の PDF で変換した。\n- N1（番号だけの論文と番号だけの PDF）は、修正前は注のリンクがなかった。修正後は fn1・fn2 がリンクされ、0.26.0 と同じになった。\n- ほかの例は、修正前と修正後で同じ。\n- 誤字の直しは今までどおり。ただし Q_one では直しが止まり、要確認 pdf_unfixed が出る（記録済みの限界）。\n\n**変異テスト（tests/test_links.py）**\n- 見つかった変異: cut_ctx_group0・cut_pos_mend・supchars_unlinked・after_ref_off（16 件不合格）・after_ref_fig_only（7 件）・after_ref_any_end・after_ref_also_after。\n- 生き残った変異: after_ref_no_digit_check の 1 つ。等価な変異で、数字の判定は速くするためのもの（RE_FIGREF・RE_TABREF の一致は必ず数字で終わる）。\n\n**速さ**\n- 架空の極端な段落（9,600 字、数字の直後の上付き 800 か所）で、note_style が 0.005 秒から 0.172 秒に、fn_marks が 0.183 秒から 0.404 秒になった。\n- 通常の論文では影響はない。td1〜3 の出力は同じ。",
+          "deviations": "**指摘への対応で、提案と違えたこと・直さなかったこと**\n- should: 提案の proto2（「図・表＋番号」で終わる正規表現、直前の 12 字ほど）とは違う形にした。\n  - float_refs と同じ RE_FIGREF・RE_TABREF を plain[:s] に当て、一致が s で終わるかを見る。\n  - こうすると、並びの番号（「図1、2³」「図1～3²」）も同じ扱いになる。proto2 では「図1～3²」が指数のままだった。参照の形の定義も 1 か所で済む。\n  - 窓は切っていない。費用は「速さ」に書いたとおりで、極端な例でも 1 段落 0.2 秒ほど。\n- should で振る舞いが変わる形（修正前の H との違い）:\n  - 「地図1²」（語の一部とみなす参照）の直後の上付きも注番号として扱う。番号だけの論文では fn2 にリンクする。修正前は指数だった。0.26.0 は「図12」を図12 にリンクしていた。\n  - 「図1」＋上付きの「0」は、注のある論文では 3 章に「上付きの「0」に対応する注が見つからない」が出る。修正前は指数とみなして出さなかった。0.26.0 も、図10 がなければ出していた。どちらも DESIGN 7 章と FIX_PLAN に書いた。\n- nit 2（上付きの後ろの並びの番号）: 直さなかった。指摘でも直すかは任意とされていて、まれな形のため。点検 2 回目に新しい分岐を足す危険を避けた。DESIGN 6・7 章、FIX_PLAN H の「残る限界」（直し方の案も）、docstring に書き、テストで今の振る舞いを固定した。\n- nit 3（structure.py のキャプションの番号）: H では structure.py に触らない方針なので、記録だけにした。FIX_PLAN H の「残る限界」、I の節の「I の後に残す直し」、DESIGN 7 章、DEVELOPMENT.md の「残っている課題」に書いた。\n\n**暫定の判断**\n- 決定事項 15 の「明らかな指数（直前が英数字…）」の英数字から、図表の番号の数字を外して読んだ。DESIGN 6 章の行と FIX_PLAN に「暫定」と書いた。\n\n**文書とコードの食い違い（直したもの。コードに合わせた）**\n1. float_refs の docstring の「上付きの数字は fn_marks で注番号として扱う」。番号だけの論文では指数とみなしていた。\n2. test_float_refs_stop_before_superscript の docstring（1 と同じ文）。\n3. DESIGN 6 章「本文の図表の参照」の行。「上付きの「1)」は注番号として扱う。並びの番号も同じ」とだけ書き、上付きの後ろの並びの番号の扱いがなかった。\n4. DESIGN 6 章「本文の上付きの注番号」の行。指数の判定に、図表の番号の除外がなかった。\n5. DESIGN 7 章の「番号だけの論文の「図1¹」は指数とみなしてリンクしない」。今の振る舞いに書き換えた。\n6. DESIGN 7 章の「指数・単位の判定は直前・直後の 1 文字と符号だけ」。図表の番号の判定を足した。\n7. README.md の「英字・数字の直後の上付きの数字は指数とみなす」。図・表の番号の直後を除くと書き足した。\n8. linker.RE_EXP_BEFORE のコメント（7 と同じ）。\n9. DEVELOPMENT.md のテストの節と「残っている課題」。今回足したテストと限界を足した。\n\n**食い違いで直さなかったもの**\n- DEVELOPMENT.md のコード構成の表の linker.py の行は、_after_float_ref に触れていない。「番号の形・指数・単位の形（_sup_marks）で決める」という書き方として誤りではないので、そのままにした。",
+          "open_issues": "- 上付きの文字の後ろの並びの番号（「図1¹、2」の「、2」）はリンクしない。記録にも 3 章にも出ない。0.26.0 はリンクしていた。直し方の案: float_refs で切った後、上付きの続きの後ろから並びの続き（区切り＋番号）を探してリンクする。利用者に頻度を確かめる。\n- キャプションの番号の直後の上付きの数字を、番号の一部として読む（「図1²」が図12 になり、本文の「図1」が 3 章の「見つからない」になる）。0.26.0 からの形で、structure.py を触る回（I の後）に直す。直し方の案: キャプションの番号を上付きの文字の手前で切る。\n- 暫定の判断のうち、まだ利用者に確かめていないもの:\n  - 決定事項 15 の「英数字」から図表の番号を外して読むこと。\n  - 「地図1²」の上付きを注番号として扱うこと。\n- 点検 1 回目からの残る限界は変わっていない。\n  - ルート2 で、番号だけの注の docx を「1)」の形の PDF に合わせると、直しがすべて止まる。\n  - 表のセルの「1)」も、論文の書き方の判定に数える。\n  - 比較の記号・単位の記号の範囲。\n- 速さ: 段落の長さ × 数字の直後の上付きの数に比例して時間がかかる。極端な例で 1 段落 0.2 秒ほど。問題になれば、直前の 40 字ほどに窓を絞る。\n- 実際の論文（テストデータ1〜3）には、図表の番号の直後の上付きがない（0 件）。規則は架空の docx でしか確かめていない。"
+        },
+        "findings": [
+          {
+            "lens": "principle",
+            "severity": "nit",
+            "file": "tests/test_links.py",
+            "line": 306,
+            "problem": "_after_float_ref が、段落の 2 つ目以降の図・表の参照（「まず図1を見る。次に図2¹」）の直後も見ることを確かめるテストがありません。\n\n各正規表現の最初の一致だけを見るように変えた変異（finditer → search）が、テスト全体で生き残ります。",
+            "evidence": "変異 afr_search_first（r3/mut/run_mut.py）で、rx.finditer(head) を [rx.search(head)] に変えた。\n- test_links.py は 110 passed、テスト全体（tools も写した場合）は 1074 passed で、生き残った。\n- この変異では、番号だけの論文の次の注のリンクが外れ、「指数・単位とみなし」の記録になる（r3/unit/probe2.py）。\n  - 「まず図1を見る。次に図2」＋上付き「3」\n  - 「表1と比べ、後の表2」＋上付き「1」\n  - 「図1と表1を見た後で図2」＋上付き「2」\n- 今の作業ツリーと 0.26.0 は、どれも注にリンクする。\n- td1〜3 と golden には、この形がない。\n- ほかの変異（窓を 3 字にする・並びを見ない・全角の数字・英語の参照・語の一部・「図」「表」＋番号だけを見る・数字ならいつも真）は、すべて見つかった。",
+            "fix": "test_sup_mark_kinds に、次の 2 つを足してください。\n- (\"まず図1を見る。次に図2\", \"1\", \"を見る\", [\"bare\"])\n- (\"表1と比べ、後の表2\", \"2\", \"\", [\"bare\"])"
+          },
+          {
+            "lens": "principle",
+            "severity": "nit",
+            "file": "src/jasme_jats/linker.py",
+            "line": 538,
+            "problem": "枝番の付いた図表の番号の直後の上付きの注番号は、今も直前の英字・数字によって指数・単位とみなされます。例は「図1a¹」「図1-a¹」「Fig. 1a¹」と、節番号の「図2.1³」です。\n\n番号だけの論文では注にリンクしません（0.26.0 はリンクしていました）。4 章と AI 依頼文の記録は「指数・単位（cm²・x² などの形）とみなし」になります。\n\nDESIGN 7 章は「図・表の番号の直後の上付きの数字（「図1¹」「表2³」）は、番号だけの論文では注にリンクし」とだけ書いています。FIX_PLAN の H の「残る限界」にも、この形が残ることは書かれていません（テストの行に「図1.5」があるだけです）。",
+            "evidence": "r3/unit/probe2.py（bare_notes が真）で比べた。\n- 「図1a」＋上付き「1」: 0.26.0 は F1 と fn1 にリンクする。今は F1 だけで、記録は「指数・単位」。\n- 「図1-a」＋「1」、「see Fig. 1a」＋「1」、「図2.1」＋「3」も同じ。\n- 「図1(a)」＋「1」は直前が「)」なので、0.26.0 と同じく fn1 にリンクする。\n\n変換の全体（r3/tools/gen_r3.py の M1）でも、「部分の図1a³」の fn3 と「節番号の図2.1¹」の fn1 が外れ、記録が出る。\n- 記録の link_note で貼り戻すと採用される（r3/tools/ai_back.py。3/3）。\n- ok・DTD・不変性は 0.26.0 と同じ。\n\nblocking にしない理由は 3 つ。決定事項 15 の文言（直前が英数字）のとおりであること。記録から戻せること。この形がまれなこと（td1〜3 は 0 件）。",
+            "fix": "直すなら、_after_float_ref で、番号の後ろの枝番 1 字（[A-Za-zａ-ｚＡ-Ｚ]、「-a」）を許してください。「図2.1」は float_refs も「図2」と読むので、記録のままでよいです。\n\n直さないなら、DESIGN 7 章と FIX_PLAN の H の「残る限界」に、次のことを書いてください。\n- 枝番（図1a）や節番号（図2.1）の直後の上付きは、指数とみなす。\n- そのため、番号だけの論文では注にリンクしない（0.26.0 はリンクしていた）。"
+          },
+          {
+            "lens": "principle",
+            "severity": "nit",
+            "file": "src/jasme_jats/linker.py",
+            "line": 576,
+            "problem": "上付きの続きが符号で始まると、後ろに続く、番号の形がはっきりした注番号もリンクしません。例は、上付きの「−1 1)」（m s⁻¹ の後ろに、上付きの空白と注番号）と、上付きの「−1注2」です。\n\n原因は、_sup_marks が、続きが符号で始まるときに続きの中のすべての候補を exponent にすることです（docstring の優先順のとおり）。「注番号は符号で始まらない」という根拠が当てはまるのは、先頭の候補だけです。\n\n0.26.0 は「1)」「注2」を注にリンクしていました。記録は「上付きの「1」「2」は、指数・単位…とみなし」になり、「注2」まで指数と書きます。\n\n今回の修正で入ったものではなく、H の最初の実装からの形です（修正前の H と同じ）。",
+            "evidence": "r3/unit/probe4.py で比べた（bare_notes が真でも偽でも同じ）。\n- 「速さは 3 m s」＋上付き「−1」＋上付き「 1)」:\n  - 0.26.0: 指数の「1」と注の「1)」を、どちらも fn1 にリンクする。\n  - 修正前の H と今: リンクは 0 件。記録は「上付きの「1」（2 か所）は、指数・単位…」の 1 件。\n- 上付き「−1」＋上付き「注2」: 0.26.0 は「注2」を fn2 にリンクする。今は 0 件。\n- 間の空白が本文の大きさなら、別の続きになるので「1)」はリンクする。\n- 符号で始まらない続き「2 2)」（cm² の後ろ）では、今も「2)」をリンクする。\n\n無作為の段落 2 万件（r3/unit/fuzz.py）で、0.26.0 がリンクしていた番号の形の注番号が外れたのは、この形だけだった。オラクルの S02・B03 は、符号で始まる上付きを単独でしか試していない。\n\nblocking・should にしない理由は 3 つ。FIX_PLAN の規則の文言（符号で始まる続きは指数）のとおりであること。記録の text と occurrence で戻せること。上付きの空白や「注」を挟む書き方はまれなこと（td1〜3 は 0 件）。",
+            "fix": "_sup_marks で、符号で始まる続きを exponent にするのは、先頭の候補（符号に続く数字）だけにしてください。後ろの候補は、今の規則で決めます（番号の形なら strong）。続き全体の exp は真のままなので、番号だけの数字は今までどおり指数になります。\n\nあわせて、次のテストを足してください。\n- 上付きの「−1 1)」は、「1)」だけを注にリンクし、「−1」は指数として記録する。\n- 上付きの「−1注2」は、「注2」を注にリンクする。\n\n直さないなら、DESIGN 7 章に「符号で始まる上付きの続きの中の注番号（s⁻¹ ¹⁾）もリンクしない（記録に出る）」と書いてください。"
+          },
+          {
+            "lens": "regression",
+            "severity": "nit",
+            "file": "src/jasme_jats/linker.py",
+            "line": 538,
+            "problem": "_after_float_ref は RE_FIGREF・RE_TABREF の並びの部分まで含めて、手前の文字が参照の番号で終わるかを見ます。そのため、並びの 2 つ目に見える数字が実は指数の底のときも、指数とみなさなくなりました。例は「表1、10²倍」「Fig. 1 and 10³ cells」「図1-10²」「表1と2²の比」です。\n\nどうなるかは論文の注の書き方で分かれます。\n- 番号だけの論文: 注 fn2・fn3 があれば、注にリンクします。\n- 「1)」の論文: 指数の記録ではなく「番号だけの形なので…」の記録になります。\n\n大文字の「STable 2²」も同じです（英語の参照は直前の文字を見ないため）。\n\n0.26.0 も同じく注にリンクしていたので、0.26.0 より悪くはなっていません。ただ、修正前の H が D2 で防いでいた形が戻っています。また、DESIGN 7 章の限界にこの形が書かれていません。",
+            "evidence": "r3/probe/fp.py で fn_marks を段落に直接当て、修正前の src（fix_r2/pre/src）と今の作業ツリーを比べた。\n\n番号だけの論文（bare_notes=True）:\n- 修正前は、どれも「上付きの「2」は、指数・単位（cm²・x² などの形）とみなし…」と記録し、リンクしなかった。\n- 今は次のようにリンクする。\n  - 「表1、10」＋上付き「2」＋「倍の値」 → fn2\n  - 「Fig. 1 and 10」＋上付き「3」 → fn3\n  - 「図1-10」＋上付き「2」 → fn2\n  - 「表1と2」＋上付き「2」 → fn2\n  - 「STable 2」＋上付き「2」 → fn2\n\n「1)」の論文（bare_notes=False）:\n- 同じ 5 件が「番号だけの形なので注 fn… にリンクしなかった」の記録になる。\n\n今までどおり指数のもの（修正前と同じ）:\n- 「図1のx²」「図1では10³」「表2、3²=9」（直後が比較の記号）「configure 2²」。\n\ntd1〜3 にこの形はない（xref も記録も 0.26.0 と同じ）。\n\n実際の論文では、図表の参照の並びの直後に指数が来る書き方はまれだと考えられる。",
+            "fix": "任意です。直すなら、2 通りあります。\n- 並びの部分で終わるときは、並びの番号の図・表が実在するとき（float_refs の ids に入っているとき）だけ除外する。\n- 先頭の番号（m.end(2)）か、「図」「表」の付いた並びの番号で終わるときだけ除外する。\n\nただし、後の案では「図1、2³」「図1～3²」のテストを見直す必要があります。\n\n直さないなら、DESIGN 7 章の指数・単位の判定の限界に書いてください。内容は「図・表の参照の並びの形で終わる数字（「表1、10²」「Fig. 1 and 10³」「図1-10²」）の直後の上付きの数字は、指数とみなさない（0.26.0 と同じく、番号だけの論文では注にリンクする）」です。"
+          }
+        ],
+        "failedLens": []
+      }
+    ],
+    "remaining": [
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "tests/test_links.py",
+        "line": 306,
+        "problem": "_after_float_ref が、段落の 2 つ目以降の図・表の参照（「まず図1を見る。次に図2¹」）の直後も見ることを確かめるテストがありません。\n\n各正規表現の最初の一致だけを見るように変えた変異（finditer → search）が、テスト全体で生き残ります。",
+        "evidence": "変異 afr_search_first（r3/mut/run_mut.py）で、rx.finditer(head) を [rx.search(head)] に変えた。\n- test_links.py は 110 passed、テスト全体（tools も写した場合）は 1074 passed で、生き残った。\n- この変異では、番号だけの論文の次の注のリンクが外れ、「指数・単位とみなし」の記録になる（r3/unit/probe2.py）。\n  - 「まず図1を見る。次に図2」＋上付き「3」\n  - 「表1と比べ、後の表2」＋上付き「1」\n  - 「図1と表1を見た後で図2」＋上付き「2」\n- 今の作業ツリーと 0.26.0 は、どれも注にリンクする。\n- td1〜3 と golden には、この形がない。\n- ほかの変異（窓を 3 字にする・並びを見ない・全角の数字・英語の参照・語の一部・「図」「表」＋番号だけを見る・数字ならいつも真）は、すべて見つかった。",
+        "fix": "test_sup_mark_kinds に、次の 2 つを足してください。\n- (\"まず図1を見る。次に図2\", \"1\", \"を見る\", [\"bare\"])\n- (\"表1と比べ、後の表2\", \"2\", \"\", [\"bare\"])"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "src/jasme_jats/linker.py",
+        "line": 538,
+        "problem": "枝番の付いた図表の番号の直後の上付きの注番号は、今も直前の英字・数字によって指数・単位とみなされます。例は「図1a¹」「図1-a¹」「Fig. 1a¹」と、節番号の「図2.1³」です。\n\n番号だけの論文では注にリンクしません（0.26.0 はリンクしていました）。4 章と AI 依頼文の記録は「指数・単位（cm²・x² などの形）とみなし」になります。\n\nDESIGN 7 章は「図・表の番号の直後の上付きの数字（「図1¹」「表2³」）は、番号だけの論文では注にリンクし」とだけ書いています。FIX_PLAN の H の「残る限界」にも、この形が残ることは書かれていません（テストの行に「図1.5」があるだけです）。",
+        "evidence": "r3/unit/probe2.py（bare_notes が真）で比べた。\n- 「図1a」＋上付き「1」: 0.26.0 は F1 と fn1 にリンクする。今は F1 だけで、記録は「指数・単位」。\n- 「図1-a」＋「1」、「see Fig. 1a」＋「1」、「図2.1」＋「3」も同じ。\n- 「図1(a)」＋「1」は直前が「)」なので、0.26.0 と同じく fn1 にリンクする。\n\n変換の全体（r3/tools/gen_r3.py の M1）でも、「部分の図1a³」の fn3 と「節番号の図2.1¹」の fn1 が外れ、記録が出る。\n- 記録の link_note で貼り戻すと採用される（r3/tools/ai_back.py。3/3）。\n- ok・DTD・不変性は 0.26.0 と同じ。\n\nblocking にしない理由は 3 つ。決定事項 15 の文言（直前が英数字）のとおりであること。記録から戻せること。この形がまれなこと（td1〜3 は 0 件）。",
+        "fix": "直すなら、_after_float_ref で、番号の後ろの枝番 1 字（[A-Za-zａ-ｚＡ-Ｚ]、「-a」）を許してください。「図2.1」は float_refs も「図2」と読むので、記録のままでよいです。\n\n直さないなら、DESIGN 7 章と FIX_PLAN の H の「残る限界」に、次のことを書いてください。\n- 枝番（図1a）や節番号（図2.1）の直後の上付きは、指数とみなす。\n- そのため、番号だけの論文では注にリンクしない（0.26.0 はリンクしていた）。"
+      },
+      {
+        "lens": "principle",
+        "severity": "nit",
+        "file": "src/jasme_jats/linker.py",
+        "line": 576,
+        "problem": "上付きの続きが符号で始まると、後ろに続く、番号の形がはっきりした注番号もリンクしません。例は、上付きの「−1 1)」（m s⁻¹ の後ろに、上付きの空白と注番号）と、上付きの「−1注2」です。\n\n原因は、_sup_marks が、続きが符号で始まるときに続きの中のすべての候補を exponent にすることです（docstring の優先順のとおり）。「注番号は符号で始まらない」という根拠が当てはまるのは、先頭の候補だけです。\n\n0.26.0 は「1)」「注2」を注にリンクしていました。記録は「上付きの「1」「2」は、指数・単位…とみなし」になり、「注2」まで指数と書きます。\n\n今回の修正で入ったものではなく、H の最初の実装からの形です（修正前の H と同じ）。",
+        "evidence": "r3/unit/probe4.py で比べた（bare_notes が真でも偽でも同じ）。\n- 「速さは 3 m s」＋上付き「−1」＋上付き「 1)」:\n  - 0.26.0: 指数の「1」と注の「1)」を、どちらも fn1 にリンクする。\n  - 修正前の H と今: リンクは 0 件。記録は「上付きの「1」（2 か所）は、指数・単位…」の 1 件。\n- 上付き「−1」＋上付き「注2」: 0.26.0 は「注2」を fn2 にリンクする。今は 0 件。\n- 間の空白が本文の大きさなら、別の続きになるので「1)」はリンクする。\n- 符号で始まらない続き「2 2)」（cm² の後ろ）では、今も「2)」をリンクする。\n\n無作為の段落 2 万件（r3/unit/fuzz.py）で、0.26.0 がリンクしていた番号の形の注番号が外れたのは、この形だけだった。オラクルの S02・B03 は、符号で始まる上付きを単独でしか試していない。\n\nblocking・should にしない理由は 3 つ。FIX_PLAN の規則の文言（符号で始まる続きは指数）のとおりであること。記録の text と occurrence で戻せること。上付きの空白や「注」を挟む書き方はまれなこと（td1〜3 は 0 件）。",
+        "fix": "_sup_marks で、符号で始まる続きを exponent にするのは、先頭の候補（符号に続く数字）だけにしてください。後ろの候補は、今の規則で決めます（番号の形なら strong）。続き全体の exp は真のままなので、番号だけの数字は今までどおり指数になります。\n\nあわせて、次のテストを足してください。\n- 上付きの「−1 1)」は、「1)」だけを注にリンクし、「−1」は指数として記録する。\n- 上付きの「−1注2」は、「注2」を注にリンクする。\n\n直さないなら、DESIGN 7 章に「符号で始まる上付きの続きの中の注番号（s⁻¹ ¹⁾）もリンクしない（記録に出る）」と書いてください。"
+      },
+      {
+        "lens": "regression",
+        "severity": "nit",
+        "file": "src/jasme_jats/linker.py",
+        "line": 538,
+        "problem": "_after_float_ref は RE_FIGREF・RE_TABREF の並びの部分まで含めて、手前の文字が参照の番号で終わるかを見ます。そのため、並びの 2 つ目に見える数字が実は指数の底のときも、指数とみなさなくなりました。例は「表1、10²倍」「Fig. 1 and 10³ cells」「図1-10²」「表1と2²の比」です。\n\nどうなるかは論文の注の書き方で分かれます。\n- 番号だけの論文: 注 fn2・fn3 があれば、注にリンクします。\n- 「1)」の論文: 指数の記録ではなく「番号だけの形なので…」の記録になります。\n\n大文字の「STable 2²」も同じです（英語の参照は直前の文字を見ないため）。\n\n0.26.0 も同じく注にリンクしていたので、0.26.0 より悪くはなっていません。ただ、修正前の H が D2 で防いでいた形が戻っています。また、DESIGN 7 章の限界にこの形が書かれていません。",
+        "evidence": "r3/probe/fp.py で fn_marks を段落に直接当て、修正前の src（fix_r2/pre/src）と今の作業ツリーを比べた。\n\n番号だけの論文（bare_notes=True）:\n- 修正前は、どれも「上付きの「2」は、指数・単位（cm²・x² などの形）とみなし…」と記録し、リンクしなかった。\n- 今は次のようにリンクする。\n  - 「表1、10」＋上付き「2」＋「倍の値」 → fn2\n  - 「Fig. 1 and 10」＋上付き「3」 → fn3\n  - 「図1-10」＋上付き「2」 → fn2\n  - 「表1と2」＋上付き「2」 → fn2\n  - 「STable 2」＋上付き「2」 → fn2\n\n「1)」の論文（bare_notes=False）:\n- 同じ 5 件が「番号だけの形なので注 fn… にリンクしなかった」の記録になる。\n\n今までどおり指数のもの（修正前と同じ）:\n- 「図1のx²」「図1では10³」「表2、3²=9」（直後が比較の記号）「configure 2²」。\n\ntd1〜3 にこの形はない（xref も記録も 0.26.0 と同じ）。\n\n実際の論文では、図表の参照の並びの直後に指数が来る書き方はまれだと考えられる。",
+        "fix": "任意です。直すなら、2 通りあります。\n- 並びの部分で終わるときは、並びの番号の図・表が実在するとき（float_refs の ids に入っているとき）だけ除外する。\n- 先頭の番号（m.end(2)）か、「図」「表」の付いた並びの番号で終わるときだけ除外する。\n\nただし、後の案では「図1、2³」「図1～3²」のテストを見直す必要があります。\n\n直さないなら、DESIGN 7 章の指数・単位の判定の限界に書いてください。内容は「図・表の参照の並びの形で終わる数字（「表1、10²」「Fig. 1 and 10³」「図1-10²」）の直後の上付きの数字は、指数とみなさない（0.26.0 と同じく、番号だけの論文では注にリンクする）」です。"
+      }
+    ],
+    "incomplete": null
+  },
+  "workflowProgress": [
+    {
+      "type": "workflow_phase",
+      "index": 1,
+      "title": "Design"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 2,
+      "title": "Implement"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 3,
+      "title": "Verify"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 4,
+      "title": "Finalize"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 5,
+      "title": "Review"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 6,
+      "title": "Fix"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 7,
+      "title": "Recheck"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 1,
+      "label": "design",
+      "phaseIndex": 1,
+      "phaseTitle": "Design",
+      "agentId": "abd549fc5b142c4b6",
+      "model": "opus",
+      "state": "done",
+      "startedAt": 1793572927528,
+      "lastProgressAt": 1793572927528,
+      "cached": true,
+      "resultPreview": "{\"design_doc\":\"/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/DESIGN_H.md\",\"decisions\":\"【先に確かめてほしい食い違い】\\n(1) U4 の英文 1 語の氏名で、正本どうしが食い違っています。FIX_PLAN の H の節（U4）と付録 U4 の (3) は「build_request で英文を除き、d12 の行は依頼文に出ない」と書いています。一方、FIX_PLAN の「決定事項」17（2026-10-14 の利用者の回答）は「英文 1 語の氏名も今までどおり AI 依頼文に載せる。あわせて、英文の氏名を姓と名に分けられなかったことを警告する」です。H の節はこの回答より前に書かれたもので、回答に合わせて直されてい…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「H（0.27.0）: リンクの誤検出と AI 依頼文の保守（D2・M5・U4・U5）」を作るチームの一員です。\nHEAD は main の 4533222（0.26.0。detached HEAD）。作業ツリーはコミットと同じで、H の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。H では pdfmatch.py・pdfdocx.py（照合・ルート2）と structure.py（I で分割する）には触らない。\nまず読むもの: docs/FIX_PLAN.md…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 2,
+      "label": "oracle_h",
+      "phaseIndex": 1,
+      "phaseTitle": "Design",
+      "agentId": "abb3208b4588e112e",
+      "model": "opus",
+      "state": "done",
+      "startedAt": 1793572927528,
+      "lastProgressAt": 1793572927528,
+      "cached": true,
+      "resultPreview": "{\"dir\":\"/tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/oracle/ (生成器 gen_h.py、期待 cases.json、比べる道具 run_h.py、文字の一致チェック overlap.py、結果 out/base0260・out/wt0260（facts の JSON と summary.json）、ログ log_base0260.txt・log_wt0260.txt、試し書き probe/probe1〜3.py。cases/*.docx は片付けで消してあり、run_h.py を実行すると gen_h.py で作り直される)\",\"cases\":\"30 件。どの docx も tests/make_fixtures.py の部品（Buil…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「H（0.27.0）: リンクの誤検出と AI 依頼文の保守（D2・M5・U4・U5）」を作るチームの一員です。\nHEAD は main の 4533222（0.26.0。detached HEAD）。作業ツリーはコミットと同じで、H の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。H では pdfmatch.py・pdfdocx.py（照合・ルート2）と structure.py（I で分割する）には触らない。\nまず読むもの: docs/FIX_PLAN.md…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 3,
+      "label": "impl",
+      "phaseIndex": 2,
+      "phaseTitle": "Implement",
+      "agentId": "ad48d47cfe38b31de",
+      "model": "opus",
+      "state": "done",
+      "startedAt": 1793572927529,
+      "lastProgressAt": 1793572927529,
+      "cached": true,
+      "resultPreview": "{\"changed_files\":[\"/home/user/jstgxmlcng_JASME/src/jasme_jats/linker.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/builder.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/pipeline.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/ai_assist.py\",\"/home/user/jstgxmlcng_JASME/tools/make_notebook.py\",\"/home/user/jstgxmlcng_JASME/tests/make_fixtures.py\",\"/home/user/jstgxmlcng_JASME/tests/conftest.py\",\"/…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「H（0.27.0）: リンクの誤検出と AI 依頼文の保守（D2・M5・U4・U5）」を作るチームの一員です。\nHEAD は main の 4533222（0.26.0。detached HEAD）。作業ツリーはコミットと同じで、H の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。H では pdfmatch.py・pdfdocx.py（照合・ルート2）と structure.py（I で分割する）には触らない。\nまず読むもの: docs/FIX_PLAN.md…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 4,
+      "label": "verify",
+      "phaseIndex": 3,
+      "phaseTitle": "Verify",
+      "agentId": "a2c48ad90b5bbbe19",
+      "model": "opus",
+      "state": "done",
+      "startedAt": 1793572927529,
+      "lastProgressAt": 1793572927529,
+      "cached": true,
+      "resultPreview": "{\"passed_all\":false,\"measures\":\"作業ツリーは 0.26.0（4533222）に H の差分を積んだ状態で測りました。ファイルは変えていません。実験はすべて /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/verify/ に置き、HEAD の git worktree は最後に消しました。\\n\\n## pytest\\n- Python 3.13: 1010 passed。\\n- Python 3.10（venv310）: 1010 passed。\\n- tests/__pycache__ はできていたので消しました。\\n\\n## ruff\\n- 201 件で、HEAD と同じです。ファイルごと・メッセージごとの件数も一致しまし…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「H（0.27.0）: リンクの誤検出と AI 依頼文の保守（D2・M5・U4・U5）」を作るチームの一員です。\nHEAD は main の 4533222（0.26.0。detached HEAD）。作業ツリーはコミットと同じで、H の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。H では pdfmatch.py・pdfdocx.py（照合・ルート2）と structure.py（I で分割する）には触らない。\nまず読むもの: docs/FIX_PLAN.md…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 5,
+      "label": "fix_verify",
+      "phaseIndex": 3,
+      "phaseTitle": "Verify",
+      "agentId": "a339c3dcfbf718992",
+      "model": "opus",
+      "state": "done",
+      "startedAt": 1793572927530,
+      "lastProgressAt": 1793572927530,
+      "cached": true,
+      "resultPreview": "{\"changed_files\":[\"/home/user/jstgxmlcng_JASME/src/jasme_jats/linker.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/ai_assist.py\",\"/home/user/jstgxmlcng_JASME/tests/test_links.py\",\"/home/user/jstgxmlcng_JASME/tests/test_ai.py\",\"/home/user/jstgxmlcng_JASME/tests/make_fixtures.py\",\"/home/user/jstgxmlcng_JASME/tests/fixtures/sample_links_bare.docx\",\"/home/user/jstgxmlcng_JASME/docs/DESIGN.md\",\"/home…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「H（0.27.0）: リンクの誤検出と AI 依頼文の保守（D2・M5・U4・U5）」を作るチームの一員です。\nHEAD は main の 4533222（0.26.0。detached HEAD）。作業ツリーはコミットと同じで、H の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。H では pdfmatch.py・pdfdocx.py（照合・ルート2）と structure.py（I で分割する）には触らない。\nまず読むもの: docs/FIX_PLAN.md…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 6,
+      "label": "finalize",
+      "phaseIndex": 4,
+      "phaseTitle": "Finalize",
+      "agentId": "a16f464e654807cad",
+      "model": "sonnet",
+      "state": "done",
+      "startedAt": 1793572927530,
+      "lastProgressAt": 1793572927530,
+      "cached": true,
+      "resultPreview": "{\"changed_files\":[\"/home/user/jstgxmlcng_JASME/src/jasme_jats/__init__.py\",\"/home/user/jstgxmlcng_JASME/pyproject.toml\",\"/home/user/jstgxmlcng_JASME/notebooks/JASME_docx_to_JSTAGE_XML.ipynb\",\"/home/user/jstgxmlcng_JASME/docs/FIX_PLAN.md\",\"/home/user/jstgxmlcng_JASME/README.md\"],\"summary\":\"単位 H の仕上げを終えた。コミットはしていない。版を 0.27.0 にし、python tools/make_notebook.py でノートブックを作り直した。生成物のモデル名 claude-opus-5-5 は a…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「H（0.27.0）: リンクの誤検出と AI 依頼文の保守（D2・M5・U4・U5）」を作るチームの一員です。\nHEAD は main の 4533222（0.26.0。detached HEAD）。作業ツリーはコミットと同じで、H の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。H では pdfmatch.py・pdfdocx.py（照合・ルート2）と structure.py（I で分割する）には触らない。\nまず読むもの: docs/FIX_PLAN.md…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 7,
+      "label": "review:principle",
+      "phaseIndex": 5,
+      "phaseTitle": "Review",
+      "agentId": "a847582cc3cf5479b",
+      "model": "opus",
+      "state": "done",
+      "startedAt": 1793572927550,
+      "lastProgressAt": 1793572927550,
+      "cached": true,
+      "resultPreview": "{\"checked\":\"作業ツリー（4533222 に H の差分を積んだもの）を読み、実験で確かめた。ファイルは変えていない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/review/principle/ に置いた（まとめは results.json）。\\n\\n## 読んだもの\\n- git diff の全体: linker.py・ai_assist.py・builder.py・pipeline.py・make_notebook.py・tests・docs。\\n- FIX_PLAN の H の節、付録 D2・M5・U4・U5、決定事項 15〜17、同じファイルを触る順。\\n- DESIGN 4.4・5・6・7 の該当箇所。\\n- pdfdoc…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「H（0.27.0）: リンクの誤検出と AI 依頼文の保守（D2・M5・U4・U5）」の実装を点検する担当です。\nHEAD は main の 4533222（0.26.0。detached HEAD）。作業ツリーはコミットと同じで、H の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。H では pdfmatch.py・pdfdocx.py（照合・ルート2）と structure.py（I で分割する）には触らない。\nまず読むもの: docs/FIX_PLAN.m…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 8,
+      "label": "review:regression",
+      "phaseIndex": 5,
+      "phaseTitle": "Review",
+      "agentId": "a2ed40444577b50c6",
+      "model": "opus",
+      "state": "done",
+      "startedAt": 1793572927551,
+      "lastProgressAt": 1793572927551,
+      "cached": true,
+      "resultPreview": "{\"checked\":\"作業ツリー（4533222〈0.26.0〉に、コミットしていない H の差分を積んだもの。17 ファイルの変更と、新しい 3 ファイル）を、回帰とテストの観点で点検した。実験はすべて /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/review/regression/ に置いた。比べる相手の 0.26.0 は、HEAD の git worktree（wt_head/src）を使った。worktree は最後に消した。\\n\\n## 申告（作業中の誤操作。直して確かめ済み）\\n- 変異テストの準備で、rsync がなかったために cd が失敗した。その後の sed が、リポジトリの src/jasme_jats/ai_assist.py…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「H（0.27.0）: リンクの誤検出と AI 依頼文の保守（D2・M5・U4・U5）」の実装を点検する担当です。\nHEAD は main の 4533222（0.26.0。detached HEAD）。作業ツリーはコミットと同じで、H の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。H では pdfmatch.py・pdfdocx.py（照合・ルート2）と structure.py（I で分割する）には触らない。\nまず読むもの: docs/FIX_PLAN.m…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 9,
+      "label": "review:user",
+      "phaseIndex": 5,
+      "phaseTitle": "Review",
+      "agentId": "a0738fb01c90b0fcf",
+      "model": "opus",
+      "state": "done",
+      "startedAt": 1793572927551,
+      "lastProgressAt": 1793572927551,
+      "cached": true,
+      "resultPreview": "{\"checked\":\"点検したのは作業ツリー（4533222 に H のコミットしていない差分を積んだもの）で、観点は利用者への見え方と文書。ファイルは変えていない。python tools/make_notebook.py を 1 回走らせたが、生成物は作業ツリーの版とバイト単位で同じで、git diff は変わらなかった。tests/__pycache__ は消した。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/review/user/ に置いた（実際の論文の出力は消し、残りは約 216KB）。\\n\\n## 測った結果\\n- pytest（3.13）: 1024 passed。test_notebook も 16 passed。\\n- ru…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「H（0.27.0）: リンクの誤検出と AI 依頼文の保守（D2・M5・U4・U5）」の実装を点検する担当です。\nHEAD は main の 4533222（0.26.0。detached HEAD）。作業ツリーはコミットと同じで、H の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。H では pdfmatch.py・pdfdocx.py（照合・ルート2）と structure.py（I で分割する）には触らない。\nまず読むもの: docs/FIX_PLAN.m…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 10,
+      "label": "fix:1",
+      "phaseIndex": 6,
+      "phaseTitle": "Fix",
+      "agentId": "a2dd036c91e969a28",
+      "model": "opus",
+      "state": "done",
+      "startedAt": 1793572927552,
+      "lastProgressAt": 1793572927552,
+      "cached": true,
+      "resultPreview": "{\"changed_files\":[\"/home/user/jstgxmlcng_JASME/src/jasme_jats/linker.py\",\"/home/user/jstgxmlcng_JASME/src/jasme_jats/ai_assist.py\",\"/home/user/jstgxmlcng_JASME/tests/test_links.py\",\"/home/user/jstgxmlcng_JASME/tests/test_ai.py\",\"/home/user/jstgxmlcng_JASME/docs/DESIGN.md\",\"/home/user/jstgxmlcng_JASME/docs/DEVELOPMENT.md\",\"/home/user/jstgxmlcng_JASME/docs/FIX_PLAN.md\",\"/home/user/jstgxmlcng_JASME/R…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「H（0.27.0）: リンクの誤検出と AI 依頼文の保守（D2・M5・U4・U5）」を作るチームの一員です。\nHEAD は main の 4533222（0.26.0。detached HEAD）。作業ツリーはコミットと同じで、H の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。H では pdfmatch.py・pdfdocx.py（照合・ルート2）と structure.py（I で分割する）には触らない。\nまず読むもの: docs/FIX_PLAN.md…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 11,
+      "label": "review:principle",
+      "phaseIndex": 7,
+      "phaseTitle": "Recheck",
+      "agentId": "a96dec2aa1e2ad2c4",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793572927635,
+      "queuedAt": 1793572927583,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "2 回目の点検で、修正 1 回目の後の作業ツリーを見た（HEAD 453…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「H（0.27.0）: リンクの誤検出と AI 依頼文の保守（D2・M5・U4・U5）」の実装を点検する担当です。\nHEAD は main の 4533222（0.26.0。detached HEAD）。作業ツリーはコミットと同じで、H の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。H では pdfmatch.py・pdfdocx.py（照合・ルート2）と structure.py（I で分割する）には触らない。\nまず読むもの: docs/FIX_PLAN.m…",
+      "promptFramed": true,
+      "lastProgressAt": 1793574240945,
+      "tokens": 442822,
+      "toolCalls": 94,
+      "durationMs": 1313309,
+      "resultPreview": "{\"checked\":\"2 回目の点検で、修正 1 回目の後の作業ツリーを見た（HEAD 4533222 ＝ 0.26.0 に、コミットしていない差分が積まれている）。ファイルは変更していない。実験は /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/review/principle/r2/ の下に置いた。\\n\\n【比べた相手】\\n- 0.26.0: HEAD の git worktree（r2/head_wt）。base0260_src と diff -rq で同じことを確かめてから使い、終わった後に git worktree remove した。\\n- 修正前の H: scratchpad/h/fix_r1/pre/src。\\n- 今の作業ツリー。\\n-…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 12,
+      "label": "review:regression",
+      "phaseIndex": 7,
+      "phaseTitle": "Recheck",
+      "agentId": "a933706f232e12b15",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793572927635,
+      "queuedAt": 1793572927584,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "2 回目の点検（1 回目の修正の後）。中断した前回の試み（scrat…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「H（0.27.0）: リンクの誤検出と AI 依頼文の保守（D2・M5・U4・U5）」の実装を点検する担当です。\nHEAD は main の 4533222（0.26.0。detached HEAD）。作業ツリーはコミットと同じで、H の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。H では pdfmatch.py・pdfdocx.py（照合・ルート2）と structure.py（I で分割する）には触らない。\nまず読むもの: docs/FIX_PLAN.m…",
+      "promptFramed": true,
+      "lastProgressAt": 1793573368857,
+      "tokens": 218805,
+      "toolCalls": 45,
+      "durationMs": 441216,
+      "resultPreview": "{\"checked\":\"2 回目の点検（1 回目の修正の後）。中断した前回の試み（scratchpad/h/review/regression/r2nd）の結果は、作業ツリーの最終の変更（21:38）より後に作られていたので使えた。ただ、主な物差しは r2b の下で流し直した。比べる相手の 0.26.0 は、HEAD の worktree（principle/r2/head_wt。git status はきれいで、版は 0.26.0）の src にした。PYTHONPATH にその src を渡すと 0.26.0 を読み込むことは、jasme_jats.__file__ と __version__ で確かめた（base0260_src をそのまま渡すと作業ツリーを読んでしまう件を避けるため）。\\n\\n【物差し】\\n- pytest: Python 3.13 で 1054 passed、3.…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 13,
+      "label": "fix:2",
+      "phaseIndex": 6,
+      "phaseTitle": "Fix",
+      "agentId": "a7818d0758183f4ea",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793574243379,
+      "queuedAt": 1793574243345,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "点検 2 回目の指摘（should 1・nit 4）を処理した。版は 0.27.0…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「H（0.27.0）: リンクの誤検出と AI 依頼文の保守（D2・M5・U4・U5）」を作るチームの一員です。\nHEAD は main の 4533222（0.26.0。detached HEAD）。作業ツリーはコミットと同じで、H の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。H では pdfmatch.py・pdfdocx.py（照合・ルート2）と structure.py（I で分割する）には触らない。\nまず読むもの: docs/FIX_PLAN.md…",
+      "promptFramed": true,
+      "lastProgressAt": 1793575916381,
+      "tokens": 522306,
+      "toolCalls": 120,
+      "durationMs": 1673001,
+      "resultPreview": "{\"changed_files\":[\"/home/user/jstgxmlcng_JASME/src/jasme_jats/linker.py\",\"/home/user/jstgxmlcng_JASME/tests/test_links.py\",\"/home/user/jstgxmlcng_JASME/docs/DESIGN.md\",\"/home/user/jstgxmlcng_JASME/docs/FIX_PLAN.md\",\"/home/user/jstgxmlcng_JASME/docs/DEVELOPMENT.md\",\"/home/user/jstgxmlcng_JASME/README.md\"],\"summary\":\"点検 2 回目の指摘（should 1・nit 4）を処理した。版は 0.27.0 のまま。コミットはしていない。\\n\\nshould（linker.py の _ex…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 14,
+      "label": "review:principle",
+      "phaseIndex": 7,
+      "phaseTitle": "Recheck",
+      "agentId": "a05789f46ab0a7b97",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793575918575,
+      "queuedAt": 1793575918569,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "実験の場所: /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「H（0.27.0）: リンクの誤検出と AI 依頼文の保守（D2・M5・U4・U5）」の実装を点検する担当です。\nHEAD は main の 4533222（0.26.0。detached HEAD）。作業ツリーはコミットと同じで、H の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。H では pdfmatch.py・pdfdocx.py（照合・ルート2）と structure.py（I で分割する）には触らない。\nまず読むもの: docs/FIX_PLAN.m…",
+      "promptFramed": true,
+      "lastProgressAt": 1793577499395,
+      "tokens": 440973,
+      "toolCalls": 109,
+      "durationMs": 1580819,
+      "resultPreview": "{\"checked\":\"実験の場所: /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/review/principle/r3/（以下 r3/）。まとめは r3/results.json。比べた相手は 3 つ。0.26.0（HEAD 4533222 を git archive したもの。base0260_src と同じことを確かめた）、修正前の H（fix_r2/pre/src）、今の作業ツリー。リポジトリのファイルは変えていない（git status は H の差分だけ。tests/__pycache__ は消した）。\\n\\n■ 読んだもの\\n- 修正前の H との差分は linker.py だけ。_after_float_ref を足し、_exponen…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 15,
+      "label": "review:regression",
+      "phaseIndex": 7,
+      "phaseTitle": "Recheck",
+      "agentId": "a6c2c3a72a8984ee1",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1793575918576,
+      "queuedAt": 1793575918569,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "点検は 2 回目の修正の後のもの。作業ツリーのファイルは変えて…",
+      "promptPreview": "あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、\n修正計画 docs/FIX_PLAN.md の単位「H（0.27.0）: リンクの誤検出と AI 依頼文の保守（D2・M5・U4・U5）」の実装を点検する担当です。\nHEAD は main の 4533222（0.26.0。detached HEAD）。作業ツリーはコミットと同じで、H の変更はコミットしていない差分として積む。\n単位 B2.1（照合 pdfmatch.py の守り）は保留中で別の控えにある。H では pdfmatch.py・pdfdocx.py（照合・ルート2）と structure.py（I で分割する）には触らない。\nまず読むもの: docs/FIX_PLAN.m…",
+      "promptFramed": true,
+      "lastProgressAt": 1793576268693,
+      "tokens": 181173,
+      "toolCalls": 38,
+      "durationMs": 350115,
+      "resultPreview": "{\"checked\":\"点検は 2 回目の修正の後のもの。作業ツリーのファイルは変えていない。実験はすべて /tmp/claude-0/-home-user-jstgxmlcng-JASME/d6c16a4c-c8c0-592a-be84-ec12faff29b8/scratchpad/h/review/regression/r3/ に置いた。\\n\\n**0.26.0 との比べ方について（まとめ役への注意）**\\n- 依頼文に書かれた base0260_src は、jasme_jats パッケージのフォルダそのもの（__init__.py などが直下にある）。\\n- PYTHONPATH=base0260_src にすると jasme_jats が見つからず、editable で入っている今の作業ツリーのコードが読み込まれる。0.26.0 と比べたつもりで、実際には同じコードどうしを比べる…"
+    }
+  ],
+  "totalTokens": 1806079,
+  "totalToolCalls": 406
+}

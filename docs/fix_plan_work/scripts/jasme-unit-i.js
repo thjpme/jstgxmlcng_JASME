@@ -17,7 +17,7 @@ const E = `${S}/i`
 const COMMON = `
 あなたは、リポジトリ /home/user/jstgxmlcng_JASME（論文 docx → J-STAGE 全文 XML 変換ツール。利用者は学会の編集委員で Google Colab から使う）で、
 修正計画 docs/FIX_PLAN.md の単位「I（0.27.1）: structure.py の分割（動作を変えない）（U6）」を作るチームの一員です。
-main と HEAD は __HEAD__（0.27.0。単位 H まで反映済み。detached HEAD）。I の変更は作業ツリーのコミットしていない差分として積む（git commit はまとめ役が行う）。
+main と HEAD は e1bd587（0.27.0。単位 H まで反映済み。detached HEAD）。I の変更は作業ツリーのコミットしていない差分として積む（git commit はまとめ役が行う）。
 まず読むもの: docs/FIX_PLAN.md の「I」の節（正本）と項目の表の U6、付録の「### U6」、「同じファイルを触る順と、既存テストの書き換え」、「毎回の共通作業」、
 docs/DEVELOPMENT.md の「コードの構成」の表と「守るべき原則」、docs/DESIGN.md の 5 章・6 章（構造の組み立て）、src/jasme_jats/structure.py の全体（約 2,500 行。クラス・関数の一覧を先に作る）、
 structure から import している側: src の pdfdocx.py・report.py・ai_assist.py・linker.py・pipeline.py・builder.py と、tests の test_pipeline.py・test_links.py・test_floats.py・test_fidelity.py・test_notes.py・test_refparse.py・test_structure.py、docs/fix_plan_repro_tests.py。
