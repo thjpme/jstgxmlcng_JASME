@@ -298,3 +298,17 @@ Colab で利用者に確かめてもらうこと（5 章の S1〜S4 の読み替
   share は変わらず False。Colab でなければローカルのサーバーをブラウザで開く。
 - 確かめること: 新しいタブで画面が開くか、ダウンロードが通るか（通らなければ Colab 自身のダウンロード `google.colab.files.download` に切り替える）。
 
+### 2026-11-02: 新しいタブは Colab で開けない（0.26.4）
+
+- 利用者の確認: 中継の URL（`https://58095-…colab.dev/`）を新しいタブで開いても開かない。出力欄には Gradio の Blocks の一覧
+  （`Gradio Blocks instance: 28 backend functions …`）が長く出て、リンクが上に行ってしまう。
+- 原因: Colab 自身が、ポートを新しいタブで開く `serve_kernel_port_as_window` を「ブラウザの保存領域の分離（storage partitioning）で
+  動かなくなった」として非推奨にしている（colabtools の `google/colab/output/_util.py`）。中継の認証がタブごとに分かれるため、
+  新しいタブからは開けない。Colab の中では、出力欄への埋め込みしか残っていない。一覧の表示は、セルの最後の式（`launch()` の戻り値）の
+  表示で、`_app = launch()` にして止めた。
+- 変更: 埋め込みに戻すが、Gradio 自身の埋め込みではなく、`root_path` に中継の URL を渡してから Colab の `serve_kernel_port_as_iframe`
+  で高さ 1400 px で埋め込み、`no_vertical_scroll` で出力欄の縦スクロールをなくす（ノートブックのスクロールだけになる）。
+  ダウンロードのリンクは中継を通る（`root_path`）。
+- 残る選択肢: 出力欄の中の画面で足りなければ、パソコンで動かす（`pip install` して `launch(inline=False)`。ブラウザのタブで開く）を
+  説明書に載せる。常時稼働のサーバーは採らない（`docs/DESIGN.md` の 2 章）。
+
