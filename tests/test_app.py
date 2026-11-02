@@ -145,7 +145,7 @@ def test_build_app_and_launch_never_share(tmp_path, monkeypatch):
     seen = {}
     monkeypatch.setattr(gr.Blocks, "launch", lambda self, **kw: seen.update(kw))
     monkeypatch.setattr(app, "_in_colab", lambda: False)
-    app.launch()
+    app.launch(inline=False)                       # Colab の外: ローカルのサーバーをブラウザで開く
     assert seen["share"] is False and seen["inline"] is False
     # Colab では、中継の URL を root_path にして（ダウンロードのリンクが中継を通る）、出力欄に大きく埋め込む
     monkeypatch.setattr(app, "_in_colab", lambda: True)
