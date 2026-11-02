@@ -1,22 +1,28 @@
-"""ルート2: 出版版 PDF に合わせて直した docx（Word の変更履歴つき）を作る。
+"""ルート2（docx から作り、出版版 PDF で補う）: 出版版 PDF で補った docx（Word の変更履歴つき）を作る。
 
-docx の段落と PDF の照合（pdfmatch.py）の結果から、段落ごとの直す箇所を決め、元の docx の XML（前処理しないもの）の
-ランを分けて、削除（w:del）と挿入（w:ins）の変更履歴として書き込む。書式（太字・斜体・上付きなど）は、直す文字の
-ランの書式をそのまま使う。
+Word の文字が正で、出版版 PDF（印刷所の校正を経たもの）からは著者校正の直しを補う。docx の段落と PDF の照合（pdfmatch.py）の
+結果から、段落ごとの直す箇所を決め、元の docx の XML（前処理しないもの）のランを分けて、削除（w:del）と挿入（w:ins）の変更履歴
+として書き込む（作成者名は AUTHOR の 1 つ）。書式（太字・斜体・上付きなど）は、直す文字のランの書式をそのまま使う。
 
-  ・直すもの: 英数字・記号の全角・半角と、その文字のすぐ前後の PDF にない空白、それ以外の文字の違い
-    （大文字・小文字、引用符、「資料」→「付録」など）
+  ・直すもの（組版の違い。(A)。Fix の kind width・space・glyph）: 英数字・記号の全角・半角と、その文字のすぐ前後の PDF にない
+    空白、ダッシュ・ハイフンの字形、引用符の字形・向き、英文の題目・副題・著者名・所属の大文字・小文字（pdfmatch.typeset_pair）
+  ・直すもの（校正の直し。(B)。Fix の kind text）: 語句の追加・削除・置き換えで、組版の違いに還元できないもの（「資料」→
+    「付録」など）。1 つの違いに (A) と (B) が混ざるときは pdfmatch.diff_parts で分ける。足す文字は PDF の文字のまま
   ・直さないもの: 表のセル・数式・図の中の文字（照合しない）、PDF の中に見つからない段落、数式・Word が付ける番号・
     リンクの文字にかかる違い、フィールドの結果・タブ・記号などの文字、空白だけの違い（PDF の空白は信頼できない）、
     段落の文字列を読み取り（docx_reader）と同じに組み立てられない段落（図形を含む段落など）、PDF のページ番号・誌名の行・
     柱・投稿受付日などや、docx にない図・表の中の文字とみなした文字（docx に足さない。PDF の側にその文字しかない位置の
-    docx の文字も消さない）、照合で直し方を決められなかった違い（pdfmatch.TextDiff.why。段落の最初・最後の、どこまでが
+    docx の文字も消さない）、照合で直し方を決められなかった違い（(C)。pdfmatch.TextDiff.why。段落の最初・最後の、どこまでが
     段落の文字か決められない文字、文字として取り出せない数式の位置にかかるものなど）。1 つの違いを分けた直す箇所の一部が
-    ほかの直す箇所と重なるときは、その違いの直す箇所をすべて直さない
+    ほかの直す箇所と重なるときは、その違いの直す箇所をすべて直さない（(A) と (B) に分けたものも、まとめて直さない）
+  ・Word が付ける番号（自動段落番号・脚注番号）は docx の文字ではないので、ここでは直さず、変換のときに全角・半角と字形を
+    PDF に合わせる（pipeline の plan.pdf_numbers）
 
 できた docx は Word で開いて、変更を 1 つずつ承諾・却下できる。本ツールの読み取りは、挿入を残し削除を除いた文字
-（すべて承諾した状態）を読むので、この docx をルート1 と同じ処理で変換すると、PDF に合わせた文字の XML になる。
+（すべて承諾した状態）を読むので、この docx をルート1 と同じ処理で変換すると、(A) と (B) を当てはめた文字の XML になる。
 書き込んだ後に docx を読み直し、段落の文字列が直した結果と一致することを確かめる（一致しない段落は直さずに作り直す）。
+段落の役割・領域・リンク・注の区切り・著者と所属の数・氏名の姓と名の分け方が元の docx と同じに決まることも確かめる
+（_structure。合わない箇所は直さずに作り直す）。
 
 段落の対応と文字は、読み取り・検証と同じ規則（ooxml の文字ポリシー）で決める。段落記号の削除でつながる段落
 （ooxml.joined_paragraphs）は、連鎖の最初の段落の ID の 1 つの段落として照合・直し、直す文字のある w:p の w:t に書き込む
@@ -28,6 +34,7 @@ from __future__ import annotations
 import copy
 import datetime as _dt
 import difflib
+import re
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,7 +46,9 @@ from .ooxml import (BR_TEXT_TYPES, MC_NS, M_NS, NO_RULE, HiddenRule, joined_para
                     paragraph_mark_deleted, parse_xml, preprocess, sym_char, w)
 
 XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
-AUTHOR = "jasme-jats（出版版 PDF に合わせた変更）"
+# 書き込む変更履歴の作成者名（組版の違いと校正の直しで分けない。利用者の判断、2026-11）。ルート2 の補完の確かめ（fidelity）も、
+# この名前で、このツールが書き込んだ変更履歴を見分ける
+AUTHOR = "jasme-jats（出版版 PDF による補完）"
 # 直す段落のある XML の部品と、段落 ID の頭文字（docx_reader・fidelity と同じ。Word の脚注・文末脚注の段落も直す）
 PARTS = {"word/document.xml": "d", "word/footnotes.xml": "f", "word/endnotes.xml": "e"}
 # 直してよいラン（w:r）の親。既存の変更履歴（w:ins / w:del）の中やハイパーリンクの中は直さない
@@ -52,15 +61,23 @@ class Fix:
     start: int            # docx の段落（plain）の中の範囲 [start, end)。start == end なら、その位置に足す
     end: int
     new: str              # PDF の文字（削除なら空）
-    kind: str             # width（全角・半角）/ space（空白の削除）/ text（文字の違い）
+    # 組版の違い（(A)）: width（英数字・記号の全角・半角）/ space（PDF にない空白の削除）/ glyph（ダッシュ・ハイフン・引用符・
+    # 大文字・小文字。細かい種類は pdfmatch.typeset_pair(old, new, case=True) で分かる）。校正の直し（(B)）と、直せない違い
+    # （(C)。reason に理由）: text
+    kind: str
     old: str = ""         # docx の文字
     applied: bool = False
     reason: str = ""      # 直さなかった理由
 
+    @property
+    def typeset(self) -> bool:
+        """組版の違い（(A)）の直す箇所か。"""
+        return self.kind != "text"
+
 
 @dataclass
 class DocxFix:
-    path: Path                                       # 直した docx
+    path: Path                                       # 出版版 PDF で補った docx
     fixes: list = field(default_factory=list)        # Fix（直したもの・直さなかったもの）
     unmatched: list = field(default_factory=list)    # PDF の中に見つからなかった段落
     check: object = None                             # 元の docx と PDF の照合（pdfmatch.PdfCheck）
@@ -76,10 +93,36 @@ class DocxFix:
     def skipped(self) -> list:
         return [f for f in self.fixes if not f.applied]
 
+    @property
+    def applied_text(self) -> list:
+        """補った校正の直し（(B)。kind text の直したもの）。"""
+        return [f for f in self.applied if not f.typeset]
+
+    @property
+    def applied_typeset(self) -> list:
+        """PDF に合わせた組版の違い（(A)）。"""
+        return [f for f in self.applied if f.typeset]
+
+    @property
+    def skipped_text(self) -> list:
+        """直さなかった校正の直しと、決められない違い（(B)・(C)。要確認）。"""
+        return [f for f in self.skipped if not f.typeset]
+
+    @property
+    def skipped_typeset(self) -> list:
+        """直せなかった組版の違い（(A)。ほかの直す箇所と重なる、直せない文字にかかる、構造が変わるなど。要確認にしない）。"""
+        return [f for f in self.skipped if f.typeset]
+
 
 # ---------------------------------------------------------------------------- 直す箇所
 def plan_fixes(plan, check) -> list:
-    """照合の結果（PdfCheck）から、段落ごとの直す箇所（Fix）の一覧を作る。"""
+    """照合の結果（PdfCheck）から、段落ごとの直す箇所（Fix）の一覧を作る。
+
+    全角・半角（check.width）と PDF にない空白（check.drops）は 1 文字ずつの組版の違い（kind width・space）。違い（check.diffs）は
+    pdfmatch.diff_parts で直す単位に分け、組版の違いの文字は kind width・glyph、校正の直しは kind text にする。直せない違い
+    （fixable が偽）は分けずに理由付きの 1 つの Fix にし、kind は組版の違いだけのもの（TextDiff.kind typeset）なら width か
+    glyph、それ以外は text（(C) と、番号・数式・リンクにかかる校正の直し）。"""
+    from .pdfmatch import diff_parts
     fixes = []
     for src, m in check.width.items():
         text = plan.paras[src].plain()
@@ -87,27 +130,20 @@ def plan_fixes(plan, check) -> list:
     for src, ds in check.drops.items():
         text = plan.paras[src].plain()
         fixes += [Fix(src, q, q + 1, "", "space", text[q]) for q in ds]
+    case_srcs = check.case_srcs
     group = {}       # id(Fix) -> 違い（TextDiff）の番号。1 つの違いを分けた直す箇所は、まとめて直すか、まとめて直さない
     for gi, d in enumerate(check.diffs):
         text = plan.paras[d.src].plain()
         old = text[d.start:d.end]
         if not d.fixable:
-            fixes.append(Fix(d.src, d.start, d.end, d.pdf, "text", old,
+            kind = _typeset_kind(d.docx, d.pdf) if d.kind == "typeset" else "text"
+            fixes.append(Fix(d.src, d.start, d.end, d.pdf, kind, old,
                              reason=d.why or "数式・Word が付ける番号・リンクの文字にかかる、または足す位置を決められない"))
             continue
-        # 違う部分の中でも、文字ごとに最小限の変更にする（大文字・小文字の違いなど）
-        for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, old, d.pdf, autojunk=False).get_opcodes():
-            if tag == "equal":
-                continue
-            o, n = old[i1:i2], d.pdf[j1:j2]
-            # docx の空白は消さない（PDF の空白は信頼できないので、空白だけの違いは直さない）
-            while o and o[0].isspace() and not n[:1].isspace():
-                o, i1 = o[1:], i1 + 1
-            while o and o[-1].isspace() and not n[-1:].isspace():
-                o, i2 = o[:-1], i2 - 1
-            if not o.strip() and not n.strip():
-                continue
-            fixes.append(Fix(d.src, d.start + i1, d.start + i2, n, "text", o))
+        # 違う部分の中でも、文字ごとに最小限の変更にし、組版の違いと校正の直しを分ける（「58」→「５８９」は「5」「8」の
+        # 全角・半角と、「９」の追加）
+        for a, b, new, kind in diff_parts(text, d, d.src in case_srcs):
+            fixes.append(Fix(d.src, a, b, new, kind if kind in ("text", "width") else "glyph", text[a:b]))
             group[id(fixes[-1])] = gi
     order = {src: i for i, src in enumerate(plan.paras)}
     fixes.sort(key=lambda f: (order.get(f.src, len(order)), f.start, f.end))
@@ -132,6 +168,15 @@ def plan_fixes(plan, check) -> list:
         for f in more:
             f.reason = overlap
     return fixes
+
+
+def _typeset_kind(docx: str, pdf: str) -> str:
+    """組版の違いだけの文字列の対（pdfmatch.typeset_same が真のもの）の Fix の kind: 違う文字がすべて全角・半角なら width、
+    それ以外（ダッシュ・引用符・大文字・小文字を含む）は glyph。"""
+    from .pdfmatch import is_width_pair
+    d = [c for c in docx if not c.isspace()]
+    q = [c for c in pdf if not c.isspace()]
+    return "width" if all(x == y or is_width_pair(x, y) for x, y in zip(d, q)) else "glyph"
 
 
 def expected_text(text: str, fixes) -> str:
@@ -471,10 +516,12 @@ def _all_paragraphs(doc):
 
 
 def make_fixed_docx(docx_path, pdf_path, out_path, journal) -> DocxFix:
-    """ルート2 の最初の段階: docx と PDF を照合し、PDF に合わせて直した docx（変更履歴つき）を out_path に作る。
+    """ルート2 の最初の段階: docx と PDF を照合し、組版の違いと校正の直しを出版版 PDF で補った docx（変更履歴つき）を out_path に
+    作る。
 
     書き込んだ後に読み直して、(1) 直した段落の文字列が直した結果と一致するか、(2) 段落の役割・領域（英文要旨・資料など）・
-    リンク（注・引用文献・図表など）・注の区切りが元の docx と同じに決まるかを確かめる。合わない箇所は直さずに作り直す。
+    リンク（注・引用文献・図表など）・注の区切り・著者と所属の数・氏名の姓と名の分け方が元の docx と同じに決まるかを確かめる。
+    合わない箇所は直さずに作り直す。
     """
     from .builder import word_note_marks
     from .pdfmatch import check_pdf
@@ -551,10 +598,14 @@ def _kept(f, keep) -> str:
 
 
 def _structure(plan) -> tuple:
-    """段落ごとの（役割, 領域）とリンクの並び {src: ((役割, 領域), [(リンク, 開始, 終了)])}、注 {fid: (番号, 段落)}、注の番号の範囲。
+    """段落ごとの（役割, 領域）とリンクの並び {src: ((役割, 領域), [(リンク, 開始, 終了)])}、注 {fid: (番号, 段落)}、注の番号の範囲、
+    著者と所属（_people）。
 
     領域（plan.region）も比べるのは、英文要旨・資料の段落は役割が空のままなので、役割だけでは、直すと英文要旨と資料の境が
     動くこと（英文要旨の「資料-1 …」を PDF の「資料－1 …」に直すと、資料の見出しになるなど）を見つけられないため。
+    著者と所属を比べるのは、英文の著者名・所属も照合して直す（大文字・小文字・全角・半角・空白）ので、直すと著者の数や
+    氏名の姓と名の分け方が変わること（「SHIKEN Shiro」を「Shiken Shiro」にすると、姓が後ろの語になる、姓と名の間の空白を
+    消すなど）を見つけるため。
     """
     paras = {}
     for src, p in plan.paras.items():
@@ -567,7 +618,42 @@ def _structure(plan) -> tuple:
         paras[src] = ((p.role, plan.region.get(src, "")), links)
     fns = {fn.fid: (fn.number, tuple(q.src for q in fn.paras)) for fn in plan.fns}
     marks = [(fn.paras[0].src, tuple(fn.mark_range), fn.fid) for fn in plan.fns if fn.paras and fn.mark_range]
-    return paras, fns, marks
+    return paras, fns, marks, _people(plan)
+
+
+def _people(plan) -> tuple:
+    """著者と所属の形: (著者ごとの (和文の氏名の段落, 英文の氏名の段落, 所属の ID の並び), 所属ごとの (和文の段落, 英文の段落,
+    ID), 氏名の段落 -> 姓と名の分け方〈_name_shape〉)。"""
+    def src(p):
+        return p.src if p is not None else ""
+    authors = tuple((src(a.name_ja), src(a.name_en), tuple(f.aid for f in a.affs)) for a in plan.authors)
+    affs = tuple((src(f.ja), src(f.en), f.aid) for f in plan.affs)
+    shapes = {}
+    for a in plan.authors:
+        for style, p, split in (("eastern", a.name_ja, a.split_ja), ("western", a.name_en, a.split_en)):
+            if p is not None:
+                shapes[p.src] = _name_shape(p.plain(), style, split)
+    return authors, affs, shapes
+
+
+def _name_shape(text: str, style: str, split) -> tuple:
+    """氏名の姓と名の分け方（builder.person_name と同じ規則で、位置ではなく形で表す）: 分けないなら ()、AI の指定の位置で
+    分けるなら ("split",)、和文の氏名は ("eastern", 語の数)、英文の氏名は ("western", 語の数, 姓の語の番号)。直した文字で
+    分け方が変わったか（大文字の語の位置・空白の数）を比べるため。"""
+    n = len(text)
+    core_s = n - len(text.lstrip(" \u3000\t"))
+    core_e = len(text.rstrip(" \u3000\t"))
+    if split is not None and core_s < split < core_e:
+        return ("split",)
+    core = text[core_s:core_e]
+    toks = re.findall(r"[^ \u3000\t]+", core)
+    if len(toks) < 2:
+        return ()
+    if style == "eastern":
+        return ("eastern", len(toks))
+    caps = [k for k, t in enumerate(toks) if re.fullmatch(r"[A-ZÀ-Ý][A-ZÀ-Ý'’\-]+", t)]
+    k = caps[0] if len(caps) == 1 and caps[0] in (0, len(toks) - 1) else len(toks) - 1
+    return ("western", len(toks), k)
 
 
 def _lost(original, fixed) -> list:
@@ -575,8 +661,16 @@ def _lost(original, fixed) -> list:
 
     注の番号（本文の注へのリンクと、注の一覧の先頭の番号）は、どれか 1 つでも守るときは、すべての注で守る（そろえるため）。
     """
-    (paras0, fns0, marks0), (paras1, fns1, _) = original, fixed
+    (paras0, fns0, marks0, people0), (paras1, fns1, _, people1) = original, fixed
     out, notes = [], False
+    if people0 != people1:
+        # 著者・所属の数か、氏名の姓と名の分け方が変わった: 著者名・所属の段落のうち、形が変わったものを直さない（数や
+        # 対応が変わったときは、著者名・所属の段落をすべて直さない）
+        if people0[:2] != people1[:2]:
+            srcs = {x for a in people0[0] for x in a[:2]} | {x for f in people0[1] for x in f[:2]}
+        else:
+            srcs = {x for x, v in people0[2].items() if people1[2].get(x) != v}
+        out += [(x, None, STRUCTURE_REASON, "") for x in sorted(srcs) if x]
     for src, (role, links) in paras0.items():
         got = paras1.get(src)
         if got is None or got[0] != role:

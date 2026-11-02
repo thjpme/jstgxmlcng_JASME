@@ -42,8 +42,9 @@ def main(argv=None):
     ap.add_argument("--pdf", type=Path, help="記事の PDF（J-STAGE への登載に必須。指定すると ZIP に入れる。"
                                           "指定しなければ、記事フォルダに前の変換の PDF が残っていても ZIP に入れない）")
     ap.add_argument("--route", choices=["docx", "pdf"],
-                    help="作り方。既定は --pdf があれば pdf、なければ docx。pdf: --pdf の出版版 PDF に合わせて直した docx"
-                         "（Word の変更履歴つき）を出力フォルダに作り、それを変換する。docx: docx から作る（docx の文字は 1 文字も"
+                    help="作り方。既定は --pdf があれば pdf、なければ docx。pdf: docx から作り、--pdf の出版版 PDF で補う"
+                         "（著者校正の直しと、全角・半角・ダッシュ・引用符などの組版の違いを PDF から補った docx〈Word の"
+                         "変更履歴つき〉を出力フォルダに作り、それを変換する）。docx: docx から作る（docx の文字は 1 文字も"
                          "変えない。--pdf があれば照合してレポートに載せるだけ）")
     ap.add_argument("--no-metafile-conversion", action="store_true", help="EMF/WMF 画像の変換を行わない")
     ap.add_argument("--images", type=Path,
@@ -62,7 +63,7 @@ def main(argv=None):
     if a.route is None:
         a.route = "pdf" if a.pdf else "docx"
     if a.route == "pdf" and not a.pdf:
-        ap.error("--route pdf（出版版 PDF に合わせてから作る）では、--pdf で記事の PDF を指定してください")
+        ap.error("--route pdf（docx から作り、出版版 PDF で補う）では、--pdf で記事の PDF を指定してください")
     api_key = next((os.environ[k] for k in API_KEY_NAMES[a.ai_provider] if os.environ.get(k)), None)
     if a.ai == "api" and not api_key:
         ap.error(f"--ai api では API キーが必要です。環境変数 {' または '.join(API_KEY_NAMES[a.ai_provider])} に API キーを"
@@ -88,6 +89,8 @@ def main(argv=None):
     fid = res.fidelity
     print(f"文字の不変性チェック: {fid.summary()}（段落 {fid.units} 件中 {fid.mapped} 件を出力、{len(fid.excluded)} 件は除外）")
     print(f"最終出力の再チェック: {'合格' if fid.final_ok else '不合格'}")
+    if res.supplement is not None:
+        print(f"補完の確かめ: {'合格' if res.supplement.ok else '不合格'}")
     print(f"DTD 検証: {'合格' if res.dtd_valid else '不合格'}")
     issues = upload_issues(res)     # XML で判定したものと、ZIP を読み直して見つけたもの
     print(f"J-STAGE のアップロード時チェック: {'問題なし' if not issues else f'要対応 {len(issues)} 件'}")
@@ -96,7 +99,7 @@ def main(argv=None):
     if res.pdf_check is not None:
         print(f"出版版 PDF との照合: {pdf_summary(res)}")
     if res.docx_fix is not None:
-        print(f"PDF に合わせて直した docx（変更履歴つき）: {res.docx_fix.path}")
+        print(f"PDF で補った docx（変更履歴つき）: {res.docx_fix.path}")
     print(f"XML: {res.xml_path}")
     print(f"ZIP: {res.zip_path}")
     print(f"レポート: {res.report_path}")

@@ -148,7 +148,7 @@ def test_cell_figures_guards(journal, meta, tmp_path, shape):
 
 def test_cell_figures_are_not_fixed_by_route2(journal, meta, tmp_path, monkeypatch):
     """表のセルの画像とキャプションで組んだ図のキャプション・画像と同じ段落の文字は、docx では表のセルなので、ルート2
-    （出版版 PDF に合わせてから作る）でも今までどおり照合せず、直さない（本文の図キャプションは直す）。"""
+    （docx から作り、出版版 PDF で補う）でも今までどおり照合せず、直さない（本文の図キャプションは直す）。"""
     from jasme_jats import pdfmatch
     from jasme_jats.docx_reader import read_docx
     from jasme_jats.model import OBJ

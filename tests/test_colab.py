@@ -57,7 +57,7 @@ def test_missing_images_box(journal, meta, tmp_path):
 
 
 def test_pdf_diff_box_shows_formula_and_insert_marks():
-    """ルート2 の赤い枠の直せなかった箇所の docx の文字は、レポートの 13.2 と同じ形にする（docx の数式・画像は「〓」、PDF に
+    """ルート2 の赤い枠の直さなかった箇所の docx の文字は、レポートの 13.3 と同じ形にする（docx の数式・画像は「〓」、PDF に
     だけある文字は、足す位置の前後の docx の文字と「［］」）。同じ記号の 2 つの意味（docx の数式と、PDF で読み取れない部分）を
     一覧の前に添える（MATH_WHY の行。docx の数式の位置の行と、PDF にだけある文字の行）。"""
     from pathlib import Path
@@ -67,7 +67,7 @@ def test_pdf_diff_box_shows_formula_and_insert_marks():
     from jasme_jats.pdfmatch import MATH_WHY, PdfCheck
     text = "値の組（￼，￼）を順に調べ，その確率を表に記録した。"
     at = text.index("を表")
-    fx = DocxFix(Path("31_1_PDFに合わせた原稿.docx"), texts={"d12": text},
+    fx = DocxFix(Path("31_1_PDFで補完した原稿.docx"), texts={"d12": text},
                  fixes=[Fix("d12", 4, 5, "〓，〓", "text", old="￼", reason=MATH_WHY),
                         Fix("d12", at, at, "（〓，…，〓とおく）", "text", reason=MATH_WHY)])
     html = pdf_diff_box(SimpleNamespace(pdf_check=PdfCheck(), docx_fix=fx))

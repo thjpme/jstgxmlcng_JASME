@@ -18,8 +18,8 @@ from .docx_reader import table_where
 from .linker import body_paragraphs, linked_ids
 from .model import note_key, note_label
 from .package import article_dir
-from .pdfmatch import (DISPLACED_WHY, EDGE_WHY, FORMULA_MARK, HEAD_WHY, LINE_MARK, LONG_WHY, MATH_WHY, RE_PAGE_NO, UNSURE_WHY,
-                       WHOLE_WHY)
+from .pdfmatch import (DISPLACED_WHY, EDGE_WHY, FORMULA_MARK, HEAD_WHY, LINE_MARK, LONG_WHY, MATH_WHY, RE_PAGE_NO, TYPESET_KINDS,
+                       UNSURE_WHY, WHOLE_WHY, diff_parts, typeset_pair)
 from .structure import NO_LINK_KINDS, TEXTBOX_TEXT_EXCLUDED
 
 
@@ -277,7 +277,7 @@ def pdf_checklist_line(r) -> str:
 
 
 ROUTE_JA = {"docx": "docx から作る（ルート1。docx の文字は 1 文字も変えない）",
-            "pdf": "出版版 PDF に合わせてから作る（ルート2。PDF に合わせて直した docx を変換）"}
+            "pdf": "docx から作り、出版版 PDF で補う（ルート2。著者校正の直しと組版の違いを PDF から補った docx を変換）"}
 NUMBER_KINDS = {"auto": "自動段落番号", "fnref": "本文の脚注番号", "fnlist": "注の一覧の脚注番号"}
 
 
@@ -292,19 +292,24 @@ def pdf_summary(r) -> str:
     if fx is not None:
         from .pdfdocx import tracked_counts
         ins, dels = tracked_counts(fx.path)
-        parts = [f"PDF に合わせて docx を直した {len(fx.applied)} 箇所（変更履歴: 挿入 {ins}・削除 {dels}）"]
-        if fx.skipped:
-            parts.append(f"直せなかった {len(fx.skipped)} 箇所（要確認）")
+        parts = [f"PDF で補った校正の直し {len(fx.applied_text)} 箇所・組版の違い {len(fx.applied_typeset)} 箇所"
+                 f"（変更履歴: 挿入 {ins}・削除 {dels}）"]
+        if fx.skipped_text:
+            parts.append(f"直さなかった {len(fx.skipped_text)} 箇所（要確認）")
+        if fx.skipped_typeset:
+            parts.append(f"組版の違いで直せなかった {len(fx.skipped_typeset)} 箇所")
         if ignored_lines(r):
             parts.append(ignored_summary(r))
         if pc.number_edits:
             parts.append(f"Word が付けた番号を PDF に合わせた {len(pc.number_edits)} 件")
-        if pc.diffs or pc.width_count:
-            parts.append(f"直した後も残る違い {len(pc.diffs) + pc.width_count} 件")
+        if pc.text_diffs:
+            parts.append(f"補った後も残る違い {len(pc.text_diffs)} 件")
+        if r.supplement is not None and not r.supplement.ok:
+            parts.append("補完の確かめ: 不合格（要対応）")
     else:
-        parts = [f"文字の違い {len(pc.diffs)} 件" + ("（要確認）" if pc.diffs else "")]
-        if pc.width_count:
-            parts.append(f"全角・半角の違い {pc.width_count} 文字（docx のまま）")
+        parts = [f"文字の違い {len(pc.text_diffs)} 件" + ("（要確認）" if pc.text_diffs else "")]
+        if pc.typeset_count:
+            parts.append(f"組版の違い {pc.typeset_count} 文字（docx のまま）")
         if ignored_lines(r):
             parts.append(ignored_summary(r))
     if unmatched:
@@ -332,8 +337,8 @@ IGNORED_NOTE = ("段落の途中にあった PDF の文字のうち、組版で�
                 "docx を手で直してから変換し直してください。")
 # ルート2 で添える文。照合に使わなかった文字が docx のほかの段落にある文字なら、照合がその段落の文字を取り違えて、元の段落から
 # 消していないか（隣り合う段落に同じ文がくり返す形など。docs/DESIGN.md の 4.4 の「限界」）も 13.1 で確かめてもらう
-IGNORED_NOTE_ROUTE2 = ("これらの文字は、PDF に合わせて直した docx にも入れていません。docx のほかの段落にある文字のときは、その文字を"
-                       " 13.1 で元の段落から消していないかも確かめてください（消していれば、直した docx を Word で開いてその変更を"
+IGNORED_NOTE_ROUTE2 = ("これらの文字は、PDF で補った docx にも入れていません。docx のほかの段落にある文字のときは、その文字を"
+                       " 13.1 で元の段落から消していないかも確かめてください（消していれば、補った docx を Word で開いてその変更を"
                        "却下し、却下して保存した docx を「docx から作る」で変換し直します）。")
 IGNORED_NUMBERS = 8      # 数字だけの行を一覧に並べる数（それより多ければ「…」）
 
@@ -403,31 +408,66 @@ def _snippets(text, edits) -> list:
     return out
 
 
-def width_rows(r) -> list:
-    """ルート1: 全角・半角だけの違い（docx のまま）を段落ごとに: [(段落, 場所, 文字数, 「docx」→「PDF」…)]。"""
+def typeset_rows(r) -> list:
+    """ルート1: 組版の違い（docx のまま）を段落ごとに: [(段落, 場所, 文字数, 「docx」→「PDF」…)]。
+
+    全角・半角（pc.width）、PDF にない空白（pc.drops）、ダッシュ・引用符・大文字・小文字などの区間（pc.typeset_diffs。
+    pdfmatch.diff_parts で 1 文字ずつに分ける）。
+    """
     pc = r.pdf_check
+    parts = {}
+    for d in pc.typeset_diffs:
+        text = r.plan.paras[d.src].plain()
+        parts.setdefault(d.src, []).extend((a, b, new) for a, b, new, kind in diff_parts(text, d, d.src in pc.case_srcs)
+                                           if kind != "text")
     rows = []
     for src, p in r.plan.paras.items():
-        subs, drops = pc.width.get(src, {}), pc.drops.get(src, set())
-        if not subs and not drops:
+        subs, drops, glyphs = pc.width.get(src, {}), pc.drops.get(src, set()), parts.get(src, [])
+        if not subs and not drops and not glyphs:
             continue
-        edits = [(q, q + 1, c) for q, c in subs.items()] + [(q, q + 1, "") for q in drops]
-        n = f"{len(subs)}" + (f"（空白 {len(drops)}）" if drops else "")
+        edits = [(q, q + 1, c) for q, c in subs.items()] + [(q, q + 1, "") for q in drops] + glyphs
+        n = f"{len(subs) + len(glyphs)}" + (f"（空白 {len(drops)}）" if drops else "")
         rows.append((src, r.plan.locations.get(src, ""), n, "、".join(_snippets(p.plain(), edits))))
     return rows
 
 
-def fix_rows(fx) -> list:
-    """ルート2: PDF に合わせて直した箇所を段落ごとに: [(段落, 場所, 箇所数, 「変更前」→「変更後」…)]。"""
+def fix_rows(fx, fixes) -> list:
+    """ルート2: PDF で補った箇所 fixes（fx.applied_text か fx.applied_typeset）を段落ごとに:
+    [(段落, 場所, 箇所数, 「変更前」→「変更後」…)]。"""
     by_src = {}
-    for f in fx.applied:
+    for f in fixes:
         by_src.setdefault(f.src, []).append(f)
     return [(src, fx.locations.get(src, ""), str(len(fs)), "、".join(_snippets(fx.texts[src], [(f.start, f.end, f.new)
                                                                                          for f in fs])))
             for src, fs in by_src.items()]
 
 
-INSERT_AT = "［］"      # ルート2 の 13.2 の docx の欄で、PDF にだけある文字の位置を示す記号
+def _fix_typeset_kind(f) -> str:
+    """ルート2: 組版の違いの直し f の種類（pdfmatch.TYPESET_KINDS の鍵）。glyph は文字の対から決める。"""
+    if f.kind in ("width", "space"):
+        return f.kind
+    return typeset_pair(f.old, f.new, case=True) or "dash"
+
+
+def typeset_counts(items) -> str:
+    """組版の違い（(A)）の種類ごとの内訳の文: 「英数字・記号の全角・半角 3 箇所、ダッシュ・ハイフン 1 箇所」。
+
+    items は pdfdocx.Fix（kind が width・space・glyph）か、種類の鍵（TYPESET_KINDS）の並び。ルート1・ルート2 で同じ文を使う。
+    """
+    cnt = Counter(x if isinstance(x, str) else _fix_typeset_kind(x) for x in items)
+    return "、".join(f"{label} {cnt[k]} 箇所" for k, label in TYPESET_KINDS.items() if cnt[k])
+
+
+def check_typeset_kinds(pc, plan) -> list:
+    """ルート1: 照合（pdfmatch.PdfCheck）の組版の違いの種類の並び（1 文字・1 区間ごと。typeset_counts の入力）。"""
+    kinds = ["width"] * pc.width_count + ["space"] * pc.drop_count
+    for d in pc.typeset_diffs:
+        text = plan.paras[d.src].plain()
+        kinds += [kind for a, b, new, kind in diff_parts(text, d, d.src in pc.case_srcs) if kind != "text"]
+    return kinds
+
+
+INSERT_AT = "［］"      # ルート2 の 13.3 の docx の欄で、PDF にだけある文字の位置を示す記号
 # 13 章の表（と Colab の枠）の「〓」の説明。docx の側（docx・前後の欄）では docx の数式・画像、PDF の側では PDF で文字として
 # 読み取れない数式などの位置（同じ記号なので、表に「〓」があるときは、表の前に必ず添える）
 FORMULA_NOTE = (f"表の「{FORMULA_MARK}」は、docx の欄と前後の欄では docx の数式・画像、PDF の欄では PDF で数式など文字として"
@@ -442,7 +482,7 @@ def _formula_note(L, cells):
 
 
 def _skipped_docx(f, text, n=8) -> str:
-    """ルート2 の 13.2 の docx の欄: 直さなかった箇所の docx の文字（数式・画像は 〓）。docx の側に文字がない箇所（PDF にだけある
+    """ルート2 の 13.3 の docx の欄: 直さなかった箇所の docx の文字（数式・画像は 〓）。docx の側に文字がない箇所（PDF にだけある
     文字。f.start == f.end）は、docx の段落の文字 text の、その位置の前後 n 文字（「…確率［］が…」）。"""
     if f.start != f.end or not text:
         return esc(f.old.replace(chr(0xFFFC), "〓"), 30)
@@ -583,6 +623,30 @@ def _fidelity_action(r):
                     "差分を確認し、変換レポートを添えて開発者に知らせてください。"),
         cli=("要対応: 文字の不変性チェックが不合格です。出力された XML の本文が docx と一致していないので、この XML は登載に"
              "使わないこと（レポートの冒頭と 5 章。変換ツールの不具合の可能性がある）"))
+
+
+def _supplement_action(r):
+    """ルート2 の補完の確かめ（fidelity.verify_supplement）が不合格のとき（要対応。不変性チェックと同じ並び）。"""
+    sup, fx = getattr(r, "supplement", None), r.docx_fix
+    if sup is None or sup.ok:
+        return None
+    name = fx.path.name if fx is not None else "補った docx"
+    n = len(sup.problems)
+    shown = list(sup.problems[:DTD_SHOWN])
+    items = "\n".join(f"・{src}: 「{esc(old, 30)}」→「{esc(new, 30)}」（{why}）" for src, old, new, why in shown) + \
+        (f"\n…ほか {n - DTD_SHOWN} 件" if n > DTD_SHOWN else "")
+    return Action(
+        NEEDS_ACTION, "supplement",
+        top=(f"> **要対応: 出版版 PDF による補完の確かめが不合格です（13.8）。** 補った docx（{esc(name)}）に、組版の違いでも "
+             "13.1 の補った箇所でもない変更があります（変換ツールの不具合の可能性があります）。この XML は登載に使わず、"
+             "「docx から作る」で変換し直すか、変換レポートを添えて開発者に知らせてください。"),
+        checklist=("- [ ] **補完の確かめが不合格**（13.8）: この XML は登載に使わない"
+                   "（「docx から作る」で変換し直すか、開発者に知らせる）"),
+        box_title="出版版 PDF による補完の確かめが不合格です（この XML は登載に使わないでください）",
+        box_detail=(f"補った docx（{name}）に、組版の違いでも 13.1 の補った箇所でもない変更があります。変換ツールの不具合の可能性が"
+                    "あります。レポートの 13.8 を確認し、変換レポートを添えて開発者に知らせてください。" + (f"\n{items}" if items else "")),
+        cli=("要対応: 出版版 PDF による補完の確かめが不合格です。補った docx に、組版の違いでも 13.1 の補った箇所でもない変更が"
+             "あるので、この XML は登載に使わないこと（レポートの冒頭と 13.8。変換ツールの不具合の可能性がある）"))
 
 
 DTD_SHOWN = 5       # 赤い枠とコマンドラインに並べる DTD のエラーの数（全件はレポートの 12 章）
@@ -1089,7 +1153,7 @@ def _newline_action(r):
 
 
 def pdf_fallback(r) -> bool:
-    """ルート2 で出版版 PDF の文字を読めず、docx を直さずに変換した（pipeline.Result.pdf_fallback と同じ。M4）。"""
+    """ルート2 で出版版 PDF の文字を読めず、docx を補わずに変換した（pipeline.Result.pdf_fallback と同じ。M4）。"""
     return r.route == "pdf" and r.docx_fix is None and r.pdf_check is not None
 
 
@@ -1124,17 +1188,17 @@ def _pdf_fallback_action(r):
     msg = pc.message
     return Action(
         NEEDS_ACTION, "pdf_fallback",
-        top=(f"> **要対応: 出版版 PDF に合わせられませんでした（13 章）。** PDF の文字を読めなかったため（{esc(msg)}）、docx を"
-             "直さずに、docx の文字のまま変換しました（「docx から作る」と同じ結果です）。PDF に合わせるときは、文字を読める"
+        top=(f"> **要対応: 出版版 PDF で補えませんでした（13 章）。** PDF の文字を読めなかったため（{esc(msg)}）、docx を"
+             "補わずに、docx の文字のまま変換しました（「docx から作る」と同じ結果です）。PDF で補うときは、文字を読める"
              "出版版 PDF を選んで変換し直すか、docx を手で直して変換し直してください。"),
-        checklist=("- [ ] **docx を PDF に合わせていない**（PDF の文字を読めなかった。13 章）: 文字を読める出版版 PDF で変換し直すか、"
+        checklist=("- [ ] **docx を PDF で補っていない**（PDF の文字を読めなかった。13 章）: 文字を読める出版版 PDF で変換し直すか、"
                    "docx を手で直して変換し直す（このままなら XML は docx の文字のまま）"),
-        box_title="出版版 PDF に合わせられませんでした（要対応）",
-        box_detail=(f"PDF の文字を読めなかったため（{msg}）、docx を直さずに、docx の文字のまま変換しました（「docx から作る」と"
-                    "同じ結果です。PDF に合わせて直した docx は作っていません）。画像だけの PDF（スキャンした PDF など）では、"
-                    "文字を読めません。PDF に合わせるときは、文字を読める出版版 PDF を手順 2 で選び直して変換し直すか、docx を手で"
+        box_title="出版版 PDF で補えませんでした（要対応）",
+        box_detail=(f"PDF の文字を読めなかったため（{msg}）、docx を補わずに、docx の文字のまま変換しました（「docx から作る」と"
+                    "同じ結果です。PDF で補った docx は作っていません）。画像だけの PDF（スキャンした PDF など）では、"
+                    "文字を読めません。PDF で補うときは、文字を読める出版版 PDF を手順 2 で選び直して変換し直すか、docx を手で"
                     "直して手順 2 からやり直してください（レポートの冒頭と 13 章）。"),
-        cli=(f"要対応: 出版版 PDF に合わせられませんでした。PDF の文字を読めなかったため（{msg}）、docx を直さずに変換した"
+        cli=(f"要対応: 出版版 PDF で補えませんでした。PDF の文字を読めなかったため（{msg}）、docx を補わずに変換した"
              "（「docx から作る」と同じ結果。レポートの冒頭と 13 章）。文字を読める出版版 PDF を --pdf で指定して変換し直すか、"
              "docx を手で直して変換し直すこと"))
 
@@ -1157,24 +1221,25 @@ def _pdf_unread_action(r):
 
 def _pdf_diff_action(r):
     pc, fx = r.pdf_check, r.docx_fix
-    if pc is None or not pc.ok or fx is not None or (not pc.diffs and not pc.width_count):
+    if pc is None or not pc.ok or fx is not None or not pc.text_diffs:
         return None
-    items = _marks_note([x for d in pc.diffs[:10] for x in (d.context, d.docx)], [d.pdf for d in pc.diffs[:10]]) + \
-        "\n".join(f"・{d.context}（docx「{d.docx}」/ PDF「{d.pdf}」{why_mark(d.why)}）" for d in pc.diffs[:10])
-    more = f"\n…ほか {len(pc.diffs) - 10} 件" if len(pc.diffs) > 10 else ""
-    width = f"、全角・半角の違いが {pc.width_count} 文字" if pc.width_count else ""
+    diffs = pc.text_diffs
+    items = _marks_note([x for d in diffs[:10] for x in (d.context, d.docx)], [d.pdf for d in diffs[:10]]) + \
+        "\n".join(f"・{d.context}（docx「{d.docx}」/ PDF「{d.pdf}」{why_mark(d.why)}）" for d in diffs[:10])
+    more = f"\n…ほか {len(diffs) - 10} 件" if len(diffs) > 10 else ""
+    typeset = ("組版の違い（全角・半角・ダッシュ・引用符など）は 13.2 に載せています（確認は要りません）。")
     return Action(
         TO_CHECK, "pdf_diff",
-        top=(f"> **要確認: 出版版 PDF と文字が違う箇所が {len(pc.diffs)} 件、全角・半角の違いが {pc.width_count} 文字あります"
-             "（13 章）。** 受け取った docx が、著者校正を経た最終版ではない可能性があります。XML は docx の文字のままです。"
-             "PDF に合わせるときは、「出版版 PDF に合わせてから作る」で変換し直すか、docx を直して変換し直してください。"),
-        checklist=(f"- [ ] **13 章の、出版版 PDF との違い**（文字の違い {len(pc.diffs)} 件・全角・半角の違い {pc.width_count} 文字）を"
-                   "確認する（docx が最終版でなければ、docx を直すか「出版版 PDF に合わせてから作る」で変換し直す）"),
-        box_title=f"出版版 PDF と文字が違う箇所が {len(pc.diffs)} 件{width}あります（要確認）",
+        top=(f"> **要確認: 出版版 PDF と文字が違う箇所が {len(diffs)} 件あります（13 章）。** 受け取った docx が、"
+             "著者校正を経た最終版ではない可能性があります。XML は docx の文字のままです。校正の直しを補うときは、"
+             f"「docx から作り、出版版 PDF で補う」で変換し直すか、docx を直して変換し直してください。{typeset}"),
+        checklist=(f"- [ ] **13 章の、出版版 PDF との違い**（文字の違い {len(diffs)} 件）を"
+                   "確認する（docx が最終版でなければ、docx を直すか「docx から作り、出版版 PDF で補う」で変換し直す）"),
+        box_title=f"出版版 PDF と文字が違う箇所が {len(diffs)} 件あります（要確認）",
         box_detail=("受け取った docx が、著者校正を経た最終版ではない可能性があります。XML は docx の文字のままです（レポートの 13 章）。"
-                    "PDF に合わせるときは、手順 2 で「出版版 PDF に合わせてから作る」を選んで変換し直すか、docx を直して"
+                    "校正の直しを補うときは、手順 2 で「docx から作り、出版版 PDF で補う」を選んで変換し直すか、docx を直して"
                     "手順 2 からやり直してください。" + (f"\n{items}{more}" if items else "")),
-        cli=(f"要確認: 出版版 PDF と文字が違う箇所が {len(pc.diffs)} 件{width}あります（レポートの冒頭と 13 章）。XML は docx の"
+        cli=(f"要確認: 出版版 PDF と文字が違う箇所が {len(diffs)} 件あります（レポートの冒頭と 13 章）。XML は docx の"
              "文字のまま。docx が最終版でなければ、docx を直すか --route pdf で変換し直すこと"))
 
 
@@ -1182,30 +1247,31 @@ def _pdf_unfixed_action(r):
     pc, fx = r.pdf_check, r.docx_fix
     if pc is None or not pc.ok or fx is None:
         return None
-    rest = len(pc.diffs) + pc.width_count
-    if not fx.skipped and not rest:
+    skipped = fx.skipped_text           # (B) と (C)。直せなかった組版の違い（fx.skipped_typeset）は要確認にしない（13.2 に載せるだけ）
+    rest = len(pc.text_diffs)
+    if not skipped and not rest:
         return None
 
     def line_note(f):       # 直せない理由のある箇所の PDF の文字は、行の変わり目に LINE_MARK が入る
         return f"。{LINE_MARK} は PDF の行の変わり目" if LINE_MARK in f.new else ""
-    # docx の文字はレポートの 13.2 と同じ形（数式・画像は FORMULA_MARK、PDF にだけある文字は INSERT_AT と前後の文字）
-    shown = [(f, _skipped_docx(f, fx.texts.get(f.src, ""))) for f in fx.skipped[:10]]
+    # docx の文字はレポートの 13.3 と同じ形（数式・画像は FORMULA_MARK、PDF にだけある文字は INSERT_AT と前後の文字）
+    shown = [(f, _skipped_docx(f, fx.texts.get(f.src, ""))) for f in skipped[:10]]
     items = _marks_note([d for _, d in shown], [f.new for f, _ in shown], insert=True) + \
         "\n".join(f"・{f.src}: 「{d}」→「{f.new}」（{f.reason}{line_note(f)}）" for f, d in shown)
-    more = f"\n…ほか {len(fx.skipped) - 10} 件" if len(fx.skipped) > 10 else ""
+    more = f"\n…ほか {len(skipped) - 10} 件" if len(skipped) > 10 else ""
     head = []
-    if fx.skipped:
-        head.append(f"直せなかった箇所 {len(fx.skipped)} 件")
+    if skipped:
+        head.append(f"直さなかった箇所 {len(skipped)} 件")
     if rest:
-        head.append(f"直した後も PDF と違う箇所 {rest} 件")
-    # 冒頭（固定の「docx を直してから変換しました」の案内）と 14 章（固定の行）には、今までどおり render が出す
+        head.append(f"補った後も PDF と違う箇所 {rest} 件")
+    # 冒頭（固定の「PDF で補ってから変換しました」の案内）と 14 章（固定の行）には、今までどおり render が出す
     return Action(
         TO_CHECK, "pdf_unfixed",
-        box_title="出版版 PDF に合わせきれなかった箇所があります（要確認）: " + "、".join(head),
-        box_detail=(f"PDF に合わせて直した docx（{fx.path.name}、変換結果の ZIP に入っています）を Word で開き、レポートの 13 章と"
-                    "照らして確認してください。XML は直した docx の文字のままです。" + (f"\n{items}{more}" if items else "")),
-        cli=(f"要確認: 出版版 PDF に合わせきれなかった箇所があります: {'、'.join(head)}（レポートの 13 章）。PDF に合わせて"
-             f"直した docx（{fx.path.name}）を Word で開き、13 章と照らして確認すること"))
+        box_title="出版版 PDF で補いきれなかった箇所があります（要確認）: " + "、".join(head),
+        box_detail=(f"PDF で補った docx（{fx.path.name}、変換結果の ZIP に入っています）を Word で開き、レポートの 13 章と"
+                    "照らして確認してください。XML は補った docx の文字のままです。" + (f"\n{items}{more}" if items else "")),
+        cli=(f"要確認: 出版版 PDF で補いきれなかった箇所があります: {'、'.join(head)}（レポートの 13 章）。PDF で補った"
+             f" docx（{fx.path.name}）を Word で開き、13 章と照らして確認すること"))
 
 
 def _pdf_suspect_action(r):
@@ -1267,11 +1333,11 @@ PDF_KEYS = ("pdf_fallback", "pdf_unread", "pdf_diff", "pdf_unfixed", "pdf_suspec
 def actions(r) -> list:
     """利用者に知らせること（要対応・要確認）の一覧。並びはレポートの冒頭の順。
 
-    ルート2 の「出版版 PDF に合わせて docx を直してから変換しました」の案内と、14 章の「Word で開き、変更履歴を確認する」は、
+    ルート2 の「出版版 PDF で校正の直しを補ってから変換しました」の案内と、14 章の「Word で開き、変更履歴を確認する」は、
     すべて直せたときにも出すものなので、ここには入れない（render の固定の部分。直せなかった箇所は pdf_unfixed の枠）。
     記事フォルダにあるのに ZIP に入れなかったファイル（Result.not_zipped）は 10 章の警告のまま。
     """
-    head = [f(r) for f in (_fidelity_action, _dtd_action, _upload_action, _ai_error_action, _ai_pending_action,
+    head = [f(r) for f in (_fidelity_action, _supplement_action, _dtd_action, _upload_action, _ai_error_action, _ai_pending_action,
                            _partial_action, _forced_action, figure_body_action, _textbox_undecided_action,
                            _textbox_place_action, _textbox_figure_text_action, images_action, lost_action,
                            _style_hidden_action, _abstract_ja_action, _app_after_refs_action, _note_overlap_action, _newline_action)]
@@ -1291,7 +1357,7 @@ def render(r) -> str:
     ai_mode = {"none": "使用しない", "api": api, "manual": "手動（チャットに貼り付け）"}.get(ai.mode, ai.mode)
     L.append(f"- AI による補完: {ai_mode}")
     L.append(f"- 作り方: {ROUTE_JA.get(r.route, r.route)}"
-             + ("（PDF の文字を読めなかったので、docx を直さずに変換した）" if pdf_fallback(r) else ""))
+             + ("（PDF の文字を読めなかったので、docx を補わずに変換した）" if pdf_fallback(r) else ""))
     L.append("")
 
     # ------------------------------------------------------------------ 1. 要約
@@ -1300,7 +1366,7 @@ def render(r) -> str:
     fid_line = (f"{fid.summary()}（docx の段落 {fid.units} 件: XML に出力 {fid.mapped} 件、出力しなかった {len(fid.excluded)} 件"
                 f"［6 章に全文］）")
     if r.docx_fix is not None:
-        fid_line += f"。照合の相手は、出版版 PDF に合わせて直した docx（{r.docx_fix.path.name}）"
+        fid_line += f"。照合の相手は、出版版 PDF で補った docx（{r.docx_fix.path.name}）"
     final_line = "合格" if fid.final_ok else ("不合格: " + fid.final_detail if fid.final_ok is False else "未実施")
     c = r.link_counts
     wn = word_note_refs(plan)
@@ -1328,9 +1394,14 @@ def render(r) -> str:
     if textbox_summary(plan):
         rows.insert(8 if plan.unplaced_floats else 7,
                     (f"テキストボックスの文字（{textbox_chapters(plan)}）", textbox_summary(plan)))
+    if r.supplement is not None:
+        sup = r.supplement
+        rows.insert(1, ("出版版 PDF による補完の確かめ（ルート2）",
+                        f"合格（元の docx から変わった文字 {sup.typeset + sup.supplied} 箇所は、すべて組版の違いか、13.1 の補った箇所）"
+                        if sup.ok else "不合格（13 章の 13.8）"))
     L.append(table(["項目", "結果"], rows))
     L.append("")
-    # 要対応・要確認（actions）。ルート2 の「docx を直してから変換しました」の案内は、PDF の知らせの前に固定で出す
+    # 要対応・要確認（actions）。ルート2 の「PDF で補ってから変換しました」の案内は、PDF の知らせの前に固定で出す
     acts = actions(r)
     late = [a for a in acts if a.key in PDF_KEYS]
     for a in [a for a in acts if a not in late]:
@@ -1339,10 +1410,11 @@ def render(r) -> str:
             L.append("")
     pc, fx = r.pdf_check, r.docx_fix
     if fx is not None:
-        L.append(f"> **出版版 PDF に合わせて docx を直してから変換しました（13 章）。** 直した docx（{esc(fx.path.name)}）は "
-                 "Word の変更履歴つきです。Word で開いて変更を確認し、却下したい変更があれば、却下して保存した docx を"
+        L.append(f"> **出版版 PDF で校正の直しを補ってから変換しました（13 章）。** 補った docx（{esc(fx.path.name)}）は "
+                 "Word の変更履歴つきです。校正の直し（13.1）と、組版の違い（全角・半角・ダッシュ・引用符など。13.2）を PDF に"
+                 "合わせています。Word で開いて変更を確認し、却下したい変更があれば、却下して保存した docx を"
                  "「docx から作る」で変換し直してください。"
-                 + (f"**直せなかった箇所が {len(fx.skipped)} 件あります。**" if fx.skipped else ""))
+                 + (f"**直さなかった箇所が {len(fx.skipped_text)} 件あります。**" if fx.skipped_text else ""))
         L.append("")
     for a in late:
         if a.top:
@@ -1529,7 +1601,7 @@ def render(r) -> str:
         word_marks = "（Word の脚注機能で書かれた注の番号だけは、Word の表示「1」ではなく本誌の形式（設定 fn_mark）にしています）"
     L.append("Word の自動段落番号や脚注番号は docx の文字ではなく Word が表示時に作るものです。表示どおりの文字を XML に出力しました"
              f"{word_marks}。"
-             "出版版 PDF があれば、自動番号・脚注番号の全角・半角を PDF に合わせています（13 章）。"
+             "「docx から作り、出版版 PDF で補う」では、自動番号・脚注番号の全角・半角と字形を PDF に合わせています（13 章）。"
              "docx に注の見出しがない場合（Word の脚注機能で書かれた注など）は、見出し（設定 fn_title）を補いました。")
     L.append("")
     if fid.generated:
@@ -1665,10 +1737,10 @@ def render(r) -> str:
     L.append(pdf_checklist_line(r))
     L.append("- [ ] 2 章（AI による補完）と 3 章（未解決）を PDF と照らして確認する")
     if fx is not None:
-        L.append(f"- [ ] **PDF に合わせて直した docx（{esc(fx.path.name)}）を Word で開き、変更履歴を確認する**"
+        L.append(f"- [ ] **PDF で補った docx（{esc(fx.path.name)}）を Word で開き、変更履歴を確認する**"
                  "（却下したい変更があれば、却下して保存した docx を「docx から作る」で変換し直す）")
-        if fx.skipped:
-            L.append(f"- [ ] 13 章の、PDF に合わせて直せなかった箇所（{len(fx.skipped)} 件）を確認する")
+        if fx.skipped_text:
+            L.append(f"- [ ] 13 章の、直さなかった箇所（{len(fx.skipped_text)} 件）を確認する")
     # 要対応・要確認（actions）。PDF の項目を先に、残りを actions の順に。「画像はすべて Graphics/ に入っている」は、XML に
     # 入らなかった画像の前に出す
     checks = [a for a in acts if a.key in PDF_KEYS] + [a for a in acts if a.key not in PDF_KEYS]
@@ -1732,35 +1804,40 @@ def render_route1(L, r, pc):
     plan = r.plan
     L.append("docx の段落の文字を、記事の PDF（著者校正を経た最終版）の文字と段落ごとに照合しました"
              f"（照合した段落 {pc.checked} 件。表のセル・別行の数式・資料の見出しと、4 文字未満の段落は除く）。"
-             "**XML は docx の文字のままで、照合の結果を載せているだけです。** PDF に合わせるときは、"
-             "「出版版 PDF に合わせてから作る」で変換し直すか、docx を直して変換し直してください。")
+             "**XML は docx の文字のままで、照合の結果を載せているだけです。** 校正の直しを補うときは、"
+             "「docx から作り、出版版 PDF で補う」で変換し直すか、docx を直して変換し直してください。")
     L.append("")
     L.append("### 13.1 文字の違い（要確認）")
     L.append("")
-    L.append("PDF と違う箇所です。docx が最終版でない（校正の直しが反映されていない、組版で直された）可能性があります。"
-             "大文字・小文字の違いや、引用符（' と ’）の違いも載せています。図の中の文字と思われる PDF の文字は除いています。")
+    L.append("PDF と違う箇所です。docx が最終版でない（校正の直しが反映されていない）可能性があります。"
+             "大文字・小文字の違い（英文の題目・著者名などを除く）も載せています。組版の違いは 13.2 です。"
+             "図の中の文字と思われる PDF の文字は除いています。")
     L.append("")
-    if pc.diffs:
-        _diff_table(L, plan, pc.diffs)
+    if pc.text_diffs:
+        _diff_table(L, plan, pc.text_diffs)
     else:
         L.append("ありません。")
     L.append("")
-    L.append("### 13.2 英数字・記号の全角・半角の違い")
+    L.append("### 13.2 組版の違い（docx のまま）")
     L.append("")
-    if pc.width_count:
+    if pc.typeset_count or pc.drop_count:
         cnt = Counter(f"{plan.paras[s].plain()[q]}→{c}" for s, m in pc.width.items() for q, c in m.items())
-        L.append("docx と PDF の違いが英数字・記号の全角・半角だけの文字です（「→」の右が PDF）。その文字のすぐ前後の空白で PDF に"
-                 "ないものも含めています。")
+        L.append("docx と PDF の違いが組版の違い（英数字・記号の全角・半角、その前後の PDF にない空白、ダッシュ・ハイフン、引用符、"
+                 "英文の題目・著者名などの大文字・小文字）だけの文字です（「→」の右が PDF）。「docx から作り、出版版 PDF で補う」では"
+                 "PDF に合わせます。確認は要りません。")
         L.append("")
-        L.append("内訳: " + "、".join(f"「{k}」{n} 件" for k, n in cnt.most_common())
-                 + (f"。PDF にない空白 {pc.drop_count} 文字" if pc.drop_count else ""))
+        L.append("内訳: " + typeset_counts(check_typeset_kinds(pc, plan)))
         L.append("")
-        L.append(table(["段落", "場所", "文字数", "docx → PDF"], width_rows(r)))
+        if cnt:
+            L.append("全角・半角の文字の対: " + "、".join(f"「{k}」{n} 件" for k, n in cnt.most_common())
+                     + (f"。PDF にない空白 {pc.drop_count} 文字" if pc.drop_count else ""))
+            L.append("")
+        L.append(table(["段落", "場所", "文字数", "docx → PDF"], typeset_rows(r)))
     else:
         L.append("ありません。")
     if pc.numbers:
         L.append("")
-        L.append("Word が付ける番号（自動段落番号・脚注番号）の全角・半角の違い（XML は Word の表示・設定の形のまま）:")
+        L.append("Word が付ける番号（自動段落番号・脚注番号）の全角・半角と字形の違い（XML は Word の表示・設定の形のまま）:")
         L.append("")
         L.append(table(["番号", "場所", "XML → PDF"], number_rows(r)))
     L.append("")
@@ -1776,71 +1853,109 @@ def render_route1(L, r, pc):
 
 def render_route2(L, r, pc, fx):
     plan = r.plan
-    L.append(f"「出版版 PDF に合わせてから作る」で変換しました。元の docx（{esc(r.docx_name)}）の段落の文字を、記事の PDF"
-             "（著者校正を経た最終版）と段落ごとに照合し、違う文字を PDF に合わせて直した docx"
-             f"（{esc(fx.path.name)}。Word の変更履歴つき）を作り、それを変換しています。XML は直した docx の文字と"
-             " 1 文字も違いません（文字の不変性チェック）。表のセル・別行の数式・図の中の文字・資料の見出しと、4 文字未満の段落は照合せず、"
+    sup = r.supplement
+    L.append(f"「docx から作り、出版版 PDF で補う」で変換しました。元の docx（{esc(r.docx_name)}）の段落の文字を、記事の PDF"
+             "（著者校正を経た最終版）と段落ごとに照合し、校正の直しと組版の違いを PDF から補った docx"
+             f"（{esc(fx.path.name)}。Word の変更履歴つき）を作り、それを変換しています。XML は補った docx の文字と"
+             " 1 文字も違いません（文字の不変性チェック）。補った docx が元の docx から変わったのは、組版の違いと 13.1 の箇所だけです"
+             "（補完の確かめ）。表のセル・別行の数式・図の中の文字・資料の見出しと、4 文字未満の段落は照合せず、"
              "docx のままです。")
     L.append("")
-    L.append("### 13.1 PDF に合わせて直した箇所（変更履歴）")
+    L.append("### 13.1 PDF で補った校正の直し（変更履歴）")
     L.append("")
-    if fx.applied:
-        cnt = Counter({"width": "英数字・記号の全角・半角", "space": "その前後の PDF にない空白の削除",
-                       "text": "文字の違い"}[f.kind] for f in fx.applied)
-        L.append("内訳: " + "、".join(f"{k} {n} 箇所" for k, n in cnt.items()) + "。PDF の空白は信頼できないので、"
-                 "空白だけの違いは直していません。")
+    if fx.applied_text:
+        kinds = Counter("置き換え" if f.old and f.new else ("追加" if f.new else "削除") for f in fx.applied_text)
+        L.append("内訳: " + "、".join(f"{k} {kinds[k]} 箇所" for k in ("置き換え", "追加", "削除") if kinds[k])
+                 + "。PDF の空白は信頼できないので、空白だけの違いは直していません。")
         L.append("")
-        L.append(table(["段落", "場所", "箇所数", "変更前 → 変更後"], fix_rows(fx)))
+        L.append(table(["段落", "場所", "箇所数", "変更前 → 変更後"], fix_rows(fx, fx.applied_text)))
     else:
         L.append("ありません。")
     L.append("")
-    L.append("### 13.2 PDF と違うが直さなかった箇所（要確認）")
+    L.append("### 13.2 組版の違い（PDF に合わせた。確認は要りません）")
     L.append("")
-    if fx.skipped:
+    if fx.applied_typeset:
+        L.append("docx と PDF の違いが組版の違い（英数字・記号の全角・半角、その前後の PDF にない空白、ダッシュ・ハイフン、引用符、"
+                 "英文の題目・著者名などの大文字・小文字）だけの文字を、PDF に合わせました（Word の変更履歴に入っています）。")
+        L.append("")
+        L.append("内訳: " + typeset_counts(fx.applied_typeset) + "。")
+        L.append("")
+        L.append(table(["段落", "場所", "箇所数", "変更前 → 変更後"], fix_rows(fx, fx.applied_typeset)))
+    else:
+        L.append("ありません。")
+    if fx.skipped_typeset:
+        L.append("")
+        L.append("直せなかった組版の違い（ほかの直す箇所と重なる、直せない文字にかかる、などの理由で直していません。"
+                 "組版の違いなので確認は要りません）:")
+        L.append("")
+        rows = [(f.src, fx.locations.get(f.src, ""), _skipped_docx(f, fx.texts.get(f.src, "")), esc(f.new, 30), f.reason)
+                for f in fx.skipped_typeset]
+        _formula_note(L, [x for row in rows for x in row[2:4]])
+        L.append(table(["段落", "場所", "docx", "PDF", "直さなかった理由"], rows))
+    L.append("")
+    L.append("### 13.3 直さなかった箇所（要確認）")
+    L.append("")
+    if fx.skipped_text:
         # PDF の側に照合に使わなかった文字しかない箇所と、PDF にだけある長い文字は、PDF のその位置の本文の行が見えるように、
         # PDF の文字を長めに出す（行の変わり目は LINE_MARK）。docx の側に文字がない箇所（PDF にだけある文字）は、docx の欄に
         # 足す位置の前後の文字を出す（同じ段落の同じ PDF の文字の行を見分けられるように）
-        long = any(f.reason in WHY_MARKS for f in fx.skipped)
-        if any(f.start == f.end for f in fx.skipped):
+        long = any(f.reason in WHY_MARKS for f in fx.skipped_text)
+        if any(f.start == f.end for f in fx.skipped_text):
             L.append(f"docx の欄の「{INSERT_AT}」は、docx に文字がなく PDF にだけ文字がある位置です（前後は docx の文字）。")
             L.append("")
         rows = [(f.src, fx.locations.get(f.src, ""), _skipped_docx(f, fx.texts.get(f.src, "")),
-                 esc(f.new, 80 if f.reason in WHY_MARKS else 30), f.reason) for f in fx.skipped]
+                 esc(f.new, 80 if f.reason in WHY_MARKS else 30), f.reason) for f in fx.skipped_text]
         _formula_note(L, [x for row in rows for x in row[2:4]])
         L.append(table(["段落", "場所", "docx", PDF_COLUMN if long else "PDF", "直さなかった理由"], rows))
     else:
         L.append("ありません。")
     L.append("")
-    L.append("### 13.3 Word が付ける番号")
+    L.append("### 13.4 Word が付ける番号")
     L.append("")
     if pc.numbers:
-        L.append("Word が付ける番号（自動段落番号・脚注番号）は docx の文字ではないので、変換のときに全角・半角を PDF に合わせました。")
+        L.append("Word が付ける番号（自動段落番号・脚注番号）は docx の文字ではないので、変換のときに全角・半角と字形を PDF に"
+                 "合わせました。")
         L.append("")
         L.append(table(["番号", "場所", "変更前 → 変更後"], number_rows(r)))
     else:
-        L.append("PDF と全角・半角が違う番号（自動段落番号・脚注番号）はありません。")
+        L.append("PDF と全角・半角や字形が違う番号（自動段落番号・脚注番号）はありません。")
     L.append("")
-    L.append("### 13.4 直した docx と PDF の照合（残っている違い）")
+    L.append("### 13.5 補った docx と PDF の照合（残っている違い）")
     L.append("")
-    if pc.diffs or pc.width_count:
-        L.append("直した docx をもう一度 PDF と照合して、まだ残っている違いです（13.2 の直さなかった箇所など）。")
+    if pc.text_diffs:
+        L.append("補った docx をもう一度 PDF と照合して、まだ残っている違いです（13.3 の直さなかった箇所など）。")
         L.append("")
-        if pc.diffs:
-            _diff_table(L, plan, pc.diffs)
-        if pc.width_count:
-            L.append("")
-            L.append(table(["段落", "場所", "文字数", "docx → PDF"], width_rows(r)))
+        _diff_table(L, plan, pc.text_diffs)
     else:
-        L.append("ありません（照合した段落は、PDF と同じ文字になりました）。")
+        L.append("ありません（照合した段落の校正の直しは、すべて補いました）。")
+    if pc.typeset_count:
+        L.append("")
+        L.append(f"組版の違いで残ったもの {pc.typeset_count} 文字（13.2）。")
     L.append("")
-    L.append("### 13.5 PDF の中に見つからなかった段落")
+    L.append("### 13.6 PDF の中に見つからなかった段落")
     L.append("")
     if fx.unmatched:
         _unmatched_table(L, fx.unmatched, lambda s: fx.texts.get(s, ""), lambda s: fx.locations.get(s, ""))
     else:
         L.append("ありません。")
     L.append("")
-    _ignored_section(L, r, 6, lambda s: fx.locations.get(s, ""))
+    _ignored_section(L, r, 7, lambda s: fx.locations.get(s, ""))
+    L.append("")
+    L.append("### 13.8 補完の確かめ")
+    L.append("")
+    if sup is None:
+        L.append("実施していません。")
+    elif sup.ok:
+        L.append(f"合格（変わった箇所 {sup.typeset + sup.supplied}: 組版の違い {sup.typeset}・補った校正の直し {sup.supplied}）。"
+                 "補った docx は、元の docx から、組版の違いと 13.1 の箇所以外に変わっていません"
+                 "（照合・直しとは別の実装で、変更履歴を取り除いた文字を元の docx と比べて確かめています）。")
+    else:
+        L.append("**不合格**です。補った docx に、組版の違いでも 13.1 の補った箇所でもない変更があります（変換ツールの不具合の"
+                 "可能性があります）。この XML は登載に使わないでください。")
+        L.append("")
+        L.append(table(["段落", "場所", "元の docx", "補った docx", "理由"],
+                       [(src, fx.locations.get(src, "") or plan.locations.get(src, ""), esc(old, 40), esc(new, 40), why)
+                        for src, old, new, why in sup.problems]))
 
 
 def render_ai_only(r) -> str:

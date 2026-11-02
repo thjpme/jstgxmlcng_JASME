@@ -2,17 +2,22 @@
 
 PDF は著者校正を経た最終版なので、XML の本文が PDF と違えば、J-STAGE には同じ記事の 2 つの版が並ぶことになる。
 受け取った docx が校正後の最終版とは限らない（組版で印刷所がかっこ・句読点を全角にそろえる、校正の直しが docx に
-戻されていない、など）ため、docx の段落ごとに PDF の中の対応する箇所を探して比べ、違いを次のように分ける。
+戻されていない、など）ため、docx の段落ごとに PDF の中の対応する箇所を探して比べ、違いを次の 3 つに分ける。
 
-  ・英数字・記号の全角・半角だけの違い（width）と、その文字のすぐ前後の空白で PDF にないもの（drops）
-  ・それ以外の文字の違い（diffs。「資料」と「付録」など）
+  (A) 組版の違い（直す。要確認にしない）: 英数字・記号の全角・半角だけの違い（width）と、その文字のすぐ前後の空白で PDF に
+      ないもの（drops）、ダッシュ・ハイフンの字形（DASHES・HYPHENS の中どうし）、引用符の字形・向き（QUOTE_CLASSES の中どうし）、
+      英文の題目・副題・著者名・所属の大文字・小文字（case_paragraphs）、Word が付ける番号（自動段落番号・脚注番号）の
+      全角・半角と字形（numbers。「●」→「・」は NUMBER_PAIRS）。判定は typeset_pair（1 文字の対）・typeset_same（文字列の対）。
+      width・drops・numbers 以外のものは、違い（diffs）の TextDiff.kind が "typeset" になる
+  (B) 校正の直し（直す）: 語句の追加・削除・置き換えで (A) に還元できないもの（diffs の kind "text"。「資料」と「付録」など）。
+      (A) と (B) が 1 つの違いに混ざる（「58」→「５８９」）ときは、diff_parts が直す単位に分ける
+  (C) 決められない違い（直さない。要確認）: PDF から足すか消すかを決められないもの（diffs の kind "text" で、TextDiff.why に理由）
   ・PDF の中に見つからない段落（unmatched）
-  ・Word が付ける番号（自動段落番号・脚注番号）の全角・半角の違い（numbers）
 
 ルート1（docx から作る）では、照合の結果をレポートに載せるだけで、文字は変えない。
-ルート2（出版版 PDF に合わせてから作る）では、この結果から、PDF に合わせて直した docx（Word の変更履歴つき）を作り
-（pdfdocx.py）、それをルート1 と同じ処理で XML にする。Word が付ける番号は docx の文字ではないので、変換のときに
-全角・半角を PDF に合わせる（plan.pdf_numbers）。
+ルート2（docx から作り、出版版 PDF で補う）では、Word の文字を正とし、この結果から (A) と (B) を PDF に合わせて補った docx
+（Word の変更履歴つき）を作り（pdfdocx.py）、それをルート1 と同じ処理で XML にする。Word が付ける番号は docx の文字では
+ないので、変換のときに全角・半角と字形を PDF に合わせる（plan.pdf_numbers）。
 
 PDF から XML を作るのではない（構造はすべて docx のスタイルから決める）。PDF から取り出した文字には組版の都合
 （両端そろえの空白、行末のハイフン、図の中の文字、数式、柱）が混じるため、空白は照合に使わず、段落ごとに PDF の中の
@@ -105,9 +110,21 @@ HYPHENS = "-‐‑－"
 # docx のダッシュ（en dash・em dash・水平線・マイナス・数字幅のダッシュ）。照合では HYPHENS と同じく「-」とみなし（_hyphen_key。
 # 違う文字とみなすと、PDF の行末の「-」を行末のハイフネーションとして無視するので、docx のダッシュを消してしまう）、PDF の英数字の
 # 後の行末の「-」「‐」（PdfStream.soft）と同じ位置で並べば、PDF に合わせて「-」に直す（行の途中のダッシュと PDF の「-」も、
-# ふつうの違いとして「-」に直している。修正計画の決定事項 20・23）。PDF の行末が U+FFFE など（何の字形か分からない）なら、
-# docx のまま（違いにしない）
+# 組版の違い〈typeset_pair の dash〉として「-」に直している。修正計画の決定事項 20・23）。PDF の行末が U+FFFE など（何の字形か
+# 分からない）なら、docx のまま（違いにしない）
 DASHES = "–—―−‒"
+# 組版の違い（(A)）とみなす引用符の類。同じ類の中の 2 文字の違いは、向き（「“」と「”」、「’」と「‘」）も含めてどの向きでも組版の
+# 違いとみなす（docx の引用符が Word のオートコレクトで向きを持ったり持たなかったりし、出版版では組版でそろえるため。利用者の
+# 判断、2026-11）。全角の「＂」「＇」は fold の後に引く（全角・半角の対としても数える）。二重引用符と一重引用符の違いは校正の直し
+# （(B)）。全角の「＂」「＇」も入れておく（fold した文字でも引くので、どちらで引いても同じ）。ルート2 の補完の確かめ（fidelity）も、
+# この定数で同じ規則を別に実装する（変えるときは両方の答えが同じことをテストで確かめる）
+QUOTE_CLASSES = (frozenset('"“”＂'), frozenset("'’‘＇"))
+# Word が付ける番号（自動段落番号・脚注番号）でだけ組版の違いとみなす字形の対（docx〈Word の表示〉の文字, PDF の文字）。向きがある。
+# テストデータの実測（2026-11）で出た対だけ（箇条の自動番号の「●」が出版版では「・」）。補完の確かめ（fidelity）と共有する
+NUMBER_PAIRS = frozenset({("●", "・")})
+# 組版の違いの種類（typeset_pair の戻り値）と、その名前（レポートの内訳）
+TYPESET_KINDS = {"width": "英数字・記号の全角・半角", "space": "PDF にない空白", "dash": "ダッシュ・ハイフン",
+                 "quote": "引用符", "case": "大文字・小文字（英文の題目・著者名など）", "number": "Word が付ける番号"}
 MIN_CHARS = 4         # これより短い段落は照合しない（短すぎて PDF の中の位置を決められない）
 MIN_COVERAGE = 0.85    # 段落の文字のうち PDF と一致した割合がこれ以上なら「照合できた」とする
 # ページ番号の行（数字だけ、かっこ付きの「（25）」、ダッシュで挟んだ「－ 1 －」「- 1 -」）。ページの最初か最後の行にあるときだけ
@@ -196,6 +213,101 @@ def is_width_pair(a: str, b: str) -> bool:
     return len(a) == len(b) == 1 and a != b and fold(a) == fold(b) and 0x21 <= ord(fold(a)) <= 0x7E
 
 
+def _quote_class(c: str) -> int:
+    """引用符の類（QUOTE_CLASSES の番号）。引用符でなければ -1。"""
+    c = fold(c)
+    return next((n for n, cls in enumerate(QUOTE_CLASSES) if c in cls), -1)
+
+
+def typeset_pair(a: str, b: str, case: bool = False, number: bool = False) -> str:
+    """docx の 1 文字 a と PDF の 1 文字 b が組版の違い（(A)）なら、その種類（TYPESET_KINDS の鍵）。同じ文字か、組版の違いで
+    なければ空。
+
+    case: 大文字・小文字の違いも組版の違いとみなす段落（英文の題目・副題・著者名・所属。case_paragraphs）の文字か。
+    number: Word が付ける番号の文字か（NUMBER_PAIRS の字形の対は、番号でだけ組版の違いとみなす）。
+    全角・半角は fold が同じ 0x21〜0x7E の対（is_width_pair）。ダッシュ・ハイフンは DASHES・HYPHENS の中のどの 2 文字も
+    （_hyphen_key と同じ組）。引用符は QUOTE_CLASSES の同じ類の中のどの 2 文字も（向きを問わない）。「ａ」と「A」のように
+    全角・半角と大文字・小文字が重なるものは case（case の段落でなければ組版の違いではない）。
+    """
+    if a == b:
+        return ""
+    if is_width_pair(a, b):
+        return "width"
+    if a in HYPHENS + DASHES and b in HYPHENS + DASHES:
+        return "dash"
+    qa = _quote_class(a)
+    if qa >= 0 and qa == _quote_class(b):
+        return "quote"
+    if number and (a, b) in NUMBER_PAIRS:
+        return "number"
+    fa, fb = fold(a), fold(b)
+    if case and fa.isascii() and fa.isalpha() and fb.isascii() and fa.lower() == fb.lower():
+        return "case"
+    return ""
+
+
+def typeset_same(docx: str, pdf: str, case: bool = False) -> bool:
+    """文字列の対（docx の文字, PDF の文字）が組版の違い（(A)）だけの違いか: 両側の空白（str.isspace。全角の空白を含む）を除いて、
+    同じ長さで、1 文字ずつ同じ文字か typeset_pair の対か。同じ文字列も真（違いがない）。Word が付ける番号の字形の対
+    （NUMBER_PAIRS）は見ない（番号は _classify が res.numbers で扱う）。"""
+    d = [c for c in docx if not c.isspace()]
+    q = [c for c in pdf if not c.isspace()]
+    return len(d) == len(q) and all(x == y or typeset_pair(x, y, case) for x, y in zip(d, q))
+
+
+def _typeset_rep(c: str, case: bool) -> str:
+    """組版の違いの組を 1 つの文字にそろえた代表の文字（typeset_ops で並べるため。向きを持たない表なので、代表の文字が同じなら
+    typeset_pair も真になるが、typeset_ops は念のため 1 文字ずつ typeset_pair で確かめる）。"""
+    if c in HYPHENS or c in DASHES:
+        return "-"
+    q = _quote_class(c)
+    if q >= 0:
+        return "\"'"[q]
+    f = fold(c)
+    return f.lower() if case and f.isascii() and f.isalpha() else f
+
+
+def typeset_ops(docx: str, pdf: str, case: bool = False) -> list:
+    """docx の文字列と PDF の文字列の opcodes（difflib。位置は文字列の上）。組版の違いの組を代表の文字にそろえた列
+    （_typeset_rep）で並べ、"equal" の中の 1 文字ずつの対が同じ文字でも typeset_pair でもなければ、その文字を "replace" に分けて
+    返す。つまり "equal" の中の違う文字は、すべて組版の違い（(A)）で、それ以外の部分は校正の直し（(B)）の候補。空白は残して
+    並べる（空白だけの部分の扱いは呼び出し側。diff_parts）。
+
+    「58」と「５８９」は、5↔５・8↔８ が equal（(A)）、「９」が insert になる（raw の文字で並べると、「58」→「５８９」の 1 つの
+    置き換えになり、(A) と (B) を分けられない）。"""
+    a = [_typeset_rep(c, case) for c in docx]
+    b = [_typeset_rep(c, case) for c in pdf]
+    out = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if tag != "equal":
+            out.append((tag, i1, i2, j1, j2))
+            continue
+        k = 0
+        while k < i2 - i1:
+            m = k
+            while m < i2 - i1 and (docx[i1 + m] == pdf[j1 + m] or typeset_pair(docx[i1 + m], pdf[j1 + m], case)):
+                m += 1
+            if m > k:
+                out.append(("equal", i1 + k, i1 + m, j1 + k, j1 + m))
+            if m < i2 - i1:
+                out.append(("replace", i1 + m, i1 + m + 1, j1 + m, j1 + m + 1))
+                m += 1
+            k = m
+    return out
+
+
+def case_paragraphs(plan) -> set:
+    """大文字・小文字の違いを組版の違い（(A)）とみなす段落の ID: 英文の題目・副題・著者名・所属。
+
+    英文の題目・著者名は、組版で大文字・小文字をそろえ直すことがある（「Checking Against The …」と「Checking against the …」、
+    「Shiro SHIKEN」と「Shiro Shiken」）。英文要旨・引用文献・本文の英文の大文字・小文字の違いは校正の直し（(B)）とする。
+    同じ段落を複数の著者・所属が指すことがあるので集合にする。"""
+    out = {p.src for p in [*plan.title_en, *plan.subtitle_en]}
+    out |= {a.name_en.src for a in plan.authors if a.name_en is not None}
+    out |= {f.en.src for f in plan.affs if f.en is not None}
+    return out
+
+
 @dataclass
 class TextDiff:
     src: str
@@ -206,6 +318,9 @@ class TextDiff:
     end: int = 0
     fixable: bool = True   # ルート2 で docx を直せるか（数式・Word が付ける番号・リンクの文字にかかるものは直さない）
     why: str = ""    # 直せない理由（ルート2 のレポートに出す）。空なら pdfdocx.plan_fixes の決まった文言
+    # text: 校正の直しを含む違い（(B)。why があれば決められない違い〈(C)〉）/ typeset: 組版の違いだけ（(A)。typeset_same が真で、
+    # why のないもの。ルート2 では直すが、要確認にしない）
+    kind: str = "text"
 
 
 @dataclass
@@ -227,6 +342,31 @@ class PdfCheck:
     # 最後の docx の文字を直さなかった（HEAD_WHY）ときに、段落のすぐ隣に続いていた照合に使わない行（_ignored_rows）だけ（重複なし）。
     # それ以外の段落の切れ目（段落の前後）や数式などの位置にあるものは、もともと違いにならないので載せない
     ignored_lines: list = field(default_factory=list)
+    # 大文字・小文字の違いを組版の違いとみなす段落の ID（英文の題目・副題・著者名・所属。case_paragraphs。compare が入れる）
+    case_srcs: set = field(default_factory=set)
+
+    @property
+    def text_diffs(self) -> list:
+        """校正の直しを含む違いと、決められない違い（(B)・(C)。kind text）。"""
+        return [d for d in self.diffs if d.kind == "text"]
+
+    @property
+    def typeset_diffs(self) -> list:
+        """組版の違いだけの違い（(A)。kind typeset。width・drops・numbers に入らなかったダッシュ・引用符・大文字・小文字など）。"""
+        return [d for d in self.diffs if d.kind == "typeset"]
+
+    @property
+    def typeset_count(self) -> int:
+        """組版の違いの文字の数: width の文字と、typeset_diffs の違う文字（空白を除いて 1 文字ずつ比べる）。PDF にない空白
+        （drops）と Word が付ける番号（numbers）は別に数える（drop_count・number_count）。"""
+        def chars(t):
+            return [c for c in t if not c.isspace()]
+        return self.width_count + sum(1 for d in self.typeset_diffs for x, y in zip(chars(d.docx), chars(d.pdf)) if x != y)
+
+    @property
+    def number_count(self) -> int:
+        """PDF に合わせる Word が付ける番号の数（number_edits の数）。"""
+        return len(self.numbers)
 
     @property
     def number_edits(self) -> dict:
@@ -507,11 +647,18 @@ def _locked_positions(p) -> set:
 
 
 def target_paragraphs(plan) -> list:
-    """照合する段落: 題目・本文・見出し・キャプション・注・付記・謝辞・引用文献・英文要旨（表のセル・別行数式・資料は除く）。"""
+    """照合する段落: 題目・副題（和文・英文）・英文の著者名・英文の所属・本文・見出し・キャプション・注・付記・謝辞・
+    引用文献・英文要旨・資料の中の段落（表のセル・囲みの段落・別行数式・資料の見出しは除く。linker.body_paragraphs の
+    "cell"・"formula" と、資料の見出し〈body_paragraphs が返さない〉）。
+
+    英文の著者名・所属は、大文字・小文字の違いを組版の違いとして PDF に合わせるために照合する（case_paragraphs。利用者の
+    判断、2026-11）。和文の著者名・所属は照合しない（短く、PDF の中の位置を決めにくいうえ、組版でそろえ直す違いが出ない）。"""
     from .linker import body_paragraphs
     out = []
     for p in list(plan.title) + list(plan.subtitle) + list(plan.title_en) + list(plan.subtitle_en):
         out.append(p)
+    out += [a.name_en for a in plan.authors if a.name_en is not None]
+    out += [f.en for f in plan.affs if f.en is not None]
     for p, where in body_paragraphs(plan):
         if where not in ("cell", "formula"):
             out.append(p)
@@ -528,6 +675,7 @@ def compare(plan, pages, fn_marks=None) -> PdfCheck:
     res.ignored_lines に記録する（ページ番号は列から除く。pdf_stream）。
     """
     res = PdfCheck()
+    res.case_srcs = case_paragraphs(plan)
     fn_marks = fn_marks or {}
     list_marks = {fn.paras[0].src: fn.word_id for fn in plan.fns if fn.word_note and fn.paras}
     st = pdf_stream(pages)
@@ -591,7 +739,7 @@ def compare(plan, pages, fn_marks=None) -> PdfCheck:
             res.unmatched.append(p.src)
             continue
         short_end[p.src] = _classify(*aligned[p.src], st, owner, owned_lines, res, dense_lines, (shorts[n], shorts[n + 1]),
-                                     p.src in heads)
+                                     p.src in heads, p.src in res.case_srcs)
         _contested_edges(res, p, seq, aligned[p.src][5], st)
     # 4. docx で隣り合う 2 つの段落の間（間に docx の段落がないもの）にある、どの段落にも当たらない PDF の行（校正で足された
     # 一文かもしれない）は、照合に使わなかった文字として前の段落に記録する（13 章の最後の一覧）。前の段落の最後の行のすぐ後ろに
@@ -2054,14 +2202,16 @@ def _line_width(line: str) -> float:
 
 
 def _classify(p, seq, gens, win, ops, unsure, st: PdfStream, owner, owned_lines, res: PdfCheck, dense_lines,
-              beside=((), ()), heading=False):
+              beside=((), ()), heading=False, case=False):
     """段落の照合（_align の opcodes。PDF の側の位置は窓 win の上の位置）の違う部分を、全角・半角の違い（res.width・drops）、
-    Word が付ける番号の違い（res.numbers）、それ以外の違い（res.diffs。直せる違いと、直さない違い〈TextDiff.why〉）に分ける。
+    Word が付ける番号の違い（res.numbers。全角・半角と、NUMBER_PAIRS の字形）、それ以外の違い（res.diffs。直せる違いと、直さない
+    違い〈TextDiff.why〉。組版の違いだけのものは kind typeset。_report_regions）に分ける。
 
     unsure: まとめての照合（_joint）が付けた段落の印。owner・owned_lines: どれかの段落に当たった PDF の文字の位置と行。
     dense_lines: どれかの段落の文字が多く当たった行（どの段落の文字とも一致しない行かを見るときに使う。compare）。
     beside: docx で段落のすぐ前・すぐ後ろにある、照合しない短い段落（MIN_CHARS 文字未満）の文字（key）のリスト。
     heading: 題目・見出しの段落か（文の終わりで終わらないのがふつうなので、段落の最後の後ろの行を文の続きとみなさない）。
+    case: 大文字・小文字の違いを組版の違いとみなす段落か（case_paragraphs。_report_regions の kind に使う）。
     戻り値: 段落の最後に一致した文字の行が目に見えて短いか（段落はその行で終わっている。compare の手順 4 で使う）。
     """
     text = p.plain()
@@ -2191,6 +2341,19 @@ def _classify(p, seq, gens, win, ops, unsure, st: PdfStream, owner, owned_lines,
                         width[i1 + k] = pc
                 else:
                     regions.append((i1 + k, i1 + k + 1, j1 + k, j1 + k + 1, why))   # 大文字・小文字の違い
+            continue
+        if tag == "replace" and i2 - i1 == j2 - j1 and all(i in gens for i in range(i1, i2)) and \
+                all(mine(j) for j in range(j1, j2)) and len({st.line[win[j]] for j in range(j1, j2)}) == 1 and \
+                all(typeset_pair(seq[i1 + k][0], st.chars[win[j1 + k]], number=True) for k in range(i2 - i1)):
+            # Word が付ける番号の字形の違い（自動番号の「●」と PDF の「・」。NUMBER_PAIRS）: 照合の鍵（_hyphen_key）が違うので
+            # 置き換えになるが、番号の全角・半角（上の一致した部分）と同じく、組版の違いとして PDF に合わせる（res.numbers。
+            # 番号は docx の文字ではないので、変換のときに plan.pdf_numbers で合わせる）。番号の文字だけで、PDF の側が同じ行の
+            # この段落の文字のときだけ（それ以外の番号にかかる違いは、今までどおり直さない違い）
+            for k in range(i2 - i1):
+                kind, ident, at, _ = gens[i1 + k]
+                res.numbers.setdefault((kind, ident), {})[at] = st.chars[win[j1 + k]]
+                numbers.add(i1 + k)
+                d2w[i1 + k] = win[j1 + k]      # 前後の PDF にない空白（drops）を、全角・半角の番号と同じに調べる
             continue
         if tag == "insert" and (i1 == 0 or i1 == len(seq)) and not unsure["flow"]:
             continue                     # 図・表のキャプションなどの前後の PDF の文字（図・表の中の文字など）
@@ -2419,7 +2582,7 @@ def _classify(p, seq, gens, win, ops, unsure, st: PdfStream, owner, owned_lines,
         if side in weak_hit:
             for i in range(op[1], op[2]):
                 width.pop(i, None)
-    _report_regions(p, seq, gens, st, win, regions, mine, used, locked, forced, width, res)
+    _report_regions(p, seq, gens, st, win, regions, mine, used, locked, forced, width, res, case=case)
     if width:
         res.width[p.src] = {seq[i][1]: c for i, c in width.items()}
     drops = set()
@@ -2543,7 +2706,8 @@ def _latin(c: str) -> bool:
     return o < 0x250 or 0x2010 <= o <= 0x2027
 
 
-def _report_regions(p, seq, gens, st: PdfStream, win, regions, mine, used, locked, forced, width, res: PdfCheck, near=12):
+def _report_regions(p, seq, gens, st: PdfStream, win, regions, mine, used, locked, forced, width, res: PdfCheck, near=12,
+                    case=False):
     """違う部分を、近いものどうしまとめて TextDiff にする。
 
     mine: PDF の文字が、ほかの段落に当たっていないか。used: さらに、照合に使わない文字（柱の候補の行・投稿受付日など、
@@ -2558,6 +2722,8 @@ def _report_regions(p, seq, gens, st: PdfStream, win, regions, mine, used, locke
     文字）は PDF の文字にして、直せるまとめた違いに含める（width から除く。別の直す箇所にすると、まとめた直しと重なって、
     plan_fixes がまとめた直しの一部だけを当てはめ、「pp.46-5-58」のような docx にも PDF にもない文字にしていた）。
     forced: 窓の中の位置 -> 使う PDF の文字（docx のダッシュの位置の行末の「-」）。
+    組版の違いだけ（typeset_same。case: 大文字・小文字も組版の違いとみなす段落か）の違いは、直せない理由 why のあるものと Word が
+    付ける番号にかかるものは違いにせず（DISPLACED_WHY で文字が違うものを除く）、それ以外は kind typeset の違いにする。
     """
     merged = []
     for r in sorted(regions):
@@ -2655,22 +2821,52 @@ def _report_regions(p, seq, gens, st: PdfStream, win, regions, mine, used, locke
         if num:
             dtext = f"（Word が付けた番号「{num}」）" + dtext
         dk, pk = re.sub(r"\s", "", (num + text[a:b].replace(OBJ, ""))), re.sub(r"\s", "", ptext)
-        if fold_str(dk) == fold_str(pk) and not (why == DISPLACED_WHY and dk != pk):
-            # 全角・半角だけの違いは、違いにしない（res.width で扱う）。ただし、図の中の文字の行と並べたために直さなかった
-            # 全角・半角の違い（DISPLACED_WHY。_classify）は、黙って捨てずに直さない違いとして出す
+        same = typeset_same(dk, pk, case)
+        if dk == pk or (same and (why or num) and not (why == DISPLACED_WHY and dk != pk)):
+            # 同じ文字は違いにしない。直せない理由のある違い（(C)）と Word が付ける番号にかかる違いで、組版の違いだけのものも
+            # 違いにしない（全角・半角は res.width・res.numbers で扱う）。ただし、図の中の文字の行と並べたために直さなかった
+            # 組版の違い（DISPLACED_WHY。_classify）は、黙って捨てずに直さない違いとして出す
             continue
+        # why のない、組版の違いだけの違い（ダッシュ・引用符・英文の題目などの大文字・小文字と、それに全角・半角が混ざったもの。
+        # 全角・半角だけの部分は、ここに来る前に width に入っている）は (A)。直せない理由のあるものは (C) のまま（kind text）
+        kind = "typeset" if same and not why else "text"
         ctx = (text[max(0, a - 12):a] + "［" + text[a:b] + "］" + text[b:b + 12]).replace(OBJ, FORMULA_MARK)
         fixable = not why and anchor_ok and not num and OBJ not in text[a:b] \
             and not any(SKIP == seq[i][0] for i in range(i1, i2)) and not any(x in locked for x in range(a, max(b, a + 1)))
-        res.diffs.append(TextDiff(p.src, dtext, shown, ctx, a, b, fixable, why))
+        res.diffs.append(TextDiff(p.src, dtext, shown, ctx, a, b, fixable, why, kind))
         if fixable and len(group) > 1:
             # まとめた直しの範囲の、全角・半角だけの直し（PDF の文字は ptext に入っている）は、別の直す箇所にしない
             for i in [i for i in width if a <= seq[i][1] < b]:
                 width.pop(i)
 
 
-def fold_str(s: str) -> str:
-    return "".join(fold(c) for c in s)
+def diff_parts(text: str, d: TextDiff, case: bool = False) -> list:
+    """1 つの違い（TextDiff。docx の段落の文字 text の [d.start, d.end) と d.pdf）を、直す単位 [(開始, 終了, 新しい文字, 種類)] に
+    分ける（位置は段落の上）。種類は typeset_pair の種類（(A)。width・dash・quote・case）か "text"（(B)）。
+
+    分け方は typeset_ops（組版の違いの組を代表の文字にそろえて並べる）: "equal" の中の違う文字は 1 文字ずつの (A)、それ以外の
+    部分は (B) として PDF の文字で直す（中に組版の違いになりうる文字があっても。足す文字は PDF の文字のまま）。docx の空白は
+    消さず、空白だけの違いは直さない（PDF の空白は信頼できない）。ルート2 の直す箇所（pdfdocx.plan_fixes）とレポートで使う
+    （分け方を 1 か所にする）。case: 大文字・小文字も組版の違いとみなす段落か（PdfCheck.case_srcs）。"""
+    old = text[d.start:d.end]
+    out = []
+    for tag, i1, i2, j1, j2 in typeset_ops(old, d.pdf, case):
+        if tag == "equal":
+            for k in range(i2 - i1):
+                o, n = old[i1 + k], d.pdf[j1 + k]
+                if o != n:
+                    out.append((d.start + i1 + k, d.start + i1 + k + 1, n, typeset_pair(o, n, case)))
+            continue
+        o, n = old[i1:i2], d.pdf[j1:j2]
+        # docx の空白は消さない（PDF の空白は信頼できないので、空白だけの違いは直さない）
+        while o and o[0].isspace() and not n[:1].isspace():
+            o, i1 = o[1:], i1 + 1
+        while o and o[-1].isspace() and not n[-1:].isspace():
+            o, i2 = o[:-1], i2 - 1
+        if not o.strip() and not n.strip():
+            continue
+        out.append((d.start + i1, d.start + i2, n, "text"))
+    return out
 
 
 def check_pdf(plan, pdf_path, fn_marks=None) -> PdfCheck:

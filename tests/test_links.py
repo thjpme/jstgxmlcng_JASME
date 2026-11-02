@@ -5,7 +5,7 @@
   数字の記録（判断の一覧・レポートの 4 章・AI 依頼文の「推定:」）と、記録の text・occurrence の link_note を貼り戻せること
 - 語の中の「図1」「表1」（地図1・図表1・発表1回目・付表1 など）を図・表にリンクしないこと（Linker.float_refs）
 - その場で作る小さな論文（make_fixtures.make_article）と、段落だけの単体テストで、規則の境界
-- ルート2 で、番号だけの注の docx を注番号が「1)」の形の出版版 PDF に合わせるときの今の振る舞い（extract_pages を差し替える。
+- ルート2（docx から作り、出版版 PDF で補う）で、番号だけの注の docx を注番号が「1)」の形の出版版 PDF で補うときの今の振る舞い（extract_pages を差し替える。
   docs/DESIGN.md の 4.4・7 章の限界）
 docs/fix_plan_repro_tests.py の D2・M5 の再現テスト（test_PROBLEM_superscript_exponent_linked_as_note・
 test_PROBLEM_figure_reference_inside_word）の期待を逆にしたものも、ここに置く（test_superscript_exponent_not_linked・
@@ -595,7 +595,7 @@ def route2_case(tmp_path, variant):
 
 @pytest.mark.parametrize("variant", ["all", "partial", "cell"])
 def test_route2_note_style_change(variant, journal, meta, tmp_path, monkeypatch):
-    """ルート2 で、番号だけの注の docx を「1)」の形の出版版 PDF に合わせるときの今の振る舞い（修正計画の H の「残る限界」・
+    """ルート2 で、番号だけの注の docx を「1)」の形の出版版 PDF で補うときの今の振る舞い（修正計画の H の「残る限界」・
     docs/DESIGN.md の 4.4 と 7 章）。直した docx では注番号が上付きの「1)」の形になり、論文の書き方の判定（note_style）が「1)」の
     書き方に変わる。注番号のある段落をすべて直せるとき（all）は、すべて直して注のリンクも残る。1 つでも直さない段落（PDF に見つから
     ない段落・表のセル）があると、その段落の番号だけの注番号のリンクが直した docx で消えるので、pdfdocx の守り（_lost）が
@@ -617,6 +617,7 @@ def test_route2_note_style_change(variant, journal, meta, tmp_path, monkeypatch)
     if variant == "all":
         assert fixes == [("", ")", True, "")] * 3 + [("", "い", True, "")]
         assert xrefs == [("1)", "fn1"), ("2)", "fn2"), ("3)", "fn3")] and "pdf_unfixed" not in keys
+        assert res.supplement.ok            # 補完の確かめ（fidelity.verify_supplement）
     else:
         assert fixes == [("", ")", False, STRUCTURE_REASON)] * 2 + [("", "い", False, STRUCTURE_REASON)]
         assert xrefs == [("1", "fn1"), ("2", "fn2"), ("3", "fn3")] and "pdf_unfixed" in keys

@@ -257,18 +257,18 @@ if globals().get("LO_PROC") is not None and LO_PROC.poll() is None:
     code("""
 #@title 2. 作り方を選び、論文の docx と PDF をアップロード
 #@markdown **作り方（ROUTE）**: 最初に選びます。
-#@markdown - **出版版 PDF に合わせてから作る**（初期値）: 受け取った docx が著者校正の前の原稿で、出版社が組版で直した文字（全角・半角、「資料」→「付録」など）が出版版 PDF にしかないことがあるため、docx の文字を PDF に合わせて直した docx（**Word の変更履歴つき**。スタイル・書式・数式・図・注はそのまま）を作り、それを変換します。表の中・数式・図の中の文字・リンクの文字は直しません。PDF のページ番号・投稿受付日など組版で入る文字や、表・図の中の文字は docx に足しません（足さなかった文字はレポートの 13 章の最後に一覧が出ます。本文が混じっていないか確かめてください）。**PDF のアップロードが必要です。**
-#@markdown - **docx から作る**: docx の本文の文字を 1 文字も変えずに XML にします。PDF をアップロードすると、変換の後に docx の文字と PDF の文字を照合し、違う箇所（全角・半角の違い、「資料」と「付録」など）をレポートの 13 章に出します（XML は docx の文字のままです）。PDF がまだないときや、docx が最終版だと分かっているときに選びます。
-ROUTE = "出版版 PDF に合わせてから作る"  #@param ["出版版 PDF に合わせてから作る", "docx から作る"]
+#@markdown - **docx から作り、出版版 PDF で補う**（初期値）: 受け取った docx が著者校正の前の原稿で、校正の直し（「資料」→「付録」など）が出版版 PDF にしかないことがあるため、校正の直しと、組版の違い（全角・半角、ダッシュ、引用符など）を PDF から補った docx（**Word の変更履歴つき**。スタイル・書式・数式・図・注はそのまま）を作り、それを変換します。表の中・数式・図の中の文字・リンクの文字は直しません。PDF のページ番号・投稿受付日など組版で入る文字や、表・図の中の文字は docx に足しません（足さなかった文字はレポートの 13 章の最後に一覧が出ます。本文が混じっていないか確かめてください）。補った docx が元の docx から組版の違いと報告した直し以外に変わっていないことも確かめます。**PDF のアップロードが必要です。**
+#@markdown - **docx から作る**: docx の本文の文字を 1 文字も変えずに XML にします。PDF をアップロードすると、変換の後に docx の文字と PDF の文字を照合し、違う箇所（「資料」と「付録」などの校正の直しと、全角・半角などの組版の違い）をレポートの 13 章に出します（XML は docx の文字のままです）。PDF がまだないときや、docx が最終版だと分かっているときに選びます。
+ROUTE = "docx から作り、出版版 PDF で補う"  #@param ["docx から作り、出版版 PDF で補う", "docx から作る"]
 #@markdown **PDF もアップロードする（UPLOAD_PDF）**: J-STAGE に登載する PDF がまだなければ、チェックを外し、作り方を「docx から作る」にしてから実行してください（PDF 用のボタンは出ません。PDF が用意できたら、この手順 2 から PDF を選んで変換し直します）。
 UPLOAD_PDF = True  #@param {type:"boolean"}
 """ + guard(1) + """
 from pathlib import Path
 from google.colab import files
 
-ROUTE_KEY = {"docx から作る": "docx", "出版版 PDF に合わせてから作る": "pdf"}[ROUTE]
+ROUTE_KEY = {"docx から作る": "docx", "docx から作り、出版版 PDF で補う": "pdf", "出版版 PDF に合わせてから作る": "pdf"}[ROUTE]
 if ROUTE_KEY == "pdf" and not UPLOAD_PDF:
-    raise SystemExit("「出版版 PDF に合わせてから作る」には PDF が必要です。UPLOAD_PDF にチェックを入れるか、PDF がまだないときは"
+    raise SystemExit("「docx から作り、出版版 PDF で補う」には PDF が必要です。UPLOAD_PDF にチェックを入れるか、PDF がまだないときは"
                      "作り方（ROUTE）を「docx から作る」にして、もう一度この手順を実行してください。")
 WORK = Path("/content/jasme_work")
 INPUT = WORK / "input"
@@ -300,7 +300,7 @@ if UPLOAD_PDF:
     pdf_files = upload("J-STAGE に登載する PDF", ".pdf")
     pdf_path = pdf_files[0] if pdf_files else None
 if ROUTE_KEY == "pdf" and not pdf_path:
-    raise SystemExit("「出版版 PDF に合わせてから作る」には PDF が必要です。もう一度この手順を実行し、PDF を選んでください"
+    raise SystemExit("「docx から作り、出版版 PDF で補う」には PDF が必要です。もう一度この手順を実行し、PDF を選んでください"
                      "（PDF がまだないときは、作り方（ROUTE）を「docx から作る」にしてから実行します）。")
 print()
 print("作り方:", ROUTE)

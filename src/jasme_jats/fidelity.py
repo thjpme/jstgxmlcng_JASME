@@ -12,16 +12,25 @@ docx の各段落の文字列を ooxml.canonical_texts()（段落ごとの ooxml
   ・空白だけとして除外した段落（Exclusion.blank）の docx の文字は、本当に空白だけか
 
 さらに final_check() で、目印を取り除いた最終出力の文字列が、検証済みの木と一致することを確かめる。
+
+ルート2 では、verify_supplement()（補完の確かめ）で、出版版 PDF で補った docx が、元の docx から「組版の違い（(A)）」と
+「13.1 に報告した校正の直し（(B)。pdfdocx.Fix の kind text）」以外に変わっていないことを確かめる。照合（pdfmatch）と
+docx の書き込み（pdfdocx）の不具合も見つけられるように、共有するのは定数（pdfmatch の FW_FIRST・FW_LAST・HYPHENS・DASHES・
+QUOTE_CLASSES・NUMBER_PAIRS、pdfdocx の AUTHOR・PARTS）だけで、組版の違いの判定（_pair）と変更の単位の取り出しは、ここで
+別に実装する（文字の取り出しは ooxml.canonical_texts）。
 """
 from __future__ import annotations
 
+import copy
 import difflib
 from collections import defaultdict
 from dataclasses import dataclass, field
 
 from lxml import etree
 
-from .ooxml import DocxPackage, HiddenRule, canonical_texts, is_ws
+from .ooxml import DocxPackage, HiddenRule, canonical_texts, is_ws, paragraph_ids, w
+from .pdfdocx import AUTHOR, PARTS
+from .pdfmatch import DASHES, FW_FIRST, FW_LAST, HYPHENS, NUMBER_PAIRS, QUOTE_CLASSES
 from .omml import MML_NS, math_plain
 from .tracking import AI, GEN, JX_NS, SPAN
 
@@ -215,3 +224,328 @@ def final_check(tracked_root, final_bytes: bytes, res: FidelityResult):
     res.final_ok = expected == got
     res.final_detail = "" if res.final_ok else _diff(expected, got)
     return res.final_ok
+
+
+# ---------------------------------------------------------------------------- 補完の確かめ（ルート2）
+# 補った docx のこのツールの変更履歴の中の文字を、canonical_texts の文字の中で見分けるための目印（Unicode の非文字。docx の文字には
+# 出ない）。挿入（w:ins）のランの中の文字を I_OPEN〜I_CLOSE で、削除（w:del）のランの中の文字を D_OPEN〜D_CLOSE で挟む
+I_OPEN, I_CLOSE, D_OPEN, D_CLOSE = "﷐", "﷑", "﷒", "﷓"
+MARKS = I_OPEN + I_CLOSE + D_OPEN + D_CLOSE
+SUP_WINDOW = 16          # 1 つの変更の単位に当てる校正の直し（Fix）を探す数（段落の中で、まだ当てていない最初の直しから）
+SUP_CONTEXT = 10         # 問題の箇所の前後に添える文字の数
+# 補完の確かめの不合格の理由
+UNTRACKED_WHY = "変更履歴でない書き換えがある（このツールの変更履歴を却下した文字が、元の docx の文字と違う）"
+PARA_SET_WHY = "段落が増えたか消えた（補った docx と元の docx で、段落の並びが違う）"
+PARA_MARK_WHY = "このツールの変更履歴が、段落記号か書式にかかっている"
+READ_WHY = "補った docx の変更履歴を読み取れない（承諾した文字が、補った docx の文字と合わない）"
+UNIT_WHY = "組版の違い（(A) の対・空白の削除）でも、13.1 の補った箇所でもない変更"
+UNWRITTEN_WHY = "13.1 に報告したのに、補った docx に書き込まれていない"
+NUMBER_WHY = "Word が付ける番号を、組版の違い（全角・半角と、番号の字形の対）でない文字にしている"
+NUMBER_SRC_WHY = "Word が付ける番号の元の文字が分からない"
+
+
+@dataclass
+class SupplementResult:
+    """補完の確かめ（verify_supplement）の結果。"""
+    ok: bool = True
+    typeset: int = 0          # (A) と当たった文字の数（全角・半角などの対と、消した空白。Fix の width・space・glyph の数に当たる）
+    supplied: int = 0         # (B)（13.1 の Fix。kind text）と当たった数
+    problems: list = field(default_factory=list)   # [(段落 ID, 元の docx の文字, 補った docx の文字, 理由)]
+
+
+def _fold(c: str) -> str:
+    """全角の英数字・記号 → 半角（pdfmatch.fold と同じ規則を、定数から別に書く）。"""
+    o = ord(c)
+    return chr(o - 0xFEE0) if FW_FIRST <= o <= FW_LAST else c
+
+
+def _quote_class(c: str) -> int:
+    return next((n for n, cls in enumerate(QUOTE_CLASSES) if c in cls), -1)
+
+
+def _pair(a: str, b: str, case: bool = False, number: bool = False) -> bool:
+    """docx の 1 文字 a と、補った docx の 1 文字 b が組版の違い（(A)）の対か（同じ文字は偽）。pdfmatch.typeset_pair と同じ規則を、
+    定数だけを共有して別に書いたもの（tests/test_supplement.py で、すべての対で答えが同じことを確かめる）。
+
+    全角・半角（_fold が同じで 0x21〜0x7E）、HYPHENS ＋ DASHES の中どうし（向きを問わない）、QUOTE_CLASSES の同じ類の中どうし
+    （全角は _fold の後。向きを問わない）、number なら NUMBER_PAIRS の対（向きがある）、case なら英字の大文字・小文字
+    （「ａ」と「A」のように全角・半角と重なるものも。両方が _fold の後に ASCII の英字のときだけ）。
+    """
+    if a == b:
+        return False
+    fa, fb = _fold(a), _fold(b)
+    if fa == fb and 0x21 <= ord(fa) <= 0x7E:
+        return True
+    dash = HYPHENS + DASHES
+    if a in dash and b in dash:
+        return True
+    qa = _quote_class(fa)
+    if qa >= 0 and qa == _quote_class(fb):
+        return True
+    if number and (a, b) in NUMBER_PAIRS:
+        return True
+    if case and fa.isascii() and fb.isascii() and fa.isalpha() and fa.lower() == fb.lower():
+        return True
+    return False
+
+
+def _mark_runs(el, open_mark: str, close_mark: str):
+    """変更履歴の要素 el の中のランの文字を目印で挟み、削除の文字（w:delText）はふつうの文字（w:t）にする。"""
+    for r in list(el.iter(w("r"))):
+        if r.tag != w("r"):
+            continue
+        for t in r.iter(w("delText")):
+            t.tag = w("t")
+        for t in r.iter(w("delInstrText")):
+            t.tag = w("instrText")
+        start = etree.Element(w("t"))
+        start.text = open_mark
+        end = etree.Element(w("t"))
+        end.text = close_mark
+        rpr = r.find(w("rPr"))
+        r.insert(r.index(rpr) + 1 if rpr is not None else 0, start)
+        r.append(end)
+
+
+def _unwrap(el):
+    """要素 el を取り除き、中身を親の同じ位置に戻す。"""
+    parent = el.getparent()
+    idx = parent.index(el)
+    kids = list(el)
+    prev = el.getprevious()
+    if el.text:
+        if prev is not None:
+            prev.tail = (prev.tail or "") + el.text
+        else:
+            parent.text = (parent.text or "") + el.text
+    for k, ch in enumerate(kids):
+        parent.insert(idx + k, ch)
+    if el.tail:
+        if kids:
+            kids[-1].tail = (kids[-1].tail or "") + el.tail
+        else:
+            before = parent[idx - 1] if idx > 0 else None
+            if before is not None:
+                before.tail = (before.tail or "") + el.tail
+            else:
+                parent.text = (parent.text or "") + el.tail
+    parent.remove(el)
+
+
+def _marked_texts(fixed_docx, problems) -> dict:
+    """補った docx の段落 ID → 目印付きの文字（canonical_texts。このツールの変更履歴の中の文字を目印で挟む）。
+
+    このツールの変更履歴（作成者が AUTHOR の w:ins・w:del）を、中のランの文字を目印で挟んで外し（削除の文字は w:t にする）、
+    canonical_texts で読む。目印の外の文字が変わっていない文字、I_OPEN〜I_CLOSE が足した文字、D_OPEN〜D_CLOSE が消した文字。
+    このツールの変更履歴が段落記号・書式（w:rPr の中）にかかっていれば、problems に足す。
+    """
+    pkg = DocxPackage(fixed_docx)
+    rule = HiddenRule(pkg.xml("word/styles.xml"))
+    out = {}
+    for part, prefix in PARTS.items():
+        src_root = pkg.xml(part)
+        if src_root is None:
+            continue
+        root = copy.deepcopy(src_root)
+        ids = paragraph_ids(root, prefix)
+        for el in list(root.iter(w("ins"), w("del"))):
+            if el.get(w("author")) != AUTHOR:
+                continue
+            parent = el.getparent()
+            if parent is None:
+                continue
+            if parent.tag == w("rPr"):
+                p = next((a for a in el.iterancestors(w("p"))), None)
+                problems.append((ids.get(p, ""), "", "", PARA_MARK_WHY))
+                parent.remove(el)
+                continue
+            if el.tag == w("ins"):
+                _mark_runs(el, I_OPEN, I_CLOSE)
+            else:
+                _mark_runs(el, D_OPEN, D_CLOSE)
+            _unwrap(el)
+        out.update(canonical_texts(root, prefix, rule))
+    return out
+
+
+def _split_marked(text: str):
+    """目印付きの文字から (却下した文字, 承諾した文字, 単位の一覧)。単位は (却下した文字の上の位置, 承諾した文字の上の位置,
+    消した文字 D, 足した文字 I)。変わっていない文字をはさまずに続く挿入・削除を 1 つの単位にする。目印の並びがおかしければ None。"""
+    rej, acc, units = [], [], []
+    state = ""            # "" / "i" / "d"
+    cur = None            # 作っている単位 [rej の位置, acc の位置, D, I]
+    for c in text:
+        if c in MARKS:
+            if c == I_OPEN and state == "":
+                state = "i"
+            elif c == D_OPEN and state == "":
+                state = "d"
+            elif (c == I_CLOSE and state == "i") or (c == D_CLOSE and state == "d"):
+                state = ""
+            else:
+                return None
+            continue
+        if state == "":
+            if cur is not None:
+                units.append(tuple(cur))
+                cur = None
+            rej.append(c)
+            acc.append(c)
+            continue
+        if cur is None:
+            cur = [len(rej), len(acc), "", ""]
+        if state == "d":
+            cur[2] += c
+            rej.append(c)
+        else:
+            cur[3] += c
+            acc.append(c)
+    if state:
+        return None
+    if cur is not None:
+        units.append(tuple(cur))
+    return "".join(rej), "".join(acc), units
+
+
+def _unit_ends(d: str, i: str, queue: list, p: int, case: bool) -> dict:
+    """変更の単位（消した文字 d, 足した文字 i）を、組版の違いと、校正の直しの並び queue の p 番目からのいくつか（どれも 1 回ずつ。
+    単位の中の順は問わない）で説明できる、当て終わった後の queue の位置 → (A) の文字の数（最も少ないもの）。
+
+    d と i を前から 1 文字ずつ、同じ文字か _pair の対として並べるか、d の空白を消す（(A)）か、まだ当てていない直し f の
+    (f.old, f.new) を d・i のその位置に当てて進め、d・i を使い切ったときに、当てた直しが queue[p:p+k] のちょうど k 個の
+    ものだけを答えにする（位置は使わない。数式の後ろでは、Fix の位置と canonical_text の位置が合わないため）。
+    """
+    window = queue[p:p + SUP_WINDOW]
+    full = (1 << len(window)) - 1
+    best = {}
+    seen = {}
+    stack = [(0, 0, 0, 0)]       # (d の位置, i の位置, 当てた直しの集合〈window の中のビット〉, (A) の文字の数)
+    while stack:
+        a, b, used, n = stack.pop()
+        key = (a, b, used)
+        if key in seen and seen[key] <= n:
+            continue
+        seen[key] = n
+        if a == len(d) and b == len(i):
+            k = 0
+            while k < len(window) and used >> k & 1:
+                k += 1
+            if used == (1 << k) - 1:
+                best[p + k] = min(best.get(p + k, n), n)
+        if a < len(d) and b < len(i) and (d[a] == i[b] or _pair(d[a], i[b], case)):
+            stack.append((a + 1, b + 1, used, n + (d[a] != i[b])))
+        if a < len(d) and d[a].isspace():
+            stack.append((a + 1, b, used, n + 1))
+        if used != full:
+            for k, f in enumerate(window):
+                if used >> k & 1:
+                    continue
+                if d.startswith(f.old, a) and i.startswith(f.new, b) and (f.old or f.new):
+                    stack.append((a + len(f.old), b + len(f.new), used | 1 << k, n))
+    return best
+
+
+def _excerpt(text: str, pos: int, inner: str) -> str:
+    """text の pos からの inner の前後 SUP_CONTEXT 文字を添えた抜き出し（「…前［inner］後…」）。"""
+    head = text[max(0, pos - SUP_CONTEXT):pos]
+    tail = text[pos + len(inner):pos + len(inner) + SUP_CONTEXT]
+    return f"{'…' if pos > SUP_CONTEXT else ''}{head}［{inner}］{tail}{'…' if pos + len(inner) + SUP_CONTEXT < len(text) else ''}"
+
+
+def _diff_excerpt(a: str, b: str):
+    """2 つの文字の最初の違う部分を、前後の文字を添えて抜き出す (a の抜き出し, b の抜き出し)。"""
+    sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op != "equal":
+            return _excerpt(a, i1, a[i1:i2]), _excerpt(b, j1, b[j1:j2])
+    return a, b
+
+
+def verify_supplement(original_docx, fixed_docx, fixes, case_srcs, numbers_original, pdf_numbers) -> SupplementResult:
+    """補完の確かめ: ルート2 の補った docx（fixed_docx）が、元の docx（original_docx）から、組版の違い（(A)）と 13.1 に報告した
+    校正の直し（fixes のうち applied で kind text のもの）以外に変わっていないか。照合（pdfmatch）・書き込み（pdfdocx）とは別の
+    実装（設計: 定数だけを共有する）。
+
+      1. 補った docx のこのツールの変更履歴を却下した文字が、元の docx の文字（source_texts）と、すべての段落で同じか
+         （報告しない変更・変更履歴でない書き換え・段落の増減がないこと）。承諾した文字が補った docx の文字（source_texts）と
+         同じかも確かめる（変更履歴の読み取りの確かめ）
+      2. 段落ごと（段落記号の削除でつないだ段落は 1 つ）に、変わっていない文字をはさまずに続く挿入・削除を 1 つの単位にし、
+         単位ごとに（消した文字, 足した文字）を作る（位置は変更履歴で決まるので、文字列を並べ直したときのずれは起きない）
+      3. 単位を、1 文字ずつの (A) の対（_pair。大文字・小文字は case_srcs の段落だけ）・空白の削除と、その段落の校正の直しの
+         並びの次のいくつか（old・new が文字列として一致するもの）で説明できるか（_unit_ends）。説明できない単位と、どの単位にも
+         当たらずに残った直しは不合格
+      4. Word が付ける番号（pdf_numbers。docx の文字ではない）が、元の文字（numbers_original）と同じ長さで、1 文字ずつ同じか
+         _pair（number）の対か
+
+    case_srcs: 大文字・小文字の違いを (A) とする段落の ID。numbers_original・pdf_numbers: (種類, ID) -> 番号の文字列。
+    """
+    res = SupplementResult()
+    problems = res.problems
+    case_srcs = set(case_srcs or ())
+    original = source_texts(original_docx)
+    fixed = source_texts(fixed_docx)
+    marked = _marked_texts(fixed_docx, problems)
+
+    # 1. 却下した文字が元の docx と同じか（段落の並びも）
+    split = {}
+    if set(marked) != set(original):
+        extra = sorted(set(marked) ^ set(original))
+        problems.append((",".join(extra[:5]) + ("…" if len(extra) > 5 else ""), "", "", PARA_SET_WHY))
+    for src, text in marked.items():
+        parts = _split_marked(text)
+        if parts is None or parts[1] != fixed.get(src):
+            problems.append((src, "", fixed.get(src, ""), READ_WHY))
+            continue
+        split[src] = parts
+        rej = parts[0]
+        if src in original and rej != original[src]:
+            old, new = _diff_excerpt(original[src], rej)
+            problems.append((src, old, new, UNTRACKED_WHY))
+
+    # 2.・3. 変更の単位を (A) と (B) に当てる
+    queues = defaultdict(list)
+    for f in fixes or ():
+        if f.applied and f.kind == "text":
+            queues[f.src].append(f)
+    for src in queues:
+        queues[src].sort(key=lambda f: (f.start, f.end))
+    for src, (rej, acc, units) in split.items():
+        queue = queues.get(src, [])
+        case = src in case_srcs
+        reach = {0: (0, 0)}            # 当て終わった queue の位置 → ((A) の文字の数, (B) の数)
+        for rpos, apos, d, i in units:
+            nxt = {}
+            for p, (na, nb) in reach.items():
+                for q, n in _unit_ends(d, i, queue, p, case).items():
+                    cand = (na + n, nb + q - p)
+                    if q not in nxt or cand < nxt[q]:
+                        nxt[q] = cand
+            if nxt:
+                reach = nxt
+            else:
+                problems.append((src, _excerpt(rej, rpos, d), _excerpt(acc, apos, i), UNIT_WHY))
+        end = len(queue)
+        if end in reach:
+            na, nb = reach[end]
+        else:
+            p = max(reach)
+            na, nb = reach[p]
+            for f in queue[p:]:
+                problems.append((src, f.old, f.new, UNWRITTEN_WHY))
+        res.typeset += na
+        res.supplied += nb
+    for src, queue in queues.items():
+        if src not in split:
+            for f in queue:
+                problems.append((src, f.old, f.new, UNWRITTEN_WHY))
+
+    # 4. Word が付ける番号
+    for key, new in (pdf_numbers or {}).items():
+        ident = f"{key[0]}:{key[1]}" if isinstance(key, tuple) and len(key) == 2 else str(key)
+        old = (numbers_original or {}).get(key)
+        if old is None:
+            problems.append((ident, "", new, NUMBER_SRC_WHY))
+        elif len(old) != len(new) or any(a != b and not _pair(a, b, number=True) for a, b in zip(old, new)):
+            problems.append((ident, old, new, NUMBER_WHY))
+    res.ok = not problems
+    return res
