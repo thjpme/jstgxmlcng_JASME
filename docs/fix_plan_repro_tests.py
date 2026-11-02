@@ -26,6 +26,12 @@ tests/test_floats.py・tests/test_lost_images.py に足した）。
 （test_PROBLEM_deleted_paragraph_mark_keeps_two_paragraphs。逆は tests/test_pipeline.py の
 test_deleted_paragraph_mark_joins_paragraphs）。U8・U3・N8 に当たるテストは、このファイルにはもともとない（直した後の振る舞いの
 テストは、直すときに tests/test_reader.py・tests/test_pipeline.py・tests/test_pdfmatch.py・tests/test_fidelity.py に足した）。
+単位 H（0.27.0。D2・M5・U4・U5）で取り除いたもの: 上付きの指数が注にリンクされる（test_PROBLEM_superscript_exponent_linked_as_note。
+逆は tests/test_links.py の test_superscript_exponent_not_linked）、語の中の「図1」「表1」が図・表にリンクされる
+（test_PROBLEM_figure_reference_inside_word。正規表現の一致は直した後も同じなので、逆は Linker.float_refs の結果で確かめる
+tests/test_links.py の test_float_refs_skip_words にした）。U4・U5 に当たるテストは、このファイルにはもともとない（直した後の
+振る舞いのテストは、直すときに tests/test_ai.py・tests/test_notebook.py に足した）。残っているのは、仕様の確認のテスト 1 件
+（自動番号の番号付け）だけ。
 
 実行のしかた（tests/conftest.py のフィクスチャ journal・meta を使うため、tests/ に一時的に写して実行し、終わったら消す）:
 
@@ -63,31 +69,6 @@ def make_doc(path, body_parts, abstract=("Abstract text."), appendix=None, extra
     body += mf.tail(b, appendix=appendix)
     b.save(path, body)
     return path
-
-
-# --------------------------------------------------------------------------- 3. 上付きの数字が注にリンクされる
-def test_PROBLEM_superscript_exponent_linked_as_note(journal, meta, tmp_path):
-    """上付きの「2」（cm²・x² の指数）が、注 2 があると注へのリンクにされる。"""
-    def parts(b):
-        return [mf.para(S["sec1"], "１．はじめに"),
-                mf.para(S["body"], "面積は 3 cm", mf.run("2", sup=True), " である", mf.run("1)", sup=True), "。"),
-                mf.para(S["fn_head"], "注"),
-                mf.para(S["body"], "1) 一つ目の注。"),
-                mf.para(S["body"], "2) 二つ目の注。")]
-    path = make_doc(tmp_path / "sup.docx", parts)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
-    links = [(text(x), x.get("rid")) for x in load(res).iter("xref") if x.get("ref-type") == "fn"]
-    assert ("1)", "fn1") in links
-    assert ("2", "fn2") in links          # ← 指数の 2 が注 2 へのリンクになる（誤り）
-
-
-# --------------------------------------------------------------------------- 9. 図表参照の誤検出
-def test_PROBLEM_figure_reference_inside_word(journal):
-    """「地図1」「図表1」のような語の中の「図1」「表1」が図・表へのリンクになる。"""
-    from jasme_jats.linker import RE_FIGREF, RE_TABREF
-    assert RE_FIGREF.search("地図1に示す").group(0) == "図1"
-    assert RE_TABREF.search("図表1に示す").group(0) == "表1"
-    assert RE_TABREF.search("発表1回目の").group(0) == "表1"
 
 
 # --------------------------------------------------------------------------- 11. 自動番号の番号付けが本文と脚注・テキストボックスで共有される
