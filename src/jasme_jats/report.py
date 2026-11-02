@@ -694,7 +694,7 @@ def unplaced_text(plan, partial="") -> tuple:
     """AI の回答を反映した後も、位置を決められない図表が残っているときの赤い枠の (見出し, 本文)。なければ None。
 
     図表ごとに、キャプション、XML の中の図表の ID（と、図形の中身から出した本文の段落など。structure.float_targets）、
-    仮に置いた位置（structure.ArticlePlan.float_place。アンカー段落の後ろか本文の最後）を示す。partial（AIOutcome.partial。
+    仮に置いた位置（article.ArticlePlan.float_place。アンカー段落の後ろか本文の最後）を示す。partial（AIOutcome.partial。
     AI の回答が途中で切れていた）があれば、出し直しの頼み方は、途中で切れた回答の枠（PARTIAL_MSG）と同じものを示す
     （別の頼み方を並べない）。
     """

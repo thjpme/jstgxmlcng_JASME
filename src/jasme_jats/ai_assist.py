@@ -23,10 +23,11 @@ from dataclasses import dataclass, field
 
 from lxml import etree
 
+from .article import ArticlePlan, _para_text
 from .floats import column_cm, describe, estimate_top_left
 from .model import OBJ, LinkSpec, Para, note_label
 from .omml import MML_NS, OmmlConverter, math_display_text
-from .structure import AFTER_BODY_REGIONS, ArticlePlan, _para_text, float_caption
+from .structure import AFTER_BODY_REGIONS, float_caption
 
 # 既定の AI モデル（Claude。動作を確かめたもの）。ここ 1 か所で決める（pipeline.Options・cli の既定、ノートブックの手順 4 と説明。
 # tools/make_notebook.py はこのファイルを読んで、DEFAULT_MODEL と DEFAULT_MODEL_INFO の値を使う）。

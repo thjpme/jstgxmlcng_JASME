@@ -32,6 +32,7 @@ from . import __version__
 from .ai_assist import (DEFAULT_MODEL, AIOutcome, apply_ops, build_request, call_provider, float_placements,
                         image_blocks, manual_prompt, parse_cut_response, parse_response, retarget_ops, role_overrides,
                         split_ops, target_keys)
+from .article import _para_text
 from .builder import build, finalize, serialize, word_note_marks
 from .config import ArticleMeta, JournalConfig
 from .docx_reader import read_docx
@@ -46,7 +47,7 @@ from .pdfmatch import PdfCheck, check_pdf
 from .report import (BOX_PENDING_NOTE, NEEDS_ACTION, actions, figure_body_detail, images_to_prepare, render,
                      render_ai_only)
 from .report import pdf_fallback as report_pdf_fallback
-from .structure import _para_text, classify, float_caption, float_targets
+from .structure import classify, float_caption, float_targets
 from .tracking import SPAN
 from .validate import validate
 

@@ -18,8 +18,8 @@ import re
 import unicodedata
 from typing import NamedTuple
 
+from .article import ArticlePlan, BoxNode, FigNode, FormulaNode, ListNode, PNode, QuoteNode, Sec, TableNode
 from .model import OBJ, Atom, LinkSpec, Para
-from .structure import ArticlePlan, BoxNode, FigNode, FormulaNode, ListNode, PNode, QuoteNode, Sec, TableNode
 
 # URL（末尾の句読点・閉じ括弧は含めない）
 RE_URL = re.compile(r"(?:https?://|www\.)[^\s<>\"'「」『』、。，（）［］【】〔〕\u3000]+", re.I)
