@@ -245,7 +245,7 @@ class Exclusion:
     """XML に出力しない docx の文字列。必ずレポートに一覧で出す。
 
     blank: 空白だけの段落（の空白）として除外したもの。不変性チェックで、docx の文字が本当に空白だけかを確かめる
-    （空白以外の文字があれば不合格）。付けるのは structure.ArticlePlan.exclude_blank()（空白だけの段落）と
+    （空白以外の文字があれば不合格）。付けるのは article.ArticlePlan.exclude_blank()（空白だけの段落）と
     builder.Builder.fig（図の画像だけの段落にある空白）だけ。
     """
     src: str

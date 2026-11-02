@@ -21,7 +21,9 @@ CELLS = FIXTURES / "sample_b3_cells.docx"   # 表のセルに画像とキャプ�
 TABLEFIG = FIXTURES / "sample_b3_tablefig.docx"   # 画像のない図キャプションと、隣のキャプションのない表
 PLACE = FIXTURES / "sample_b3_place.docx"   # 位置を決められない図表の仮の置き場所（AI 補完が必要。ALL_DOCS には入れない）
 OUTSIDE = FIXTURES / "sample_outside.docx"   # 本文の外の段落に結び付いた図形（AI 補完が必要。ALL_DOCS には入れない）
-ALL_DOCS = [FULL, EDGE, TEMPLATE, NOTES, PDFCHECK, READER, STRUCTURE, CELLS, TABLEFIG]
+LINKS = FIXTURES / "sample_links.docx"   # 注・図表へのリンクの規則（注番号が「1)」の書き方の論文。修正計画の D2・M5）
+LINKS_BARE = FIXTURES / "sample_links_bare.docx"   # 同じ規則の、注番号が番号だけの上付きの論文
+ALL_DOCS = [FULL, EDGE, TEMPLATE, NOTES, PDFCHECK, READER, STRUCTURE, CELLS, TABLEFIG, LINKS, LINKS_BARE]
 
 
 @pytest.fixture(scope="session")

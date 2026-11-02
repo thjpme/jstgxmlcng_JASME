@@ -23,12 +23,19 @@ from dataclasses import dataclass, field
 
 from lxml import etree
 
+from .article import ArticlePlan, _para_text
 from .floats import column_cm, describe, estimate_top_left
 from .model import OBJ, LinkSpec, Para, note_label
 from .omml import MML_NS, OmmlConverter, math_display_text
-from .structure import AFTER_BODY_REGIONS, ArticlePlan, _para_text, float_caption
+from .structure import AFTER_BODY_REGIONS, float_caption
 
+# 既定の AI モデル（Claude。動作を確かめたもの）。ここ 1 か所で決める（pipeline.Options・cli の既定、ノートブックの手順 4 と説明。
+# tools/make_notebook.py はこのファイルを読んで、DEFAULT_MODEL と DEFAULT_MODEL_INFO の値を使う）。
+# モデルを変えるときは、2 つを一緒に直し、python tools/make_notebook.py でノートブックを作り直す。どちらもリテラルだけで書く
+# （make_notebook.py がパッケージを import せずに ast.literal_eval で読むため）
 DEFAULT_MODEL = "claude-opus-5-5"
+# 既定のモデルの表示名、料金（100 万トークンあたりの米ドル。入力・出力）、提供終了の予定（この日より前には終わらない。年-月-日）
+DEFAULT_MODEL_INFO = {"name": "Claude Opus 5.5", "input_usd": 4, "output_usd": 20, "not_before": "2027-09-22"}
 
 ROLES = {
     "sec1": "章見出し", "sec2": "節見出し", "sec3": "項見出し", "p": "本文段落", "fig_caption": "図キャプション",
@@ -257,7 +264,14 @@ def _spec_label(spec: LinkSpec) -> str:
 
 
 def build_request(plan: ArticlePlan, linker, build_exclusions=(), unsplit_names=()) -> tuple:
-    """AI への依頼（本文の文字列と画像）を作る。戻り値: (テキスト, [画像: (image_id, media_type, bytes)])"""
+    """AI への依頼（本文の文字列と画像）を作る。戻り値: (テキスト, [画像: (image_id, media_type, bytes)])
+
+    build_exclusions は書き出しの段階で出力しないと決めた段落（builder.BuildInfo.exclusions）、unsplit_names は姓と名を分けられ
+    なかった氏名 [(段落の ID, 氏名, 言語 ja / en)]（builder.BuildInfo.unsplit_names）。英文の氏名も「姓と名の区切りがない氏名」に
+    載せる（利用者の決定事項 17 で今までどおり載せる）が、AI の split_name は和文の氏名にしか使えない（apply_ops）ので、英文の行には
+    split_name を提案しないことを添える（builder の 10 章の警告の「AI による補完では、英文の著者名は分けられません」と同じ言い分）。
+    氏名の中の改行は「⏎」で示す（1 件を 1 行に書くため。氏名の文字は変えない）。
+    """
     lines = []
     lines.append("# 論文の段落一覧")
     lines.append("各行は [段落ID]（現在の役割 / 位置 / Word のスタイル名）本文。«文字→ID» はすでにリンク済みの箇所。")
@@ -318,8 +332,11 @@ def build_request(plan: ArticlePlan, linker, build_exclusions=(), unsplit_names=
             p = plan.paras.get(e.src)
             hint = set_role_hint(p, plan) if p is not None else ""
             lines.append(f"- [{e.src}] 出力から除外: {e.reason}: 「{e.text[:60]}」{hint}")
-    for src, text in unsplit_names:
-        lines.append(f"- [{src}] 姓と名の区切りがない氏名: 「{text}」")
+    for src, text, lang in unsplit_names:
+        note = "（英文の氏名。split_name は和文の氏名にだけ使えるので、提案しない）" if lang == "en" else ""
+        # 氏名の中の改行（Word の Shift+Enter。10 章と要確認で別に知らせる）は、行が分かれないよう「⏎」で示す（レポートの表と同じ）
+        shown = text.replace("\n", "⏎")
+        lines.append(f"- [{src}] 姓と名の区切りがない氏名{note}: 「{shown}」")
     images = []
     for f in plan.figures:
         for ip in f.image_paras:

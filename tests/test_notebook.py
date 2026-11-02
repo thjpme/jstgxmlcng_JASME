@@ -61,6 +61,31 @@ def test_gradio_notebook_is_up_to_date_and_cells_compile():
     assert "if loaded_before:\n    print(" in cell and "_app.close()" in cell
 
 
+def test_default_model_comes_from_ai_assist():
+    """手順 4 の MODEL の既定と選択肢は、パッケージの ai_assist.DEFAULT_MODEL と同じ（修正計画の U5。make_notebook.py は
+    ai_assist.py をファイルとして読むので、その読み方の誤りも、パッケージから import した値と比べて捕まえる）。
+    説明書 docs/USAGE_AI.md のモデル名・料金・提供終了の予定も DEFAULT_MODEL_INFO と同じ（説明書は手で書くので、ずれたら直す）。"""
+    from jasme_jats.ai_assist import DEFAULT_MODEL, DEFAULT_MODEL_INFO
+    assert mk.DEFAULT_MODEL == DEFAULT_MODEL and mk.DEFAULT_MODEL_INFO == DEFAULT_MODEL_INFO
+    assert f'MODEL = "{DEFAULT_MODEL}"  #@param ["{DEFAULT_MODEL}", "自動（最新の Opus）"]' in cell_source("#@title 4.")
+    usage_ai = (ROOT / "docs" / "USAGE_AI.md").read_text(encoding="utf-8")
+    assert f"`{DEFAULT_MODEL}`（{DEFAULT_MODEL_INFO['name']}）" in usage_ai
+    assert (f"既定のモデル `{DEFAULT_MODEL}` は、入力 100 万トークンあたり {DEFAULT_MODEL_INFO['input_usd']} ドル、"
+            f"出力 100 万トークンあたり {DEFAULT_MODEL_INFO['output_usd']} ドル") in usage_ai
+    y, m, d = (int(x) for x in DEFAULT_MODEL_INFO["not_before"].split("-"))
+    assert f"提供終了は {y} 年 {m} 月 {d} 日より前にはならない" in usage_ai
+
+
+def test_module_constants_reports_missing_line(tmp_path):
+    """make_notebook.module_constants は、パッケージを import せずに「名前 = リテラル」を読み、行がない（式で書いた）ときは
+    分かるエラーで止める（.group の AttributeError などにしない）。"""
+    path = tmp_path / "ai_assist.py"
+    path.write_text('X = 1\nY: dict = {"a": [1, 2]}\nDEFAULT_MODEL = "claude-" + "opus"\n', encoding="utf-8")
+    assert mk.module_constants(path, ("X", "Y")) == {"X": 1, "Y": {"a": [1, 2]}}
+    with pytest.raises(SystemExit, match="DEFAULT_MODEL = … の行が見つかりません"):
+        mk.module_constants(path, ("X", "DEFAULT_MODEL"))
+
+
 def test_step_guard_and_mark():
     ns = {}
     with pytest.raises(SystemExit, match="先に手順 1・2 を"):

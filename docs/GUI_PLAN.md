@@ -327,3 +327,12 @@ Colab で利用者に確かめてもらうこと（5 章の S1〜S4 の読み替
   （同時に進む）、そのまま画面を開く。2 回目の実行はツールを入れ直さず画面を開き直す。手順 1 のセルの雛形は断片
   （`PREP_PARAMS`・`PREP_BRANCH`・`PREP_PIP`・`PREP_LO`・`PREP_VERSION`）に分け、通常のノートブックは同じ順で連結する（中身は変わらない）。
 
+### 2026-11-02: main（0.27.1、単位 H・I）のマージ（0.27.2）
+
+- PR #1（`docs/gui-plan` → main）が衝突していたので、main（b80a413）をマージした。版は 0.27.2。
+- 衝突の解消: main が README に足した説明（注番号だけの上付きの限界、上付きの指数・語の中の図表番号、著者名の分け方）は
+  `docs/USAGE.md` の同じ場所に移した。main の「API キーについての詳細」（`API_HELP`）の変更（既定のモデル名を `ai_assist` から読む）は、
+  そのセルを `docs/USAGE_AI.md` に移してあるので捨て、手順 4 の `MODEL` の行だけ `MODEL_LINE`（`ai_assist.DEFAULT_MODEL` から）を採った。
+  テスト `test_default_model_comes_from_ai_assist` は、説明書 `docs/USAGE_AI.md` のモデル名・料金・提供終了の予定を
+  `DEFAULT_MODEL_INFO` と比べる形にした（説明書は手で書くので、モデルを変えたらテストが知らせる）。
+
