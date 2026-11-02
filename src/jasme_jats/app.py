@@ -468,35 +468,34 @@ def colab_proxy_url(port: int) -> str:
     return output.eval_js(f"google.colab.kernel.proxyPort({port})")
 
 
-def open_link_html(url: str) -> str:
-    """「画面を開く」のリンク（別のタブで開く）。Colab の出力欄は暗い配色のこともあるので、色を明示する。"""
-    import html
-    return ("<div style='border:3px solid #2563eb;border-radius:8px;padding:12px 16px;margin:12px 0;background:#eff6ff;"
-            "color:#1f2937;font-size:15px;line-height:1.7'>"
-            f"<a href='{html.escape(url)}' target='_blank' style='font-size:18px;font-weight:bold;color:#1d4ed8'>"
-            "画面を開く（新しいタブ）</a><br>"
-            "このノートブックのタブは閉じないでください（閉じると画面も止まります）。"
-            "画面を閉じてしまったら、このリンクをもう一度押します。</div>")
+def colab_embed(port: int, height: int) -> None:
+    """Colab の出力欄に、中継を通した画面を大きく埋め込む（出力欄の縦スクロールをなくし、ノートブックのスクロールだけにする）。
+
+    新しいタブで開く形（google.colab.output.serve_kernel_port_as_window）は、ブラウザの保存領域の分離（storage partitioning）で
+    動かなくなっており、Colab 自身が非推奨にしている。Colab の中では埋め込みしか残っていない。
+    """
+    from google.colab import output
+    output.no_vertical_scroll()
+    output.serve_kernel_port_as_iframe(port, height=str(height))
 
 
-def launch(inline: bool = False):
+def launch(inline: bool = True, height: int = 1400):
     """画面を開く。share は必ず False（未公開の原稿を Gradio の中継サーバーに通さない）。
 
-    Colab では、出力欄に埋め込まず（小さな窓になって使いにくい）、Colab の中継の URL を別のタブで開くリンクを出す。
-    ファイルのリンク（ダウンロードなど）も中継を通るように、root_path にその URL を渡す（埋め込みでは、Gradio がランタイムの
-    内部のホスト名でファイルの URL を作り、ブラウザから開けなかった）。Colab でなければ、ローカルのサーバーをブラウザで開く。
+    Colab では、空いているポートで起動し、Colab の中継の URL を root_path に渡して、ファイルのリンク（ダウンロード）も中継を通るように
+    してから、出力欄に大きく埋め込む（Gradio 自身の埋め込みは root_path を渡さないので、ファイルの URL がランタイムの内部のホスト名に
+    なり、ブラウザから開けなかった）。Colab でなければ、ローカルのサーバーをブラウザで開く。
     """
     colab = _in_colab()
     state = AppState(Path("/content/jasme_work") if colab else None)
     demo = build_app(state, ColabIO() if colab else IO())
     common = dict(share=False, quiet=True, allowed_paths=[str(state.work)])
-    if colab and not inline:
+    if colab:
         port = _free_port()
         url = colab_proxy_url(port)
         demo.launch(server_port=port, root_path=url.split("?")[0].rstrip("/"), inline=False, prevent_thread_lock=True,
                     **common)
-        from IPython.display import HTML, display
-        display(HTML(open_link_html(url)))
+        colab_embed(port, height)
     else:
         demo.launch(inline=inline, **common)
     return demo

@@ -147,18 +147,13 @@ def test_build_app_and_launch_never_share(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "_in_colab", lambda: False)
     app.launch()
     assert seen["share"] is False and seen["inline"] is False
-    # Colab では、中継の URL を root_path にして別のタブで開くリンクを出す（出力欄に埋め込まない）
-    import sys
-    import types
-    shown = []
-    ipy = types.ModuleType("IPython.display")
-    ipy.HTML, ipy.display = (lambda x: x), shown.append
-    monkeypatch.setitem(sys.modules, "IPython", types.ModuleType("IPython"))
-    monkeypatch.setitem(sys.modules, "IPython.display", ipy)
+    # Colab では、中継の URL を root_path にして（ダウンロードのリンクが中継を通る）、出力欄に大きく埋め込む
     monkeypatch.setattr(app, "_in_colab", lambda: True)
     monkeypatch.setattr(app, "colab_proxy_url", lambda port: f"https://x-{port}-colab.googleusercontent.com/?authuser=0")
+    embedded = []
+    monkeypatch.setattr(app, "colab_embed", lambda port, height: embedded.append((port, height)))
     seen.clear()
     app.launch()
     assert seen["share"] is False and seen["inline"] is False and seen["prevent_thread_lock"] is True
     assert seen["root_path"] == f"https://x-{seen['server_port']}-colab.googleusercontent.com"
-    assert "画面を開く（新しいタブ）" in shown[-1] and f"https://x-{seen['server_port']}-colab" in shown[-1]
+    assert embedded == [(seen["server_port"], 1400)]
