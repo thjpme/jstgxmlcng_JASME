@@ -42,6 +42,31 @@ def test_notebook_shows_version_and_cells_compile():
             compile("".join(c["source"]), "cell", "exec")
 
 
+def test_default_model_comes_from_ai_assist():
+    """手順 4 の MODEL の既定と選択肢、「API キーについての詳細」のモデル名・料金・提供終了の予定は、パッケージの
+    ai_assist.DEFAULT_MODEL・DEFAULT_MODEL_INFO と同じ（修正計画の U5。make_notebook.py は ai_assist.py をファイルとして読むので、
+    その読み方の誤りも、パッケージから import した値と比べて捕まえる）。"""
+    from jasme_jats.ai_assist import DEFAULT_MODEL, DEFAULT_MODEL_INFO
+    assert mk.DEFAULT_MODEL == DEFAULT_MODEL and mk.DEFAULT_MODEL_INFO == DEFAULT_MODEL_INFO
+    assert f'MODEL = "{DEFAULT_MODEL}"  #@param ["{DEFAULT_MODEL}", "自動（最新の Opus）"]' in cell_source("#@title 4.")
+    assert f"<code>{DEFAULT_MODEL}</code>（{DEFAULT_MODEL_INFO['name']}）" in mk.API_HELP
+    assert (f"既定のモデル <code>{DEFAULT_MODEL}</code> は、入力 100 万トークンあたり {DEFAULT_MODEL_INFO['input_usd']} ドル、"
+            f"出力 100 万トークンあたり {DEFAULT_MODEL_INFO['output_usd']} ドル") in mk.API_HELP
+    y, m, d = (int(x) for x in DEFAULT_MODEL_INFO["not_before"].split("-"))
+    assert f"提供終了は {y} 年 {m} 月 {d} 日より前にはならない" in mk.API_HELP
+    assert any("".join(c["source"]) == mk.API_HELP.strip("\n") for c in json.loads(mk.render())["cells"])   # ノートブックに入る
+
+
+def test_module_constants_reports_missing_line(tmp_path):
+    """make_notebook.module_constants は、パッケージを import せずに「名前 = リテラル」を読み、行がない（式で書いた）ときは
+    分かるエラーで止める（.group の AttributeError などにしない）。"""
+    path = tmp_path / "ai_assist.py"
+    path.write_text('X = 1\nY: dict = {"a": [1, 2]}\nDEFAULT_MODEL = "claude-" + "opus"\n', encoding="utf-8")
+    assert mk.module_constants(path, ("X", "Y")) == {"X": 1, "Y": {"a": [1, 2]}}
+    with pytest.raises(SystemExit, match="DEFAULT_MODEL = … の行が見つかりません"):
+        mk.module_constants(path, ("X", "DEFAULT_MODEL"))
+
+
 def test_step_guard_and_mark():
     ns = {}
     with pytest.raises(SystemExit, match="先に手順 1・2 を"):
