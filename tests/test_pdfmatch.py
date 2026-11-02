@@ -1,10 +1,10 @@
-"""出版版 PDF との照合（pdfmatch.py）と、PDF に合わせて直した docx（pdfdocx.py）。
+"""出版版 PDF との照合（pdfmatch.py）と、PDF で補った docx（pdfdocx.py）。
 
 tests/fixtures/sample_pdfcheck.pdf は、sample_pdfcheck.docx の文字を出版社が組版で直した想定（全角のかっこ・句読点、
 「資料」→「付録」など）にして LibreOffice で PDF にしたもの（tests/make_fixtures.py）。
 
   ルート1（docx から作る）: docx の文字は変えない。照合の結果をレポートに載せるだけ
-  ルート2（出版版 PDF に合わせてから作る）: PDF に合わせて直した docx（変更履歴つき）を作り、それを変換する
+  ルート2（docx から作り、出版版 PDF で補う）: PDF で補った docx（変更履歴つき）を作り、それを変換する
 
 ページ番号・柱・投稿受付日など（組版で入り、docx にない文字）の扱いは、extract_pages の代わりに作った PDF の文字
 （d12_pages など。形だけを本誌の出版版 PDF にまねた架空の文字）で確かめる。
@@ -88,17 +88,17 @@ def test_route1_reports_without_changing_text(journal, meta, tmp_path):
     report = res.report_path.read_text(encoding="utf-8")
     head = report.split("## 2.")[0]
     assert "作り方: docx から作る" in head
-    assert "要確認: 出版版 PDF と文字が違う箇所が 1 件、全角・半角の違いが 25 文字あります" in head
+    assert "要確認: 出版版 PDF と文字が違う箇所が 1 件あります" in head
     assert "XML は docx の文字のままで、照合の結果を載せているだけです" in report
     # 照合しないものの説明: 資料の中の段落は照合し、資料の見出しだけを照合しない（pdfmatch.target_paragraphs）
     assert "表のセル・別行の数式・資料の見出しと、4 文字未満の段落は除く" in report
     assert "| d13 |" in report and "| 資料 | 付録 |" in report
     assert "「(→（」5 件" in report and "「架空理論 (Fict」→「架空理論（Fict」" in report
-    assert "出版版 PDF との違い**（文字の違い 1 件・全角・半角の違い 25 文字）" in report.split("## 14.")[1]
+    assert "出版版 PDF との違い**（文字の違い 1 件）" in report.split("## 14.")[1]
 
 
 def test_route2_fixes_docx_with_tracked_changes(journal, meta, tmp_path):
-    """ルート2: PDF に合わせて直した docx（変更履歴つき）を作り、それを変換する。"""
+    """ルート2: PDF で補った docx（変更履歴つき）を作り、それを変換する。"""
     pytest.importorskip("pypdfium2")
     before = PDFCHECK.read_bytes()
     res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, pdf_path=PDFCHECK_PDF, route="pdf",
@@ -126,12 +126,13 @@ def test_route2_fixes_docx_with_tracked_changes(journal, meta, tmp_path):
     assert PUBLISHED["d12"] in paragraphs(fx.path)
     report = res.report_path.read_text(encoding="utf-8")
     head = report.split("## 2.")[0]
-    assert "作り方: 出版版 PDF に合わせてから作る" in head
-    assert "PDF に合わせて docx を直した 44 箇所（変更履歴: 挿入 26・削除 40）" in head
-    assert f"照合の相手は、出版版 PDF に合わせて直した docx（{fx.path.name}）" in head
+    assert "作り方: docx から作り、出版版 PDF で補う" in head
+    assert "PDF で補った校正の直し 1 箇所・組版の違い 43 箇所（変更履歴: 挿入 26・削除 40）" in head
+    assert f"照合の相手は、出版版 PDF で補った docx（{fx.path.name}）" in head
     assert "「詳しくは資料の学習指」→「詳しくは付録の学習指」" in report
     assert "表のセル・別行の数式・図の中の文字・資料の見出しと、4 文字未満の段落は照合せず、docx のままです。" in report
-    assert "### 13.2 PDF と違うが直さなかった箇所（要確認）\n\nありません。" in report
+    assert "### 13.3 直さなかった箇所（要確認）\n\nありません。" in report
+    assert res.supplement.ok and "### 13.8 補完の確かめ\n\n合格" in report
     assert "Word で開き、変更履歴を確認する" in report.split("## 14.")[1]
 
 
@@ -354,34 +355,42 @@ def test_colab_box_and_cli_route(journal, meta, tmp_path, capsys):
     from jasme_jats.colab import pdf_diff_box
     res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "1", pdf_path=PDFCHECK_PDF, convert_metafiles=False))
     html = pdf_diff_box(res)
-    assert "#d97706" in html and "出版版 PDF と文字が違う箇所が 1 件、全角・半角の違いが 25 文字あります" in html
-    assert "XML は docx の文字のまま" in html and "出版版 PDF に合わせてから作る" in html
+    assert "#d97706" in html and "出版版 PDF と文字が違う箇所が 1 件あります" in html
+    assert "XML は docx の文字のまま" in html and "docx から作り、出版版 PDF で補う" in html
     res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "2", pdf_path=PDFCHECK_PDF, route="pdf",
                                                    convert_metafiles=False))
     assert pdf_diff_box(res) == ""                 # すべて直せて、残っている違いもない
-    f = res.docx_fix.applied[0]
+    from jasme_jats.report import TO_CHECK, actions
+    # (B) 校正の直し（「資料」→「付録」）を直せなかったときは要確認（終了コード 0）
+    f = res.docx_fix.applied_text[0]
     f.applied, f.reason = False, "ほかの直す箇所と重なる"
     html = pdf_diff_box(res)
-    assert "直せなかった箇所 1 件" in html and "ほかの直す箇所と重なる" in html and res.docx_fix.path.name in html
-    from jasme_jats.report import TO_CHECK, actions
-    assert {a.key: a.level for a in actions(res)} == {"pdf_unfixed": TO_CHECK}     # 直せなかった箇所は要確認（終了コード 0）
+    assert "直さなかった箇所 1 件" in html and "ほかの直す箇所と重なる" in html and res.docx_fix.path.name in html
+    assert {a.key: a.level for a in actions(res)} == {"pdf_unfixed": TO_CHECK}
     assert not res.needs_action
+    f.applied, f.reason = True, ""
+    # (A) 組版の違いを直せなかったときは要確認にしない（13.2 に載せるだけ）
+    f = res.docx_fix.applied_typeset[0]
+    f.applied, f.reason = False, "ほかの直す箇所と重なる"
+    assert pdf_diff_box(res) == "" and actions(res) == [] and not res.needs_action
+    f.applied, f.reason = True, ""
 
     with pytest.raises(SystemExit):
         main([str(PDFCHECK), "--out", str(tmp_path / "c"), "--route", "pdf"])
     assert "--pdf で記事の PDF を指定してください" in capsys.readouterr().err
-    # --pdf があれば、既定は「出版版 PDF に合わせてから作る」（--meta がないと J-STAGE のアップロード時チェックで要対応になり 1）
+    # --pdf があれば、既定は「docx から作り、出版版 PDF で補う」（--meta がないと J-STAGE のアップロード時チェックで要対応になり 1）
     from conftest import META_EXAMPLE
     meta_args = ["--meta", str(META_EXAMPLE)]
     assert main([str(PDFCHECK), "--out", str(tmp_path / "c"), "--pdf", str(PDFCHECK_PDF), "--no-metafile-conversion"]
                 + meta_args) == 0
     out = capsys.readouterr().out
-    assert "出版版 PDF との照合: PDF に合わせて docx を直した 44 箇所" in out
-    assert "PDF に合わせて直した docx（変更履歴つき）:" in out and "_PDFに合わせた原稿.docx" in out
+    assert "出版版 PDF との照合: PDF で補った校正の直し 1 箇所・組版の違い 43 箇所" in out
+    assert "PDF で補った docx（変更履歴つき）:" in out and "_PDFで補完した原稿.docx" in out
+    assert "補完の確かめ: 合格" in out
     assert main([str(PDFCHECK), "--out", str(tmp_path / "d"), "--pdf", str(PDFCHECK_PDF), "--route", "docx",
                  "--no-metafile-conversion"] + meta_args) == 0     # ルート1 の PDF との違いは要確認（0）
     out = capsys.readouterr().out
-    assert "出版版 PDF との照合: 文字の違い 1 件" in out and "PDF に合わせて直した docx" not in out
+    assert "出版版 PDF との照合: 文字の違い 1 件" in out and "PDF で補った docx" not in out
 
 
 def test_route2_keeps_note_marks_when_fixing_breaks_notes(journal, meta, tmp_path, monkeypatch):
@@ -422,26 +431,26 @@ def test_route2_with_unreadable_pdf_converts_original(journal, meta, tmp_path, m
     assert res.fidelity.ok and res.docx_fix is None and not list(tmp_path.glob("*.docx"))
     assert ORIGINAL["d12"] in texts(load(res))
     report = res.report_path.read_text(encoding="utf-8")
-    assert "（PDF の文字を読めなかったので、docx を直さずに変換した）" in report
+    assert "（PDF の文字を読めなかったので、docx を補わずに変換した）" in report
     assert "照合できなかった" in report.split("## 2.")[0]
     # 要対応として知らせる（修正計画 D の M4。決定事項 4: 変換は続けて知らせる）: Colab の赤い枠、レポートの冒頭・14 章、
     # コマンドラインの終了コード 1 と標準エラー
-    assert res.pdf_fallback and res.needs_action
+    assert res.pdf_fallback and res.needs_action and res.supplement is None
     html = pdf_diff_box(res)
-    assert "#dc2626" in html and "出版版 PDF に合わせられませんでした" in html and "画像だけの PDF" in html
-    assert "要対応: 出版版 PDF に合わせられませんでした" in report.split("## 2.")[0]
-    assert "docx を PDF に合わせていない" in report.split("## 14.")[1]
+    assert "#dc2626" in html and "出版版 PDF で補えませんでした" in html and "画像だけの PDF" in html
+    assert "要対応: 出版版 PDF で補えませんでした" in report.split("## 2.")[0]
+    assert "docx を PDF で補っていない" in report.split("## 14.")[1]
     from conftest import META_EXAMPLE
     assert main([str(PDFCHECK), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli"), "--pdf",
                  str(tmp_path / "dummy.pdf"), "--no-metafile-conversion"]) == 1
     err = capsys.readouterr().err
-    assert "要対応: 出版版 PDF に合わせられませんでした" in err and "PDF から文字を取り出せなかった" in err
+    assert "要対応: 出版版 PDF で補えませんでした" in err and "PDF から文字を取り出せなかった" in err
     # ルート1 で読めないときは要確認（照合できなかっただけで、XML は docx の文字のまま。終了コード 0）
     res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "r1", pdf_path=tmp_path / "dummy.pdf", route="docx",
                                                    convert_metafiles=False))
     assert not res.pdf_fallback and not res.needs_action
     html = pdf_diff_box(res)
-    assert "出版版 PDF と照合できませんでした（要確認）" in html and "出版版 PDF に合わせられませんでした" not in html
+    assert "出版版 PDF と照合できませんでした（要確認）" in html and "出版版 PDF で補えませんでした" not in html
     assert "要確認: 出版版 PDF と照合できませんでした" in res.report_path.read_text(encoding="utf-8").split("## 2.")[0]
     assert main([str(PDFCHECK), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli1"), "--pdf",
                  str(tmp_path / "dummy.pdf"), "--route", "docx", "--no-metafile-conversion"]) == 0
@@ -1010,8 +1019,8 @@ def test_deleted_paragraph_end_before_other_paragraph_is_deleted(journal, tmp_pa
 
 def test_corrected_digit_line_at_paragraph_end_in_report(journal, meta, tmp_path, monkeypatch):
     """同じ形（「，」の後ろの年が出版版で直されている）をルート2 で変換すると、XML の文献は docx の年のまま（消さない）。
-    13.2 に直さなかった理由を出し、13.4（直した docx と PDF の照合）でも「PDF と同じ文字になりました」とは言わず、残っている
-    違いとして出す。13.6 には年の行が載る。"""
+    13.3 に直さなかった理由を出し、13.5（補った docx と PDF の照合）でも「PDF と同じ文字になりました」とは言わず、残っている
+    違いとして出す。13.7 には年の行が載る。"""
     from jasme_jats.pdfmatch import HEAD_WHY
     small_article(tmp_path, journal, BODY16, REF2, YEAR_REF)
     ref, lines, old, new = END_CASES[0]
@@ -1021,10 +1030,10 @@ def test_corrected_digit_line_at_paragraph_end_in_report(journal, meta, tmp_path
     assert [(f.old, f.new, f.reason) for f in res.docx_fix.skipped] == [(old, new, HEAD_WHY)]
     assert not any(f.kind == "text" for f in res.docx_fix.applied) and YEAR_REF in texts(load(res))
     ch13 = chapters(res)[1]
-    assert f"| {old} | {new} | {HEAD_WHY} |" in ch13.split("### 13.2")[1].split("### 13.3")[0]
-    remaining = ch13.split("### 13.4")[1].split("### 13.5")[0]
+    assert f"| {old} | {new} | {HEAD_WHY} |" in ch13.split("### 13.3")[1].split("### 13.4")[0]
+    remaining = ch13.split("### 13.5")[1].split("### 13.6")[0]
     assert "PDF と同じ文字になりました" not in remaining and f"| {old} | {new}" in remaining
-    assert f"数字だけの行 1 件: {new}" in ch13.split("### 13.6")[1]
+    assert f"数字だけの行 1 件: {new}" in ch13.split("### 13.7")[1]
 
 
 def test_corrected_heading_number_line_is_not_deleted(journal, tmp_path):
@@ -1148,7 +1157,7 @@ def test_long_pdf_only_text_on_other_paragraph_line_is_not_reported(journal, tmp
 
 @pytest.mark.parametrize("route", ["docx", "pdf"])
 def test_long_pdf_only_text_is_listed_in_report(route, journal, meta, tmp_path, monkeypatch):
-    """PDF にだけある 20 文字以上の文字で、段落の文字のある行にかかるもの（LONG_WHY）は、ルート2 では直さずに 13.2 に、
+    """PDF にだけある 20 文字以上の文字で、段落の文字のある行にかかるもの（LONG_WHY）は、ルート2 では直さずに 13.3 に、
     ルート1 では 13.1 に、その旨を添えて載せる（行の変わり目は LINE_MARK）。"""
     from jasme_jats.pdfmatch import LONG_WHY
     from jasme_jats.report import WHY_MARKS
@@ -1166,7 +1175,7 @@ def test_long_pdf_only_text_is_listed_in_report(route, journal, meta, tmp_path, 
         assert "PDF にだけある 20 文字以上の文字" in WHY_MARKS[LONG_WHY] and "| PDF（⏎ は行の変わり目） |" in section
     else:
         assert [(f.src, f.old, f.new, f.reason) for f in res.docx_fix.skipped] == [("d12", "", shown, LONG_WHY)]
-        assert f"| {shown} | {LONG_WHY} |" in ch13.split("### 13.2")[1].split("### 13.3")[0]
+        assert f"| {shown} | {LONG_WHY} |" in ch13.split("### 13.3")[1].split("### 13.4")[0]
 
 
 SIMILAR_A = "架空省（2018a）．『架空学校学習指導要領（令和元年告示）解説　架空算数編』．架空文教出版．"
@@ -3421,7 +3430,7 @@ def test_route2_with_broken_pdf_is_needs_action(journal, meta, tmp_path):
                                                    convert_metafiles=False))
     assert res.pdf_fallback and res.docx_fix is None and res.fidelity.ok and res.needs_action
     html = pdf_diff_box(res)
-    assert "出版版 PDF に合わせられませんでした" in html and "PDF を読めなかった" in html
+    assert "出版版 PDF で補えませんでした" in html and "PDF を読めなかった" in html
 
 
 def test_route2_without_pypdfium2_is_needs_action(journal, meta, tmp_path, monkeypatch, capsys):
