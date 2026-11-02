@@ -4,16 +4,70 @@
 スタイルが想定外の段落には、番号の形式などから機械的に推定した役割を与え、
 推定したことを Decision として記録する（レポートと AI 補完の対象になる）。
 構造の組み立ては文字列を一切変更しない。出力しない段落は Exclusion として必ず記録する。
+
+構造の型（ArticlePlan と、章・段落・図表・注などのノード、FloatInfo・BoxInfo）と _para_text は article.py にある（修正計画の
+U6 で本体を変えずに移した。これまでどおり、ここからも import できる）。ここには、役割を決める規則（役割の集合・番号の形の
+正規表現・除外の理由の文言）と、組み立て（Classifier）を置く。
+
+処理とメソッドの目次:
+
+- classify: Classifier(...).run() で組み立てる。本文の外（引用文献・注・付記・謝辞・英文の部分）の段落に結び付いた図形が
+  あれば（Classifier.outside）、1 回目が段落に書き込んだもの（_doc_paragraphs）を戻して、もう 1 回組み立てる（修正計画の N7）。
+- Classifier.run の流れ:
+  1. 段落の役割: role_of（AI の指定 overrides、なければ style_role〈スタイルの基準の連鎖をたどる〉）。Word の脚注・文末脚注の
+     段落も plan.paras・plan.note_of に記録する。AI が exclude とした段落は理由付きで除外する。
+  2. 領域に分ける: split_regions（和文の冒頭・本文・後付け・英文の部分。table_roles・back_heading_by_text・guess_heading）。
+  3. 和文の冒頭: build_front_ja（read_author_table_ja・author_paragraph_ja → add_author_ja → aff_for）。
+  4. 本文: build_body
+     - 浮動配置の図表の置き場所: place_floats（float_captions・float_number・float_summary。機械的に組む float_mechanical
+       〈表のセルの画像とキャプション cell_figures・cell_pairs・cell_caption〉、AI の指定で組む float_from_spec、位置を
+       決められない図表の仮の位置 provisional_target・run_end〈list_or_quote〉。図形の中身を取る _take・_take_table・
+       _caption_decision・_drop_blank）
+     - 文字だけのテキストボックス（囲み・図の注記）: place_boxes（text_only・near_image・box_children・run_end・_xid_list）
+     - 段落の役割の推定（textbox_caption・guess_heading〈all_bold〉）と、本文スタイルの図表キャプションの推定（same_place・
+       is_image_para）
+     - 図表・箇条書き・引用・別行数式に組む: assemble_floats（same_place・table_for_figure・formula_node・
+       doc_numbering_is_bullet）
+     - 章・節・項の入れ子: nest。段落の位置の説明: compute_locations（node_paras）
+  5. 後付け（付記・謝辞・注・引用文献）: build_back（outside_key・back_heading_by_text・note_mark・appendix_heading・formula_node）
+  6. 英文の部分と資料: build_front_en（outside_key・appendix_heading・appendix_sentence・note_appendix_sentence・
+     check_abstract_ja・add_author_en・add_aff_en）
+  7. Word の脚注・文末脚注を注にする: attach_word_notes（unreferenced_note_reason・no_link_rule）
+  8. ID を付ける: assign_ids（図・表・数式・注・文献・所属）
+  9. 段落記号の削除でつないだ段落のスタイルの違いを判断の一覧に記録する: joined_styles
+- レポート・AI 依頼文・Colab・コマンドラインが使う関数: float_caption・float_ids・float_targets（浮動配置の図形の中身と、それを
+  出力した XML の要素の説明）。
 """
 from __future__ import annotations
 
 import re
 import unicodedata
-from dataclasses import dataclass, field
 from typing import Optional
 
+# 構造の型は article.py にある（ここでも使う）。structure から import しているコード（tests など）のために、これまでどおりの
+# 名前でここにも置く（互換のため。どれもこのファイルで使っているので noqa: F401 は付けない〈付けると ruff の RUF100 になる〉）
+from .article import (
+    Aff,
+    AppNode,
+    ArticlePlan,
+    Author,
+    BackSec,
+    BoxInfo,
+    BoxNode,
+    FigNode,
+    FloatInfo,
+    FnNode,
+    FormulaNode,
+    ListNode,
+    PNode,
+    QuoteNode,
+    RefNode,
+    Sec,
+    TableNode,
+    _para_text,
+)
 from .floats import NEAR_PARAS, at_anchor, box_lines, textbox_kind, why_not_at_anchor
-from .model import Decision, Exclusion, Float, Para, Table, note_key, note_label
+from .model import Para, Table, note_key, note_label
 from .ooxml import is_ws
 
 BODY_ROLES = {"sec1", "sec2", "sec3", "p", "fig_caption", "table_caption", "quote", "fn"}
@@ -165,321 +219,6 @@ def no_link_rule(kinds) -> str:
     if "著者名" in kinds:
         out.append("著者名の中の注の番号は、著者名に上付きの文字を置けないので出力しない")
     return "。".join(out)
-
-
-# ----------------------------------------------------------------------------- nodes
-@dataclass(eq=False)
-class Sec:
-    level: int
-    heading: Optional[Para]
-    children: list = field(default_factory=list)
-    sid: str = ""
-
-
-@dataclass(eq=False)
-class PNode:
-    para: Para
-
-
-@dataclass(eq=False)
-class ListNode:
-    items: list
-    ordered: bool = True
-
-
-@dataclass(eq=False)
-class QuoteNode:
-    paras: list
-
-
-@dataclass(eq=False)
-class FigNode:
-    image_paras: list
-    caption: Optional[Para] = None
-    caption_more: list = field(default_factory=list)   # 2 段落目以降のキャプション
-    tables: list = field(default_factory=list)         # 表で組んだ図の本体（テキストボックスの中の表など）
-    extra_images: list = field(default_factory=list)   # 他の段落の中から移した画像（グループ図形の画像）
-    fid: str = ""
-    number: Optional[int] = None
-    formula: object = None        # AI が数式画像と判断した場合に読み取った MathML（mml:math 要素）
-    formula_decision: str = ""
-
-
-@dataclass(eq=False)
-class TableNode:
-    table: Optional[Table]
-    caption: Optional[Para] = None
-    caption_more: list = field(default_factory=list)
-    tid: str = ""
-    number: Optional[int] = None
-
-
-@dataclass(eq=False)
-class FormulaNode:
-    para: Para
-    fid: str = ""
-    label: str = ""               # "(1)" など（本文中の文字列）
-    label_range: tuple = None     # para.plain() 上の位置
-
-
-@dataclass(eq=False)
-class BoxNode:
-    """囲み（文字だけのテキストボックス）。<boxed-text> になる。children は PNode・ListNode・QuoteNode・FormulaNode。"""
-    xid: str
-    children: list = field(default_factory=list)
-
-
-@dataclass(eq=False)
-class FnNode:
-    paras: list
-    fid: str = ""
-    number: Optional[int] = None
-    mark_range: tuple = None      # 先頭の「1)」の位置（para.plain() 上）
-    word_note: bool = False       # Word の脚注機能・文末脚注機能による注
-    word_kind: str = ""           # footnote（脚注）/ endnote（文末脚注）
-    word_id: str = ""             # 注の鍵（model.note_key。"footnote:5" など）
-    word_refs: list = field(default_factory=list)   # 参照のある段落の ID（docx の順。重複なし。注の中の参照も）
-    # 参照の少なくとも 1 つを、注へのリンクにして出力するか（False なら、参照は XML に出力しなかった段落と、注の番号をリンクに
-    # しない段落〈ArticlePlan.no_link_paras〉の中だけ。本文からのリンクのない注）
-    linked: bool = True
-    custom_mark: bool = False     # 参照のどれかが、記号を自分で付けたもの（customMarkFollows。本文の記号は docx の文字のまま）
-
-
-@dataclass(eq=False)
-class RefNode:
-    para: Para
-    rid: str = ""
-    parsed: dict = field(default_factory=dict)
-
-
-@dataclass(eq=False)
-class BackSec:
-    heading: Optional[Para]
-    children: list = field(default_factory=list)
-
-
-@dataclass(eq=False)
-class AppNode:
-    title: Optional[Para]
-    children: list = field(default_factory=list)
-
-
-@dataclass(eq=False)
-class Author:
-    name_ja: Optional[Para] = None
-    name_en: Optional[Para] = None
-    affs: list = field(default_factory=list)      # Aff
-    split_ja: Optional[int] = None                 # 姓と名の境目（AI 補完で指定された場合）
-    split_en: Optional[int] = None
-
-
-@dataclass(eq=False)
-class Aff:
-    ja: Optional[Para] = None
-    en: Optional[Para] = None
-    aid: str = ""
-
-
-@dataclass(eq=False)
-class FloatInfo:
-    """本文の浮動配置の図形のうち、図表の中身（画像・表・キャプション）を持つもの。"""
-    float: Float
-    paras: list = field(default_factory=list)      # テキストボックスの段落（出現順）
-    tables: list = field(default_factory=list)     # テキストボックスの表
-    images: list = field(default_factory=list)     # グループ図形の画像（アンカー段落の中にある ImageRef）
-    mode: str = ""                                 # mechanical（機械的に配置）/ ai（AI の指定で配置）/ unplaced（未配置）
-    reason: str = ""                               # 未配置の理由
-    where: str = ""                                # 未配置のときに仮に置いた位置: anchor（アンカー段落の後ろ）/ end（本文の最後）
-    end_why: str = ""                              # 本文の最後に置いた理由: ai（AI が本文の外の段落の後ろを指定）/ anchor（アンカー段落が本文でない）
-    end_after: str = ""                            # AI が指定した本文の外の段落の ID（end_why が ai のとき）
-    # 未配置で where が anchor のとき、その後ろに仮に置いた本文の段落の ID（アンカー段落。アンカー段落が箇条書き・引用の途中なら、
-    # その箇条書き・引用の最後の段落。Classifier.run_end）
-    after_src: str = ""
-
-
-@dataclass(eq=False)
-class BoxInfo:
-    """文字だけのテキストボックス（Classifier.place_boxes が扱ったもの）の扱い。レポート・AI 依頼文・知らせに使う。"""
-    box: object                     # model.TextBox
-    paras: list = field(default_factory=list)      # テキストボックスの段落（出現順。本文の要素の列にあるもの）
-    kind: str = ""                  # box（囲み）/ label（図に重ねた注記）/ undecided（決められない）/ blank（空白だけ）。AI の指定の後は、指定の種類
-    why: str = ""                   # 判定の根拠（floats.textbox_kind）
-    mode: str = ""                  # mechanical / ai
-    # 囲みを置いた位置: before（アンカー段落の前）/ after（アンカー段落〈箇条書き・引用の途中なら、その終わり〉の後ろ）/
-    # end（本文の最後）/ ai（AI の指定の段落の後ろ）。出力しないものは ""
-    where: str = ""
-    estimated: bool = False         # 位置を推定した（要確認）
-    place_why: str = ""             # 位置を推定した理由
-    after_src: str = ""             # 後ろに置いた本文の段落（before ならアンカー段落）
-    outside: str = ""               # アンカー段落が本文の外なら、その領域（OUTSIDE_JA のキー。修正計画の N7）
-    near: bool = False              # 画像の近く（Classifier.near_image）
-    float: object = None            # 浮動配置のテキストボックスなら、その図形（model.Float。AI 依頼文の位置の説明に使う）
-
-
-@dataclass
-class ArticlePlan:
-    lang: str = "ja"
-    title: list = field(default_factory=list)
-    subtitle: list = field(default_factory=list)
-    title_en: list = field(default_factory=list)
-    subtitle_en: list = field(default_factory=list)
-    authors: list = field(default_factory=list)
-    affs: list = field(default_factory=list)
-    abstract_heading: Optional[Para] = None
-    abstract: list = field(default_factory=list)
-    body: list = field(default_factory=list)
-    notes: Optional[BackSec] = None
-    ack: Optional[BackSec] = None
-    fn_heading: Optional[Para] = None
-    fns: list = field(default_factory=list)
-    ref_heading: Optional[Para] = None
-    refs: list = field(default_factory=list)
-    apps: list = field(default_factory=list)
-    exclusions: list = field(default_factory=list)
-    decisions: list = field(default_factory=list)
-    figures: list = field(default_factory=list)
-    tables: list = field(default_factory=list)
-    formulas: list = field(default_factory=list)
-    paras: dict = field(default_factory=dict)        # src -> Para
-    locations: dict = field(default_factory=dict)    # src -> 人が読める位置
-    region: dict = field(default_factory=dict)       # src -> front_ja / body / notes / ack / fn / refs / front_en / app
-    citation_mode: str = ""                          # author-year / numeric（refparse が設定）
-    uncited_refs: list = field(default_factory=list) # 本文からリンクされていない文献の ID
-    floats: dict = field(default_factory=dict)       # 浮動配置の図形の ID -> FloatInfo
-    body_seq: list = field(default_factory=list)     # 本文の段落 ID（出現順。浮動配置の図形の中の段落を除く）
-    moved_images: set = field(default_factory=set)   # 図に移したため、元の段落では出力しない画像の ID
-    float_decisions: dict = field(default_factory=dict)  # AI の指定で配置した図形の ID -> Decision
-    figure_issues: list = field(default_factory=list)    # 画像のない図キャプションの近くの表を図の本体にできなかったもの: (段落 ID, 理由)
-    # docx の表のセルの段落のうち、表の外に出したもの（表のセルの画像とキャプションで組んだ図のキャプション・本体。cell_figures）。
-    # 出版版 PDF との照合では、今までどおり表のセルとして扱う（照合しない・直さない。linker.body_paragraphs の文脈 "cell"）
-    cell_paras: set = field(default_factory=set)
-    layout: object = None                            # 本文の段組みと行の設定（model.Layout）
-    pdf_numbers: dict = field(default_factory=dict)  # ルート2: Word が付ける番号を PDF に合わせたもの: (種類, ID) -> 文字列（pdfmatch）
-    note_of: dict = field(default_factory=dict)      # Word の脚注・文末脚注の段落 ID -> 注の鍵（model.note_key。参照のない注も）
-    warnings: list = field(default_factory=list)     # 構造の組み立ての警告（pipeline がレポートの 10 章の警告に加える）
-    abstract_ja: list = field(default_factory=list)  # 英文要旨の中の、かな・漢字が 3 割以上の段落 ID（自動では移さない。要確認）
-    app_after_refs: list = field(default_factory=list)   # 引用文献などの後ろの、資料の見出しと思われる段落 ID（暫定で警告だけ）
-    # 手で書いた注と Word の脚注・文末脚注の両方にある注の番号（Word の注の番号は 1 から付けるので重なる。要確認）
-    note_overlap: list = field(default_factory=list)
-    # 文字だけのテキストボックスの ID -> BoxInfo（Classifier.place_boxes が扱ったもの。空白だけのものも。出現順）
-    textboxes: dict = field(default_factory=dict)
-
-    @property
-    def unplaced_floats(self) -> list:
-        return [fid for fid, info in self.floats.items() if info.mode == "unplaced"]
-
-    @property
-    def undecided_boxes(self) -> list:
-        """囲みか図の注記か決められず、除外した文字だけのテキストボックスの ID（要確認）。"""
-        return [x for x, info in self.textboxes.items() if info.kind == "undecided"]
-
-    @property
-    def estimated_boxes(self) -> list:
-        """位置を推定して置いた囲みの ID（要確認）。"""
-        return [x for x, info in self.textboxes.items() if info.kind == "box" and info.estimated]
-
-    def box_place(self, xid) -> str:
-        """囲みを置いた位置の説明（レポート・Colab・コマンドライン・判断の記録で使う）。例: 段落「…」の前 / 段落「…」の後ろ /
-        本文の最後。後ろに置いた段落に文字がなければ、その前にある、文字のある本文の段落で示す（float_place と同じ）。"""
-        info = self.textboxes[xid]
-        if info.where == "end":
-            return "本文の最後"
-        if info.where == "before":
-            p = self.paras.get(info.after_src)
-            if p is not None and _para_text(p).strip():
-                return f"段落「{_para_text(p).strip()[:20]}」の前"
-        seq = self.body_seq
-        k = seq.index(info.after_src) if info.after_src in seq else -1
-        if info.where == "before":
-            k -= 1      # 空のアンカー段落の前に置いた: その前の、文字のある段落の後ろ
-        while k >= 0:
-            p = self.paras.get(seq[k])
-            if p is not None and _para_text(p).strip():
-                return f"段落「{_para_text(p).strip()[:20]}」の後ろ"
-            k -= 1
-        return "本文の最初"
-
-    def float_text_src(self, fid):
-        """位置を決められない図表を仮に置いた位置を示す、文字のある本文の段落の ID（本文の最後に置いたもの・見つからないものは
-        None）。
-
-        仮に置いた位置のすぐ前の段落（アンカー段落。箇条書き・引用の途中なら、その最後の段落。FloatInfo.after_src）に文字が
-        なければ（空の段落など）、その前にある、文字のある本文の段落（XML の中で図表を探す手がかり。レポートの 3 章の場所にも使う）。
-        """
-        info = self.floats[fid]
-        if info.where == "end":
-            return None
-        seq = self.body_seq
-        start = info.after_src or info.float.anchor_src
-        k = seq.index(start) if start in seq else -1
-        while k >= 0:
-            p = self.paras.get(seq[k])
-            if p is not None and _para_text(p).strip():
-                return seq[k]
-            k -= 1
-        return None
-
-    def float_place(self, fid) -> str:
-        """位置を決められない図表を仮に置いた位置の説明（レポート・Colab・コマンドライン・判断の記録で使う）。
-
-        例: 段落「図1は表で組んだ問題である。この」の後ろ / 本文の最後。段落は float_text_src（アンカー段落、またはアンカー段落を
-        含む箇条書き・引用の最後の段落。文字がなければ、その前にある、文字のある本文の段落）。
-        """
-        if self.floats[fid].where == "end":
-            return "本文の最後"
-        src = self.float_text_src(fid)
-        return f"段落「{_para_text(self.paras[src]).strip()[:20]}」の後ろ" if src else "本文の最初"
-
-    def no_link_paras(self) -> dict:
-        """XML に出力するが、Word の脚注・文末脚注の参照（注の番号）をリンクにしない段落: 段落 ID -> 段落の種類（「題目」など）。
-
-        題目・副題（和文・英文）・著者名・所属・引用文献の段落。builder はこれらを emit の xref=False の文脈（TITLE・NAME・AFF・
-        REF）で書き出すので、注の番号は上付きの文字だけになる（上付きを置けない NAME では、番号も出さない）。Word の注の
-        リンクの有無（FnNode.linked。Classifier.attach_word_notes）と、レポートの 1 章のリンクの数（report.word_note_refs）・
-        8 章の表が使う。builder の書き出しの文脈を変えたら、ここも合わせる（tests/test_notes.py が XML の注へのリンクと照らして
-        確かめる）。
-        """
-        out = {}
-        for kind, paras in (("題目", self.title), ("副題", self.subtitle), ("英文題目", self.title_en),
-                            ("英文副題", self.subtitle_en),
-                            ("著者名", [p for a in self.authors for p in (a.name_ja, a.name_en) if p is not None]),
-                            ("所属", [p for aff in self.affs for p in (aff.ja, aff.en) if p is not None]),
-                            ("引用文献", [r.para for r in self.refs])):
-            for p in paras:
-                out.setdefault(p.src, kind)
-        return out
-
-    def unlinked_places(self, refs) -> tuple:
-        """本文からのリンクのない Word の注（FnNode.linked が偽）の、参照のある段落 refs（FnNode.word_refs）を分ける:
-        (XML に出力しなかった段落の ID の列, 注の番号をリンクにしない段落〈no_link_paras〉の「題目の段落 d3」の形の列)。
-        判断の一覧と、レポートの 8 章の表の説明に使う。"""
-        nolink = self.no_link_paras()
-        return [s for s in refs if s not in nolink], [f"{nolink[s]}の段落 {s}" for s in refs if s in nolink]
-
-    def decide(self, stage, category, src, message, confidence="", applied=True) -> Decision:
-        n = sum(1 for x in self.decisions if x.stage == stage) + 1
-        d = Decision(did=f"{'M' if stage == 'mechanical' else 'A'}-{n:03d}", stage=stage,
-                     category=category, src=src, message=message, confidence=confidence,
-                     location=self.locations.get(src, ""), applied=applied)
-        self.decisions.append(d)
-        return d
-
-    def exclude(self, para: Para, reason: str):
-        text = _para_text(para)
-        self.exclusions.append(Exclusion(src=para.src, reason=reason, text=text))
-
-    def exclude_blank(self, para: Para):
-        """空白だけの段落を、理由「空白のみの段落」で除外に記録する（文字がまったくない段落は記録しない）。
-
-        理由「空白のみの段落」の除外は、ここだけで作る（blank=True を付ける）。不変性チェック（fidelity.verify）は、blank の除外の
-        docx の文字が本当に空白だけかを確かめる（空白以外の文字があれば、変換ツールの不具合として不合格）。
-        """
-        if para.plain():
-            self.exclusions.append(Exclusion(src=para.src, reason="空白のみの段落", text=_para_text(para), blank=True))
-
-
-def _para_text(para: Para) -> str:
-    return "".join(a.text for a in para.atoms if a.kind == "text")
 
 
 def _xid_list(xids) -> str:
