@@ -44,7 +44,7 @@
 
 - `tools/make_notebook.py` の `REPO`（ノートブックがツールを入れる先）→ 直したら `python tools/make_notebook.py` でノートブックを作り直す
 - `tools/make_notebook.py` の `DOCS`（ノートブックから説明書へのリンク。`REPO` から作るので、`REPO` を直せばよい）
-- `README.md`（Colab のボタンのリンクと、pip で入れるときの URL）、`docs/USAGE.md`（Colab のボタンのリンク）
+- `README.md`（Colab のボタンのリンク 2 つと、pip で入れるときの URL）、`docs/USAGE.md`（Colab のボタンのリンク 2 つ）
 - `docs/DEVELOPMENT.md`、この文書
 
 GitHub は譲渡の後しばらく古い URL から転送しますが、転送に頼らず直してください（古い名前で別のリポジトリが作られると転送が切れます）。

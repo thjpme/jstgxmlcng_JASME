@@ -43,13 +43,13 @@ def test_notebook_shows_version_and_cells_compile():
 
 
 def test_gradio_notebook_is_up_to_date_and_cells_compile():
-    """試作の Gradio のノートブック（準備と画面を開く）も、生成と一致し、セルが構文として正しく、Gradio を入れて share なしで開く。"""
+    """1 画面版（Gradio）のノートブック（準備と画面を 1 つのセルで）も、生成と一致し、セルが構文として正しく、Gradio を入れて share なしで開く。"""
     text = mk.OUT_GRADIO.read_text(encoding="utf-8")
     assert text == mk.render_gradio(mk.notebook_branch(text))      # --branch で作ったものも、同じ置き換えが効く
     assert 'BRANCH = "docs/gui-plan"' in "".join(json.loads(mk.render_gradio("docs/gui-plan"))["cells"][1]["source"])
     nb = json.loads(mk.render_gradio())
     sources = ["".join(c["source"]) for c in nb["cells"]]
-    assert f"ツールの版: {__version__}" in sources[0] and "試作版" in sources[0] and "ZIP をダウンロードできるか" in sources[0]
+    assert f"ツールの版: {__version__}" in sources[0] and "画面が開きます" in sources[0] and "従来版" in sources[0]
     codes = [src for c, src in zip(nb["cells"], sources) if c["cell_type"] == "code"]
     assert len(codes) == 1                          # 準備と画面を 1 つのセルで
     compile(codes[0], "cell", "exec")

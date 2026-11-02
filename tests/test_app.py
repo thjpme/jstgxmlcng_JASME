@@ -1,4 +1,4 @@
-"""Gradio の操作画面（app.py。試作）: AppState の遷移と、build_app が画面を組めること。ブラウザは使わない。"""
+"""Gradio の操作画面（app.py。1 画面版）: AppState の遷移と、build_app が画面を組めること。ブラウザは使わない。"""
 import zipfile
 
 import pytest
