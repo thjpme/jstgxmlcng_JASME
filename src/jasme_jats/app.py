@@ -27,7 +27,7 @@ from .report import NEEDS_ACTION, actions, ai_pending, images_to_prepare
 DOCS = "https://github.com/thjpme/jstgxmlcng_JASME/blob/main/docs/USAGE.md"
 
 # 画面の入力欄。名前は AppState.inputs の鍵で、画面の部品の並びもこの順（INPUT_NAMES）
-ROUTES = [("出版版 PDF に合わせてから作る", "pdf"), ("docx から作る", "docx")]
+ROUTES = [("docx から作り、出版版 PDF で補う", "pdf"), ("docx から作る", "docx")]
 AI_MODES = [("使わない（推奨しません）", "none"), ("手動（チャットに貼り付け）", "manual"), ("API（Claude）", "api")]
 PEER_REVIEWS = ["査読あり", "査読なし"]
 AUTO_MODEL = "自動（最新の Opus）"

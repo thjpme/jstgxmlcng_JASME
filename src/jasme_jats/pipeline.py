@@ -17,8 +17,11 @@
 
 作り方は 2 通り（Options.route）:
   ルート1（docx）: docx から作る。docx の文字は 1 文字も変えない。記事の PDF があれば照合して、違いをレポートに載せるだけ（pdfmatch）
-  ルート2（pdf） : 出版版 PDF に合わせて直した docx（Word の変更履歴つき）を先に作り（pdfdocx）、それをルート1 と同じ処理で
-                   変換する。Word が付ける番号（自動番号・脚注番号）は docx の文字ではないので、変換のときに全角・半角を PDF に合わせる
+  ルート2（pdf） : docx から作り、出版版 PDF で補う。Word の文字が正で、著者校正の直し（(B)）と、組版の違い（(A)。全角・半角・
+                   ダッシュ・引用符など）を PDF に合わせた docx（Word の変更履歴つき）を先に作り（pdfdocx）、それをルート1 と同じ処理で
+                   変換する。Word が付ける番号（自動番号・脚注番号）は docx の文字ではないので、変換のときに全角・半角と字形を PDF に
+                   合わせる。最後に、補った docx が元の docx から (A) と報告した (B) 以外に変わっていないことを確かめる
+                   （補完の確かめ。fidelity.verify_supplement）
 """
 from __future__ import annotations
 
@@ -36,7 +39,7 @@ from .article import _para_text
 from .builder import build, finalize, serialize, word_note_marks
 from .config import ArticleMeta, JournalConfig
 from .docx_reader import read_docx
-from .fidelity import final_check, verify
+from .fidelity import SupplementResult, final_check, verify, verify_supplement
 from .images import ImageResult, export_images, user_image
 from .jstage_rules import check as jstage_check
 from .linker import cited_refs, link
@@ -122,7 +125,7 @@ class Options:
     ai_api_key: Optional[str] = None
     ai_response: Optional[str] = None         # 手動モード: AI の回答（JSON）
     pdf_path: Optional[Path] = None
-    route: str = "docx"                       # docx（ルート1: docx から作る）/ pdf（ルート2: 出版版 PDF に合わせてから作る）
+    route: str = "docx"                       # docx（ルート1: docx から作る）/ pdf（ルート2: docx から作り、出版版 PDF で補う）
     convert_metafiles: bool = True
 
 
@@ -151,7 +154,7 @@ class Result:
     has_pdf: bool = False
     output_note: str = ""
     forced_floats: list = field(default_factory=list)   # AI による補完でも位置が決まらず、仮の位置（アンカー段落の後ろ・本文の最後）に置いた図表の説明
-    pdf_check: Optional[PdfCheck] = None                # 出版版 PDF との照合（PDF がなければ None）。ルート2 では直した docx との照合
+    pdf_check: Optional[PdfCheck] = None                # 出版版 PDF との照合（PDF がなければ None）。ルート2 では補った docx との照合
     lost_images: list = field(default_factory=list)     # docx にあるのに XML に出力しなかった画像（LostImage。要対応）
     zip_issues: list = field(default_factory=list)      # アップロード用の ZIP を読み直して見つけた問題（package.zip_problems。jstage_issues とは別）
     not_zipped: list = field(default_factory=list)      # 記事フォルダにあるのに ZIP に入れなかったファイル（package.unzipped_files。10 章）
@@ -163,7 +166,10 @@ class Result:
     deleted_rows: list = field(default_factory=list)    # 変更履歴で削除された、文字のない表の行（model.DeletedRow。読み飛ばした。6 章）
     newlines: list = field(default_factory=list)        # 段落の中の改行（model.Newline。段落ごと。10 章と、題目などは要確認）
     route: str = "docx"
-    docx_fix: Optional[DocxFix] = None                  # ルート2: PDF に合わせて直した docx と、直した箇所
+    docx_fix: Optional[DocxFix] = None                  # ルート2: 出版版 PDF で補った docx と、補った箇所・直さなかった箇所
+    # ルート2 の補完の確かめ（fidelity.SupplementResult。補った docx が元の docx から、組版の違いと報告した校正の直し以外に
+    # 変わっていないか）。ルート1 と、PDF の文字を読めずに補わなかったときは None
+    supplement: Optional[SupplementResult] = None
     xml_path: Optional[Path] = None
     zip_path: Optional[Path] = None
     report_path: Optional[Path] = None
@@ -172,8 +178,10 @@ class Result:
 
     @property
     def ok(self) -> bool:
-        """文字の不変性チェック・最終出力の再チェック・DTD 検証がすべて合格（要対応の有無は needs_action）。"""
-        return bool(self.fidelity.ok and self.fidelity.final_ok and self.dtd_valid)
+        """文字の不変性チェック・最終出力の再チェック・DTD 検証と、ルート2 の補完の確かめ（supplement があるとき）がすべて合格
+        （要対応の有無は needs_action）。"""
+        return bool(self.fidelity.ok and self.fidelity.final_ok and self.dtd_valid
+                    and (self.supplement is None or self.supplement.ok))
 
     @property
     def needs_action(self) -> bool:
@@ -183,7 +191,7 @@ class Result:
 
     @property
     def pdf_fallback(self) -> bool:
-        """ルート2（出版版 PDF に合わせてから作る）で PDF の文字を読めず、docx を直さずに変換した（要対応。M4）。"""
+        """ルート2（docx から作り、出版版 PDF で補う）で PDF の文字を読めず、docx を補わずに変換した（要対応。M4）。"""
         return report_pdf_fallback(self)
 
 
@@ -298,12 +306,13 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     split = journal.split_labels if opts.split_labels is None else opts.split_labels
 
     docx_name = docx_path.name
+    original_docx = docx_path       # 元の docx（ルート2 で docx_path を補った docx に差し替える前。補完の確かめで使う）
     docx_fix = None
     if opts.route == "pdf":
-        # ルート2: 出版版 PDF に合わせて直した docx（変更履歴つき）を作り、以降はそれを変換する
+        # ルート2: 出版版 PDF で補った docx（変更履歴つき）を作り、以降はそれを変換する
         if not opts.pdf_path:
-            raise ValueError("出版版 PDF に合わせてから作る（ルート2）には、記事の PDF が必要です")
-        fixed = out_dir / f"{meta.article_id(journal)}_PDFに合わせた原稿.docx"
+            raise ValueError("docx から作り、出版版 PDF で補う（ルート2）には、記事の PDF が必要です")
+        fixed = out_dir / f"{meta.article_id(journal)}_PDFで補完した原稿.docx"
         docx_fix = make_fixed_docx(docx_path, opts.pdf_path, fixed, journal)
         if docx_fix.check.ok:
             docx_path = fixed
@@ -389,7 +398,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         marks = {wid: m for wid, (_, m) in word_note_marks(plan, journal).items()}
         pdf_check = check_pdf(plan, opts.pdf_path, fn_marks=marks)
         if opts.route == "pdf" and pdf_check.number_edits:
-            # ルート2: Word が付ける番号（docx の文字ではない）の全角・半角を PDF に合わせて組み立て直す
+            # ルート2: Word が付ける番号（docx の文字ではない）の全角・半角と字形（「●」→「・」）を PDF に合わせて組み立て直す
             plan.pdf_numbers = pdf_check.number_edits
             root, info = build(plan, meta, journal, split)
 
@@ -413,6 +422,14 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         xml_bytes = serialize(final_root)
         final_check(root, xml_bytes, fid)
         valid, errors = validate(xml_bytes)
+
+    # 補完の確かめ（ルート2 で補った docx を作ったときだけ）: 補った docx が元の docx から、組版の違い（(A)）と 13.1 に報告した
+    # 校正の直し（(B)）以外に変わっていないか。AI の再変換・DTD 検証の作り直しで docx は変わらないので、1 回でよい
+    supplement = None
+    if docx_fix is not None:
+        numbers_original = {**(pdf_check.original if pdf_check is not None else {}), **docx_fix.check.original}
+        supplement = verify_supplement(original_docx, docx_path, docx_fix.fixes,
+                                       docx_fix.check.case_srcs, numbers_original, plan.pdf_numbers)
 
     # 画像の出力漏れ（不変性チェックは文字しか見ない）
     lost, hidden_images = lost_images(doc, plan, root, info, plan.exclusions + info.exclusions)
@@ -499,7 +516,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         build_notes=build_notes, hidden_text=doc.hidden_text, tracked_changes=doc.tracked_changes,
         comments=doc.comments, has_pdf=has_pdf, output_note=output_note, xml_path=flat_xml, zip_path=zip_path,
         prompt_path=prompt_path, forced_floats=forced_floats, pdf_check=pdf_check, route=opts.route, docx_fix=docx_fix,
-        lost_images=lost, hidden_images=hidden_images, zip_issues=zip_problems(zip_path, journal, meta),
+        supplement=supplement, lost_images=lost, hidden_images=hidden_images, zip_issues=zip_problems(zip_path, journal, meta),
         not_zipped=unzipped_files(out_dir, journal, meta, zip_path), joined=doc.joined, deleted_rows=doc.deleted_rows,
         newlines=info.newlines, style_hidden=doc.style_hidden,
         style_hidden_images=[img.image_id for img in doc.images if img.hidden_style])

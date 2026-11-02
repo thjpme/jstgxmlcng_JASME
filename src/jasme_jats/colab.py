@@ -110,9 +110,9 @@ def summary_box(res) -> str:
              not issues),
             ("出版版 PDF との照合", pdf_summary(res), True)]
     if res.docx_fix is not None:
-        rows.append(("PDF に合わせて直した docx", f"{res.docx_fix.path.name}（変更履歴つき。ダウンロードする ZIP に入ります）", True))
+        rows.append(("PDF で補った docx", f"{res.docx_fix.path.name}（変更履歴つき。ダウンロードする ZIP に入ります）", True))
     elif res.pdf_fallback:
-        rows.append(("PDF に合わせて直した docx", "作れませんでした（PDF の文字を読めなかったため、docx を直さずに変換しました）", False))
+        rows.append(("PDF で補った docx", "作れませんでした（PDF の文字を読めなかったため、docx を補わずに変換しました）", False))
     lines = "".join(f"<div style='white-space:pre-wrap{'' if ok else ';color:#b91c1c;font-weight:bold'}'>"
                     f"{html.escape(label)}: {html.escape(value)}</div>" for label, value, ok in rows)
     return f"<div style=\"{_SUMMARY}\"><div style='font-weight:bold;margin-bottom:2px'>結果の要約</div>{lines}</div>"

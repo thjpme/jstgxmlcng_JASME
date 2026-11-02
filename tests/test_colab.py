@@ -28,15 +28,15 @@ def test_summary_box_and_report_details(journal, meta, tmp_path, monkeypatch):
     html = summary_box(res)
     assert "結果の要約" in html and "文字の不変性チェック: 合格" in html and "DTD 検証: 合格" in html
     assert "J-STAGE のアップロード時チェック: 問題なし" in html and "出版版 PDF との照合: PDF なし" in html
-    assert "#b91c1c" not in html and "PDF に合わせて直した docx" not in html
+    assert "#b91c1c" not in html and "PDF で補った docx" not in html
     res.dtd_valid = False
     assert "color:#b91c1c;font-weight:bold'>DTD 検証: 不合格" in summary_box(res)
-    # ルート2 で直した docx の名前。PDF の文字を読めなかったときは、直せなかったことを赤い文字で
-    res.docx_fix = SimpleNamespace(path=tmp_path / "31_1_PDFに合わせた原稿.docx")
-    assert "PDF に合わせて直した docx: 31_1_PDFに合わせた原稿.docx（変更履歴つき" in summary_box(res)
+    # ルート2 で補った docx の名前。PDF の文字を読めなかったときは、補えなかったことを赤い文字で
+    res.docx_fix = SimpleNamespace(path=tmp_path / "31_1_PDFで補完した原稿.docx")
+    assert "PDF で補った docx: 31_1_PDFで補完した原稿.docx（変更履歴つき" in summary_box(res)
     res.docx_fix = None
     monkeypatch.setattr(type(res), "pdf_fallback", property(lambda self: True))
-    assert "font-weight:bold'>PDF に合わせて直した docx: 作れませんでした" in summary_box(res)
+    assert "font-weight:bold'>PDF で補った docx: 作れませんでした" in summary_box(res)
     md = "# 変換レポート\n\n| 項目 | 結果 |\n|---|---|\n| 不変性 | 合格 |\n\n> **注意** <b>\n"
     html = report_details(md)
     assert html.index("<details") < html.index("<summary") and "変換レポートの全文を見る" in html

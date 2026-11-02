@@ -453,7 +453,7 @@ if _missing:
 """ + mark(7)),
     code("""
 #@title 8. 結果をダウンロード
-#@markdown 「変換結果_巻_開始ページ.zip」（J-STAGE にアップロードする jasme_巻_開始ページ.zip、XML、変換レポート。「出版版 PDF に合わせてから作る」では（PDF の文字を読めたとき）PDF に合わせて直した docx も）をダウンロードします。要対応（赤い枠）が残っていると一度止まります（そのままダウンロードするときは、もう一度 ▶）。
+#@markdown 「変換結果_巻_開始ページ.zip」（J-STAGE にアップロードする jasme_巻_開始ページ.zip、XML、変換レポート。「docx から作り、出版版 PDF で補う」では（PDF の文字を読めたとき）PDF で補った docx も）をダウンロードします。要対応（赤い枠）が残っていると一度止まります（そのままダウンロードするときは、もう一度 ▶）。
 """ + guard(1, 2, 3, 4, 5) + """from IPython.display import HTML, display
 from jasme_jats.colab import result_boxes
 from jasme_jats.report import NEEDS_ACTION, actions, images_to_prepare

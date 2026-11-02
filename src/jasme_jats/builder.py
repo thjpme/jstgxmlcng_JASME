@@ -87,7 +87,7 @@ class Builder:
         self.em = E.Emitter(self.name_image, fn_numbers, plan.moved_images)
 
     def autonum(self, p) -> str:
-        """段落の Word の自動番号（ルート2 では、全角・半角を出版版 PDF に合わせたもの）。"""
+        """段落の Word の自動番号（ルート2 では、全角・半角と字形を出版版 PDF に合わせたもの）。"""
         return self.plan.pdf_numbers.get(("auto", p.src), p.autonum)
 
     # ------------------------------------------------------------------ 画像
@@ -825,8 +825,8 @@ def word_note_marks(plan, journal) -> dict:
     （設定 fn_mark。本誌は「1)」）)。
 
     番号は plan.fns の中の Word の注の順（structure.Classifier.attach_word_notes が、脚注と文末脚注をまとめて本文で最初に
-    参照される順に並べる）の通し番号。本文の脚注番号と注の一覧の先頭の両方に使う。ルート2（出版版 PDF に合わせてから作る）では、
-    全角・半角を PDF に合わせたもの（plan.pdf_numbers）で置き換えて出力する。
+    参照される順に並べる）の通し番号。本文の脚注番号と注の一覧の先頭の両方に使う。ルート2（docx から作り、出版版 PDF で補う）では、
+    全角・半角と字形を PDF に合わせたもの（plan.pdf_numbers）で置き換えて出力する。
     """
     out = {}
     k = 0

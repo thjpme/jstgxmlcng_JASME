@@ -334,7 +334,7 @@ def test_step8_shows_result_boxes():
     src = cell_source("#@title 8.")
     assert "from jasme_jats.colab import result_boxes" in src
     assert src.index("files.download(archive)") < src.index("display(HTML(result_boxes(res)))")
-    assert "（PDF の文字を読めたとき）PDF に合わせて直した docx" in src
+    assert "（PDF の文字を読めたとき）PDF で補った docx" in src
 
 
 def test_step3_reads_full_width_numbers_and_common_dates(capsys):

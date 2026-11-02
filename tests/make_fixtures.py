@@ -246,6 +246,8 @@ class Builder:
         self.footnotes_extra = []
         self.endnotes_extra = []        # Word の文末脚注（endnote() の XML）
         self.styles_extra = []          # word/styles.xml に足すスタイルの定義（w:style の XML。READER_STYLES など）
+        # 箇条書き（numbering.xml の numId=6〈abstractNum 7〉の 1 段目）の記号を変えるとき、その記号（None なら「•」のまま）
+        self.bullet = None
         self._rid = 900
 
     def add_image(self, name, data):
@@ -307,6 +309,13 @@ class Builder:
                     sx = self.zin.read(item.filename).decode("utf-8")
                     sx = sx.replace("</w:styles>", "".join(self.styles_extra) + "</w:styles>")
                     zout.writestr(item, sx)
+                elif item.filename == "word/numbering.xml" and self.bullet:
+                    nx = self.zin.read(item.filename).decode("utf-8")
+                    head = '<w:abstractNum w:abstractNumId="7"'
+                    a = nx.index(head)
+                    b = nx.index('<w:lvl w:ilvl="1">', a)
+                    nx = nx[:a] + nx[a:b].replace('<w:lvlText w:val="•"/>', f'<w:lvlText w:val="{self.bullet}"/>') + nx[b:]
+                    zout.writestr(item, nx)
                 elif item.filename == "[Content_Types].xml":
                     ct = self.zin.read(item.filename).decode("utf-8")
                     if 'Extension="png"' not in ct:
@@ -1077,15 +1086,17 @@ def deleted(xml):
 
 
 def make_article(path, title, body_parts, endnotes=(), refs=None, footnotes=(), abstract=("Small article abstract.",),
-                 appendix=None):
+                 appendix=None, bullet=None):
     """題目・著者・本文・引用文献 1 件・英文要旨だけの小さな論文。
 
     body_parts(b) は本文の段落（章見出しから）の XML の一覧を返す。本文で「試験（2024）」を引用すると、引用文献にリンクされる。
     endnotes・footnotes は Word の文末脚注・脚注の XML（endnote()・footnote()）の一覧。
     refs(b) は、引用文献 1 件の後ろに足す段落（引用文献の段落など）の XML の一覧を返す（省略すると足さない）。
     abstract は英文要旨の段落の文字の一覧、appendix は英文要旨の後ろ（資料）の段落の XML の一覧（省略すると足さない）。
+    bullet: 箇条書き（list_item の numId=6）の記号を「•」から変えるときの記号（出版版 PDF との照合の「●」など）。
     """
     b = Builder()
+    b.bullet = bullet
     b.endnotes_extra.extend(endnotes)
     b.footnotes_extra.extend(footnotes)
     body = []

@@ -57,7 +57,7 @@ OPENAI_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml --o
 GEMINI_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai api --ai-provider gemini --ai-model モデル名
 SAKANA_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai api --ai-provider sakana --ai-model モデル名
 python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --images 画像フォルダ   # 用意できなかった図の画像（25_77_01.png など）を入れる
-python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --pdf 記事.pdf               # 出版版 PDF に合わせてから作る
+python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --pdf 記事.pdf               # docx から作り、出版版 PDF で補う
 python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --pdf 記事.pdf --route docx  # docx から作る（PDF とは照合だけ）
 ```
 
