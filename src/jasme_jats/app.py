@@ -318,6 +318,28 @@ class AppState:
             archive.unlink()
 
 
+def download_button_html(path: "str | Path") -> str:
+    """「ZIP を保存」のボタン。ファイルは、画面の中の JavaScript が Gradio のファイルの経路（gradio_api/file=）から取り、ブラウザに保存させる。
+
+    Colab の出力欄の中では、ファイルのリンクをそのまま開く（新しいタブや、リンク先への移動）と、Colab の中継の認証が
+    タブごとに分かれているため開けない。画面の中からの取得（fetch）は同じ画面の認証で通るので、取ってから保存する。
+    URL は画面の場所からの相対（root_path の下）。
+    """
+    import html
+    from urllib.parse import quote
+    path = Path(path)
+    url = "gradio_api/file=" + quote(str(path))
+    js = ("const b=this;b.disabled=true;b.textContent='取り出しています…';"
+          f"fetch('{url}').then(r=>{{if(!r.ok)throw new Error(r.status);return r.blob();}})"
+          ".then(x=>{const a=document.createElement('a');a.href=URL.createObjectURL(x);"
+          f"a.download={html.escape(repr(path.name))};document.body.appendChild(a);a.click();a.remove();"
+          "b.textContent='保存しました（もう一度押すと再保存）';b.disabled=false;})"
+          ".catch(e=>{b.textContent='保存できませんでした: '+e;b.disabled=false;});")
+    return (f"<button onclick=\"{js}\" style='background:#2563eb;color:#ffffff;border:none;border-radius:6px;"
+            "padding:10px 18px;font-size:16px;font-weight:bold;cursor:pointer;margin:8px 0'>"
+            f"ZIP を保存（{html.escape(path.name)}）</button>")
+
+
 # ---------------------------------------------------------------------------- 画面
 def build_app(state: AppState, io: "IO | None" = None):
     """gr.Blocks を組み立てる（起動は launch または demo.launch）。state は 1 人の利用者の 1 回の作業を持つ。"""
@@ -377,18 +399,18 @@ def build_app(state: AppState, io: "IO | None" = None):
             accept = gr.Checkbox(label="このままダウンロード（要対応が残っています）", visible=False)
             download_btn = gr.Button("結果をダウンロード")
             next_btn = gr.Button("次の論文")
-        download_file = gr.File(label="変換結果（ZIP）", interactive=False)
+        download_html = gr.HTML()                      # 「ZIP を保存」のボタン（download_button_html）
 
         inputs = [route, docx, pdf, volume, issue, fpage, lpage, peer_review, manuscript_type, approved, keywords_ja,
                   keywords_en, pub_date, epub_date, received, accepted, corresp, doi, subject_other, subject_other_en,
                   ai_mode, model, split_labels]
         assert len(inputs) == len(INPUT_NAMES)
-        views = [message, result, manual_col, prompt, attach, images_col, images_md, accept, download_file]
+        views = [message, result, manual_col, prompt, attach, images_col, images_md, accept, download_html]
 
         def sync(values):
             state.set_inputs(**dict(zip(INPUT_NAMES, values)))
 
-        def view(error: "InputError | None" = None, file=None):
+        def view(error: "InputError | None" = None, download: str = ""):
             """結果に応じた画面の更新（views の順）。"""
             manual = state.waiting_for_answer
             return [message_html(error) if error else "",
@@ -399,7 +421,7 @@ def build_app(state: AppState, io: "IO | None" = None):
                     gr.update(visible=bool(state.missing_images())),
                     state.images_markdown(),
                     gr.update(visible=state.needs_action, value=False),
-                    file]
+                    download]
 
         def on_change(*values):
             sync(values)
@@ -430,8 +452,9 @@ def build_app(state: AppState, io: "IO | None" = None):
 
         def on_download(accept_todo):
             path, note = state.download(accept_todo)
-            keep = [gr.update()] * (len(views) - 2)       # 結果などはそのまま（message と download_file だけ変える）
-            return [error_box("ダウンロードの前に", note) if note else ""] + keep + [path]
+            keep = [gr.update()] * (len(views) - 2)       # 結果などはそのまま（message と download_html だけ変える）
+            return ([error_box("ダウンロードの前に", note) if note else ""] + keep
+                    + [download_button_html(path) if path else ""])
 
         def on_next():
             state.reset()
