@@ -1,4 +1,4 @@
-"""Gradio による 1 画面の操作画面（試作。docs/GUI_PLAN.md の 4 章・8 章）。
+"""Gradio による 1 画面の操作画面（一般の利用者用。docs/GUI_PLAN.md の 4 章・8 章）。
 
 2 層に分ける。
   - AppState: 入力と結果を持ち、「変換を押せるか」「要対応が残っているか」「回答待ちか」「足りない画像」などを決める。
@@ -351,7 +351,7 @@ def build_app(state: AppState, io: "IO | None" = None):
         return e.html or error_box("入力を確認してください", str(e))
 
     with gr.Blocks(title="論文 docx → J-STAGE XML 変換") as demo:
-        gr.Markdown(f"# 論文 docx → J-STAGE XML 変換　版 {__version__}（試作）\n[説明書]({DOCS})")
+        gr.Markdown(f"# 論文 docx → J-STAGE XML 変換　版 {__version__}\n[説明書]({DOCS})")
         route = gr.Radio(ROUTES, value=DEFAULTS["route"], label="作り方",
                          info="PDF がまだないときは「docx から作る」")
         docx = gr.File(label="docx（論文の Word ファイル）", file_types=[".docx"], file_count="single")

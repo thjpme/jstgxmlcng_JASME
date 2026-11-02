@@ -13,7 +13,7 @@ from pathlib import Path
 REPO = "thjpme/jstgxmlcng_JASME"
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "notebooks" / "JASME_docx_to_JSTAGE_XML.ipynb"
-OUT_GRADIO = ROOT / "notebooks" / "JASME_試作_Gradio.ipynb"      # Gradio の 1 画面アプリの試作（docs/GUI_PLAN.md）
+OUT_GRADIO = ROOT / "notebooks" / "JASME_docx_to_JSTAGE_XML_GUI.ipynb"      # 一般の利用者用: Gradio の 1 画面（docs/GUI_PLAN.md）
 VERSION = re.search(r'__version__ = "([^"]+)"', (ROOT / "src" / "jasme_jats" / "__init__.py").read_text()).group(1)
 VERSION_NOTE = "（試用版。正式版は 1.0 から）" if VERSION.startswith("0.") else ""
 try:
@@ -94,7 +94,7 @@ def code(text, form=True):
 DOCS = f"https://github.com/{REPO}/blob/main/docs"      # 説明書（利用者向け）
 
 
-# 手順 1（準備）のセルは断片に分けて持つ（試作の Gradio のノートブックが、順番を変えて同じ断片を使う）
+# 手順 1（準備）のセルは断片に分けて持つ（1 画面版のノートブックが、順番を変えて同じ断片を使う）
 PREP_PARAMS = f"""
 #@title 1. 準備（最初に 1 回だけ。1 分ほどかかります）
 #@markdown **CONVERT_EMF**: Word の図形（EMF/WMF）の図を変換するために、LibreOffice を裏でインストールします（通常はチェックのまま。数分かかりますが、手順 2 以降は待たずに進めます）。
@@ -517,7 +517,7 @@ display(HTML(next_article_box(globals().get("PREVIOUS", {}).get("docx", ""))))
 
 
 
-# 試作: Gradio の 1 画面アプリ。準備と画面を 1 つのセルにする。LibreOffice のインストールを先に裏で始めてから pip をし（同時に進む）、
+# 1 画面版（Gradio。一般の利用者用）: 準備と画面を 1 つのセルにする。LibreOffice のインストールを先に裏で始めてから pip をし（同時に進む）、
 # 画面を開く。2 回目の実行（画面を開き直すとき）はツールを入れ直さない（入れ直しには、セッションの再起動が要るため）
 _gradio_prep = (PREP_LO + PREP_PIP + PREP_VERSION).replace("（手順 5 で終わるのを待つ）", "（変換のときに終わるのを待つ）")
 for _old, _new in (("手順 1 からもう一度実行", "このセルをもう一度実行"), ("手順 1 からやり直して", "このセルからやり直して"),
@@ -543,13 +543,13 @@ _app = launch()
 """)
 cells_gradio = [
     md(f"""
-# 論文 docx → J-STAGE XML 変換（試作版・Gradio の 1 画面）
+# 論文 docx → J-STAGE 全文 XML 変換（全国数学教育学会誌『数学教育学研究』）
 
 **ツールの版: {VERSION}**{VERSION_NOTE}
 
-試作版です。確かめること: docx と PDF（10〜30 MB）をアップロードできるか、変換中に進捗が出るか、ZIP をダウンロードできるか、
-API モードでシークレットを読めるか、準備にかかる時間。
-セルの ▶ を押すと、ツールの準備（2 分ほど）のあと、その下に画面が開きます。メニューの「表示」でサイドバーなどを閉じると広く使えます。
+論文の Word ファイル（.docx）を、J-STAGE の全文 XML（JATS 1.1）に変換します。パソコンに何かをインストールする必要はありません。
+下のセルの ▶ を押すと、ツールの準備（2 分ほど）のあと、その下に画面が開きます。画面に docx と PDF、書誌情報を入れて「変換する」を押します。
+メニューの「表示」でサイドバーなどを閉じると広く使えます。手順ごとにセルを実行する従来版のノートブックは、説明書の「使い方」にあります。
 
 説明書: [使い方・結果の見方・できないこと]({DOCS}/USAGE.md)　[AI の API キーと手動モード]({DOCS}/USAGE_AI.md)　ソースコード: https://github.com/{REPO}
 """),
@@ -572,7 +572,7 @@ def render(branch: str = "main") -> str:
 
 
 def render_gradio(branch: str = "main") -> str:
-    """試作（Gradio）のノートブックの JSON を作る。branch は render と同じ。"""
+    """1 画面版（Gradio）のノートブックの JSON を作る。branch は render と同じ。"""
     return _notebook(cells_gradio, branch)
 
 

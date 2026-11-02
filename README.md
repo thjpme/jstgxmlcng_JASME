@@ -14,9 +14,14 @@ J-STAGE の全文 XML（JATS 1.1、FULL-J）に変換します。
 
 ## 使い方（Google Colab。パソコンへのインストールは不要）
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/thjpme/jstgxmlcng_JASME/blob/main/notebooks/JASME_docx_to_JSTAGE_XML.ipynb)
+ノートブックは 2 つあります。どちらも同じツールで変換し、結果は同じです。
 
-1. 上のボタンからノートブックを開き（Google アカウントが必要）、上から順に各セルの ▶ を押します。
+| | ノートブック | 使い方 |
+|---|---|---|
+| **一般の利用者用（1 画面）** | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/thjpme/jstgxmlcng_JASME/blob/main/notebooks/JASME_docx_to_JSTAGE_XML_GUI.ipynb) | セルを 1 つ実行すると画面が開きます。画面に docx と PDF、書誌情報を入れて「変換する」を押し、「ZIP を保存」で結果を受け取ります |
+| 従来版（手順ごとのセル） | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/thjpme/jstgxmlcng_JASME/blob/main/notebooks/JASME_docx_to_JSTAGE_XML.ipynb) | 手順 1〜9 のセルを上から順に実行します。入力欄の値を残したまま続けて変換するときや、1 画面版がうまく開かないときに使います |
+
+1. 上のボタンからノートブックを開きます（Google アカウントが必要）。
 2. 論文の docx（と出版版の PDF）をアップロードし、巻・号・ページなどの書誌情報を入力して、変換します。
 3. 結果（`変換結果_巻_開始ページ.zip`）をダウンロードし、その中の `jasme_巻_開始ページ.zip` を J-STAGE の編集登載システムにアップロードします。
 
