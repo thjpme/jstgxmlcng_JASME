@@ -78,7 +78,7 @@
 | G | 0.26.0 | 読み取りの文字ポリシー（段落記号の削除・スタイルの隠し文字・セルの改行）（実装済み） | D5、U8、U3、N8 |
 | H | 0.27.0 | リンクの誤検出と AI 依頼文の保守（実装済み） | D2、M5、U4、U5 |
 | I | 0.27.1 | structure.py の分割（動作を変えない。第 1 段階だけ）（実装済み） | U6、golden |
-| J | 0.28.0 | ルート2 を「docx から作り、出版版 PDF で補う」に改める（違いの 3 分類・補完の確かめ）（実装中） | N21 |
+| J | 0.28.0 | ルート2 を「docx から作り、出版版 PDF で補う」に改める（違いの 3 分類・補完の確かめ） | N21 |
 
 A（黙って文字・画像が落ちる不具合と、それを捕まえる検証の強化）を最初に置く。後の大きな変更で同じ種類の誤りが起きても、テストと不変性チェックで捕まえられるようにするため。structure.py の分割（I）は、structure.py を触る A・B3・E・F・G がすべて終わった後に置く。B2・B3 は、計画を作った後に見つかった不具合（N10〜N19）で、B2 は公開本文が出版版 PDF と違う文字になるもの（Colab の初期値のルート2 で起きる）、B3 は利用者が XML の中で図表を手で移す手間が大きいもの（Colab の試験で見つかった）なので、C より先に置く。
 
@@ -647,7 +647,7 @@ A（黙って文字・画像が落ちる不具合と、それを捕まえる検�
 
 - (A)(B)(C) の分類（`pdfmatch.TextDiff.kind`・`typeset_pair`・`diff_parts`）、`pdfdocx.Fix.kind` の `glyph`、`DocxFix.applied_text` など、補完の確かめ（`fidelity.verify_supplement`・`Result.supplement`）、レポートの 13 章の組み替え（ルート2 は 13.1〜13.8、ルート1 は 13.1〜13.4）、名前の変更（Colab の `ROUTE`・コマンドライン・README・文書）、版 0.28.0。
 - 試験運用で確かめること: 本誌の出版版 PDF 5 本とテストデータ1〜3 で、補完の確かめが偽の不合格にならないか、(A) の表にない字形が (B) として 13.1 に出る量、英文の著者名・所属の照合の誤検出、補完の確かめの速さ。
-- 触ったファイル: src の pdfmatch.py・pdfdocx.py・pipeline.py・builder.py・fidelity.py・report.py・colab.py・cli.py・__init__.py、pyproject.toml、tools/make_notebook.py（手順 2 だけ。ほかのセルは GUI の作業）、tests の test_pdfmatch.py・test_supplement.py・test_notebook.py・test_colab.py・test_links.py・test_figure_body.py、README.md、CLAUDE.md、docs の DESIGN.md・DEVELOPMENT.md・FIX_PLAN.md。
+- 触ったファイル: src の pdfmatch.py・pdfdocx.py・pipeline.py・builder.py・fidelity.py・report.py・colab.py・cli.py・__init__.py、pyproject.toml、src の app.py・data/jasme.toml、tools/make_notebook.py（全セルの名前。notebooks は作り直し）、docs/USAGE.md、tests の test_pdfmatch.py・test_supplement.py・test_notebook.py・test_colab.py・test_links.py・test_figure_body.py、README.md、CLAUDE.md、notebooks/*.ipynb、docs の DESIGN.md・DEVELOPMENT.md・FIX_PLAN.md。
 
 ## 同じファイルを触る順と、既存テストの書き換え
 

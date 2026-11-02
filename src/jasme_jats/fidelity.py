@@ -15,9 +15,12 @@ docx の各段落の文字列を ooxml.canonical_texts()（段落ごとの ooxml
 
 ルート2 では、verify_supplement()（補完の確かめ）で、出版版 PDF で補った docx が、元の docx から「組版の違い（(A)）」と
 「13.1 に報告した校正の直し（(B)。pdfdocx.Fix の kind text）」以外に変わっていないことを確かめる。照合（pdfmatch）と
-docx の書き込み（pdfdocx）の不具合も見つけられるように、共有するのは定数（pdfmatch の FW_FIRST・FW_LAST・HYPHENS・DASHES・
-QUOTE_CLASSES・NUMBER_PAIRS、pdfdocx の AUTHOR・PARTS）だけで、組版の違いの判定（_pair）と変更の単位の取り出しは、ここで
-別に実装する（文字の取り出しは ooxml.canonical_texts）。
+docx の書き込み（pdfdocx）の不具合も見つけられるように、照合・書き込みと共有するのは定数（pdfmatch の FW_FIRST・FW_LAST・
+HYPHENS・DASHES・QUOTE_CLASSES・NUMBER_PAIRS、pdfdocx の AUTHOR・PARTS）だけにする。組版の違いの判定（_pair）と変更の単位の
+取り出しはここで別に実装し（文字の取り出しは ooxml.canonical_text）、大文字・小文字を (A) とする段落と、Word が付ける番号の
+元の文字は、補った docx から組み立てた plan から別に作る（supplement_targets。照合の case_paragraphs・PdfCheck.original は
+使わない）。照合から受け取るのは、直した箇所の一覧（pdfdocx.Fix）と、番号を PDF に合わせたもの（plan.pdf_numbers）で、
+どちらも確かめる側。
 """
 from __future__ import annotations
 
@@ -264,6 +267,14 @@ def _quote_class(c: str) -> int:
     return next((n for n, cls in enumerate(QUOTE_CLASSES) if c in cls), -1)
 
 
+def _width(a: str, b: str) -> bool:
+    """a と b が全角・半角の対か（_fold が同じで 0x21〜0x7E。同じ文字は偽）。"""
+    if a == b:
+        return False
+    fa = _fold(a)
+    return fa == _fold(b) and 0x21 <= ord(fa) <= 0x7E
+
+
 def _pair(a: str, b: str, case: bool = False, number: bool = False) -> bool:
     """docx の 1 文字 a と、補った docx の 1 文字 b が組版の違い（(A)）の対か（同じ文字は偽）。pdfmatch.typeset_pair と同じ規則を、
     定数だけを共有して別に書いたもの（tests/test_supplement.py で、すべての対で答えが同じことを確かめる）。
@@ -274,9 +285,9 @@ def _pair(a: str, b: str, case: bool = False, number: bool = False) -> bool:
     """
     if a == b:
         return False
-    fa, fb = _fold(a), _fold(b)
-    if fa == fb and 0x21 <= ord(fa) <= 0x7E:
+    if _width(a, b):
         return True
+    fa, fb = _fold(a), _fold(b)
     dash = HYPHENS + DASHES
     if a in dash and b in dash:
         return True
@@ -411,41 +422,55 @@ def _split_marked(text: str):
     return "".join(rej), "".join(acc), units
 
 
-def _unit_ends(d: str, i: str, queue: list, p: int, case: bool) -> dict:
+def _unit_ends(d: str, i: str, queue: list, p: int, case: bool, at_start: bool = False) -> dict:
     """変更の単位（消した文字 d, 足した文字 i）を、組版の違いと、校正の直しの並び queue の p 番目からのいくつか（どれも 1 回ずつ。
     単位の中の順は問わない）で説明できる、当て終わった後の queue の位置 → (A) の文字の数（最も少ないもの）。
 
     d と i を前から 1 文字ずつ、同じ文字か _pair の対として並べるか、d の空白を消す（(A)）か、まだ当てていない直し f の
     (f.old, f.new) を d・i のその位置に当てて進め、d・i を使い切ったときに、当てた直しが queue[p:p+k] のちょうど k 個の
     ものだけを答えにする（位置は使わない。数式の後ろでは、Fix の位置と canonical_text の位置が合わないため）。
+
+    空白の削除を (A) とするのは、照合の drops と同じく、半角の空白（U+0020）で、d の中のすぐ前かすぐ後ろ（空白が続けば、その
+    並びの前か後ろ）の文字を全角・半角の対（_width）として並べたときと、単位が段落の文字の先頭にある（at_start。自動番号の
+    後ろの空白）ときの、段落の先頭の空白だけ。全角の空白・タブ・改行の削除は (A) にしない。Word の脚注番号（canonical_text
+    には出ない）の隣の空白の削除は、隣の文字が見えないので当てられず、不合格になる（安全側の限界）。
+
+    限界: 探す直しは、まだ当てていない最初の直しから SUP_WINDOW 個まで。1 つの単位（変わっていない文字をはさまずに続く変更）に
+    校正の直しが SUP_WINDOW を超えてかかると、正しい書き込みでも説明できず、不合格になる（安全側）。
     """
     window = queue[p:p + SUP_WINDOW]
     full = (1 << len(window)) - 1
     best = {}
     seen = {}
-    stack = [(0, 0, 0, 0)]       # (d の位置, i の位置, 当てた直しの集合〈window の中のビット〉, (A) の文字の数)
+    # 直前の d の文字の扱い: 0 ふつう / 1 全角・半角の対（か、その後ろで消した空白）/ 2 隣が決まっていない、消した空白 /
+    # 3 段落の先頭で消した空白（at_start のとき、d の最初から）
+    stack = [(0, 0, 0, 3 if at_start else 0, 0)]   # (d の位置, i の位置, 当てた直しの集合〈window の中のビット〉, 直前, (A) の数)
     while stack:
-        a, b, used, n = stack.pop()
-        key = (a, b, used)
+        a, b, used, last, n = stack.pop()
+        key = (a, b, used, last)
         if key in seen and seen[key] <= n:
             continue
         seen[key] = n
-        if a == len(d) and b == len(i):
+        if a == len(d) and b == len(i) and last != 2:
             k = 0
             while k < len(window) and used >> k & 1:
                 k += 1
             if used == (1 << k) - 1:
                 best[p + k] = min(best.get(p + k, n), n)
         if a < len(d) and b < len(i) and (d[a] == i[b] or _pair(d[a], i[b], case)):
-            stack.append((a + 1, b + 1, used, n + (d[a] != i[b])))
-        if a < len(d) and d[a].isspace():
-            stack.append((a + 1, b, used, n + 1))
+            width = _width(d[a], i[b])
+            if width or last != 2:
+                stack.append((a + 1, b + 1, used, 1 if width else 0, n + (d[a] != i[b])))
+        if a < len(d) and d[a] == " ":
+            stack.append((a + 1, b, used, last if last in (1, 3) else 2, n + 1))
         if used != full:
             for k, f in enumerate(window):
                 if used >> k & 1:
                     continue
                 if d.startswith(f.old, a) and i.startswith(f.new, b) and (f.old or f.new):
-                    stack.append((a + len(f.old), b + len(f.new), used | 1 << k, n))
+                    if f.old and last == 2:
+                        continue
+                    stack.append((a + len(f.old), b + len(f.new), used | 1 << k, last if not f.old else 0, n))
     return best
 
 
@@ -463,6 +488,24 @@ def _diff_excerpt(a: str, b: str):
         if op != "equal":
             return _excerpt(a, i1, a[i1:i2]), _excerpt(b, j1, b[j1:j2])
     return a, b
+
+
+def supplement_targets(plan, note_marks) -> tuple:
+    """補完の確かめに渡す (大文字・小文字を (A) とする段落の ID, Word が付ける番号の元の文字)。照合（pdfmatch の case_paragraphs・
+    PdfCheck.original）を通さず、補った docx から組み立てた plan から別に作る。
+
+    大文字・小文字: 英文の題目・副題・著者名・所属の段落（plan.title_en・subtitle_en・authors[].name_en・affs[].en）。
+    番号: 自動番号 ("auto", 段落 ID) -> Para.autonum と、Word の注の番号 ("fnref", 注の鍵)・("fnlist", 注の鍵) -> note_marks の
+    文字（builder.word_note_marks の出力する文字列。注の鍵 -> 文字）。plan.pdf_numbers と同じ鍵。
+    """
+    case = {p.src for p in [*plan.title_en, *plan.subtitle_en]}
+    case |= {a.name_en.src for a in plan.authors if a.name_en is not None}
+    case |= {f.en.src for f in plan.affs if f.en is not None}
+    numbers = {("auto", p.src): p.autonum for p in plan.paras.values() if p.autonum}
+    for wid, mark in note_marks.items():
+        numbers[("fnref", wid)] = mark
+        numbers[("fnlist", wid)] = mark
+    return case, numbers
 
 
 def verify_supplement(original_docx, fixed_docx, fixes, case_srcs, numbers_original, pdf_numbers) -> SupplementResult:
@@ -541,7 +584,7 @@ def verify_supplement(original_docx, fixed_docx, fixes, case_srcs, numbers_origi
         for rpos, apos, d, i in units:
             nxt = {}
             for p, (na, nb) in reach.items():
-                for q, n in _unit_ends(d, i, queue, p, case).items():
+                for q, n in _unit_ends(d, i, queue, p, case, rpos == 0).items():
                     cand = (na + n, nb + q - p)
                     if q not in nxt or cand < nxt[q]:
                         nxt[q] = cand

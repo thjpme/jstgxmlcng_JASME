@@ -39,7 +39,7 @@ from .article import _para_text
 from .builder import build, finalize, serialize, word_note_marks
 from .config import ArticleMeta, JournalConfig
 from .docx_reader import read_docx
-from .fidelity import SupplementResult, final_check, verify, verify_supplement
+from .fidelity import SupplementResult, final_check, supplement_targets, verify, verify_supplement
 from .images import ImageResult, export_images, user_image
 from .jstage_rules import check as jstage_check
 from .linker import cited_refs, link
@@ -427,9 +427,11 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     # 校正の直し（(B)）以外に変わっていないか。AI の再変換・DTD 検証の作り直しで docx は変わらないので、1 回でよい
     supplement = None
     if docx_fix is not None:
-        numbers_original = {**(pdf_check.original if pdf_check is not None else {}), **docx_fix.check.original}
-        supplement = verify_supplement(original_docx, docx_path, docx_fix.fixes,
-                                       docx_fix.check.case_srcs, numbers_original, plan.pdf_numbers)
+        # 大文字・小文字を (A) とする段落と番号の元の文字は、照合（pdfmatch）を通さず plan から別に作る（独立の確かめ）
+        case_srcs, numbers_original = supplement_targets(
+            plan, {wid: m for wid, (_, m) in word_note_marks(plan, journal).items()})
+        supplement = verify_supplement(original_docx, docx_path, docx_fix.fixes, case_srcs, numbers_original,
+                                       plan.pdf_numbers)
 
     # 画像の出力漏れ（不変性チェックは文字しか見ない）
     lost, hidden_images = lost_images(doc, plan, root, info, plan.exclusions + info.exclusions)

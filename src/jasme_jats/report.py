@@ -1397,7 +1397,7 @@ def render(r) -> str:
     if r.supplement is not None:
         sup = r.supplement
         rows.insert(1, ("出版版 PDF による補完の確かめ（ルート2）",
-                        f"合格（元の docx から変わった文字 {sup.typeset + sup.supplied} 箇所は、すべて組版の違いか、13.1 の補った箇所）"
+                        f"合格（元の docx から変わった箇所は、すべて組版の違い {sup.typeset} 文字か、13.1 の補った校正の直し {sup.supplied} 箇所）"
                         if sup.ok else "不合格（13 章の 13.8）"))
     L.append(table(["項目", "結果"], rows))
     L.append("")
@@ -1946,7 +1946,7 @@ def render_route2(L, r, pc, fx):
     if sup is None:
         L.append("実施していません。")
     elif sup.ok:
-        L.append(f"合格（変わった箇所 {sup.typeset + sup.supplied}: 組版の違い {sup.typeset}・補った校正の直し {sup.supplied}）。"
+        L.append(f"合格（組版の違い {sup.typeset} 文字・補った校正の直し {sup.supplied} 箇所）。"
                  "補った docx は、元の docx から、組版の違いと 13.1 の箇所以外に変わっていません"
                  "（照合・直しとは別の実装で、変更履歴を取り除いた文字を元の docx と比べて確かめています）。")
     else:

@@ -34,6 +34,13 @@ def test_summary_box_and_report_details(journal, meta, tmp_path, monkeypatch):
     # ルート2 で補った docx の名前。PDF の文字を読めなかったときは、補えなかったことを赤い文字で
     res.docx_fix = SimpleNamespace(path=tmp_path / "31_1_PDFで補完した原稿.docx")
     assert "PDF で補った docx: 31_1_PDFで補完した原稿.docx（変更履歴つき" in summary_box(res)
+    # 補完の確かめ（ルート2 で行ったときだけ。不合格は赤字）
+    assert "補完の確かめ" not in summary_box(res)
+    res.supplement = SimpleNamespace(ok=True)
+    assert "<div style='white-space:pre-wrap'>出版版 PDF による補完の確かめ: 合格" in summary_box(res)
+    res.supplement = SimpleNamespace(ok=False)
+    assert "color:#b91c1c;font-weight:bold'>出版版 PDF による補完の確かめ: 不合格" in summary_box(res)
+    res.supplement = None
     res.docx_fix = None
     monkeypatch.setattr(type(res), "pdf_fallback", property(lambda self: True))
     assert "font-weight:bold'>PDF で補った docx: 作れませんでした" in summary_box(res)

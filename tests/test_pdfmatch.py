@@ -3861,3 +3861,17 @@ def test_route2_chapter13_sections(journal, meta, tmp_path):
     heads1 = re.findall(r"^### (13\.\d .*)$", chapters(res1)[1], flags=re.M)
     assert heads1 == ["13.1 文字の違い（要確認）", "13.2 組版の違い（docx のまま）", "13.3 PDF の中に見つからなかった段落",
                       f"13.4 {IGNORED_TITLE}"]
+
+
+@pytest.mark.parametrize("space, dropped", [("　", False), (" ", True)], ids=["fullwidth", "halfwidth"])
+def test_fullwidth_space_next_to_width_fix_is_kept(space, dropped, journal, tmp_path):
+    """全角・半角を直した文字のすぐ隣の、PDF にない空白（drops）として消すのは半角の空白だけ。docx の全角の空白（キャプションの
+    「図1　架空の…」の区切りなど）は消さない（0.27 までは「図１架空の…」にしていた）。"""
+    text = f"本研究では，図1{space}架空の授業の流れに示すとおり，観点ごとに記録を整理した。"
+    plan, src = guard_article(tmp_path, journal, [text])
+    s = src[text]
+    pc = compare(plan, guard_pages(*cut_lines("　本研究では，図１ 架空の授業の流れに示すとおり，観点ごとに記録を整理した。")))
+    fixes = [(f.old, f.new, f.kind) for f in plan_fixes(plan, pc) if f.src == s]
+    assert fixes == [("1", "１", "width")] + ([(" ", "", "space")] if dropped else [])
+    want = text.replace("図1", "図１").replace("図１ ", "図１") if dropped else text.replace("図1", "図１")
+    assert fixed_texts(plan, pc)[s] == want

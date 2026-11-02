@@ -109,6 +109,9 @@ def summary_box(res) -> str:
              "問題なし" if not issues else f"要対応 {len(issues)} 件\n" + "\n".join(f"　{mid} {msg}" for mid, msg in issues),
              not issues),
             ("出版版 PDF との照合", pdf_summary(res), True)]
+    sup = getattr(res, "supplement", None)
+    if sup is not None:             # ルート2 で補完の確かめを行ったときだけ
+        rows.insert(4, ("出版版 PDF による補完の確かめ", "合格" if sup.ok else "不合格（この XML は登載に使わないでください）", sup.ok))
     if res.docx_fix is not None:
         rows.append(("PDF で補った docx", f"{res.docx_fix.path.name}（変更履歴つき。ダウンロードする ZIP に入ります）", True))
     elif res.pdf_fallback:

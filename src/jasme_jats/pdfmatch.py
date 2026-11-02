@@ -4,8 +4,9 @@ PDF は著者校正を経た最終版なので、XML の本文が PDF と違え�
 受け取った docx が校正後の最終版とは限らない（組版で印刷所がかっこ・句読点を全角にそろえる、校正の直しが docx に
 戻されていない、など）ため、docx の段落ごとに PDF の中の対応する箇所を探して比べ、違いを次の 3 つに分ける。
 
-  (A) 組版の違い（直す。要確認にしない）: 英数字・記号の全角・半角だけの違い（width）と、その文字のすぐ前後の空白で PDF に
-      ないもの（drops）、ダッシュ・ハイフンの字形（DASHES・HYPHENS の中どうし）、引用符の字形・向き（QUOTE_CLASSES の中どうし）、
+  (A) 組版の違い（直す。要確認にしない）: 英数字・記号の全角・半角だけの違い（width）と、その文字のすぐ前後の半角の空白で
+      PDF にないもの（drops。docx の全角の空白は消さない）、ダッシュ・ハイフンの字形（DASHES・HYPHENS の中どうし）、
+      引用符の字形・向き（QUOTE_CLASSES の中どうし）、
       英文の題目・副題・著者名・所属の大文字・小文字（case_paragraphs）、Word が付ける番号（自動段落番号・脚注番号）の
       全角・半角と字形（numbers。「●」→「・」は NUMBER_PAIRS）。判定は typeset_pair（1 文字の対）・typeset_same（文字列の対）。
       width・drops・numbers 以外のものは、違い（diffs）の TextDiff.kind が "typeset" になる
@@ -330,7 +331,7 @@ class PdfCheck:
     checked: int = 0                # 照合した段落の数
     unmatched: list = field(default_factory=list)   # PDF の中に見つからなかった段落の src
     width: dict = field(default_factory=dict)       # src -> {plain 上の位置: PDF の文字}
-    drops: dict = field(default_factory=dict)       # src -> {plain 上の位置（落とす空白）}
+    drops: dict = field(default_factory=dict)       # src -> {plain 上の位置（落とす半角の空白）}
     diffs: list = field(default_factory=list)       # TextDiff
     numbers: dict = field(default_factory=dict)     # Word が付ける番号: (種類, 段落 ID または注の鍵) -> {番号の中の位置: PDF の文字}
     original: dict = field(default_factory=dict)    # Word が付ける番号の元の文字列: (種類, ID) -> 文字列
@@ -2596,7 +2597,10 @@ def _classify(p, seq, gens, win, ops, unsure, st: PdfStream, owner, owned_lines,
             start = gens[j][3] + 1 if j in gens else seq[j][1] + 1
             end = gens[k][3] if k in gens else seq[k][1]
             gap = range(start, end)
-            if not gap or not all(text[x].isspace() for x in gap):
+            # 消すのは半角の空白（U+0020）だけの並び。docx の全角の空白・タブなどは、組版で入る見かけの空白ではなく、docx の
+            # 書き方（キャプションの「図1　架空の…」の区切りなど）なので消さない（PDF の空白は英文の単語の間でなければ空白と
+            # みなさないため、消すと「図１架空の…」になっていた。0.28.0 から）
+            if not gap or not all(text[x] == " " for x in gap):
                 continue
             pk = d2w[k]
             if not _pdf_space(st, pk):
