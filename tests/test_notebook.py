@@ -279,10 +279,10 @@ def test_step8_does_not_stop_with_only_checks(monkeypatch, tmp_path):
 
 
 def test_step2_route_defaults_to_published_pdf():
-    """作り方の初期値は「出版版 PDF に合わせてから作る」。PDF がないときは「docx から作る」を案内する。"""
+    """作り方の初期値は「docx から作り、出版版 PDF で補う」。PDF がないときは「docx から作る」を案内する。"""
     src = cell_source("#@title 2.")
-    assert 'ROUTE = "出版版 PDF に合わせてから作る"  #@param ["出版版 PDF に合わせてから作る", "docx から作る"]' in src
-    ns = {"DONE": {1}, "ROUTE": "出版版 PDF に合わせてから作る", "UPLOAD_PDF": False}
+    assert 'ROUTE = "docx から作り、出版版 PDF で補う"  #@param ["docx から作り、出版版 PDF で補う", "docx から作る"]' in src
+    ns = {"DONE": {1}, "ROUTE": "docx から作り、出版版 PDF で補う", "UPLOAD_PDF": False}
     body = src.split("from google.colab import files\n", 1)[1].split("WORK = ", 1)[0]
     with pytest.raises(SystemExit, match="「docx から作る」"):
         exec(body, ns)
@@ -334,7 +334,7 @@ def test_step8_shows_result_boxes():
     src = cell_source("#@title 8.")
     assert "from jasme_jats.colab import result_boxes" in src
     assert src.index("files.download(archive)") < src.index("display(HTML(result_boxes(res)))")
-    assert "（PDF の文字を読めたとき）PDF に合わせて直した docx" in src
+    assert "（PDF の文字を読めたとき）PDF で補った docx" in src
 
 
 def test_step3_reads_full_width_numbers_and_common_dates(capsys):

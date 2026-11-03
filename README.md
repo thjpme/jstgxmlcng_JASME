@@ -4,8 +4,8 @@
 J-STAGE の全文 XML（JATS 1.1、FULL-J）に変換します。
 
 - **本文の文字は 1 文字も変えません**（誤字脱字も含めてそのまま）。変換の最後に、docx と XML の文字を 1 文字ずつ照合して確かめます。
-- 受け取った docx が出版版と違うときは、先に docx を出版版 PDF に合わせて直し（Word の変更履歴つき）、それを変換することもできます
-  （[docs/USAGE.md](docs/USAGE.md) の「出版版 PDF との照合と、2 通りの作り方」）。
+- 受け取った docx が出版版と違うときは、先に出版版 PDF から著者校正の直しと組版の違いを補った docx（Word の変更履歴つき）を作り、
+  それを変換することもできます（[docs/USAGE.md](docs/USAGE.md) の「出版版 PDF との照合と、2 通りの作り方」）。
 - 見出し・本文・図表・ブロック引用・注・謝辞・付記・引用文献・英文要旨などを、テンプレートのスタイルから機械的に変換します。
 - 本文中の「図1」「表2」、注の上付き番号、引用（`Claude (2025)` の **2025 の部分だけ**）、URL・DOI に機械的にリンクを付けます。
 - 機械処理で取りこぼした箇所（スタイルの誤り、変則的な引用、画像で貼られた数式など）は、任意で生成 AI（Claude）に補完させられます。
@@ -57,7 +57,7 @@ OPENAI_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml --o
 GEMINI_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai api --ai-provider gemini --ai-model モデル名
 SAKANA_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai api --ai-provider sakana --ai-model モデル名
 python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --images 画像フォルダ   # 用意できなかった図の画像（25_77_01.png など）を入れる
-python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --pdf 記事.pdf               # 出版版 PDF に合わせてから作る
+python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --pdf 記事.pdf               # docx から作り、出版版 PDF で補う
 python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --pdf 記事.pdf --route docx  # docx から作る（PDF とは照合だけ）
 ```
 

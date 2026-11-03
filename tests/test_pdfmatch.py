@@ -1,10 +1,10 @@
-"""出版版 PDF との照合（pdfmatch.py）と、PDF に合わせて直した docx（pdfdocx.py）。
+"""出版版 PDF との照合（pdfmatch.py）と、PDF で補った docx（pdfdocx.py）。
 
 tests/fixtures/sample_pdfcheck.pdf は、sample_pdfcheck.docx の文字を出版社が組版で直した想定（全角のかっこ・句読点、
 「資料」→「付録」など）にして LibreOffice で PDF にしたもの（tests/make_fixtures.py）。
 
   ルート1（docx から作る）: docx の文字は変えない。照合の結果をレポートに載せるだけ
-  ルート2（出版版 PDF に合わせてから作る）: PDF に合わせて直した docx（変更履歴つき）を作り、それを変換する
+  ルート2（docx から作り、出版版 PDF で補う）: PDF で補った docx（変更履歴つき）を作り、それを変換する
 
 ページ番号・柱・投稿受付日など（組版で入り、docx にない文字）の扱いは、extract_pages の代わりに作った PDF の文字
 （d12_pages など。形だけを本誌の出版版 PDF にまねた架空の文字）で確かめる。
@@ -88,17 +88,17 @@ def test_route1_reports_without_changing_text(journal, meta, tmp_path):
     report = res.report_path.read_text(encoding="utf-8")
     head = report.split("## 2.")[0]
     assert "作り方: docx から作る" in head
-    assert "要確認: 出版版 PDF と文字が違う箇所が 1 件、全角・半角の違いが 25 文字あります" in head
+    assert "要確認: 出版版 PDF と文字が違う箇所が 1 件あります" in head
     assert "XML は docx の文字のままで、照合の結果を載せているだけです" in report
     # 照合しないものの説明: 資料の中の段落は照合し、資料の見出しだけを照合しない（pdfmatch.target_paragraphs）
     assert "表のセル・別行の数式・資料の見出しと、4 文字未満の段落は除く" in report
     assert "| d13 |" in report and "| 資料 | 付録 |" in report
     assert "「(→（」5 件" in report and "「架空理論 (Fict」→「架空理論（Fict」" in report
-    assert "出版版 PDF との違い**（文字の違い 1 件・全角・半角の違い 25 文字）" in report.split("## 14.")[1]
+    assert "出版版 PDF との違い**（文字の違い 1 件）" in report.split("## 14.")[1]
 
 
 def test_route2_fixes_docx_with_tracked_changes(journal, meta, tmp_path):
-    """ルート2: PDF に合わせて直した docx（変更履歴つき）を作り、それを変換する。"""
+    """ルート2: PDF で補った docx（変更履歴つき）を作り、それを変換する。"""
     pytest.importorskip("pypdfium2")
     before = PDFCHECK.read_bytes()
     res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, pdf_path=PDFCHECK_PDF, route="pdf",
@@ -126,12 +126,13 @@ def test_route2_fixes_docx_with_tracked_changes(journal, meta, tmp_path):
     assert PUBLISHED["d12"] in paragraphs(fx.path)
     report = res.report_path.read_text(encoding="utf-8")
     head = report.split("## 2.")[0]
-    assert "作り方: 出版版 PDF に合わせてから作る" in head
-    assert "PDF に合わせて docx を直した 44 箇所（変更履歴: 挿入 26・削除 40）" in head
-    assert f"照合の相手は、出版版 PDF に合わせて直した docx（{fx.path.name}）" in head
+    assert "作り方: docx から作り、出版版 PDF で補う" in head
+    assert "PDF で補った校正の直し 1 箇所・組版の違い 43 箇所（変更履歴: 挿入 26・削除 40）" in head
+    assert f"照合の相手は、出版版 PDF で補った docx（{fx.path.name}）" in head
     assert "「詳しくは資料の学習指」→「詳しくは付録の学習指」" in report
     assert "表のセル・別行の数式・図の中の文字・資料の見出しと、4 文字未満の段落は照合せず、docx のままです。" in report
-    assert "### 13.2 PDF と違うが直さなかった箇所（要確認）\n\nありません。" in report
+    assert "### 13.3 直さなかった箇所（要確認）\n\nありません。" in report
+    assert res.supplement.ok and "### 13.8 補完の確かめ\n\n合格" in report
     assert "Word で開き、変更履歴を確認する" in report.split("## 14.")[1]
 
 
@@ -246,7 +247,7 @@ def test_endnote_numbers_and_text_follow_pdf_in_route2(journal, meta, tmp_path, 
     report = res.report_path.read_text(encoding="utf-8")
     assert "| 本文の脚注番号 | Word の文末脚注 5 | 「2)」→「2）」 |" in report
     assert "| 注の一覧の脚注番号 | Word の文末脚注 5 | 「2)」→「２）」 |" in report
-    # 8 章の対応の表は PDF に合わせた番号（注の書き出しは、PDF に合わせて直した docx の文字）
+    # 8 章の対応の表は PDF に合わせた番号（注の書き出しは、PDF で補った docx の文字）
     assert "| fn2 | Word の文末脚注 5 | ２） | 文末脚注の本文ＡＢＣである。 | あり |" in report
 
 
@@ -354,34 +355,42 @@ def test_colab_box_and_cli_route(journal, meta, tmp_path, capsys):
     from jasme_jats.colab import pdf_diff_box
     res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "1", pdf_path=PDFCHECK_PDF, convert_metafiles=False))
     html = pdf_diff_box(res)
-    assert "#d97706" in html and "出版版 PDF と文字が違う箇所が 1 件、全角・半角の違いが 25 文字あります" in html
-    assert "XML は docx の文字のまま" in html and "出版版 PDF に合わせてから作る" in html
+    assert "#d97706" in html and "出版版 PDF と文字が違う箇所が 1 件あります" in html
+    assert "XML は docx の文字のまま" in html and "docx から作り、出版版 PDF で補う" in html
     res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "2", pdf_path=PDFCHECK_PDF, route="pdf",
                                                    convert_metafiles=False))
     assert pdf_diff_box(res) == ""                 # すべて直せて、残っている違いもない
-    f = res.docx_fix.applied[0]
+    from jasme_jats.report import TO_CHECK, actions
+    # (B) 校正の直し（「資料」→「付録」）を直せなかったときは要確認（終了コード 0）
+    f = res.docx_fix.applied_text[0]
     f.applied, f.reason = False, "ほかの直す箇所と重なる"
     html = pdf_diff_box(res)
-    assert "直せなかった箇所 1 件" in html and "ほかの直す箇所と重なる" in html and res.docx_fix.path.name in html
-    from jasme_jats.report import TO_CHECK, actions
-    assert {a.key: a.level for a in actions(res)} == {"pdf_unfixed": TO_CHECK}     # 直せなかった箇所は要確認（終了コード 0）
+    assert "直さなかった箇所 1 件" in html and "ほかの直す箇所と重なる" in html and res.docx_fix.path.name in html
+    assert {a.key: a.level for a in actions(res)} == {"pdf_unfixed": TO_CHECK}
     assert not res.needs_action
+    f.applied, f.reason = True, ""
+    # (A) 組版の違いを直せなかったときは要確認にしない（13.2 に載せるだけ）
+    f = res.docx_fix.applied_typeset[0]
+    f.applied, f.reason = False, "ほかの直す箇所と重なる"
+    assert pdf_diff_box(res) == "" and actions(res) == [] and not res.needs_action
+    f.applied, f.reason = True, ""
 
     with pytest.raises(SystemExit):
         main([str(PDFCHECK), "--out", str(tmp_path / "c"), "--route", "pdf"])
     assert "--pdf で記事の PDF を指定してください" in capsys.readouterr().err
-    # --pdf があれば、既定は「出版版 PDF に合わせてから作る」（--meta がないと J-STAGE のアップロード時チェックで要対応になり 1）
+    # --pdf があれば、既定は「docx から作り、出版版 PDF で補う」（--meta がないと J-STAGE のアップロード時チェックで要対応になり 1）
     from conftest import META_EXAMPLE
     meta_args = ["--meta", str(META_EXAMPLE)]
     assert main([str(PDFCHECK), "--out", str(tmp_path / "c"), "--pdf", str(PDFCHECK_PDF), "--no-metafile-conversion"]
                 + meta_args) == 0
     out = capsys.readouterr().out
-    assert "出版版 PDF との照合: PDF に合わせて docx を直した 44 箇所" in out
-    assert "PDF に合わせて直した docx（変更履歴つき）:" in out and "_PDFに合わせた原稿.docx" in out
+    assert "出版版 PDF との照合: PDF で補った校正の直し 1 箇所・組版の違い 43 箇所" in out
+    assert "PDF で補った docx（変更履歴つき）:" in out and "_PDFで補完した原稿.docx" in out
+    assert "補完の確かめ: 合格" in out
     assert main([str(PDFCHECK), "--out", str(tmp_path / "d"), "--pdf", str(PDFCHECK_PDF), "--route", "docx",
                  "--no-metafile-conversion"] + meta_args) == 0     # ルート1 の PDF との違いは要確認（0）
     out = capsys.readouterr().out
-    assert "出版版 PDF との照合: 文字の違い 1 件" in out and "PDF に合わせて直した docx" not in out
+    assert "出版版 PDF との照合: 文字の違い 1 件" in out and "PDF で補った docx" not in out
 
 
 def test_route2_keeps_note_marks_when_fixing_breaks_notes(journal, meta, tmp_path, monkeypatch):
@@ -422,26 +431,26 @@ def test_route2_with_unreadable_pdf_converts_original(journal, meta, tmp_path, m
     assert res.fidelity.ok and res.docx_fix is None and not list(tmp_path.glob("*.docx"))
     assert ORIGINAL["d12"] in texts(load(res))
     report = res.report_path.read_text(encoding="utf-8")
-    assert "（PDF の文字を読めなかったので、docx を直さずに変換した）" in report
+    assert "（PDF の文字を読めなかったので、docx を補わずに変換した）" in report
     assert "照合できなかった" in report.split("## 2.")[0]
     # 要対応として知らせる（修正計画 D の M4。決定事項 4: 変換は続けて知らせる）: Colab の赤い枠、レポートの冒頭・14 章、
     # コマンドラインの終了コード 1 と標準エラー
-    assert res.pdf_fallback and res.needs_action
+    assert res.pdf_fallback and res.needs_action and res.supplement is None
     html = pdf_diff_box(res)
-    assert "#dc2626" in html and "出版版 PDF に合わせられませんでした" in html and "画像だけの PDF" in html
-    assert "要対応: 出版版 PDF に合わせられませんでした" in report.split("## 2.")[0]
-    assert "docx を PDF に合わせていない" in report.split("## 14.")[1]
+    assert "#dc2626" in html and "出版版 PDF で補えませんでした" in html and "画像だけの PDF" in html
+    assert "要対応: 出版版 PDF で補えませんでした" in report.split("## 2.")[0]
+    assert "docx を PDF で補っていない" in report.split("## 14.")[1]
     from conftest import META_EXAMPLE
     assert main([str(PDFCHECK), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli"), "--pdf",
                  str(tmp_path / "dummy.pdf"), "--no-metafile-conversion"]) == 1
     err = capsys.readouterr().err
-    assert "要対応: 出版版 PDF に合わせられませんでした" in err and "PDF から文字を取り出せなかった" in err
+    assert "要対応: 出版版 PDF で補えませんでした" in err and "PDF から文字を取り出せなかった" in err
     # ルート1 で読めないときは要確認（照合できなかっただけで、XML は docx の文字のまま。終了コード 0）
     res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "r1", pdf_path=tmp_path / "dummy.pdf", route="docx",
                                                    convert_metafiles=False))
     assert not res.pdf_fallback and not res.needs_action
     html = pdf_diff_box(res)
-    assert "出版版 PDF と照合できませんでした（要確認）" in html and "出版版 PDF に合わせられませんでした" not in html
+    assert "出版版 PDF と照合できませんでした（要確認）" in html and "出版版 PDF で補えませんでした" not in html
     assert "要確認: 出版版 PDF と照合できませんでした" in res.report_path.read_text(encoding="utf-8").split("## 2.")[0]
     assert main([str(PDFCHECK), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli1"), "--pdf",
                  str(tmp_path / "dummy.pdf"), "--route", "docx", "--no-metafile-conversion"]) == 0
@@ -1010,8 +1019,8 @@ def test_deleted_paragraph_end_before_other_paragraph_is_deleted(journal, tmp_pa
 
 def test_corrected_digit_line_at_paragraph_end_in_report(journal, meta, tmp_path, monkeypatch):
     """同じ形（「，」の後ろの年が出版版で直されている）をルート2 で変換すると、XML の文献は docx の年のまま（消さない）。
-    13.2 に直さなかった理由を出し、13.4（直した docx と PDF の照合）でも「PDF と同じ文字になりました」とは言わず、残っている
-    違いとして出す。13.6 には年の行が載る。"""
+    13.3 に直さなかった理由を出し、13.5（補った docx と PDF の照合）でも「PDF と同じ文字になりました」とは言わず、残っている
+    違いとして出す。13.7 には年の行が載る。"""
     from jasme_jats.pdfmatch import HEAD_WHY
     small_article(tmp_path, journal, BODY16, REF2, YEAR_REF)
     ref, lines, old, new = END_CASES[0]
@@ -1021,10 +1030,10 @@ def test_corrected_digit_line_at_paragraph_end_in_report(journal, meta, tmp_path
     assert [(f.old, f.new, f.reason) for f in res.docx_fix.skipped] == [(old, new, HEAD_WHY)]
     assert not any(f.kind == "text" for f in res.docx_fix.applied) and YEAR_REF in texts(load(res))
     ch13 = chapters(res)[1]
-    assert f"| {old} | {new} | {HEAD_WHY} |" in ch13.split("### 13.2")[1].split("### 13.3")[0]
-    remaining = ch13.split("### 13.4")[1].split("### 13.5")[0]
+    assert f"| {old} | {new} | {HEAD_WHY} |" in ch13.split("### 13.3")[1].split("### 13.4")[0]
+    remaining = ch13.split("### 13.5")[1].split("### 13.6")[0]
     assert "PDF と同じ文字になりました" not in remaining and f"| {old} | {new}" in remaining
-    assert f"数字だけの行 1 件: {new}" in ch13.split("### 13.6")[1]
+    assert f"数字だけの行 1 件: {new}" in ch13.split("### 13.7")[1]
 
 
 def test_corrected_heading_number_line_is_not_deleted(journal, tmp_path):
@@ -1148,7 +1157,7 @@ def test_long_pdf_only_text_on_other_paragraph_line_is_not_reported(journal, tmp
 
 @pytest.mark.parametrize("route", ["docx", "pdf"])
 def test_long_pdf_only_text_is_listed_in_report(route, journal, meta, tmp_path, monkeypatch):
-    """PDF にだけある 20 文字以上の文字で、段落の文字のある行にかかるもの（LONG_WHY）は、ルート2 では直さずに 13.2 に、
+    """PDF にだけある 20 文字以上の文字で、段落の文字のある行にかかるもの（LONG_WHY）は、ルート2 では直さずに 13.3 に、
     ルート1 では 13.1 に、その旨を添えて載せる（行の変わり目は LINE_MARK）。"""
     from jasme_jats.pdfmatch import LONG_WHY
     from jasme_jats.report import WHY_MARKS
@@ -1166,7 +1175,7 @@ def test_long_pdf_only_text_is_listed_in_report(route, journal, meta, tmp_path, 
         assert "PDF にだけある 20 文字以上の文字" in WHY_MARKS[LONG_WHY] and "| PDF（⏎ は行の変わり目） |" in section
     else:
         assert [(f.src, f.old, f.new, f.reason) for f in res.docx_fix.skipped] == [("d12", "", shown, LONG_WHY)]
-        assert f"| {shown} | {LONG_WHY} |" in ch13.split("### 13.2")[1].split("### 13.3")[0]
+        assert f"| {shown} | {LONG_WHY} |" in ch13.split("### 13.3")[1].split("### 13.4")[0]
 
 
 SIMILAR_A = "架空省（2018a）．『架空学校学習指導要領（令和元年告示）解説　架空算数編』．架空文教出版．"
@@ -1514,10 +1523,10 @@ def test_running_heads_are_listed_in_report(route, journal, meta, tmp_path, monk
         assert fx.check.ignored_lines == ignored
         assert [(f.src, f.old, f.new, f.reason) for f in fx.skipped] == [("d13", "2回", "試験四郎", HEAD_WHY)]
         assert PUBLISHED["d12"] in out and "詳しくは付録の学習指導案を参照されたい。授業は2回行った。" in out
-        assert f"| 2回 | 試験四郎 | {HEAD_WHY} |" in ch13.split("### 13.2")[1].split("### 13.3")[0]
-        section = ch13.split(f"### 13.6 {IGNORED_TITLE}")[1]
+        assert f"| 2回 | 試験四郎 | {HEAD_WHY} |" in ch13.split("### 13.3")[1].split("### 13.4")[0]
+        section = ch13.split(f"### 13.7 {IGNORED_TITLE}")[1]
         # ルート2 では、ほかの段落にある文字でも、13.1 で元の段落から消していないかを確かめてもらう
-        assert IGNORED_NOTE_ROUTE2 in section and "PDF に合わせて直した docx にも入れていません" in section
+        assert IGNORED_NOTE_ROUTE2 in section and "PDF で補った docx にも入れていません" in section
     assert "照合に使わなかった PDF の文字 2 件（2 段落。誌名の行・投稿受付日・表や図の中の文字などとみなしたもの。" in head
     assert "13 章で確認" not in head            # 要約の行の 13 章の案内は、行の最後の「（13 章）」だけ
     assert "13 章の最後の「照合に使わなかった PDF の文字」（2 件）に、docx にない本文" in ch14
@@ -1535,7 +1544,7 @@ def test_running_heads_are_listed_in_report(route, journal, meta, tmp_path, monk
     res.fidelity.ok, res.dtd_valid = False, False
     top = render(res).split("## 2.")[0]
     order = ["> **注意: 文字の不変性チェックが不合格です。**", "> **要対応: J-STAGE 指定の DTD による検証が不合格です",
-             "> **出版版 PDF に合わせて docx を直してから変換しました" if route == "pdf" else "> **要確認: 出版版 PDF と文字が違う箇所",
+             "> **出版版 PDF で校正の直しを補ってから変換しました" if route == "pdf" else "> **要確認: 出版版 PDF と文字が違う箇所",
              "> **要確認: 照合に使わなかった PDF の文字が 2 件あります"]
     pos = [top.index(x) for x in order]
     assert pos == sorted(pos)
@@ -1550,7 +1559,7 @@ def test_no_running_heads_in_report(journal, meta, tmp_path):
                                                    convert_metafiles=False))
     assert res.docx_fix.check.ignored_lines == [] and res.pdf_check.ignored_lines == []
     head, ch13, ch14 = chapters(res)
-    assert f"### 13.6 {IGNORED_TITLE}\n\nありません。" in ch13
+    assert f"### 13.7 {IGNORED_TITLE}\n\nありません。" in ch13
     assert "照合に使わなかった PDF の文字" not in head and "照合に使わなかった PDF の文字" not in ch14
 
 
@@ -1572,14 +1581,14 @@ def test_table_cells_are_listed_per_paragraph(journal, meta, tmp_path, monkeypat
     assert "照合に使わなかった PDF の文字 42 件（1 段落。" in head
     labels = grid[0] + [row[0] for row in grid[1:]]                     # 見出しの行と組の列（短い行）
     numbers = [c for row in grid[1:] for c in row[1:]]                   # 得点のセル（数字だけの行）
-    assert f"| 段落 | 場所 | 行数 | PDF の文字（{LINE_MARK} は行の変わり目） |" in ch13.split("### 13.6")[1]
-    rows = [x for x in ch13.split("### 13.6")[1].splitlines() if x.startswith(f"| {src} |")]
+    assert f"| 段落 | 場所 | 行数 | PDF の文字（{LINE_MARK} は行の変わり目） |" in ch13.split("### 13.7")[1]
+    rows = [x for x in ch13.split("### 13.7")[1].splitlines() if x.startswith(f"| {src} |")]
     assert rows == [f"| {src} | {res.docx_fix.locations[src]} | 42 | " + LINE_MARK.join(labels) + LINE_MARK
                     + "数字だけの行 30 件: " + "、".join(numbers[:8]) + "… |"]
 
 
 def test_location_of_paragraph_with_only_ignored_lines(journal, meta, tmp_path, monkeypatch):
-    """ほかに直す箇所のない段落（d15）の途中の柱も、ルート2 の 13.6 に、元の docx の段落の場所付きで載る。"""
+    """ほかに直す箇所のない段落（d15）の途中の柱も、ルート2 の 13.7 に、元の docx の段落の場所付きで載る。"""
     d15 = "この段落は出版版と同じで，架空の資料を https://example.com/a で公開している。"
     cut = d15.index("架空の資料")
     pages = ["\n".join(["（1）", *FRONT, PUBLISHED["d12"], PUBLISHED["d13"], PUBLISHED["d14"], d15[:cut]]),
@@ -1588,12 +1597,12 @@ def test_location_of_paragraph_with_only_ignored_lines(journal, meta, tmp_path, 
     assert ("d15", "試験四郎") in res.docx_fix.check.ignored_lines
     assert not any(f.src == "d15" for f in res.docx_fix.fixes)
     loc = _mechanical(PDFCHECK, journal)[1].locations["d15"]          # 元の docx の段落の場所
-    assert f"| d15 | {loc} | 1 | 試験四郎 |" in chapters(res)[1].split("### 13.6")[1]
+    assert f"| d15 | {loc} | 1 | 試験四郎 |" in chapters(res)[1].split("### 13.7")[1]
 
 
 def test_head_only_position_shows_pdf_lines_in_report(journal, meta, tmp_path, monkeypatch):
     """PDF の側に照合に使わなかった文字（投稿受付日と、どの段落にも当たらないページの端の行）しかない位置の docx の文字は
-    直さず、13.2 に、PDF の文字を行の変わり目に LINE_MARK を入れて長めに出す（受付日の後ろの行まで見えるように。本文の
+    直さず、13.3 に、PDF の文字を行の変わり目に LINE_MARK を入れて長めに出す（受付日の後ろの行まで見えるように。本文の
     「／」と見分けられるように、本文に出ない記号にし、列の見出しにも書く）。"""
     from jasme_jats.pdfmatch import HEAD_WHY
     from jasme_jats.report import PDF_COLUMN
@@ -1602,7 +1611,7 @@ def test_head_only_position_shows_pdf_lines_in_report(journal, meta, tmp_path, m
     res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "pdf")
     shown = R1 + LINE_MARK + "ＸＸＸＸＸＸ"
     assert [(f.src, f.old, f.new, f.reason) for f in res.docx_fix.skipped] == [("d12", "基づく", shown, HEAD_WHY)]
-    section = chapters(res)[1].split("### 13.2")[1].split("### 13.3")[0]
+    section = chapters(res)[1].split("### 13.3")[1].split("### 13.4")[0]
     assert f"| 基づく | {shown} | {HEAD_WHY} |" in section and f"| docx | {PDF_COLUMN} | 直さなかった理由 |" in section
     from jasme_jats.colab import pdf_diff_box                  # Colab の枠でも、行の変わり目の記号を説明する
     assert f"「{shown}」（{HEAD_WHY}。{LINE_MARK} は PDF の行の変わり目）" in pdf_diff_box(res)
@@ -2671,7 +2680,7 @@ def test_corrected_year_line_at_page_top_before_next_reference(nxt, journal, tmp
 def test_paragraph_starting_with_line_on_many_pages_is_found(journal, tmp_path):
     """同じ文字の段落（くり返し示す問題文など）が docx に 2 つあり、PDF ではその最初の行が、図の中の同じ文字の行とあわせて
     3 ページに出る（何ページにも出る行。行全体でしか一致させない行なので、まとめての照合の列に入らない）。段落の文字が、docx で
-    前後の段落の PDF の位置の間にそのまま続いていれば、その段落の位置とする（PDF の中に見つからない段落〈13.5〉にしない）。"""
+    前後の段落の PDF の位置の間にそのまま続いていれば、その段落の位置とする（PDF の中に見つからない段落〈13.6〉にしない）。"""
     item = "比の値を求める問題を，三つの場面に分けて架空の数値で示し，各場面で比の値の意味を問うた。"
     first = body_lines(item)[0]       # 2 行目は 21 文字（段落の文字の半分に足りない）
     plan, src = n10_article(tmp_path, journal, [("body", RATIO), ("body", item), ("body", TALK), ("body", SURVEY),
@@ -3232,7 +3241,8 @@ def test_dash_at_line_end_follows_pdf(dash, journal, tmp_path):
     plan, src = n10_article(tmp_path, journal, [("body", text)])
     pc = compare(plan, n10_pages([*SMALL_FRONT, "　架空の研究では pp.11-", "16 の範囲を参照した。", *N10_TAIL]))
     assert changed_paragraphs(plan, pc, {src[text]: DASH_BODY.replace("–", "-")}) == {}
-    assert [(d.docx, d.pdf, d.fixable, d.why) for d in pc.diffs if d.src == src[text]] == [(dash, "-", True, "")]
+    assert [(d.docx, d.pdf, d.fixable, d.why, d.kind) for d in pc.diffs if d.src == src[text]] == \
+        [(dash, "-", True, "", "typeset")]          # 組版の違い（(A)。ダッシュ・ハイフン）
     pc = compare(plan, n10_pages([*SMALL_FRONT, "　架空の研究では pp.11￾", "16 の範囲を参照した。", *N10_TAIL]))
     assert changed_paragraphs(plan, pc, {}) == {} and not [d for d in pc.diffs if d.src == src[text]]
 
@@ -3247,7 +3257,8 @@ def test_hyphen_variant_at_line_end_follows_pdf(docx_hyphen, pdf_hyphen, journal
     plan, src = n10_article(tmp_path, journal, [("body", text)])
     pc = compare(plan, n10_pages([*SMALL_FRONT, f"　架空の研究では pp.11{pdf_hyphen}", "16 の範囲を参照した。", *N10_TAIL]))
     assert changed_paragraphs(plan, pc, {src[text]: DASH_BODY.replace("–", pdf_hyphen)}) == {}
-    assert [(d.docx, d.pdf, d.fixable, d.why) for d in pc.diffs if d.src == src[text]] == [(docx_hyphen, pdf_hyphen, True, "")]
+    assert [(d.docx, d.pdf, d.fixable, d.why, d.kind) for d in pc.diffs if d.src == src[text]] == \
+        [(docx_hyphen, pdf_hyphen, True, "", "typeset")]
     pc = compare(plan, n10_pages([*SMALL_FRONT, "　架空の研究では pp.11￾", "16 の範囲を参照した。", *N10_TAIL]))
     assert changed_paragraphs(plan, pc, {}) == {} and not [d for d in pc.diffs if d.src == src[text]]
 
@@ -3268,6 +3279,7 @@ def test_dash_in_middle_of_line_follows_pdf(docx_dash, pdf_dash, journal, tmp_pa
     plan, src = n10_article(tmp_path, journal, [("body", text)])
     pc = compare(plan, n10_pages([*SMALL_FRONT, f"　架空の研究では pp.11{pdf_dash}16 の範囲を参照", "した。", *N10_TAIL]))
     assert changed_paragraphs(plan, pc, {src[text]: DASH_BODY.replace("–", pdf_dash)}) == {}
+    assert [d.kind for d in pc.diffs if d.src == src[text]] == ["typeset"]
 
 
 NBH = "<w:r><w:noBreakHyphen/></w:r>"      # Word の改行なしハイフン（読み取りでは「‑」）
@@ -3285,12 +3297,16 @@ def test_no_break_hyphen_follows_pdf_in_route2(pdf_lines, journal, meta, tmp_pat
     res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "pdf", docx=tmp_path / "n10.docx")
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     assert [(f.old, f.new, f.applied) for f in res.docx_fix.fixes] == [("‑", "-", True)]
+    assert res.docx_fix.fixes[0].kind == "glyph"            # 組版の違い（(A)。ダッシュ・ハイフン）
     assert "架空の研究では pp.11-16 の範囲を参照した。" in texts(load(res))
     assert "架空の研究では pp.11-16 の範囲を参照した。" in paragraphs(res.docx_fix.path)
     assert "架空の研究では pp.11‑16 の範囲を参照した。" in paragraphs(res.docx_fix.path, reject=True)
     res1 = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "docx", docx=tmp_path / "n10.docx")
     assert "架空の研究では pp.11‑16 の範囲を参照した。" in texts(load(res1))
     assert [(d.docx, d.pdf, d.fixable) for d in res1.pdf_check.diffs] == [("‑", "-", True)]
+    assert res1.pdf_check.diffs[0].kind == "typeset"
+    ch13 = chapters(res1)[1]           # 13.1（文字の違い）ではなく 13.2（組版の違い）に出る
+    assert "‑" not in ch13.split("### 13.2")[0] and "‑" in ch13.split("### 13.2")[1].split("### 13.3")[0]
 
 
 def test_en_dash_in_reference_at_line_end_is_not_deleted(journal, tmp_path):
@@ -3358,8 +3374,8 @@ def test_addition_between_unreadable_formulas_is_not_fixed(journal, tmp_path):
 
 @pytest.mark.parametrize("route", ["docx", "pdf"])
 def test_formula_and_insert_position_shown_in_report(route, journal, meta, tmp_path, monkeypatch):
-    """直さない違いの docx の文字と前後の文字では、docx の数式も「〓」で示す（ルート1 の 13.1・ルート2 の 13.4 の前後の欄で、
-    数式が消えて見えないように）。ルート2 の 13.2 では、docx の側に文字がない（PDF にだけある文字の）行の docx の欄に、足す位置の
+    """直さない違いの docx の文字と前後の文字では、docx の数式も「〓」で示す（ルート1 の 13.1・ルート2 の 13.5 の前後の欄で、
+    数式が消えて見えないように）。ルート2 の 13.3 では、docx の側に文字がない（PDF にだけある文字の）行の docx の欄に、足す位置の
     前後の docx の文字（「…［］…」）を出す（同じ段落に同じ PDF の文字の行が並んでも見分けられるように）。表に「〓」があるときは、
     docx の欄と PDF の欄で意味が違う（docx の数式・画像と、PDF で読み取れない部分）ことを、表の前に添える。"""
     pair = ["値の組（", mf.omath(mf.mr("p")), "，", mf.omath(mf.mr("p")), "）を順に調べ，その結果を表にまとめた。"]
@@ -3377,10 +3393,10 @@ def test_formula_and_insert_position_shown_in_report(route, journal, meta, tmp_p
     else:
         from jasme_jats.pdfmatch import EDGE_WHY, MATH_WHY
         from jasme_jats.report import INSERT_AT
-        section = ch13.split("### 13.2")[1].split("### 13.3")[0]
+        section = ch13.split("### 13.3")[1].split("### 13.4")[0]
         assert f"| 〓 | 〓，〓 | {MATH_WHY} |" in section and FORMULA_NOTE in section
         assert f"| …に，課題を述べる{INSERT_AT} | 。 | {EDGE_WHY} |" in section and INSERT_AT == "［］"
-        section = ch13.split("### 13.4")[1].split("### 13.5")[0]
+        section = ch13.split("### 13.5")[1].split("### 13.6")[0]
         assert "値の組（〓，［〓］）を順に調べ" in section and FORMULA_NOTE in section
 
 
@@ -3414,7 +3430,7 @@ def test_route2_with_broken_pdf_is_needs_action(journal, meta, tmp_path):
                                                    convert_metafiles=False))
     assert res.pdf_fallback and res.docx_fix is None and res.fidelity.ok and res.needs_action
     html = pdf_diff_box(res)
-    assert "出版版 PDF に合わせられませんでした" in html and "PDF を読めなかった" in html
+    assert "出版版 PDF で補えませんでした" in html and "PDF を読めなかった" in html
 
 
 def test_route2_without_pypdfium2_is_needs_action(journal, meta, tmp_path, monkeypatch, capsys):
@@ -3449,7 +3465,8 @@ def test_route2_fully_fixed_has_no_action(journal, meta, tmp_path):
     assert actions(res) == [] and result_boxes(res) == "" and pdf_diff_box(res) == "" and not pdf_suspect(res)
     assert not res.needs_action
     report = res.report_path.read_text(encoding="utf-8")
-    assert "出版版 PDF に合わせて docx を直してから変換しました" in report.split("## 2.")[0]
+    assert "出版版 PDF で校正の直しを補ってから変換しました" in report.split("## 2.")[0]
+    assert res.supplement.ok and res.ok
     assert "Word で開き、変更履歴を確認する" in report.split("## 14.")[1]
 
 
@@ -3579,3 +3596,282 @@ def test_route2_fixes_paragraphs_with_style_hidden_text(split, journal, meta, tm
     k = shown.index(want[0])
     assert PUBLISHED["d12"] in shown and shown[k:k + len(want)] == want
     assert paragraphs(fx.path, reject=True) == paragraphs(path)
+
+
+# ---------------------------------------------------------------------------- 組版の違い（(A)）と校正の直し（(B)）の分け方（単位 J）
+def test_typeset_pair_table():
+    """組版の違い（(A)）の 1 文字の対の表（pdfmatch.typeset_pair）。引用符は同じ類の中なら向きを問わない（利用者の判断）。
+    Word が付ける番号の字形「●」→「・」は番号でだけ、大文字・小文字は英文の題目・著者名などの段落でだけ (A)。"""
+    from jasme_jats.pdfmatch import typeset_pair, typeset_same
+    typeset = [("２", "2", "width"), ("(", "（", "width"), ("–", "-", "dash"), ("‑", "-", "dash"), ("－", "‐", "dash"),
+               ("—", "−", "dash"), ('"', "“", "quote"), ('"', "”", "quote"), ("'", "’", "quote"), ("”", "“", "quote"),
+               ("＂", "“", "quote"), ("“", '"', "quote"), ("’", "'", "quote"), ("“", "”", "quote"), ("‘", "’", "quote"),
+               ("＇", "'", "width")]
+    for a, b, kind in typeset:
+        assert typeset_pair(a, b) == kind, (a, b)
+    assert typeset_pair("●", "・", number=True) == "number"
+    assert typeset_pair("A", "a", case=True) == "case" and typeset_pair("ａ", "A", case=True) == "case"
+    for a, b in [("●", "・"), ("A", "a"), ("ａ", "A"), ("〜", "～"), ("・", "･"), ("…", "."), ('"', "'"), ("“", "’"),
+                 ("資", "付"), ("2", "3"), ("a", "a")]:
+        assert typeset_pair(a, b) == "", (a, b)
+    assert typeset_pair("・", "●", number=True) == ""          # 番号の字形の対には向きがある
+    assert typeset_pair("é", "É", case=True) == ""              # 大文字・小文字は ASCII の英字だけ
+    assert typeset_same("理論 (ATD)", "理論（ATD）") and typeset_same("pp.11–16", "pp.11-16")
+    assert not typeset_same("理論 (ATD)", "理論（ATE）") and not typeset_same("58", "５８９")
+    assert not typeset_same("The PDF", "the PDF") and typeset_same("The PDF", "the PDF", case=True)
+
+
+MIXED = "本研究では，架空の授業の記録を集め，合計で58件と2回の観察として観点ごとに整理した。"
+
+
+@pytest.mark.parametrize("text, pub, want", [
+    (MIXED, MIXED.replace("58件と2回の観察", "59件と２回の観察記録"),
+     [("8", "9", "text"), ("2", "２", "width"), ("", "記録", "text")]),
+    ("本研究では，架空の授業では 'ratio' の語を用いて，二つの量の関係を説明させた。",
+     "本研究では，架空の授業では ’ratio’ の訳語を用いて，二つの量の関係を説明させた。",
+     [("'", "’", "glyph"), ("'", "’", "glyph"), ("", "訳", "text")]),
+], ids=["width-in-text", "quote-in-text"])
+def test_mixed_diff_is_split(text, pub, want, journal, tmp_path):
+    """1 つの違いに組版の違い（(A)）と校正の直し（(B)）が混ざるとき、直す単位に分ける（pdfmatch.diff_parts）。直した結果の
+    文字は PDF の文字（今までと同じ）で、分けた (A) と (B) は 1 つの組（重なりで (B) を止めると (A) も止まる）。"""
+    plan, src = guard_article(tmp_path, journal, [RATIO, text])
+    s = src[text]
+    pc = compare(plan, guard_pages(*cut_lines("　" + RATIO), *cut_lines("　" + pub)))
+    assert [d.kind for d in pc.diffs if d.src == s] == ["text"]
+    got = [(f.old, f.new, f.kind) for f in plan_fixes(plan, pc) if f.src == s]
+    assert got == want
+    assert changed_paragraphs(plan, pc, {s: pub}) == {}
+    # 校正の直し（置き換え）の位置に、ほかの直す箇所（全角・半角）が重なると、同じ違いから分けた組版の違いも直さない
+    first = next(f for f in plan_fixes(plan, pc) if f.src == s and f.kind == "text")
+    if first.start == first.end:
+        return
+    pc.width.setdefault(s, {})[first.start] = "＠"
+    fixes = [f for f in plan_fixes(plan, pc) if f.src == s and (f.kind != "width" or f.start != first.start)]
+    assert fixes and all(f.reason == "ほかの直す箇所と重なる" for f in fixes)
+
+
+def test_mixed_diff_with_added_digit_is_split(journal, tmp_path):
+    """「58」→「５８９」（1 つの違いにまとまったもの）は、「5」「8」の全角・半角（(A)）と、「９」の追加（(B)。PDF の文字のまま）に
+    分ける（raw の文字で並べると、1 つの置き換えになる）。"""
+    text = "本研究では，架空の授業の記録を合計で58件集め，観点ごとに整理した。"
+    plan, src = guard_article(tmp_path, journal, [text])
+    s = src[text]
+    a = text.index("58")
+    pc = PdfCheck(diffs=[TextDiff(s, "58", "５８９", "", a, a + 2, True)])
+    assert [(f.old, f.new, f.kind, f.reason) for f in plan_fixes(plan, pc)] == \
+        [("5", "５", "width", ""), ("8", "８", "width", ""), ("", "９", "text", "")]
+    assert fixed_texts(plan, pc)[s] == text.replace("58", "５８９")
+
+
+@pytest.mark.parametrize("pdf_lines", [["　架空の研究では pp.11-", "16 の範囲を参照した。"],
+                                       ["　架空の研究では pp.11-16 の範囲を参照", "した。"]], ids=["line-end", "middle"])
+def test_dash_is_typeset_kind(pdf_lines, journal, meta, tmp_path, monkeypatch):
+    """行末の forced と行の途中のダッシュの違いは組版の違い（kind typeset。ルート2 の Fix は glyph）。ルート1 では 13.1（文字の
+    違い）に出ず 13.2（組版の違い）に出て、ほかに違いがなければ要確認（pdf_diff）にならない。"""
+    from jasme_jats.report import actions
+    plan, src = n10_article(tmp_path, journal, [("body", DASH_BODY)])
+    pages = n10_pages([*SMALL_FRONT, *pdf_lines, *N10_TAIL])
+    pc = compare(plan, pages)
+    assert [(d.docx, d.pdf, d.kind) for d in pc.diffs] == [("–", "-", "typeset")]
+    assert pc.text_diffs == [] and pc.typeset_count == 1
+    assert [(f.old, f.new, f.kind) for f in plan_fixes(plan, pc)] == [("–", "-", "glyph")]
+    res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "docx", docx=tmp_path / "n10.docx")
+    assert "pdf_diff" not in [a.key for a in actions(res)]
+    ch13 = chapters(res)[1]
+    assert "–" not in ch13.split("### 13.2")[0] and "–" in ch13.split("### 13.2")[1].split("### 13.3")[0]
+
+
+QUOTE_BODY = "本研究では，架空の授業で 'ratio' の語を用いて，二つの量の関係を説明させた。"
+
+
+@pytest.mark.parametrize("docx_q, pdf_q", [("'", "’"), ("’", "'"), ("‘", "’"), ('"', "“")])
+def test_quotes_follow_pdf_as_typeset(docx_q, pdf_q, journal, meta, tmp_path, monkeypatch):
+    """引用符の字形・向きの違い（同じ類の中。向きは問わない）は組版の違い（Fix は glyph）で、PDF に合わせて直し、要確認に
+    しない。"""
+    from jasme_jats.report import actions
+    text = QUOTE_BODY.replace("'", docx_q)
+    plan, src = n10_article(tmp_path, journal, [("body", text)])
+    pages = n10_pages([*SMALL_FRONT, *body_lines(QUOTE_BODY.replace("'", pdf_q)), *N10_TAIL])
+    pc = compare(plan, pages)
+    assert [d.kind for d in pc.diffs] == ["typeset"]
+    assert [(f.old, f.new, f.kind) for f in plan_fixes(plan, pc)] == [(docx_q, pdf_q, "glyph")] * 2
+    assert changed_paragraphs(plan, pc, {src[text]: QUOTE_BODY.replace("'", pdf_q)}) == {}
+    res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "pdf", docx=tmp_path / "n10.docx")
+    assert [a.key for a in actions(res)] == [] and len(res.docx_fix.applied_typeset) == 2
+
+
+def test_double_to_single_quote_is_text(journal, tmp_path):
+    """二重引用符と一重引用符の違い（類が違う）は校正の直し（(B)。kind text）として直す。"""
+    text = QUOTE_BODY.replace("'", '"')
+    plan, src = n10_article(tmp_path, journal, [("body", text)])
+    pc = compare(plan, n10_pages([*SMALL_FRONT, *body_lines(QUOTE_BODY), *N10_TAIL]))
+    assert [d.kind for d in pc.diffs] == ["text"] and pc.text_diffs == pc.diffs
+    assert {(f.old, f.new, f.kind) for f in plan_fixes(plan, pc)} == {('"', "'", "text")}
+    assert changed_paragraphs(plan, pc, {src[text]: QUOTE_BODY}) == {}
+
+
+def test_case_only_in_english_front(journal, tmp_path):
+    """大文字・小文字の違いは、英文の題目・副題・著者名・所属でだけ組版の違い（glyph）。英文の著者名・所属も照合する（利用者の
+    判断）。英文要旨・本文の同じ違いは校正の直し（text）。"""
+    body = "本研究では，架空の授業で Ratio Table の語を用いて，二つの量の関係を説明させた。"
+    plan, src = n10_article(tmp_path, journal, [("body", body)])
+    en = ["A small article", "For checking", "Rokuro Shiken", "Fictional university", "Abstract", "Small Article abstract."]
+    pub = body.replace("Ratio Table", "ratio table")
+    pc = compare(plan, n10_pages([*SMALL_FRONT, *body_lines(pub), "引用および参考文献", SMALL_REF, *en]))
+    assert {src["Rokuro SHIKEN"], src["Fictional University"]} <= pc.case_srcs
+    assert {src["Rokuro SHIKEN"], src["Fictional University"], src["A Small Article"]} <= \
+        {p.src for p in __import__("jasme_jats.pdfmatch", fromlist=["x"]).target_paragraphs(plan)}
+    kinds = {d.src: d.kind for d in pc.diffs}
+    for s in ("A Small Article", "For Checking", "Rokuro SHIKEN", "Fictional University"):
+        assert kinds[src[s]] == "typeset", s
+    assert kinds[src[body]] == "text" and kinds[src["Small article abstract."]] == "text"
+    fixes = plan_fixes(plan, pc)
+    assert {(f.old, f.new, f.kind) for f in fixes if f.src == src["Rokuro SHIKEN"]} == \
+        {("H", "h", "glyph"), ("I", "i", "glyph"), ("K", "k", "glyph"), ("E", "e", "glyph"), ("N", "n", "glyph")}
+    assert {f.kind for f in fixes if f.src in (src[body], src["Small article abstract."])} == {"text"}
+    assert fixed_texts(plan, pc)[src["Rokuro SHIKEN"]] == "Rokuro Shiken"
+
+
+def test_english_author_case_fix_keeps_name_split(journal, meta, tmp_path, monkeypatch):
+    """英文の著者名の大文字・小文字を直すと姓と名の分け方が変わる（「SHIKEN Rokuro」の姓は前の語、「Shiken Rokuro」の姓は後ろの
+    語）ときは、直さない（pdfdocx._structure の著者の形）。XML の姓は元の docx と同じ。"""
+    def parts(b):
+        return [mf.para(mf.S["sec1"], "１．はじめに"), mf.para(mf.S["body"], TALK)]
+    path = tmp_path / "name.docx"
+    mf.make_article(path, "ページ番号の判定の検証用文書", parts)
+    data = zipfile.ZipFile(path).read("word/document.xml").decode("utf-8")
+    assert data.count("Rokuro SHIKEN") == 1
+    swapped = tmp_path / "swapped.docx"
+    with zipfile.ZipFile(path) as zin, zipfile.ZipFile(swapped, "w") as zout:
+        for item in zin.infolist():
+            blob = zin.read(item.filename)
+            if item.filename == "word/document.xml":
+                blob = data.replace("Rokuro SHIKEN", "SHIKEN Rokuro").encode("utf-8")
+            zout.writestr(item, blob)
+    en = ["A Small Article", "For Checking", "Shiken Rokuro", "Fictional University", "Abstract", "Small article abstract."]
+    pages = n10_pages([*SMALL_FRONT, *body_lines(TALK), "引用および参考文献", SMALL_REF, *en])
+    res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "pdf", docx=swapped)
+    from jasme_jats.pdfdocx import STRUCTURE_REASON
+    name = [f for f in res.docx_fix.fixes if f.old in "HIKEN" and f.new in "hiken" and f.kind == "glyph"]
+    assert name and all(not f.applied and f.reason == STRUCTURE_REASON for f in name)
+    assert [x.text for x in load(res).iter("surname")][-1] == "SHIKEN"
+
+
+BULLETS = ["一つ目の項目として，架空の授業の記録を集めた。", "二つ目の項目として，記録を観点ごとに整理した。"]
+
+
+def bullet_article(tmp_path, journal):
+    """自動番号「●」の箇条書き（2 項目）のある小さな論文の構造と、段落の文字 -> 段落 ID。"""
+    def parts(b):
+        return [mf.para(mf.S["sec1"], "１．はじめに"), mf.para(mf.S["body"], TALK),
+                *[mf.list_item(mf.S["body"], t) for t in BULLETS]]
+    mf.make_article(tmp_path / "n10.docx", "ページ番号の判定の検証用文書", parts, bullet="●")
+    _, plan, _ = _mechanical(tmp_path / "n10.docx", journal)
+    return plan, {p.plain(): p.src for p in plan.paras.values()}
+
+
+def test_autonum_bullet_follows_pdf(journal, meta, tmp_path, monkeypatch):
+    """自動番号の「●」と PDF の「・」は、Word が付ける番号の字形の違い（組版の違い。NUMBER_PAIRS）。ルート2 は番号を「・」に
+    合わせて出力し（plan.pdf_numbers。docx の文字ではないので Fix は作らない）、要確認にしない。ルート1 は XML の番号は「●」の
+    まま（13 章の番号の表に出る）。"""
+    from jasme_jats.report import actions
+    plan, src = bullet_article(tmp_path, journal)
+    assert [plan.paras[src[t]].autonum.strip() for t in BULLETS] == ["●", "●"]
+    pages = n10_pages([*SMALL_FRONT, *body_lines(TALK), *[f"・{t}" for t in BULLETS], *N10_TAIL])
+    pc = compare(plan, pages)
+    assert {k: v.strip() for k, v in pc.number_edits.items()} == {("auto", src[t]): "・" for t in BULLETS}
+    assert pc.diffs == [] and plan_fixes(plan, pc) == []
+    res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "pdf", docx=tmp_path / "n10.docx")
+    xml = res.xml_path.read_text(encoding="utf-8")
+    assert "●" not in xml and xml.count("・") >= 2
+    assert res.docx_fix.fixes == [] and [a.key for a in actions(res)] == []
+    res1 = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "docx", docx=tmp_path / "n10.docx")
+    assert "●" in res1.xml_path.read_text(encoding="utf-8") and "pdf_diff" not in [a.key for a in actions(res1)]
+    assert "●" in chapters(res1)[1]
+
+
+def test_typeset_skipped_is_not_to_check(journal, meta, tmp_path):
+    """組版の違いの直す箇所だけが直せなかったとき（ほかの直す箇所と重なるなど）は要確認（pdf_unfixed）にしない。校正の直しが
+    直せなかったときは、今までどおり要確認。"""
+    pytest.importorskip("pypdfium2")
+    from jasme_jats.report import TO_CHECK, actions
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, pdf_path=PDFCHECK_PDF, route="pdf",
+                                                   convert_metafiles=False))
+    fx = res.docx_fix
+    assert len(fx.applied_text) == 1 and len(fx.applied_typeset) == 43 and actions(res) == []
+    f = fx.applied_typeset[0]
+    f.applied, f.reason = False, "ほかの直す箇所と重なる"
+    assert fx.skipped_typeset == [f] and fx.skipped_text == [] and actions(res) == []
+    g = fx.applied_text[0]
+    g.applied, g.reason = False, "ほかの直す箇所と重なる"
+    assert {a.key: a.level for a in actions(res)} == {"pdf_unfixed": TO_CHECK}
+
+
+def test_unfixable_typeset_diff_is_typeset_fix(journal, tmp_path):
+    """直せない文字にかかる（足す位置を決められないなど。fixable が偽で why のない）組版の違いだけの違いは、理由付きの組版の違いの
+    Fix（glyph・width）にする（要確認の数に入れない）。"""
+    text = "架空の研究では pp.11–16 の範囲を参照した。"
+    plan, src = guard_article(tmp_path, journal, [text])
+    s = src[text]
+    a = text.index("–")
+    pc = PdfCheck(diffs=[TextDiff(s, "–", "-", "", a, a + 1, False, "", "typeset"),
+                         TextDiff(s, "(", "（", "", 0, 1, False, "", "typeset")])
+    assert [(f.kind, bool(f.reason), f.typeset) for f in plan_fixes(plan, pc)] == \
+        [("width", True, True), ("glyph", True, True)]
+
+
+def test_route1_typeset_only_has_no_action(journal, meta, tmp_path, monkeypatch):
+    """組版の違い（全角・半角とダッシュ）だけの論文のルート1 では、要確認（pdf_diff）がなく、違いは 13.2 にだけ載る。"""
+    from jasme_jats.report import actions
+    plan, src = n10_article(tmp_path, journal, [("body", DASH_BODY), ("body", TALK)])
+    pub = DASH_BODY.replace("–", "-").replace("，", ",")
+    pages = n10_pages([*SMALL_FRONT, *body_lines(pub.replace("pp.11-16", "pp.11-16")), *body_lines(TALK.replace("３", "3")),
+                       *N10_TAIL])
+    pc = compare(plan, pages)
+    assert pc.text_diffs == [] and pc.typeset_count == 3
+    res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "docx", docx=tmp_path / "n10.docx")
+    assert "pdf_diff" not in [a.key for a in actions(res)]
+    ch13 = chapters(res)[1]
+    sec1 = ch13.split("### 13.1")[1].split("### 13.2")[0]
+    assert "ありません" in sec1 and "–" not in sec1 and "–" in ch13.split("### 13.2")[1].split("### 13.3")[0]
+
+
+def test_width_only_region_without_why(journal, tmp_path):
+    """全角・半角だけの違いは今までどおり width に入り、kind typeset の違い（TextDiff）にならない（_report_regions の組版の違いの
+    判定を広げても挙動が変わらない）。"""
+    text = "本研究では，架空の授業の記録を合計で58件集め，観点ごとに整理した。"
+    plan, src = guard_article(tmp_path, journal, [text])
+    pc = compare(plan, guard_pages(*cut_lines("　" + text.replace("58", "５８"))))
+    assert pc.diffs == [] and pc.width == {src[text]: {text.index("58"): "５", text.index("58") + 1: "８"}}
+    assert pc.typeset_count == 2
+
+
+def test_route2_chapter13_sections(journal, meta, tmp_path):
+    """13 章の節の見出しの順と名前: ルート2 は 13.1〜13.8、ルート1 は 13.1〜13.4。"""
+    pytest.importorskip("pypdfium2")
+    import re
+    from jasme_jats.report import IGNORED_TITLE
+    res2 = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "2", pdf_path=PDFCHECK_PDF, route="pdf",
+                                                    convert_metafiles=False))
+    heads2 = re.findall(r"^### (13\.\d .*)$", chapters(res2)[1], flags=re.M)
+    assert heads2 == ["13.1 PDF で補った校正の直し（変更履歴）", "13.2 組版の違い（PDF に合わせた。確認は要りません）",
+                      "13.3 直さなかった箇所（要確認）", "13.4 Word が付ける番号", "13.5 補った docx と PDF の照合（残っている違い）",
+                      "13.6 PDF の中に見つからなかった段落", f"13.7 {IGNORED_TITLE}", "13.8 補完の確かめ"]
+    res1 = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "1", pdf_path=PDFCHECK_PDF, convert_metafiles=False))
+    heads1 = re.findall(r"^### (13\.\d .*)$", chapters(res1)[1], flags=re.M)
+    assert heads1 == ["13.1 文字の違い（要確認）", "13.2 組版の違い（docx のまま）", "13.3 PDF の中に見つからなかった段落",
+                      f"13.4 {IGNORED_TITLE}"]
+
+
+@pytest.mark.parametrize("space, dropped", [("　", False), (" ", True)], ids=["fullwidth", "halfwidth"])
+def test_fullwidth_space_next_to_width_fix_is_kept(space, dropped, journal, tmp_path):
+    """全角・半角を直した文字のすぐ隣の、PDF にない空白（drops）として消すのは半角の空白だけ。docx の全角の空白（キャプションの
+    「図1　架空の…」の区切りなど）は消さない（0.27 までは「図１架空の…」にしていた）。"""
+    text = f"本研究では，図1{space}架空の授業の流れに示すとおり，観点ごとに記録を整理した。"
+    plan, src = guard_article(tmp_path, journal, [text])
+    s = src[text]
+    pc = compare(plan, guard_pages(*cut_lines("　本研究では，図１ 架空の授業の流れに示すとおり，観点ごとに記録を整理した。")))
+    fixes = [(f.old, f.new, f.kind) for f in plan_fixes(plan, pc) if f.src == s]
+    assert fixes == [("1", "１", "width")] + ([(" ", "", "space")] if dropped else [])
+    want = text.replace("図1", "図１").replace("図１ ", "図１") if dropped else text.replace("図1", "図１")
+    assert fixed_texts(plan, pc)[s] == want

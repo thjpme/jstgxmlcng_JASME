@@ -171,17 +171,17 @@ cells = [
     code(PREP + "DONE = {1}\n"),
     code("""
 #@title 2. 作り方を選び、論文の docx と PDF をアップロード
-#@markdown **ROUTE**（作り方）: 「出版版 PDF に合わせてから作る」は、docx の文字を出版版 PDF に合わせて直した docx（Word の変更履歴つき）を作ってから変換します（PDF が必要）。「docx から作る」は docx の文字のまま変換します（PDF がまだないときはこちら）。違いは説明書の「出版版 PDF との照合と、2 通りの作り方」。
-ROUTE = "出版版 PDF に合わせてから作る"  #@param ["出版版 PDF に合わせてから作る", "docx から作る"]
+#@markdown **ROUTE**（作り方）: 「docx から作り、出版版 PDF で補う」は、Word の文字を正として、出版版 PDF から著者校正の直しと組版の違い（全角・半角・ダッシュ・引用符など）を補った docx（Word の変更履歴つき）を作ってから変換します（PDF が必要）。「docx から作る」は docx の文字のまま変換します（PDF がまだないときはこちら）。違いは説明書の「出版版 PDF との照合と、2 通りの作り方」。
+ROUTE = "docx から作り、出版版 PDF で補う"  #@param ["docx から作り、出版版 PDF で補う", "docx から作る"]
 #@markdown **UPLOAD_PDF**: J-STAGE に登載する PDF もアップロードします。PDF がまだないときはチェックを外し、作り方を「docx から作る」にします。
 UPLOAD_PDF = True  #@param {type:"boolean"}
 """ + guard(1) + """
 from pathlib import Path
 from google.colab import files
 
-ROUTE_KEY = {"docx から作る": "docx", "出版版 PDF に合わせてから作る": "pdf"}[ROUTE]
+ROUTE_KEY = {"docx から作る": "docx", "docx から作り、出版版 PDF で補う": "pdf", "出版版 PDF に合わせてから作る": "pdf"}[ROUTE]
 if ROUTE_KEY == "pdf" and not UPLOAD_PDF:
-    raise SystemExit("「出版版 PDF に合わせてから作る」には PDF が必要です。UPLOAD_PDF にチェックを入れるか、PDF がまだないときは"
+    raise SystemExit("「docx から作り、出版版 PDF で補う」には PDF が必要です。UPLOAD_PDF にチェックを入れるか、PDF がまだないときは"
                      "作り方（ROUTE）を「docx から作る」にして、もう一度この手順を実行してください。")
 WORK = Path("/content/jasme_work")
 INPUT = WORK / "input"
@@ -213,7 +213,7 @@ if UPLOAD_PDF:
     pdf_files = upload("J-STAGE に登載する PDF", ".pdf")
     pdf_path = pdf_files[0] if pdf_files else None
 if ROUTE_KEY == "pdf" and not pdf_path:
-    raise SystemExit("「出版版 PDF に合わせてから作る」には PDF が必要です。もう一度この手順を実行し、PDF を選んでください"
+    raise SystemExit("「docx から作り、出版版 PDF で補う」には PDF が必要です。もう一度この手順を実行し、PDF を選んでください"
                      "（PDF がまだないときは、作り方（ROUTE）を「docx から作る」にしてから実行します）。")
 print()
 print("作り方:", ROUTE)
@@ -453,7 +453,7 @@ if _missing:
 """ + mark(7)),
     code("""
 #@title 8. 結果をダウンロード
-#@markdown 「変換結果_巻_開始ページ.zip」（J-STAGE にアップロードする jasme_巻_開始ページ.zip、XML、変換レポート。「出版版 PDF に合わせてから作る」では（PDF の文字を読めたとき）PDF に合わせて直した docx も）をダウンロードします。要対応（赤い枠）が残っていると一度止まります（そのままダウンロードするときは、もう一度 ▶）。
+#@markdown 「変換結果_巻_開始ページ.zip」（J-STAGE にアップロードする jasme_巻_開始ページ.zip、XML、変換レポート。「docx から作り、出版版 PDF で補う」では（PDF の文字を読めたとき）PDF で補った docx も）をダウンロードします。要対応（赤い枠）が残っていると一度止まります（そのままダウンロードするときは、もう一度 ▶）。
 """ + guard(1, 2, 3, 4, 5) + """from IPython.display import HTML, display
 from jasme_jats.colab import result_boxes
 from jasme_jats.report import NEEDS_ACTION, actions, images_to_prepare

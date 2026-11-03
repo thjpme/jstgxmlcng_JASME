@@ -109,10 +109,13 @@ def summary_box(res) -> str:
              "問題なし" if not issues else f"要対応 {len(issues)} 件\n" + "\n".join(f"　{mid} {msg}" for mid, msg in issues),
              not issues),
             ("出版版 PDF との照合", pdf_summary(res), True)]
+    sup = getattr(res, "supplement", None)
+    if sup is not None:             # ルート2 で補完の確かめを行ったときだけ
+        rows.insert(4, ("出版版 PDF による補完の確かめ", "合格" if sup.ok else "不合格（この XML は登載に使わないでください）", sup.ok))
     if res.docx_fix is not None:
-        rows.append(("PDF に合わせて直した docx", f"{res.docx_fix.path.name}（変更履歴つき。ダウンロードする ZIP に入ります）", True))
+        rows.append(("PDF で補った docx", f"{res.docx_fix.path.name}（変更履歴つき。ダウンロードする ZIP に入ります）", True))
     elif res.pdf_fallback:
-        rows.append(("PDF に合わせて直した docx", "作れませんでした（PDF の文字を読めなかったため、docx を直さずに変換しました）", False))
+        rows.append(("PDF で補った docx", "作れませんでした（PDF の文字を読めなかったため、docx を補わずに変換しました）", False))
     lines = "".join(f"<div style='white-space:pre-wrap{'' if ok else ';color:#b91c1c;font-weight:bold'}'>"
                     f"{html.escape(label)}: {html.escape(value)}</div>" for label, value, ok in rows)
     return f"<div style=\"{_SUMMARY}\"><div style='font-weight:bold;margin-bottom:2px'>結果の要約</div>{lines}</div>"
@@ -218,8 +221,9 @@ def pdf_diff_box(res) -> str:
     """出版版 PDF との照合で確認が必要なことがあるときの表示（要対応は赤、要確認は黄の枠。report.pdf_actions）。なければ空文字。
 
     ルート1（docx から作る）: docx と PDF で文字が違う箇所。PDF の文字を読めなければ「照合できませんでした」（要確認）。
-    ルート2（出版版 PDF に合わせてから作る）: 直せなかった箇所と、直した後も残る違い（直した docx は変換結果の ZIP に入る）。
-    PDF の文字を読めなければ「出版版 PDF に合わせられませんでした」（要対応）。どちらでも、docx の段落の半分以上が PDF に
+    ルート2（docx から作り、出版版 PDF で補う）: 直さなかった箇所と、補った後も残る違い（組版の違いは数えない。補った docx は
+    変換結果の ZIP に入る）。PDF の文字を読めなければ「出版版 PDF で補えませんでした」（要対応）。補完の確かめの不合格の枠は
+    ここではなく result_boxes()（report.actions の全部）に出る。どちらでも、docx の段落の半分以上が PDF に
     見つからなければ「別の記事の PDF かもしれません」、照合に使わなかった PDF の文字があればその枠も出す。
     """
     from .report import pdf_actions

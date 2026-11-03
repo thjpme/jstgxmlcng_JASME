@@ -28,15 +28,22 @@ def test_summary_box_and_report_details(journal, meta, tmp_path, monkeypatch):
     html = summary_box(res)
     assert "結果の要約" in html and "文字の不変性チェック: 合格" in html and "DTD 検証: 合格" in html
     assert "J-STAGE のアップロード時チェック: 問題なし" in html and "出版版 PDF との照合: PDF なし" in html
-    assert "#b91c1c" not in html and "PDF に合わせて直した docx" not in html
+    assert "#b91c1c" not in html and "PDF で補った docx" not in html
     res.dtd_valid = False
     assert "color:#b91c1c;font-weight:bold'>DTD 検証: 不合格" in summary_box(res)
-    # ルート2 で直した docx の名前。PDF の文字を読めなかったときは、直せなかったことを赤い文字で
-    res.docx_fix = SimpleNamespace(path=tmp_path / "31_1_PDFに合わせた原稿.docx")
-    assert "PDF に合わせて直した docx: 31_1_PDFに合わせた原稿.docx（変更履歴つき" in summary_box(res)
+    # ルート2 で補った docx の名前。PDF の文字を読めなかったときは、補えなかったことを赤い文字で
+    res.docx_fix = SimpleNamespace(path=tmp_path / "31_1_PDFで補完した原稿.docx")
+    assert "PDF で補った docx: 31_1_PDFで補完した原稿.docx（変更履歴つき" in summary_box(res)
+    # 補完の確かめ（ルート2 で行ったときだけ。不合格は赤字）
+    assert "補完の確かめ" not in summary_box(res)
+    res.supplement = SimpleNamespace(ok=True)
+    assert "<div style='white-space:pre-wrap'>出版版 PDF による補完の確かめ: 合格" in summary_box(res)
+    res.supplement = SimpleNamespace(ok=False)
+    assert "color:#b91c1c;font-weight:bold'>出版版 PDF による補完の確かめ: 不合格" in summary_box(res)
+    res.supplement = None
     res.docx_fix = None
     monkeypatch.setattr(type(res), "pdf_fallback", property(lambda self: True))
-    assert "font-weight:bold'>PDF に合わせて直した docx: 作れませんでした" in summary_box(res)
+    assert "font-weight:bold'>PDF で補った docx: 作れませんでした" in summary_box(res)
     md = "# 変換レポート\n\n| 項目 | 結果 |\n|---|---|\n| 不変性 | 合格 |\n\n> **注意** <b>\n"
     html = report_details(md)
     assert html.index("<details") < html.index("<summary") and "変換レポートの全文を見る" in html
@@ -88,7 +95,7 @@ def test_missing_images_box(journal, meta, tmp_path):
 
 
 def test_pdf_diff_box_shows_formula_and_insert_marks():
-    """ルート2 の赤い枠の直せなかった箇所の docx の文字は、レポートの 13.2 と同じ形にする（docx の数式・画像は「〓」、PDF に
+    """ルート2 の赤い枠の直さなかった箇所の docx の文字は、レポートの 13.3 と同じ形にする（docx の数式・画像は「〓」、PDF に
     だけある文字は、足す位置の前後の docx の文字と「［］」）。同じ記号の 2 つの意味（docx の数式と、PDF で読み取れない部分）を
     一覧の前に添える（MATH_WHY の行。docx の数式の位置の行と、PDF にだけある文字の行）。"""
     from pathlib import Path
@@ -98,7 +105,7 @@ def test_pdf_diff_box_shows_formula_and_insert_marks():
     from jasme_jats.pdfmatch import MATH_WHY, PdfCheck
     text = "値の組（￼，￼）を順に調べ，その確率を表に記録した。"
     at = text.index("を表")
-    fx = DocxFix(Path("31_1_PDFに合わせた原稿.docx"), texts={"d12": text},
+    fx = DocxFix(Path("31_1_PDFで補完した原稿.docx"), texts={"d12": text},
                  fixes=[Fix("d12", 4, 5, "〓，〓", "text", old="￼", reason=MATH_WHY),
                         Fix("d12", at, at, "（〓，…，〓とおく）", "text", reason=MATH_WHY)])
     html = pdf_diff_box(SimpleNamespace(pdf_check=PdfCheck(), docx_fix=fx))
