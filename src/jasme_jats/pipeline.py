@@ -120,7 +120,7 @@ class Options:
     out_dir: Path
     split_labels: Optional[bool] = None       # None なら雑誌の設定に従う
     ai_mode: str = "none"                     # none / api / manual
-    ai_provider: str = "claude"               # API モードで使う AI: claude（推奨）/ openai（ChatGPT）/ gemini
+    ai_provider: str = "claude"               # API モードで使う AI: claude（推奨）/ openai（ChatGPT）/ gemini / sakana（Sakana AI）
     ai_model: str = DEFAULT_MODEL             # claude 以外では利用者が指定する
     ai_api_key: Optional[str] = None
     ai_response: Optional[str] = None         # 手動モード: AI の回答（JSON）

@@ -9,7 +9,7 @@
   「docx の文字」は、Word で表示される文字（変更履歴をすべて承諾し、隠し文字を隠した状態）とする。読み取り（docx_reader）・
   検証（canonical_text・canonical_texts。fidelity.source_texts）・ルート2（pdfdocx.paragraph_units・write_fixed_docx）の 3 か所は、
   ここに置く規則（段落のつながり joined_paragraphs と、隠し文字の判定 HiddenRule）を共有し、文字の取り出しはそれぞれ別の実装で行う。
-  含める: w:t, m:t（数式中の文字）, w:tab（タブ文字）, 改行 w:br / w:cr（改行文字）,
+  含める: w:t, m:t（数式中の文字）, w:tab / w:ptab（タブ文字）, 改行 w:br / w:cr（改行文字）,
           w:noBreakHyphen（U+2011）, w:softHyphen（U+00AD）, w:sym（記号フォントは Unicode に対応付け）
   含めない: 削除された変更履歴（w:del, w:moveFrom）, フィールドコード, 隠し文字（HiddenRule。ランの直接の w:vanish・w:specVanish、
           文字スタイル・段落スタイル〈w:basedOn をたどる〉と既定の書式〈w:docDefaults〉の w:vanish）,

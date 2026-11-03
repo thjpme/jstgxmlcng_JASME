@@ -17,7 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 ai = ["anthropic>=1.0", "openai>=1.66", "google-genai>=1.30"]
 images = ["pypdfium2>=4"]
-gui = ["gradio==6.31.0"]    # 1 画面の操作画面（app.py。試作）。版は固定する（docs/GUI_PLAN.md の 8 章）
+gui = ["gradio==6.31.0"]    # 1 画面の操作画面（app.py。一般の利用者用）。版は固定する（docs/GUI_PLAN.md の 8 章）
 colab = ["markdown>=3.4"]    # Colab で変換レポートを畳んで表示する（colab.report_details）
 dev = ["pytest>=7", "anthropic>=1.0", "openai>=1.66", "google-genai>=1.30", "pypdfium2>=4", "markdown>=3.4", "gradio==6.31.0"]
 

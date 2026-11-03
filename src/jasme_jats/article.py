@@ -189,7 +189,7 @@ class ArticlePlan:
     formulas: list = field(default_factory=list)
     paras: dict = field(default_factory=dict)        # src -> Para
     locations: dict = field(default_factory=dict)    # src -> 人が読める位置
-    region: dict = field(default_factory=dict)       # src -> front_ja / body / notes / ack / fn / refs / front_en / app
+    region: dict = field(default_factory=dict)       # src -> front_ja / authors / body / back / notes / ack / fn / refs / front_en / app / excluded
     citation_mode: str = ""                          # author-year / numeric（refparse が設定）
     uncited_refs: list = field(default_factory=list) # 本文からリンクされていない文献の ID
     floats: dict = field(default_factory=dict)       # 浮動配置の図形の ID -> FloatInfo

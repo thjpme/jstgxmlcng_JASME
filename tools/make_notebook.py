@@ -1,8 +1,8 @@
-"""Colab 用ノートブック notebooks/JASME_docx_to_JSTAGE_XML.ipynb を生成する。
+"""Colab 用ノートブック notebooks/JASME_docx_to_JSTAGE_XML.ipynb（従来版）と JASME_docx_to_JSTAGE_XML_GUI.ipynb（1 画面版）を生成する。
 
-  python tools/make_notebook.py
+  python tools/make_notebook.py [--branch ブランチ名]
 
-ノートブックを Colab 上で直接編集して GitHub に保存してもよいが、その場合はこのスクリプトにも同じ変更を反映すること。
+ipynb を直接編集せず、このスクリプトを直して作り直す（CLAUDE.md。作り直し忘れは tests/test_notebook.py が検出する）。
 """
 import ast
 import json

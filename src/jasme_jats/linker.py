@@ -123,7 +123,7 @@ def find_in_para(p: Para, text: str, occurrence: int = 1):
 
 # ---------------------------------------------------------------------------- 本文の段落を列挙
 def body_paragraphs(plan: ArticlePlan):
-    """リンク付けの対象となる段落を (para, 文脈) で列挙する。文脈: body / caption / cell / abstract / back / ref
+    """リンク付けの対象となる段落を (para, 文脈) で列挙する。文脈: body / title（見出し）/ caption / cell / formula / abstract / back / fn / ref
 
     docx の表のセルの段落を表の外に出したもの（表のセルの画像とキャプションで組んだ図のキャプションと、画像と同じ段落の文字。
     plan.cell_paras）は、今までどおり cell とする（出版版 PDF との照合で、表のセルとして照合しない・直さない。pdfmatch）。

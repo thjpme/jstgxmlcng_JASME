@@ -2,6 +2,7 @@
 
 論文の docx を J-STAGE 全文 XML（JATS 1.1）に変換するツール（『全国数学教育学会誌 数学教育学研究』用）。
 作業の前に `docs/DEVELOPMENT.md`（コードの構成・守るべき原則・反映の流れ）と `docs/DESIGN.md`（設計）を読むこと。
+コードの地図（層・依存・データの流れ・逆引き）は `docs/ARCHITECTURE.md`、未修正の問題の一覧は `docs/REVIEW_2026-11.md`。
 新しく引き継いだ人向けの環境の作り方は `docs/HANDOFF.md`。
 
 ## 最優先の原則
