@@ -89,32 +89,62 @@ def test_next_article_clears_only_per_article_items(tmp_path):
     assert st.res is None and st.result_html() == "" and not (st.work / "output").exists()
 
 
-def test_missing_images_are_filled_in_filename_order(tmp_path, monkeypatch):
+def test_missing_images_are_filled_per_figure(tmp_path, monkeypatch):
     import dataclasses
     import io
     from PIL import Image
     real = app.convert
-    # EMF を変換しない設定にして、テンプレートの図 1 の画像を用意できない状態にする（LibreOffice の有無に左右されない）
+    # EMF を変換しない設定にして、テンプレートの図の画像を用意できない状態にする（LibreOffice の有無に左右されない）
     monkeypatch.setattr(app, "convert", lambda d, m, j, o: real(d, m, j, dataclasses.replace(o, convert_metafiles=False)))
     st = filled(tmp_path, docx=TEMPLATE)
     st.convert()
     rows = st.missing_images()
     assert rows and "必要です" in st.images_markdown() and rows[0][0] in st.images_markdown()
-    assert st.needs_action
+    assert st.image_slots() == rows and st.needs_action
+    assert st.slot_label("a.png", "図1 x") == "図1 x（a.png）" and st.slot_label("a.png", "") == "a.png"
     buf = io.BytesIO()
     Image.new("RGB", (60, 40), "white").save(buf, "PNG")
-    pics = []
-    for name in ("b.png", "a.png"):
-        p = tmp_path / name
-        p.write_bytes(buf.getvalue())
-        pics.append(p)
-    added = st.add_images(pics)                    # 足りない図が 1 つなら、名前の順で先頭の a.png だけを使う
-    assert added == [rows[0][0]] and len(st.missing_images()) == len(rows) - 1
-    assert list(st.user_images.values())[0][0] == "a.png"
+    pic = tmp_path / "z_any_name.png"                  # ファイル名は何でもよい。割り当ては名前の順ではなく、図ごとの指定
+    pic.write_bytes(buf.getvalue())
+    last = rows[0][0]                                  # テンプレートの足りない図は 1 つ（欄が複数のときも、選んだ欄だけを入れる）
+    added = st.add_images({last: str(pic), "31_1_99.png": None})       # 選んでいない欄（None）は飛ばす
+    assert added == [last] and last not in [r[0] for r in st.missing_images()]
+    assert len(st.missing_images()) == len(rows) - 1 and st.user_images[last][0] == "z_any_name.png"
     with pytest.raises(InputError, match="選ばれていません"):
-        st.add_images([])
-    st.convert()                                   # 変換し直すと、前の画像は持ち越さない
+        st.add_images({})
+    with pytest.raises(InputError, match="選ばれていません"):
+        st.add_images({last: None})
+    with pytest.raises(InputError, match="用意が必要な画像ではありません"):
+        st.add_images({last: str(pic)})                # 入れた図はもう必要ない
+    st.convert()                                       # 変換し直すと、前の画像は持ち越さない
     assert len(st.missing_images()) == len(rows)
+
+
+def test_image_slots_in_view(tmp_path):
+    """build_app の画面更新: 足りない図の数だけ欄を見せ、ラベルは「キャプション（出力ファイル名）」。上限を超えた分は見せない。"""
+    import types
+    import gradio as gr
+    st = AppState(tmp_path / "work")
+    st.res = types.SimpleNamespace(needs_action=True)      # 模擬の結果（AI は使わない設定なので回答待ちにならない）
+    st.set_inputs(ai_mode="none")
+    st.result_html = lambda: ""
+    rows = [(f"31_1_{k:02d}.png", f"図{k} 架空の図" if k % 2 else "", "why") for k in range(1, app.MAX_IMAGE_SLOTS + 4)]
+    assert len(rows) > app.MAX_IMAGE_SLOTS
+    st.missing_images = lambda: rows
+    assert len(st.image_slots()) == app.MAX_IMAGE_SLOTS
+    assert f"{app.MAX_IMAGE_SLOTS} 件までです" in st.images_markdown()
+    assert st.slot_label(*rows[0][:2]) == "図1 架空の図（31_1_01.png）" and st.slot_label(*rows[1][:2]) == "31_1_02.png"
+    demo = app.build_app(st, app.IO())
+    assert isinstance(demo, gr.Blocks)
+    fns = {f.fn.__name__: f.fn for f in demo.fns.values()}
+    out = fns["on_images"](*[None] * app.MAX_IMAGE_SLOTS)                 # 何も選ばないとエラー（画面の更新の数は変わらない）
+    assert len(out) == 9 + app.MAX_IMAGE_SLOTS and "選ばれていません" in out[0]
+    slots = out[9:]
+    assert slots[0]["visible"] and slots[0]["label"] == "図1 架空の図（31_1_01.png）" and slots[0]["value"] is None
+    assert slots[1]["label"] == "31_1_02.png" and all(u["visible"] for u in slots)
+    st.missing_images = lambda: rows[:2]
+    slots = fns["on_images"](*[None] * app.MAX_IMAGE_SLOTS)[9:]
+    assert [u["visible"] for u in slots] == [True, True] + [False] * (app.MAX_IMAGE_SLOTS - 2)
 
 
 def test_io_reads_secrets_and_waits_for_libreoffice(monkeypatch):

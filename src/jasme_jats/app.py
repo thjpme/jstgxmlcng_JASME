@@ -25,6 +25,7 @@ from .pipeline import AIRequiredError, Options, add_images, convert
 from .report import NEEDS_ACTION, actions, ai_pending, images_to_prepare
 
 DOCS = "https://github.com/thjpme/jstgxmlcng_JASME/blob/main/docs/USAGE.md"
+MAX_IMAGE_SLOTS = 30          # 足りない画像の欄の数（最初から作って、足りない図の数だけ見せる）。これより多い分は「画像を入れる」の後に出る
 
 # 画面の入力欄。名前は AppState.inputs の鍵で、画面の部品の並びもこの順（INPUT_NAMES）
 ROUTES = [("docx から作り、出版版 PDF で補う", "pdf"), ("docx から作る", "docx")]
@@ -250,23 +251,34 @@ class AppState:
         """画像を用意する必要がある図: [(出力ファイル名, 図のキャプション, 理由)]。"""
         return images_to_prepare(self.res) if self.res is not None else []
 
+    def image_slots(self) -> list:
+        """画面に欄を出す図: missing_images() の先頭から MAX_IMAGE_SLOTS 件まで。"""
+        return self.missing_images()[:MAX_IMAGE_SLOTS]
+
+    @staticmethod
+    def slot_label(name: str, caption: str) -> str:
+        """欄のラベル: 「図のキャプション（出力ファイル名）」。キャプションがなければ出力ファイル名だけ。"""
+        return f"{caption}（{name}）" if caption else name
+
     def images_markdown(self) -> str:
         rows = self.missing_images()
         if not rows:
             return ""
-        lines = [f"次の図の画像が必要です（{len(rows)} 件）。ファイルは名前の順に、上の図から割り当てます。"]
-        lines += [f"{i}. {cap or name}（{name}）" for i, (name, cap, _why) in enumerate(rows, 1)]
+        lines = [f"次の図の画像が必要です（{len(rows)} 件）。図ごとにファイルを選んで「画像を入れる」を押してください。"
+                 "ファイル名は何でもかまいません。一部の図だけ入れてもよく、残りの図の欄は残ります。"]
+        if len(rows) > MAX_IMAGE_SLOTS:
+            lines.append(f"一度に出す欄は {MAX_IMAGE_SLOTS} 件までです。上の {MAX_IMAGE_SLOTS} 件を入れると、続きの欄が出ます。")
+        lines += [f"{i}. {self.slot_label(name, cap)}" for i, (name, cap, _why) in enumerate(rows, 1)]
         return "\n".join(lines)
 
-    def add_images(self, paths) -> list:
-        """選んだ画像（複数）を、足りない図に出力ファイル名の順に割り当てて入れる。戻り値: 入れた出力ファイル名。"""
+    def add_images(self, mapping: dict) -> list:
+        """選んだ画像を、図ごとに入れる。mapping: 出力ファイル名 → ファイルのパス。戻り値: 入れた出力ファイル名。"""
         if self.res is None:
             raise InputError("先に変換してください。")
-        files = sorted((Path(p) for p in paths or []), key=lambda p: p.name)
-        names = [name for name, _cap, _why in self.missing_images()]
-        if not files:
+        chosen = {name: Path(p) for name, p in (mapping or {}).items() if p}
+        if not chosen:
             raise InputError("画像が選ばれていません。")
-        supplied = {name: (p.name, p.read_bytes()) for name, p in zip(names, files)}
+        supplied = {name: (p.name, p.read_bytes()) for name, p in chosen.items()}
         try:
             added = add_images(self.res, supplied)
         except ValueError as e:
@@ -394,7 +406,8 @@ def build_app(state: AppState, io: "IO | None" = None):
             apply_btn = gr.Button("反映")
         with gr.Column(visible=False) as images_col:
             images_md = gr.Markdown()
-            images_up = gr.File(label="足りない図の画像（PNG・JPEG など。複数可）", file_count="multiple")
+            image_files = [gr.File(label=f"足りない図の画像 {k}", file_count="single", visible=False)
+                           for k in range(1, MAX_IMAGE_SLOTS + 1)]        # 図ごとの欄。view() が見せる数とラベルを決める
             images_btn = gr.Button("画像を入れる")
         with gr.Row():
             accept = gr.Checkbox(label="このままダウンロード（要対応が残っています）", visible=False)
@@ -406,7 +419,8 @@ def build_app(state: AppState, io: "IO | None" = None):
                   keywords_en, pub_date, epub_date, received, accepted, corresp, doi, subject_other, subject_other_en,
                   ai_mode, model, split_labels]
         assert len(inputs) == len(INPUT_NAMES)
-        views = [message, result, manual_col, prompt, attach, images_col, images_md, accept, download_html]
+        views = [message, result, manual_col, prompt, attach, images_col, images_md, accept, download_html] + image_files
+        assert len(views) == 9 + MAX_IMAGE_SLOTS
 
         def sync(values):
             state.set_inputs(**dict(zip(INPUT_NAMES, values)))
@@ -414,6 +428,7 @@ def build_app(state: AppState, io: "IO | None" = None):
         def view(error: "InputError | None" = None, download: str = ""):
             """結果に応じた画面の更新（views の順）。"""
             manual = state.waiting_for_answer
+            slots = state.image_slots()
             return [message_html(error) if error else "",
                     state.result_html(),
                     gr.update(visible=manual),
@@ -422,7 +437,9 @@ def build_app(state: AppState, io: "IO | None" = None):
                     gr.update(visible=bool(state.missing_images())),
                     state.images_markdown(),
                     gr.update(visible=state.needs_action, value=False),
-                    download]
+                    download] + [gr.update(visible=True, label=state.slot_label(name, cap), value=None)
+                                 for name, cap, _why in slots] \
+                + [gr.update(visible=False, value=None)] * (MAX_IMAGE_SLOTS - len(slots))
 
         def on_change(*values):
             sync(values)
@@ -444,30 +461,32 @@ def build_app(state: AppState, io: "IO | None" = None):
                 return view(e)
             return view()
 
-        def on_images(paths):
+        def on_images(*paths):
+            names = [name for name, _cap, _why in state.image_slots()]       # 欄の並びは、直前の view() で出したもの
             try:
-                state.add_images(paths)
+                state.add_images(dict(zip(names, paths)))
             except InputError as e:
                 return view(e)
             return view()
 
         def on_download(accept_todo):
             path, note = state.download(accept_todo)
-            keep = [gr.update()] * (len(views) - 2)       # 結果などはそのまま（message と download_html だけ変える）
-            return ([error_box("ダウンロードの前に", note) if note else ""] + keep
-                    + [download_button_html(path) if path else ""])
+            out = [gr.update()] * len(views)               # 結果などはそのまま（message と download_html だけ変える）
+            out[0] = error_box("ダウンロードの前に", note) if note else ""
+            out[8] = download_button_html(path) if path else ""
+            return out
 
         def on_next():
             state.reset()
-            return [state.inputs[n] for n in INPUT_NAMES] + view() + ["", None]
+            return [state.inputs[n] for n in INPUT_NAMES] + view() + [""]
 
         for comp in inputs:
             comp.change(on_change, inputs, [go, ready], api_name=False)
         go.click(on_convert, inputs, views)
         apply_btn.click(on_apply, [answer], views)
-        images_btn.click(on_images, [images_up], views)
+        images_btn.click(on_images, image_files, views)
         download_btn.click(on_download, [accept], views)
-        next_btn.click(on_next, None, inputs + views + [answer, images_up])
+        next_btn.click(on_next, None, inputs + views + [answer])
     return demo
 
 
