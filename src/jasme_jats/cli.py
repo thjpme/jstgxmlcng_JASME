@@ -2,13 +2,14 @@
 
   python -m jasme_jats 論文.docx --meta 書誌情報.toml --out 出力フォルダ [--ai api|manual|none]
                        [--ai-provider claude|openai|gemini|sakana] [--ai-model モデル名] [--pdf 記事.pdf [--route docx|pdf]]
+                       [--ai manual --ai-response 回答のファイル]
 
 書誌情報ファイル（TOML）の例は examples/meta_example.toml を参照。
 
 終了コード: 0 は要対応なし、1 は要対応あり（report.actions の「要対応」。一覧は標準エラーに出す。--meta がない・
 画像が足りない・手動モードで AI の回答をまだ指定していない、なども 1）、2 は変換を中止した（書誌情報の誤り、AI による補完が
-必要な原稿を --ai none で変換したとき、--images の画像を読めないとき。引数の誤り〈指定したファイル・フォルダがないなど〉も
-argparse が 2 で止める）。
+必要な原稿を --ai none で変換したとき、--images の画像を読めないとき。引数の誤り〈指定したファイル・フォルダがない、
+--ai manual でないのに --ai-response を指定した、など〉も argparse が 2 で止める）。
 """
 from __future__ import annotations
 
@@ -39,7 +40,8 @@ def main(argv=None):
     ap.add_argument("--ai-model",
                     help=f"API モードで使うモデル。claude の既定は {DEFAULT_MODEL}（auto で使える最新の Opus。指定したモデルが"
                          "使えなければ最新の Opus に切り替える）。claude 以外では必ず指定する（Claude Opus と同等以上のモデルを推奨）")
-    ap.add_argument("--ai-response", type=Path, help="手動モード: AI の回答（JSON）を保存したファイル")
+    ap.add_argument("--ai-response", type=Path,
+                    help="手動モード（--ai manual と一緒に指定する）: AI の回答（JSON）を保存したファイル")
     ap.add_argument("--pdf", type=Path, help="記事の PDF（J-STAGE への登載に必須。指定すると ZIP に入れる。"
                                           "指定しなければ、記事フォルダに前の変換の PDF が残っていても ZIP に入れない）")
     ap.add_argument("--route", choices=["docx", "pdf"],
@@ -55,6 +57,10 @@ def main(argv=None):
     if a.ai == "api" and a.ai_provider != "claude" and not a.ai_model:
         ap.error(f"--ai-provider {a.ai_provider} では --ai-model でモデル名を指定してください"
                  "（Claude Opus と同等以上のモデルを推奨）")
+    if a.ai_response is not None and a.ai != "manual":
+        # 回答のファイルは --ai manual のときだけ読む（--ai の既定は none）。黙って無視すると、AI の回答を反映していない結果になる
+        ap.error("--ai-response（AI の回答のファイル）は --ai manual のときだけ読みます"
+                 f"（今は --ai {a.ai}）。AI の回答を反映するときは --ai manual を一緒に指定してください")
     for opt, path in (("変換する docx", a.docx), ("--meta", a.meta), ("--pdf", a.pdf), ("--ai-response", a.ai_response)):
         # 通常のファイルでなくても読めるもの（/dev/stdin・プロセス置換の /dev/fd/NN など）は通す。フォルダは誤り
         if path is not None and (not path.exists() or path.is_dir()):

@@ -18,8 +18,10 @@ import tempfile
 from pathlib import Path
 
 from . import __version__
+from . import report as rp
 from .ai_assist import API_KEY_NAMES, DEFAULT_MODEL
-from .colab import (ai_required_box, error_box, no_ai_box, report_details, result_boxes, step_text, summary_box)
+from .colab import (ANSWER_LABEL, APPLY_LABEL, CONVERT_LABEL, ai_required_box, error_box, no_ai_box, report_details, result_boxes,
+                    step_text, summary_box)
 from .config import ArticleMeta, JournalConfig, keyword_language_mismatch, keyword_problem
 from .pipeline import AIRequiredError, Options, add_images, convert
 from .report import NEEDS_ACTION, actions, ai_pending, images_to_prepare
@@ -101,6 +103,11 @@ class ColabIO(IO):
 
 
 # ---------------------------------------------------------------------------- 状態
+def _app_text(text: str) -> str:
+    """目印（report.step）を 1 画面版の語に置き換える（colab.STEP_WORDS の "app"）。"""
+    return step_text(text, "app")
+
+
 class AppState:
     """画面の入力と結果。Gradio に依存しない。"""
 
@@ -228,16 +235,18 @@ class AppState:
         """手動モードで、AI の回答をまだ反映していない。"""
         return self.res is not None and self.inputs["ai_mode"] == "manual" and ai_pending(self.res)
 
-    # 手動モードで、AI の回答を貼り付け直す必要がある Action の key（report.py の ai_error・partial・forced の枠が「「AI の回答」の欄に
-    # 貼り付け直して「反映」を押し」と案内する）。これらが出ているときも、手動の欄（依頼文・「AI の回答」・「反映」）を見せたままにする
-    REPASTE_KEYS = ("ai_error", "partial", "forced")
+    # 手動モードで、AI の回答を貼り付け直す案内（report.py の枠。colab.STEP_WORDS の repaste）が出る Action の key。これらが出ている
+    # ときも、手動の欄（依頼文・回答の欄・「反映」）を見せたままにする。float_ref（リンクしなかった図・表の参照。AI の回答を反映した後も
+    # AI がリンクを付けなかったとき、「AI に出し直してもらう」案内が貼り直しを勧める）も入れる
+    REPASTE_KEYS = ("ai_error", "partial", "forced", "float_ref")
 
     @property
     def answer_box_open(self) -> bool:
-        """手動の欄（依頼文・添付画像・「AI の回答」・「反映」）を見せるか。
+        """手動の欄（依頼文・添付画像・回答の欄〈ANSWER_LABEL〉・「反映」）を見せるか。
 
         AI の回答をまだ反映していないとき（waiting_for_answer）に加えて、反映した後も、回答を読めない（ai_error）・途中で切れた
-        （partial）・図表の位置が決まらない（forced）の枠が出ているあいだは、貼り付け直せるように見せたままにする。
+        （partial）・図表の位置が決まらない（forced）・AI もリンクを付けなかった図・表の参照がある（float_ref）の枠が出ているあいだは、
+        貼り付け直せるように見せたままにする。
         回答の反映（apply_answer）ができるときだけ見せる（waiting_for_answer と同じく、「AI による補完の方法」の欄が手動のとき）。
         """
         if self.res is None or self.inputs["ai_mode"] != "manual":
@@ -311,26 +320,29 @@ class AppState:
         found = sorted(self.out_dir.glob("*_変換レポート.md")) if self.out_dir.exists() else []
         return str(found[0]) if found else ""
 
-    # 操作ごとの案内（crash の operation）。入力や、貼り付けた回答・入れた画像を消す操作を勧めない
+    # 操作ごとの案内（crash の operation）。入力や、貼り付けた回答・入れた画像を消す操作を勧めない。欄・ボタンの名前は、目印（report.step）で
+    # 書いて colab.STEP_WORDS の 1 画面版の語に置き換える（文の中に欄の名前を直接書かない）
     CRASH_ADVICE = {
-        "convert": "入力（docx・PDF・書誌情報の欄）が正しいかを確かめ、直してから、もう一度「変換する」を押してください。"
-                   "同じ例外で止まるときは、入力を変えずに、開発者に知らせてください。",
-        "apply": "反映の途中で止まったため、前の結果は捨てており、手動の欄（依頼文・「AI の回答」・「反映」）は今は隠れています。"
-                 "「変換する」を押すと、AI の回答を反映する前の結果と手動の欄が戻り、貼り付けた回答も「AI の回答」の欄に残っています。"
-                 "欄が戻ったら、念のため回答を別の場所にも保存してください。同じ例外で止まるときは、入力は変えずに、"
-                 "開発者に知らせてください。",
-        "images": "入れた画像と変換の結果は、この画面に残っています。入力は変えず、「変換する」も押し直さずに"
-                  "（押すと、入れた画像が消えます）、開発者に知らせてください。",
+        "convert": _app_text("入力（" + rp.step("docx") + "・" + rp.step("pdf") + "・" + rp.step("meta") + "）が正しいかを確かめ、直してから、"
+                             + rp.step("convert_again") + "してください。同じ例外で止まるときは、入力を変えずに、開発者に知らせてください。"),
+        "apply": _app_text("反映の途中で止まったため、前の結果は捨てており、手動の欄（" + rp.step("prompt") + "・" + rp.step("answer_field") + "・"
+                           + rp.step("apply_button") + "）は今は隠れています。" + rp.step("convert_again") + "すと、AI の回答を反映する前の結果と"
+                           "手動の欄が戻り、貼り付けた回答も" + rp.step("answer_field") + "に残っています。欄が戻ったら、念のため回答を別の場所にも"
+                           "保存してください。同じ例外で止まるときは、入力は変えずに、開発者に知らせてください。"),
+        "images": _app_text("入れた画像と変換の結果は、この画面に残っています。入力は変えず、" + rp.step("convert_again") + "さずに（押すと、"
+                            "入れた画像が消えます）、開発者に知らせてください。"),
         "download": "変換の結果は、この画面に残っています。もう一度ダウンロードの操作をしてかまいません。同じ例外で止まるときは、"
                     "入力は変えずに、開発者に知らせてください。"}
 
     # 回答の反映の想定外のエラーで、前の結果がまだ残っているとき（変換に入る前に止まった）。手動の欄も、貼り付けた回答もそのまま
-    CRASH_ADVICE_APPLY_KEPT = ("前の結果と手動の欄（依頼文・「AI の回答」・「反映」）は、この画面にそのまま残っています。貼り付けた回答も"
-                               "欄に残っています。同じ例外で止まるときは、入力は変えずに、開発者に知らせてください。")
+    CRASH_ADVICE_APPLY_KEPT = _app_text(
+        "前の結果と手動の欄（" + rp.step("prompt") + "・" + rp.step("answer_field") + "・" + rp.step("apply_button") + "）は、この画面にそのまま残っています。"
+        "貼り付けた回答も欄に残っています。同じ例外で止まるときは、入力は変えずに、開発者に知らせてください。")
 
     # ダウンロードの想定外のエラーで、出力フォルダが消えているとき（ZIP を作り直せない）。画面の結果は読めるが、同じ操作は同じ例外で止まる
-    CRASH_ADVICE_FOLDER_GONE = ("画面の結果は読めますが、サーバー側の出力フォルダがないので、ダウンロードの操作をもう一度しても同じ例外で"
-                                "止まります。必要な内容をこの画面から控えてから、入力を確かめて「変換する」を押し直してください。")
+    CRASH_ADVICE_FOLDER_GONE = _app_text(
+        "画面の結果は読めますが、サーバー側の出力フォルダがないので、ダウンロードの操作をもう一度しても同じ例外で止まります。"
+        "必要な内容をこの画面から控えてから、入力を確かめて" + rp.step("convert_again") + "してください。")
 
     def crash(self, error: Exception, operation: str = "convert") -> InputError:
         """想定外の例外（変換ツールの不具合の可能性）を、画面に出す赤い枠にする。例外の種類と文を載せ、操作（operation。
@@ -467,15 +479,15 @@ def build_app(state: AppState, io: "IO | None" = None):
             subject_other = gr.Textbox(label="原稿種別（日本語）", info="原稿種別で「その他」を選んだときだけ")
             subject_other_en = gr.Textbox(label="原稿種別（英語）", info="同上")
         ready = gr.Markdown("足りない項目: docx")
-        go = gr.Button("変換する", variant="primary", interactive=False)
+        go = gr.Button(CONVERT_LABEL, variant="primary", interactive=False)
         message = gr.HTML()
         result = gr.HTML()
         with gr.Column(visible=False) as manual_col:
             prompt = gr.Textbox(label="依頼文（新しいチャットに貼り付けて送る）", lines=8, max_lines=8, interactive=False,
                                 buttons=["copy"])
             attach = gr.File(label="依頼文と一緒に添付する画像", file_count="multiple", interactive=False)
-            answer = gr.Textbox(label="AI の回答（json のコードブロック）を貼り付ける", lines=6)
-            apply_btn = gr.Button("反映")
+            answer = gr.Textbox(label=ANSWER_LABEL, lines=6)
+            apply_btn = gr.Button(APPLY_LABEL)
         with gr.Column(visible=False) as images_col:
             images_md = gr.Markdown()
             image_files = [gr.File(label=f"足りない図の画像 {k}", file_count="single", visible=False)

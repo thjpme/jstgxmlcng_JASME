@@ -225,7 +225,7 @@ def test_result_boxes_show_textbox_notices(journal, meta, tmp_path):
     assert result_boxes(res, level="要対応") == ""
     res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "m", ai_mode="manual", convert_metafiles=False))
     html = result_boxes(res)
-    assert "手順 6 で AI の回答を貼り付けて変換し直すと、AI が囲みか注記かを判断します" in html
+    assert "手順 6 で AI の回答を貼り付けて ▶ を押すと、AI が囲みか注記かを判断します" in html
     assert "囲みか図の注記か決められなかったテキストボックス（3 章）は、AI の回答を反映するまで XML に出力していません。" in html
     assert "囲みか図の注記か決められなかったテキストボックス（3 章）は、AI の回答を反映するまで" in res.output_note
 
@@ -238,14 +238,14 @@ def test_step_words_cover_every_mark_in_report():
 
     import pytest
 
-    from jasme_jats import pipeline, report
+    from jasme_jats import app, pipeline, report
     from jasme_jats.colab import STEP_WORDS, step_text
     assert set(STEP_WORDS) == {"notebook", "app", "cli"}
     for screen, words in STEP_WORDS.items():
         assert set(words) == set(report.STEP_NAMES), screen
         assert all("\x00" not in w and ("手順" not in w or screen == "notebook") for w in words.values())
     used = set()
-    for module in (report, pipeline):         # 目印は report.py と pipeline.py（AIRequiredError の文）で使う
+    for module in (report, pipeline, app):    # 目印は report.py・pipeline.py（AIRequiredError の文）・app.py（CRASH_ADVICE）で使う
         used |= set(re.findall(r"step\((?:'|\")(\w+)(?:'|\")\)", Path(module.__file__).read_text(encoding="utf-8")))
     assert used == set(report.STEP_NAMES)                 # 使っていない目印・表にない目印がない
     assert step_text(report.step("docx") + "から", "notebook") == "手順 2 から"     # 4e8c38a までの文と同じ（助詞の前の空白）
@@ -324,7 +324,7 @@ def test_app_screen_words_in_boxes(journal, meta, tmp_path):
     note = result_boxes(res, level="要対応")
     page = result_boxes(res, level="要対応", screen="app")
     assert "手順 5 の依頼文を AI" in note and "手順 6 に貼り付けて ▶ を押してください" in note
-    assert "依頼文を AI" in page and "「AI の回答」の欄に貼り付けて「反映」を押してください" in page and "手順" not in page
+    assert "依頼文を AI" in page and "「AI の回答（json のコードブロック）を貼り付ける」の欄に貼り付けて「反映」を押してください" in page and "手順" not in page
 
 
 def test_mark_lookalike_in_docx_text_is_shown_as_is(tmp_path, journal, meta, monkeypatch):
@@ -398,4 +398,68 @@ def test_notebook_sentences_equal_those_before_marks(journal, meta, tmp_path):
     res = convert(OUTSIDE, meta, journal, Options(out_dir=tmp_path / "o", ai_mode="manual", convert_metafiles=False))
     assert "Word で直した docx を手順 2 でアップロードし直し、そこから順にやり直してください" in result_boxes(res)
     res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "s", ai_mode="manual", convert_metafiles=False))
-    assert "手順 6 で AI の回答を貼り付けて変換し直すと、AI が囲みか注記かを判断します" in result_boxes(res)
+    assert "手順 6 で AI の回答を貼り付けて ▶ を押すと、AI が囲みか注記かを判断します" in result_boxes(res)
+
+
+def _html_text_and_tags(html):
+    from html.parser import HTMLParser
+
+    class P(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.text, self.tags = [], []
+
+        def handle_starttag(self, tag, attrs):
+            self.tags.append(tag)
+
+        def handle_data(self, data):
+            self.text.append(data)
+    p = P()
+    p.feed(html)
+    return "".join(p.text), p.tags
+
+
+def test_report_details_shows_angle_brackets(journal, meta, tmp_path):
+    """0.29.0 の最後の点検: レポートに引用した docx の文字に「x<y>z」「<y かつ z>」「<b>」のような、タグに見える並びがあっても、
+    「変換レポートの全文を見る」（Markdown → HTML）で文字が消えない。.md の文字は docx のまま。ツールのタグ（md_tag でコードにしたもの）は
+    今までどおりコードで出る。"""
+    import make_fixtures as mf
+    from conftest import ALL_DOCS, FLOAT, FLOAT_TEXT, OUTSIDE, PLACE
+
+    from jasme_jats.colab import markdown_text_only, report_details
+    from jasme_jats.pipeline import AIRequiredError, Options, convert
+    S = mf.S
+    md = ("# 変換レポート\n\n> **要確認**: 「x<y>z」「<y かつ z>」「<b>」「a&amp;b」「<http://example.org>」 と `<xref>` と "
+          "`<fig id=\"…\">`\n\n- 引用: 「<i>強調」\n\n```\n<pre>の中の <b> は文字のまま\n```\n\n| 項目 | 結果 |\n|---|---|\n| x<y | <z> |\n")
+    text, tags = _html_text_and_tags(report_details(md))
+    for s in ("x<y>z", "<y かつ z>", "<b>", "a&amp;b", "<http://example.org>", "<xref>", '<fig id="…">', "<i>強調", "<pre>の中の <b> は文字のまま",
+              "x<y", "<z>"):
+        assert s in text, s
+    assert set(tags) <= {"style", "details", "summary", "div", "h1", "blockquote", "p", "strong", "code", "ul", "li", "pre", "table",
+                         "thead", "tbody", "tr", "th", "td"}, tags
+    assert "<code>&lt;xref&gt;</code>" in report_details(md)           # ツールのタグはコードのまま
+    # 実際の docx の経路: 引用文献の段落の文字がレポートの 10 章の警告などに載り、Colab の全文表示で消えない
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "架空の主張である。"),
+                mf.table([[mf.cell(mf.para(S["body"], "表の", mf.br(), "セル"))]])]
+    path = tmp_path / "x.docx"
+    mf.make_article(path, "t", parts, refs=lambda b: [mf.para(S["ref"], "x<y>z", mf.br(), "続き")])
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    rep = res.report_path.read_text(encoding="utf-8")
+    assert "x<y>z" in rep                                               # .md の文字は docx のまま
+    text, _ = _html_text_and_tags(report_details(rep))
+    assert "x<y>z" in text and "xz" not in text.replace("x<y>z", "")
+    # レポートは生の HTML を使わない: すべての fixture のレポートで、生の HTML を無効にして HTML にしても、無効にしない場合と同じ
+    # （違うのは docx の文字にタグ・実体参照に見える並びがあるときだけ）。許す要素を限る必要がない
+    import markdown
+    checked = 0
+    for docx in ALL_DOCS + [FLOAT, FLOAT_TEXT, PLACE, OUTSIDE]:
+        for mode in ("none", "manual"):
+            try:
+                r = convert(docx, meta, journal, Options(out_dir=tmp_path / f"r{checked}", ai_mode=mode, convert_metafiles=False))
+            except AIRequiredError:
+                continue
+            checked += 1
+            rep = r.report_path.read_text(encoding="utf-8")
+            assert markdown_text_only(rep) == markdown.markdown(rep, extensions=["tables", "fenced_code"]), (docx.name, mode)
+    assert checked >= 15

@@ -9,9 +9,23 @@ structure.py から本体を変えずに移した（structure からも、これ
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import NamedTuple, Optional
 
 from .model import Decision, Exclusion, Float, Para, Table
+
+
+class UnlinkedRef(NamedTuple):
+    """番号から図・表を決められず、リンクしなかった図・表の参照 1 か所（ArticlePlan.float_unlinked の要素）。
+
+    word は「図」か「表」、src は段落 ID、text は参照の文字（docx のまま）、start・end は段落の文字（Para.plain()）の中の範囲
+    （text == plain()[start:end]）。AI のリンク（link_figure・link_table）が同じ範囲に付いたかを、範囲の重なりで決めるために持つ
+    （同じ文字が別の所にあっても取り違えない。ai_assist.apply_ops）。
+    """
+    word: str
+    src: str
+    text: str
+    start: int
+    end: int
 
 
 # ----------------------------------------------------------------------------- nodes
@@ -214,10 +228,14 @@ class ArticlePlan:
     fn_guess_checks: list = field(default_factory=list)
     # 本文に戻した（"returned"）範囲に、注の番号で始まる段落（本当の注の一覧かもしれない）があったときの、「注」の段落 ID -> その段落 ID の一覧
     fn_guess_numbered: dict = field(default_factory=dict)
+    # 「注」の段落 ID -> その後ろの、「注」を注の節の見出し（Word の「注見出し」スタイル）にすると注の節に入る段落 ID の一覧
+    # （次の後付けの見出し・英文の部分・文書の終わりの手前まで。本文に戻した後ろの章見出しとその本文も含む。空白だけの段落・
+    # 図形の中の段落は除く）。要確認 fn_guess の助言「注見出しにする」が何を注の節に入れるかを知らせる（report._fn_guess_action）
+    fn_guess_span: dict = field(default_factory=dict)
     # 手で書いた注と Word の脚注・文末脚注の両方にある注の番号（Word の注の番号は 1 から付けるので重なる。要確認）
     note_overlap: list = field(default_factory=list)
-    # 番号から図・表を決められず、リンクしなかった図・表の参照: (「図」か「表」, 段落 ID, 参照の文字)。同じ種類のキャプションの番号が
-    # 重なる・キャプションに枝番がある（図1-1・図1-2）ときの参照（linker.Linker.float_refs。要確認）
+    # 番号から図・表を決められず、リンクしなかった図・表の参照（UnlinkedRef: 「図」か「表」, 段落 ID, 参照の文字, 段落の中の範囲）。
+    # 同じ種類のキャプションの番号が重なる・キャプションに枝番がある（図1-1・図1-2）ときの参照（linker.Linker.float_refs。要確認）
     float_unlinked: list = field(default_factory=list)
     # 文字だけのテキストボックスの ID -> BoxInfo（Classifier.place_boxes が扱ったもの。空白だけのものも。出現順）
     textboxes: dict = field(default_factory=dict)

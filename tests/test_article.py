@@ -14,6 +14,8 @@ from jasme_jats import article, structure
 # article.py で定義する名前（structure.py から移したもの。structure からも、同じものを import できること）
 MOVED = {"Sec", "PNode", "ListNode", "QuoteNode", "FigNode", "TableNode", "FormulaNode", "BoxNode", "FnNode", "RefNode",
          "BackSec", "AppNode", "Author", "Aff", "FloatInfo", "BoxInfo", "ArticlePlan", "_para_text"}
+# 移したのではなく、article.py に新しく足した型（structure.py は使わないので、structure からは import できなくてよい）
+ADDED = {"UnlinkedRef"}
 
 
 def run_python(code):
@@ -45,7 +47,7 @@ def test_article_does_not_import_structure():
 
 def test_moved_names_are_reexported_from_structure():
     defined = {n for n, v in vars(article).items() if getattr(v, "__module__", None) == "jasme_jats.article"}
-    assert defined == MOVED
+    assert defined == MOVED | ADDED
     for name in MOVED:
         assert getattr(structure, name) is getattr(article, name), name
 

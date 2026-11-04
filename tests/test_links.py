@@ -16,7 +16,7 @@ import re
 
 import make_fixtures as mf
 import pytest
-from conftest import LINKS, LINKS_BARE
+from conftest import FULL, LINKS, LINKS_BARE
 from lxml import etree
 
 from jasme_jats.linker import RE_FIGREF, RE_TABREF, Linker, find_in_para
@@ -712,7 +712,7 @@ def test_branch_figure_numbers_are_not_linked(journal, meta, tmp_path):
     assert float_links(root, "図1-1と図1-2を比べる") == [("3", "fig", "F4")]
     assert float_links(root, "図1-2、図3は") == [("3", "fig", "F4")]
     plan = res.plan
-    assert [(w, t) for w, s, t in plan.float_unlinked] == [
+    assert [(u.word, u.text) for u in plan.float_unlinked] == [
         ("図", "図1-1"), ("図", "図1-2"), ("図", "図1"), ("図", "図2.1"), ("図", "図2"), ("図", "図1-2")]
     recs = [d for d in plan.decisions if d.category == "figure" and not d.applied and "リンクしなかった" in d.message]
     assert len(recs) == 6 and all("link_figure" in d.message for d in recs)
@@ -754,7 +754,7 @@ def test_duplicate_figure_numbers_are_not_linked(journal, meta, tmp_path):
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
     assert float_links(load(res), "図1と図2を見る") == [("2", "fig", "F3"), ("表1", "table", "T1")]
-    assert [(w, t) for w, s, t in res.plan.float_unlinked] == [("図", "図1"), ("表", "表2")]
+    assert [(u.word, u.text) for u in res.plan.float_unlinked] == [("図", "図1"), ("表", "表2")]
     msgs = [d.message for d in res.plan.decisions if not d.applied and "リンクしなかった" in d.message]
     assert len(msgs) == 2 and "キャプションが複数ある" in msgs[0] and "図1" in msgs[0]
     assert [a.key for a in actions(res) if a.key == "float_ref"] == ["float_ref"]
@@ -777,7 +777,7 @@ def test_branch_table_numbers_only_affect_tables(journal, meta, tmp_path):
                           ["表1-1　一つ目の表", "表1-2　二つ目の表", "表3　三つ目の表"])
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
     assert float_links(load(res), "図1-2と表1-2") == [("図1", "fig", "F1"), ("2", "fig", "F2"), ("3", "table", "T3")]
-    assert [(w, t) for w, s, t in res.plan.float_unlinked] == [("表", "表1-2")]
+    assert [(u.word, u.text) for u in res.plan.float_unlinked] == [("表", "表1-2")]
 
 
 def test_caption_label_branch():
@@ -811,7 +811,7 @@ def test_float_refs_branch_rules(plain, skip, want_links, want_unlinked):
     lk.float_refs(q, RE_FIGREF, ids, "fig", "図", skip, True)
     got = [(a.text, a.link.attrs["rid"]) for a in q.atoms if a.link is not None]
     assert got == want_links
-    assert [t for _, _, t in plan.float_unlinked] == want_unlinked
+    assert [u.text for u in plan.float_unlinked] == want_unlinked
     assert q.plain() == plain
 
 
@@ -849,7 +849,7 @@ def test_en_dash_branch_caption_label_and_links(split, journal, meta, tmp_path):
         assert not [x for x in root.iter("label") if text(x).startswith("図")]
         assert caps == ["図1–1　最初の図", "図1–2　次の図", "図3　別の図"]
     assert float_links(root, "図1–2を見る") == [("図3", "fig", "F3")]
-    assert sorted(t for _, _, t in res.plan.float_unlinked) == ["図1", "図1–2"]
+    assert sorted(u.text for u in res.plan.float_unlinked) == ["図1", "図1–2"]
     assert "float_ref" in [a.key for a in actions(res)]
 
 
@@ -924,8 +924,8 @@ def test_h3_float_ref_advice_follows_the_ai_state(journal, meta, tmp_path):
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "pending", ai_mode="manual", convert_metafiles=False))
     act = _float_ref(res)
     assert "AI の回答を反映すると" in act.top and "もう一度出る" in act.top and "設定（API か手動）" not in act.top
-    assert step("answer_paste") + "変換し直すと" in act.box_detail and step("ai_choose") not in act.box_detail
-    assert "--ai-response で指定して変換し直すと" in act.cli and "--ai manual か --ai api を指定して" not in act.cli
+    assert step("answer_apply") + "と" in act.box_detail and step("ai_choose") not in act.box_detail
+    assert "--ai manual --ai-response 回答のファイル を指定して変換し直すと" in act.cli and "--ai manual か --ai api を指定して" not in act.cli
     # (3) AI を使った後、一部だけリンクが付いた: 付いた分は除き、残りは「AI もリンクを付けなかった参照」。設定の変更は勧めない
     res = _manual(path, [_link_op(src, "F1", 1)], meta, journal, tmp_path / "part")
     assert res.fidelity.ok and res.ai.rejected == [] and len(res.plan.float_unlinked) == 1
@@ -948,3 +948,113 @@ def test_h3_float_ref_advice_follows_the_ai_state(journal, meta, tmp_path):
     act = _float_ref(res)
     assert "AI による補完が反映できていません" in act.top and "AI の回答を反映できたら" in act.top
     assert "設定（API か手動）" not in act.top and "--ai manual か --ai api" not in act.cli
+
+
+def test_ai_link_on_lookalike_text_keeps_the_unlinked_reference(journal, meta, tmp_path):
+    """0.29.0 の最後の点検: AI がリンクを付けた参照を plan.float_unlinked から除く一致は、段落の中の位置（範囲）を見る。
+    リンクの対象でない同じ文字（「地図1」の「図1」）に AI がリンクを付けても、本当にリンクされていない「図1」の要確認 float_ref は消えない。
+    AI がその参照そのものにリンクを付ければ消える。"""
+    body = [mf.para(S["body"], "地図1を見る。図1も見る。")]
+    path = floats_article(tmp_path, body, ["図1　一つ目の図", "図1　二つ目の図"], [], name="fu")
+    _, plan, _ = _mechanical(path, journal)
+    src = next(s for s, p in plan.paras.items() if p.plain().startswith("地図1"))
+    plain = plan.paras[src].plain()
+    [ref] = plan.float_unlinked
+    assert (ref.word, ref.src, ref.text) == ("図", src, "図1") and plain[ref.start:ref.end] == "図1"
+    assert ref.start == plain.index("。図1") + 1                      # 「地図1」の「図1」ではなく、2 つ目の「図1」
+    # (1) 1 回目の「図1」（地図1 の中）にリンクを付けた: 本当にリンクされていない 2 つ目の参照は残り、知らせも出る
+    res = _manual(path, [_link_op(src, "F1", 1)], meta, journal, tmp_path / "lookalike")
+    assert res.fidelity.ok and res.ai.rejected == []
+    assert [(u.src, u.text, u.start) for u in res.plan.float_unlinked] == [(src, "図1", ref.start)]
+    act = _float_ref(res)
+    assert "AI もリンクを付けませんでした" in act.top and "対象の参照（1 か所）" in act.box_detail
+    # (2) 2 回目の「図1」（本当にリンクされていない参照）にリンクを付けた: 除かれ、知らせも出ない
+    res = _manual(path, [_link_op(src, "F1", 2)], meta, journal, tmp_path / "real")
+    assert res.fidelity.ok and res.ai.rejected == [] and res.plan.float_unlinked == []
+    assert [a for a in actions(res) if a.key == "float_ref"] == []
+
+
+def test_float_ref_advice_names_operations_each_screen_can_take(journal, meta, tmp_path):
+    """0.29.0 の最後の点検の小さいもの (a)〜(d): 図・表の参照の知らせの案内が、画面ごとに取れる操作を言う。
+    (a) API の呼び出しが失敗したときは、回答を反映する言い方（手動の言い方）にしない。(b) 回答待ちは、1 画面版では「反映」を押すだけ
+    （押した後にさらに「変換する」を押す操作に読ませない）、ノートブックでは ▶ を押す。(c) AI を使った後の「AI に出し直してもらう」は、
+    手動なら貼り直し、API ならもう一度変換する。(d) コマンドラインは --ai manual と --ai-response を一緒に言う。"""
+    from jasme_jats import pipeline
+    from jasme_jats.ai_assist import AIOutcome
+    from jasme_jats.colab import step_text
+    path, src = _float_ref_states(tmp_path, journal, meta)
+
+    def texts(res):
+        act = _float_ref(res)
+        return {"report": act.top, "notebook": step_text(act.box_detail, "notebook"), "app": step_text(act.box_detail, "app"),
+                "cli": act.cli}
+    # (b) 回答待ち（手動）
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "pending", ai_mode="manual", convert_metafiles=False))
+    t = texts(res)
+    assert "手順 6 で AI の回答を貼り付けて ▶ を押すと" in t["notebook"]
+    assert "「反映」を押すと、AI が指定した参照にリンクが付く" in t["app"] and "「反映」を押して変換し直すと" not in t["app"]
+    assert "「変換する」" not in t["app"]                            # 回答なしで作り直す操作を勧めない
+    assert "--ai manual --ai-response 回答のファイル を指定して変換し直すと" in t["cli"]
+    # (c) AI を使った後（手動）: 貼り直す。1 画面版は手動の欄が見えたまま（AppState.answer_box_open）
+    res = _manual(path, [_link_op(src, "F1", 1)], meta, journal, tmp_path / "manual_done")
+    t = texts(res)
+    assert "手順 6 で貼り付け直してください" in t["notebook"]
+    assert "「AI の回答（json のコードブロック）を貼り付ける」の欄に貼り付け直して「反映」を押してください" in t["app"]
+    assert "--ai manual --ai-response 回答のファイル を指定し直して実行してください" in t["cli"]
+    assert "貼り付け直して反映" in t["report"] and "手順" not in t["app"] and "\x00" not in "".join(t.values())
+    from jasme_jats.app import AppState
+    st = AppState(tmp_path / "work")
+    st.set_inputs(ai_mode="manual")
+    st.res = res
+    assert st.answer_box_open                                   # 案内のとおり、貼り付け直す欄が見えている
+    # (c) AI を使った後（API）: もう一度変換する
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "api_done", convert_metafiles=False))
+    res.ai = AIOutcome(mode="api")
+    res.ai.raw = "{}"
+    t = texts(res)
+    assert "手順 5 をもう一度実行してください" in t["notebook"] and "「変換する」をもう一度押してください" in t["app"]
+    assert "--ai api でもう一度実行してください" in t["cli"] and "もう一度変換すると" in t["report"]
+    # (a) API の呼び出しが失敗した: 回答を反映する言い方ではなく、もう一度変換して補完ができれば、と言う
+    real = pipeline.call_provider
+    pipeline.call_provider = lambda *a, **k: _api_failed()
+    try:
+        res = convert(path, meta, journal, Options(out_dir=tmp_path / "api_err", ai_mode="api", ai_api_key="x", convert_metafiles=False))
+    finally:
+        pipeline.call_provider = real
+    assert res.ai.error and res.ai.mode == "api"
+    t = texts(res)
+    for screen, text in t.items():
+        assert "AI の回答を反映できたら" not in text and "AI による補完ができていません" in text, screen
+    assert "手順 5 をもう一度実行して AI による補完ができれば" in t["notebook"]
+    assert "「変換する」をもう一度押して AI による補完ができれば" in t["app"]
+    assert "--ai api でもう一度実行して AI による補完ができれば" in t["cli"]
+    # 回答を読めなかった手動モードは、今までどおり「AI の回答を反映できたら」
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "bad", ai_mode="manual", ai_response="これは JSON ではない",
+                                               convert_metafiles=False))
+    assert "AI の回答を反映できたら" in texts(res)["report"]
+
+
+def _api_failed():
+    from jasme_jats.ai_assist import AIOutcome
+    o = AIOutcome(mode="api")
+    o.error = "接続できません"
+    return o
+
+
+def test_cli_ai_response_needs_ai_manual(journal, meta, tmp_path, capsys):
+    """0.29.0 の最後の点検の (d): --ai の既定は none なので、--ai-response だけでは回答が読まれない。黙って無視せず、引数の誤り
+    （標準エラー・終了コード 2。変換の前に止める）にする。--ai api でも同じ。--ai manual と一緒なら読む。"""
+    from conftest import META_EXAMPLE
+
+    from jasme_jats.cli import main
+    resp = tmp_path / "回答.json"
+    resp.write_text('{"operations": [], "placements": [], "notes": []}', encoding="utf-8")
+    base = [str(FULL), "--meta", str(META_EXAMPLE), "--no-metafile-conversion", "--ai-response", str(resp)]
+    for extra in ([], ["--ai", "none"], ["--ai", "api"]):
+        with pytest.raises(SystemExit) as e:
+            main(base + extra + ["--out", str(tmp_path / "out")])
+        err = capsys.readouterr().err
+        assert e.value.code == 2 and "--ai-response" in err and "--ai manual" in err, extra
+    assert not (tmp_path / "out").exists()
+    assert main(base + ["--ai", "manual", "--out", str(tmp_path / "ok")]) in (0, 1)
+    assert (tmp_path / "ok").exists()

@@ -1520,12 +1520,12 @@ def apply_ops(ops, plan: ArticlePlan, doc, outcome: AIOutcome, split: bool = Fal
             outcome.accepted.append((op, d))
             if kind in ("link_figure", "link_table"):
                 # 機械的にはリンクしなかった図・表の参照（plan.float_unlinked）に AI がリンクを付けたら、その分は残りから除く
-                # （要確認の知らせ〈report.float_ref_ai〉は「AI もリンクを付けなかった参照」だけを挙げる）
+                # （要確認の知らせ〈report.float_ref_ai〉は「AI もリンクを付けなかった参照」だけを挙げる）。同じ種類・同じ段落で、
+                # 参照の範囲が AI のリンクの範囲と重なるものだけを除く（リンクの対象でない同じ文字〈「地図1」の「図1」〉に AI がリンクを
+                # 付けても、本当にリンクされていない参照は残る）
                 word = "図" if kind == "link_figure" else "表"
-                for k, (w, s, t) in enumerate(plan.float_unlinked):
-                    if (w, s, t) == (word, src, text):
-                        del plan.float_unlinked[k]
-                        break
+                plan.float_unlinked[:] = [u for u in plan.float_unlinked
+                                          if not (u.word == word and u.src == src and u.start < rng[1] and rng[0] < u.end)]
             continue
         if kind == "formula_image":
             fig = images.get(op["image"])

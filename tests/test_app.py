@@ -236,7 +236,8 @@ def test_unexpected_error_is_shown_and_old_result_dropped(tmp_path, monkeypatch)
     assert "想定外のエラーで止まりました" in out[0] and "RuntimeError: こわれた" in out[0] and "開発者に知らせてください" in out[0]
     assert "変換レポートは作られていません" in out[0] and out[1] == ""
     # 変換で落ちたときは入力を確かめて変換し直す案内（F15）
-    assert "もう一度「変換する」を押してください" in out[0] and "入力（docx・PDF・書誌情報の欄）が正しいかを確かめ" in out[0]
+    assert "「変換する」をもう一度押してください" in out[0]
+    assert "入力（「docx（論文の Word ファイル）」の欄・「PDF（J-STAGE に登載する PDF）」の欄・巻・号・ページなどの入力欄）が正しいかを確かめ" in out[0]
     # 回答の反映（_run を直接呼ぶ）でも、前の結果を残さない
     st.res = types.SimpleNamespace(report_path=tmp_path / "ない.md", needs_action=True)
     with pytest.raises(RuntimeError):
@@ -277,9 +278,9 @@ def test_unexpected_error_in_apply_answer(tmp_path, monkeypatch):
     # 前の結果を捨てたので手動の欄は隠れる。貼り付けた文字は欄に残る（views に answer がない）ので、そのとおりに案内する
     assert out[2]["visible"] is False and "手動の欄" in out[0] and "隠れています" in out[0] and "欄に残っています" in out[0]
     # H5: 欄が隠れている間は保存できないので、「別の場所にも保存」は、欄が戻る「変換する」の案内の後に言う
-    assert out[0].index("隠れています") < out[0].index("「変換する」を押すと") < out[0].index("欄が戻ったら") < out[0].index("別の場所")
+    assert out[0].index("隠れています") < out[0].index("「変換する」をもう一度押すと") < out[0].index("欄が戻ったら") < out[0].index("別の場所")
     assert "欄に残っているはず" not in out[0] and "隠れています。貼り付けた回答" not in out[0]
-    assert "もう一度「変換する」を押してください" not in out[0] and "使えなくなる" not in out[0]
+    assert "「変換する」をもう一度押してください" not in out[0] and "使えなくなる" not in out[0]
     # レポートが残っているときも、サーバー側のパスは書かない（利用者は取り出せない）。この画面の変換レポートの全文を案内する
     st.res = types.SimpleNamespace(report_path=report)
     report.parent.mkdir(parents=True, exist_ok=True)
@@ -287,7 +288,7 @@ def test_unexpected_error_in_apply_answer(tmp_path, monkeypatch):
     html = st.crash(RuntimeError("y"), "images").html
     assert str(report) not in html and "変換レポートの全文を見る" in html
     assert "入れた画像と変換の結果は、この画面に残っています" in html and "押すと、入れた画像が消えます" in html
-    assert "もう一度「変換する」を押してください" not in html
+    assert "「変換する」をもう一度押してください" not in html
     with pytest.raises(ValueError):
         st.crash(RuntimeError("y"), "other")
 
@@ -305,7 +306,7 @@ def test_download_crash_with_output_folder_gone(tmp_path):
     assert out[8] == "" and "想定外のエラーで止まりました" in out[0]
     assert "変換レポートは作られていません" not in out[0] and "結果はこの画面に残っています" not in out[0]
     assert "この画面の「変換レポートの全文を見る」" in out[0] and "同じ例外で止まります" in out[0]
-    assert "変換する」を押し直してください" in out[0]
+    assert "「変換する」をもう一度押してください" in out[0]
 
 
 def test_manual_fields_stay_for_repaste(tmp_path):
@@ -356,7 +357,7 @@ def test_apply_crash_hides_manual_fields_as_advised(tmp_path, monkeypatch):
         raise OSError("書けません")
     monkeypatch.setattr(app, "convert", boom)
     out = fns["on_apply"]('{"operations": []}')
-    assert out[2]["visible"] is False and "隠れています" in out[0] and "「変換する」を押すと" in out[0]
+    assert out[2]["visible"] is False and "隠れています" in out[0] and "「変換する」をもう一度押すと" in out[0]
     monkeypatch.setattr(app, "convert", real)
     assert fns["on_convert"](*values)[2]["visible"] is True            # 案内のとおり、欄が戻る
 
@@ -377,3 +378,32 @@ def test_apply_crash_before_result_dropped_keeps_manual_fields(tmp_path, monkeyp
     assert st.res is not None and out[2]["visible"] is True
     assert "OSError: 写せません" in out[0] and "そのまま残っています" in out[0] and "隠れています" not in out[0]
     assert "変換レポートは作られていません" not in out[0]
+
+
+def test_app_words_match_the_real_labels(tmp_path):
+    """0.29.0 の最後の点検の (e)(f): colab.STEP_WORDS の 1 画面版の語が、画面の実際のラベル（欄・ボタン）で探せる。
+    app.CRASH_ADVICE の案内は STEP_WORDS の語で組み立てる（「AI の回答」だけのような、実際のラベルと違う語を直接書かない）。"""
+    import re
+
+    from jasme_jats import colab
+    from jasme_jats.report import STEP_NAMES
+    st = AppState(tmp_path / "work")
+    demo = app.build_app(st, app.IO())
+    labels = {getattr(b, "label", None) for b in demo.blocks.values()} | {getattr(b, "value", None) for b in demo.blocks.values()}
+    for label in (colab.ANSWER_LABEL, colab.APPLY_LABEL, colab.CONVERT_LABEL, "作り方", "AI による補完の方法",
+                  "docx（論文の Word ファイル）", "PDF（J-STAGE に登載する PDF）"):
+        assert label in labels, label
+    words = colab.STEP_WORDS["app"]
+    assert set(words) == set(STEP_NAMES)
+    # 語の中の「…」で囲んだ名前は、画面のラベルにある（選択肢の名前を除く）。「AI の回答」だけの略は書かない
+    quoted = {q for w in words.values() for q in re.findall(r"「([^」]+)」", w)}
+    choices = {"手動（チャットに貼り付け）", "API（Claude）", "docx から作り、出版版 PDF で補う", "次の図の画像が必要です"}
+    assert quoted - choices <= labels, quoted - choices - labels
+    assert "AI の回答" not in quoted
+    # CRASH_ADVICE は語の表から組み立てている: 実際のラベルが入り、略した名前・直接書いた名前はない
+    texts = list(app.AppState.CRASH_ADVICE.values()) + [app.AppState.CRASH_ADVICE_APPLY_KEPT, app.AppState.CRASH_ADVICE_FOLDER_GONE]
+    for t in texts:
+        assert "\x00" not in t and "「AI の回答」" not in t and "手順" not in t
+    assert f"「{colab.ANSWER_LABEL}」の欄" in app.AppState.CRASH_ADVICE["apply"]
+    assert f"「{colab.CONVERT_LABEL}」をもう一度押" in app.AppState.CRASH_ADVICE["convert"]
+    assert words["docx"] in app.AppState.CRASH_ADVICE["convert"] and words["meta"] in app.AppState.CRASH_ADVICE["convert"]

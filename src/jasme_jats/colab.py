@@ -133,14 +133,36 @@ _REPORT_STYLE = """<style>
 </style>"""
 
 
+def markdown_text_only(markdown_text: str) -> str:
+    """変換レポート（Markdown）を HTML にする。生の HTML は使わず、書かれた文字をそのまま文字として見せる。
+
+    レポートは docx の文字を引用する（10 章の警告・冒頭の「対象の段落」など）。引用に「x<y>z」「<y かつ z>」「a&amp;b」のような
+    タグ・実体参照に見える並びがあっても、HTML のタグ・実体として読まれて文字が消えない（または別の文字に変わらない）ように、
+    Markdown の生の HTML（ブロック・インライン）と自動リンクの `<…>` を無効にし、`&` は先に別の文字に置き換えて、HTML にした後で
+    `&amp;` に戻す（markdown ライブラリは `&amp;` のような実体の形をそのまま通すため）。コードの書式（バッククォート・``` で囲んだ
+    範囲）の中は、もともと文字として出る。レポート自身は生の HTML・実体を使わない（`report.md_tag` はタグをコードで囲む。
+    tests/test_colab.py の test_report_details_shows_angle_brackets が全 fixture のレポートで確かめる）。
+    """
+    import markdown
+    from markdown.extensions import Extension
+
+    class TextOnly(Extension):
+        def extendMarkdown(self, md):
+            md.preprocessors.deregister("html_block", strict=False)
+            for name in ("html", "autolink", "automail"):
+                md.inlinePatterns.deregister(name, strict=False)
+    amp = next(c for c in map(chr, range(0xE000, 0xF8FF)) if c not in markdown_text)       # 文章にない私用領域の文字
+    body = markdown.markdown(markdown_text.replace("&", amp), extensions=["tables", "fenced_code", TextOnly()])
+    return body.replace(amp, "&amp;")
+
+
 def report_details(markdown_text: str, title: str = "変換レポートの全文を見る（クリックで開きます）") -> str:
     """変換レポート（Markdown）を、畳んだ状態（HTML の details）で表示する HTML。
 
     Markdown → HTML の変換には markdown ライブラリ（pyproject の colab の extra）を使う。入っていなければ、そのままの文字で出す。
     """
     try:
-        import markdown
-        body = markdown.markdown(markdown_text, extensions=["tables", "fenced_code"])
+        body = markdown_text_only(markdown_text)
     except ImportError:
         body = f"<pre style='white-space:pre-wrap'>{html.escape(markdown_text)}</pre>"
     return (f"{_REPORT_STYLE}<details style='margin:12px 0'><summary style='cursor:pointer;font-weight:bold;font-size:15px'>"
@@ -196,24 +218,34 @@ def ai_required_box(message: str, screen: str = "notebook") -> str:
 # 目印は U+0000 で区切る（report.step）。U+0000 は XML 1.0 の文字ではなく、docx の文字（w:t）・ファイル名・PDF の文字
 # （pdfmatch が制御文字を除く）のどれにも入らないので、docx 由来の文字（段落の抜粋など）に {{step:x}} のような並びがあっても
 # 目印とは読まれない。語は、前後の文に合わせて「〜から」「〜で」「〜してください」に続けて読める形にする（ノートブックの語は
-# 4e8c38a までの文と一字一句同じになる形。「手順 2」のように数字で終わる語の後ろの助詞の前の空白は step_text が補う）。
-# 1 画面版の語は app.py の部品のラベルに合わせる。
+# 4e8c38a までの文と同じになる形。ただし answer_apply〈以前の answer_paste。「▶ を押す」を足した〉とコマンドラインの語は、0.29.0 の最後の点検で直した。「手順 2」のように数字で終わる語の後ろの助詞の前の空白は step_text が補う）。
+# 1 画面版の語は app.py の部品のラベルに合わせる（ラベルは下の定数。app.py もこれを使う）。語の形は、前後の文が決める:
+#   paste・repaste・convert_again: 「…してください」に続く（語は「押」「指定し直し」などの語幹で終わる）。
+#   answer_apply: 「…と、AI が…」に続く（「押す」「変換し直す」の終止形で終わる。「反映」を押した後にさらに「変換する」を押す
+#   操作に読めないよう、1 画面版は「反映」を押すだけで変換し直されることが分かる形にする）。
+#   answer_field・apply_button: 欄・ボタンの名前（app.CRASH_ADVICE が使う）。
+ANSWER_LABEL = "AI の回答（json のコードブロック）を貼り付ける"      # 1 画面版の回答の欄のラベル（app.py の gr.Textbox）
+APPLY_LABEL = "反映"                                             # 回答を反映するボタン
+CONVERT_LABEL = "変換する"                                       # 変換するボタン（回答なしで作り直す）
 STEP_WORDS = {
     "notebook": {
         "docx": "手順 2", "pdf": "手順 2", "route": "手順 2", "meta": "手順 3",
         "ai_choose": "手順 4 で AI による補完の方法を「API で自動実行」か「手動（チャットに貼り付け）」にして ▶ を押し、手順 5 から",
         "ai_modes": "「API で自動実行」か「手動（チャットに貼り付け）」を選んで",
         "prompt": "手順 5 の依頼文", "paste": "手順 6 に貼り付けて ▶ を押", "repaste": "手順 6 で貼り付け直し",
-        "answer_paste": "手順 6 で AI の回答を貼り付けて", "convert_again": "手順 5 をもう一度実行",
+        "answer_apply": "手順 6 で AI の回答を貼り付けて ▶ を押す", "convert_again": "手順 5 をもう一度実行",
+        "answer_field": "手順 6 の貼り付けの欄", "apply_button": "手順 6 の ▶",
         "images": "手順 7「足りない画像をアップロード」"},
     "app": {
         "docx": "「docx（論文の Word ファイル）」の欄", "pdf": "「PDF（J-STAGE に登載する PDF）」の欄", "route": "「作り方」の欄",
         "meta": "巻・号・ページなどの入力欄",
-        "ai_choose": "「AI による補完の方法」の欄を「手動（チャットに貼り付け）」か「API（Claude）」にして「変換する」を押し、",
+        "ai_choose": f"「AI による補完の方法」の欄を「手動（チャットに貼り付け）」か「API（Claude）」にして「{CONVERT_LABEL}」を押し、",
         "ai_modes": "「AI による補完の方法」の欄で「手動（チャットに貼り付け）」か「API（Claude）」を選んで",
-        "prompt": "依頼文", "paste": "「AI の回答」の欄に貼り付けて「反映」を押",
-        "repaste": "「AI の回答」の欄に貼り付け直して「反映」を押し",
-        "answer_paste": "AI の回答を「AI の回答」の欄に貼り付けて「反映」を押して", "convert_again": "「変換する」をもう一度押",
+        "prompt": "依頼文", "paste": f"「{ANSWER_LABEL}」の欄に貼り付けて「{APPLY_LABEL}」を押",
+        "repaste": f"「{ANSWER_LABEL}」の欄に貼り付け直して「{APPLY_LABEL}」を押し",
+        "answer_apply": f"AI の回答を「{ANSWER_LABEL}」の欄に貼り付けて「{APPLY_LABEL}」を押す",
+        "convert_again": f"「{CONVERT_LABEL}」をもう一度押",
+        "answer_field": f"「{ANSWER_LABEL}」の欄", "apply_button": f"「{APPLY_LABEL}」",
         # 欄の並びの見出し（AppState.images_markdown の「次の図の画像が必要です」）の下に、図ごとの欄が並ぶ。欄の名前は図のキャプション
         # （出力ファイル名）（AppState.slot_label）
         "images": "「次の図の画像が必要です」の下に並ぶ、図ごとの欄（欄の名前は図のキャプションと出力ファイル名）"},
@@ -221,8 +253,11 @@ STEP_WORDS = {
         "docx": "docx の指定", "pdf": "--pdf の指定", "route": "--route の指定", "meta": "--meta の指定",
         "ai_choose": "--ai manual か --ai api を指定して",
         "ai_modes": "--ai manual か --ai api を指定して",
-        "prompt": "AI依頼文.txt", "paste": "ファイルに保存して --ai-response で指定", "repaste": "ファイルに保存して --ai-response で指定し直し",
-        "answer_paste": "AI の回答をファイルに保存して --ai-response で指定して", "convert_again": "--ai api でもう一度実行",
+        "prompt": "AI依頼文.txt", "paste": "ファイルに保存して --ai manual --ai-response 回答のファイル を指定",
+        "repaste": "ファイルに保存して --ai manual --ai-response 回答のファイル を指定し直し",
+        "answer_apply": "AI の回答をファイルに保存し、--ai manual --ai-response 回答のファイル を指定して変換し直す",
+        "convert_again": "--ai api でもう一度実行",
+        "answer_field": "--ai-response で指定する回答のファイル", "apply_button": "--ai-response の指定",
         "images": "--images の指定"},
 }
 _HIRAGANA = re.compile("[\u3041-\u309f]")

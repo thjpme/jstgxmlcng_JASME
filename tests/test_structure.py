@@ -1230,11 +1230,53 @@ def test_fn_guess_numbered_paragraphs_in_returned_range_are_reported(journal, me
     [act] = fn_guess_action(res)
     for t in (act.top, act.box_detail):
         assert "注の番号で始まる段落が 2 件ありました" in t and "「1) 一つ目の注である。」" in t and "「2) 二つ目の注である。」" in t
-        assert "注見出し" in t and "後ろの章見出しなども注の節に入る" in t
+        assert "注見出し" in t and "後ろの章見出しとその本文も含めてすべて注の節に入ります" in t
     assert "注の番号で始まる段落が 2 件" in act.cli and "注見出し" in act.cli
     # 注の番号で始まる段落がなければ、触れない
     path2 = fn_guess_article(tmp_path, [mf.para(S["body"], "表の下の説明である。"), *middle[2:]], "h7_none")
     res2 = convert(path2, meta, journal, Options(out_dir=tmp_path / "out2", convert_metafiles=False))
     [act2] = fn_guess_action(res2)
     assert res2.plan.fn_guess_numbered == {} and "注の番号で始まる段落が" not in act2.top + act2.box_detail + act2.cli
-    assert "後ろの章見出しなども注の節に入る" not in act2.top
+
+
+def test_fn_guess_advice_says_which_paragraphs_join_the_notes(journal, meta, tmp_path):
+    """0.29.0 の最後の点検: 「注見出し」にすると、後付けの見出しまでの段落（後ろの章も）が注の節に入る注意を、「注見出し」を勧めるすべての
+    場合（戻した・戻した範囲に注の番号がある・注の節として扱った）と、すべての出口（レポートの冒頭・14 章・Colab の枠・コマンドライン）に、
+    どの段落か分かる形（最初と最後の段落の ID と抜粋、件数）で添える。その範囲は、実際に「注見出し」にしたときに注の節に入る段落と一致する。"""
+    clause = "後ろの章見出しとその本文も含めてすべて注の節に入ります"
+    cases = {
+        "returned": [mf.para(S["body"], "表の下の説明である。"), mf.para(S["sec1"], "補足"), mf.para(S["body"], "補足の本文である。")],
+        "numbered": [mf.para(S["body"], "1) 一つ目の注である。"), mf.para(S["body"], "2) 二つ目の注である。"),
+                     mf.para(S["sec1"], "補足"), mf.para(S["body"], "補足の本文である。")],
+        "kept": [mf.para(S["body"], "表の注の文である。"), mf.para(S["body"], "最後の章のつづきの本文である。以上である。")],
+    }
+    for name, middle in cases.items():
+        res = convert(fn_guess_article(tmp_path, middle, "span_" + name), meta, journal,
+                      Options(out_dir=tmp_path / ("o_" + name), convert_metafiles=False))
+        [act] = fn_guess_action(res)
+        [(head, kind, _)] = res.plan.fn_guess_checks
+        assert kind == ("kept" if name == "kept" else "returned"), name
+        span = res.plan.fn_guess_span[head]
+        last = res.plan.paras[span[-1]].plain()
+        assert len(span) == len(middle) and last == middle_text(middle[-1]), name
+        for t in fn_guess_texts(act):
+            if t in (act.box_title,):
+                continue
+            assert "注見出し" in t and clause in t, (name, t)
+            assert f"{span[0]}「" in t and f"{span[-1]}「{last[:15]}" in t and f"までの {len(span)} 段落" in t, (name, t)
+        assert "\x00" not in "".join(fn_guess_texts(act))
+        # その範囲は、「注」を「注見出し」にしたとき、実際に注の節に入る段落と一致する
+        def parts(b, middle=middle):
+            return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "架空の主張である（注1）。"), mf.para(S["fn_head"], "注"), *middle]
+        path2 = tmp_path / f"span_{name}_style.docx"
+        mf.make_article(path2, "注の扱いの検証用文書", parts)
+        res2 = convert(path2, meta, journal, Options(out_dir=tmp_path / ("s_" + name), convert_metafiles=False))
+        assert res2.fidelity.ok and res2.fidelity.final_ok and res2.dtd_valid
+        assert [s for s, r in res2.plan.region.items() if r == "fn" and s != head] == span, name
+
+
+def middle_text(p):
+    """mf.para の XML の一覧（文字列）から、段落の文字を取り出す。"""
+    from lxml import etree
+    root = etree.fromstring(f'<root xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">{p}</root>')
+    return "".join(root.itertext())

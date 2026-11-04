@@ -21,7 +21,8 @@ import re
 import unicodedata
 from typing import NamedTuple
 
-from .article import ArticlePlan, BoxNode, FigNode, FormulaNode, ListNode, PNode, QuoteNode, Sec, TableNode
+from .article import (ArticlePlan, BoxNode, FigNode, FormulaNode, ListNode, PNode, QuoteNode, Sec, TableNode,
+                      UnlinkedRef)
 from .model import OBJ, Atom, LinkSpec, Para
 from .structure import CAP_BRANCH_NUM, CAP_BRANCH_SEP, RE_FIGCAP, RE_TABCAP, caption_label
 
@@ -415,7 +416,7 @@ class Linker:
         self.note("figure" if ref_type == "fig" else "table", p.src,
                   f"「{text}」は、{why}、リンクしなかった。手で確かめ、リンクが必要なら、AI による補完の {op}（text「{text}」、"
                   f"occurrence {occurrence_at(p, s, text)}）でリンクできる", applied=False)
-        self.plan.float_unlinked.append((word, p.src, text))
+        self.plan.float_unlinked.append(UnlinkedRef(word, p.src, text, s, e))
 
     def _word_part(self, p, plain, s, e, prev, n, rid, ref_type, word):
         """語の一部とみなしてリンクしなかった図・表の参照（plain[s:e]。「図1」）を、判断の一覧に記録する。"""

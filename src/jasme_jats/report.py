@@ -613,8 +613,8 @@ TO_CHECK = "要確認"         # 黄色い枠、レポートの冒頭・14 章�
 # 目印の名前を足すときは、colab.STEP_WORDS のすべての画面に語を足す（足りなければ、置き換えのときに例外になる）。
 # 目印は U+0000 で挟む。U+0000 は XML 1.0 の文字ではなく、docx の文字（w:t）・ファイル名・PDF の文字（pdfmatch が制御文字を除く）の
 # どれにも入らないので、文の中の docx 由来の文字（段落の抜粋など）が目印と読まれることがない。
-STEP_NAMES = ("docx", "pdf", "route", "meta", "ai_choose", "ai_modes", "prompt", "paste", "repaste", "answer_paste", "convert_again",
-              "images")
+STEP_NAMES = ("docx", "pdf", "route", "meta", "ai_choose", "ai_modes", "prompt", "paste", "repaste", "answer_apply", "convert_again",
+              "answer_field", "apply_button", "images")
 STEP_MARK = "\x00"
 STEP_MARK_PATTERN = STEP_MARK + "step:([^\x00]*)" + STEP_MARK
 
@@ -797,13 +797,14 @@ def _ai_pending_action(r):
     return Action(
         NEEDS_ACTION, "ai_pending",
         checklist=(f"- [ ] **AI の回答をまだ反映していない**（手動モード）: {esc(prompt)} を AI に渡し、返ってきた回答を貼り戻して"
-                   "変換し直す（Colab では回答を貼り付けて反映する。ノートブックは手順 6、1 画面版は「AI の回答」の欄と「反映」。"
-                   "コマンドラインでは --ai-response）"),
+                   "変換し直す（Colab では回答を貼り付けて反映する。ノートブックは手順 6、1 画面版は回答の欄に貼り付けて「反映」。"
+                   "コマンドラインでは --ai manual --ai-response 回答のファイル）"),
         box_title="AI の回答をまだ反映していません（手動モード）",
         box_detail=(f"この結果は、AI による補完の前の状態です。{step('prompt')}を AI（claude.ai などのチャット）に渡し、"
                     f"返ってきた回答を{step('paste')}してください。" + floats),
         cli=(f"要対応: 手動モードで、AI の回答をまだ反映していません（この出力は AI による補完の前の状態）。{prompt} を"
-             "チャット（claude.ai など）に貼り付け、返ってきた回答をファイルに保存して --ai-response で指定し、変換し直すこと。"
+             "チャット（claude.ai など）に貼り付け、返ってきた回答をファイルに保存して --ai manual --ai-response 回答のファイル を"
+             "指定し、変換し直すこと。"
              + floats))
 
 
@@ -922,8 +923,8 @@ def _textbox_undecided_action(r):
         cli_how = "--ai manual か --ai api で AI による補完を使うか、docx でその文字をテキストボックスの外に出して変換し直すこと"
     elif ai_pending(r):
         how = "AI の回答を反映すると、AI が囲みか注記かを判断し、囲みは本文に出します。"
-        box_how = step("answer_paste") + "変換し直すと、AI が囲みか注記かを判断します"
-        cli_how = "AI の回答を --ai-response で指定して変換し直すこと"
+        box_how = step("answer_apply") + "と、AI が囲みか注記かを判断します"
+        cli_how = "AI の回答をファイルに保存し、--ai manual --ai-response 回答のファイル を指定して変換し直すこと"
     else:
         how = ("AI の回答に、これらの種類（kind）の指定がないか、指定が検証で採用されませんでした（2 章）。AI に出し直してもらうか、"
                "Word でそのテキストボックスを確かめ、本文に必要な囲みなら、文字をテキストボックスの外（本文の段落）に出してから"
@@ -1207,7 +1208,8 @@ def float_ref_manual() -> str:
 def float_ref_ai(r, screen: str = "report") -> str:
     """リンクしなかった図・表の参照について、AI による補完の状態に合わせた文（_float_ref_action）。
 
-    AI を使っていない・回答待ち（手動モードで回答を貼り戻す前）・AI の回答を反映できなかった・AI を使った後、で文を分ける
+    AI を使っていない・回答待ち（手動モードで回答を貼り戻す前）・API の呼び出しが失敗した・貼り付けた回答を反映できなかった・
+    AI を使った後（手動なら回答の貼り直し、API ならもう一度変換）、で文を分ける
     （plan.float_unlinked は、AI が link_figure・link_table でリンクを付けた参照を除いた残りなので、AI を使った後は
     「AI もリンクを付けなかった参照」になる。ai_assist.apply_ops）。screen は "report"（レポートの冒頭。画面の操作を両方の言い方で書く）・
     "box"（Colab の枠。目印 step() で書く）・"cli"（コマンドラインの指定で書く）。
@@ -1219,15 +1221,33 @@ def float_ref_ai(r, screen: str = "report") -> str:
                "cli": "--ai manual か --ai api を指定して変換し直すと、"}[screen]
         return f"手で足すほかに、{how}AI が参照の図・表を指定してリンクを付けることもあります{checked}"
     if ai_pending(r):
-        how = {"report": "AI の回答を反映すると", "box": step("answer_paste") + "変換し直すと",
-               "cli": "AI の回答を --ai-response で指定して変換し直すと"}[screen]
+        how = {"report": "AI の回答を反映すると", "box": step("answer_apply") + "と",
+               "cli": "AI の回答をファイルに保存し、--ai manual --ai-response 回答のファイル を指定して変換し直すと"}[screen]
         return (f"手で足すほかに、{how}、AI が指定した参照にリンクが付くことがあります{checked}回答を反映した後にも"
                 "リンクが付かずに残った参照は、この知らせにもう一度出るので、残った分を手で足してください。")
+    if ai.error and ai.mode == "api":       # API の呼び出しが失敗した（回答は貼り付けるものではなく、もう一度変換すれば呼び出し直す）
+        again = {"report": "もう一度変換して AI による補完ができれば、", "box": step("convert_again") + "して AI による補完ができれば、",
+                 "cli": "--ai api でもう一度実行して AI による補完ができれば、"}[screen]
+        return ("AI による補完ができていません（要対応の知らせを参照）。手で足すほかに、"
+                f"{again}AI が参照の図・表を指定してリンクを付けることもあります{checked}")
     if ai.error:
         return ("AI による補完が反映できていません（要対応の知らせを参照）。AI の回答を反映できたら、AI が参照の図・表を指定して"
                 f"リンクを付けることもあります{checked}")
-    return ("AI の回答は反映済みですが、これらの参照には AI もリンクを付けませんでした（AI がリンクを指定しなかったか、指定が採用されな"
-            "かったため。2 章）。手で足すか、AI に出し直してもらってください。")
+    # AI の回答は反映済みで、AI もリンクを付けなかった。AI に出し直してもらう操作は、手動モードでは回答の貼り直し（1 画面版では
+    # app.AppState.REPASTE_KEYS の float_ref で手動の欄が見えたまま）、API モードではもう一度変換する
+    done = ("AI の回答は反映済みですが、これらの参照には AI もリンクを付けませんでした（AI がリンクを指定しなかったか、指定が採用されな"
+            "かったため。2 章）。")
+    ask = "リンクしなかった参照にもリンクを付けるよう頼んで"
+    if ai.mode == "manual":
+        again = {"report": f"AI に出し直してもらってください（チャットで AI に、{ask}出し直してもらい、回答を貼り付け直して反映します）",
+                 "box": f"チャットで AI に、{ask}出し直してもらい、" + step("repaste") + "てください",
+                 "cli": f"チャットで AI に、{ask}出し直してもらい、" + "新しい回答をファイルに保存して "
+                        "--ai manual --ai-response 回答のファイル を指定し直して実行してください"}[screen]
+    else:
+        again = {"report": "AI に出し直してもらってください（もう一度変換すると AI が出し直します。毎回同じ結果になるとは限りません）",
+                 "box": step("convert_again") + "してください（AI が出し直します。毎回同じ結果になるとは限りません）",
+                 "cli": "--ai api でもう一度実行してください（AI が出し直します。毎回同じ結果になるとは限りません）"}[screen]
+    return f"{done}手で足すか、{again}。"
 
 
 def float_ref_how(r, screen: str = "report") -> str:
@@ -1250,8 +1270,8 @@ def _float_ref_action(r):
     if not plan.float_unlinked:
         return None
     counts = {}
-    for _, _, text in plan.float_unlinked:
-        counts[text] = counts.get(text, 0) + 1
+    for u in plan.float_unlinked:
+        counts[u.text] = counts.get(u.text, 0) + 1
     items = list(counts.items())
     shown = "、".join(f"「{esc(t)}」" + (f"（{c} か所）" if c > 1 else "") for t, c in items[:FLOAT_REF_SHOWN]) \
         + ("ほか" if len(items) > FLOAT_REF_SHOWN else "")
@@ -1276,6 +1296,32 @@ def _float_ref_action(r):
 
 
 FN_GUESS_SHOWN = 5      # 注の扱いの要確認に並べる件数（全件は 4 章の判断の一覧）
+
+
+def _fn_guess_span_text(r, checks) -> str:
+    """「注」の段落を「注見出し」スタイルにしたとき、注の節に入る段落の説明（要確認 fn_guess の助言に添える。plan.fn_guess_span）。
+
+    「注」ごとに、その後ろの最初と最後の段落（ID と文字の抜粋）と件数。次の後付けの見出しまで（後ろの章見出しとその本文も含む）。
+    注の節に入る段落がない（記録がない）ときは空文字。
+    """
+    plan = r.plan
+    rows = []
+    for head, _, _ in checks[:FN_GUESS_SHOWN]:
+        srcs = [s for s in plan.fn_guess_span.get(head, ()) if s in plan.paras]
+        if not srcs:
+            continue
+        first, last = (_para_samples([(s, plan.paras[s].text_only())]) for s in (srcs[0], srcs[-1]))
+        rows.append(f"{head} の後ろの {first} の 1 段落" if len(srcs) == 1
+                    else f"{head} の後ろの {first}から{last}までの {len(srcs)} 段落")
+    return "、".join(rows) + ("ほか" if len(checks) > FN_GUESS_SHOWN and rows else "")
+
+
+def _fn_guess_span_clause(r, checks) -> str:
+    """助言「注見出し」に添える、注の節に入る範囲の注意（top・checklist・box_detail・cli で同じ）。"""
+    span = _fn_guess_span_text(r, checks)
+    return ("「注見出し」にすると、その「注」の段落から次の後付けの見出し（引用文献・謝辞など）または文書の終わりまでの段落が、"
+            "後ろの章見出しとその本文も含めてすべて注の節に入ります" + (f"（今回の範囲: {span}）" if span else "")
+            + "。注の一覧が論文の最後にあるときの方法です。")
 
 
 def _fn_guess_action(r):
@@ -1308,22 +1354,22 @@ def _fn_guess_action(r):
     # sec1・normal・p）。Word で実際に取れる手段は、注の節なら「注見出し」スタイル（役割 fn_heading）、本文の続きなら「注本文」スタイル
     # （役割 fn。本文では本文の段落として出て、文字からは推定されない。tests/test_structure.py の test_fn_guess_advice_is_executable）。
     # 表の注・図表のキャプション・ブロック引用のスタイルは、別の要素（表・図・引用）になるので勧めない
-    how = ("注の節なら、Word で「注」の段落のスタイルを「注見出し」にして変換し直してください"
-           + ("（注の節にすると、後ろの章見出しなども注の節に入るので、注の一覧が論文の最後にあるときの方法です）" if numbered else "")
-           + "。表の注の見出しなど本文の続きなら、"
+    clause = _fn_guess_span_clause(r, checks)
+    how = ("注の節なら、Word で「注」の段落のスタイルを「注見出し」にして変換し直してください。" + clause
+           + "表の注の見出しなど本文の続きなら、"
            "Word で「注」の段落のスタイルを「注本文」にして変換し直してください（本文・標準・章見出しのスタイルのままでは、"
            "「注」だけの段落は文字から注の見出しと推定されます）。")
     return Action(
         TO_CHECK, "fn_guess",
         top=f"> **要確認: 「注」だけの段落の扱いを、文字から推定しました（{n} 件。4 章）。** {what}{how}対象の段落: {samples}",
         checklist=(f"- [ ] **文字から推定した「注」の扱い**（{n} 件。4 章）: 注の節か本文の続きかを確かめ、違えば Word で「注」の段落の"
-                   "スタイルを「注見出し」（注の節）か「注本文」（本文の続き）にして変換し直す"),
+                   "スタイルを「注見出し」（注の節）か「注本文」（本文の続き）にして変換し直す。" + clause),
         box_title="「注」の段落の扱いを推定しました（要確認）",
         box_detail=f"{what}{how}（レポートの冒頭と 4 章）\n対象の段落: {samples}\n{detail}",
         cli=(f"要確認: 「注」だけの段落を文字から注の見出しと推定して扱いました（{n} 件。レポートの冒頭と 4 章）。"
              + (f"戻した範囲に注の番号で始まる段落が {len(numbered)} 件あります。" if numbered else "")
              + "注の節か本文の続きかを確かめ、docx で「注」の段落のスタイルを、注の節なら「注見出し」、本文の続きなら「注本文」にして"
-             "変換し直すこと"))
+             "変換し直すこと。" + clause))
 
 
 NEWLINE_SAMPLES = 5     # 改行の要確認に並べる段落の数（全件はレポートの 10 章）

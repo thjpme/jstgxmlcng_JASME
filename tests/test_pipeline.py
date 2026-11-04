@@ -871,7 +871,7 @@ def test_manual_mode_before_answer_is_needs_action(journal, meta, tmp_path, caps
     from conftest import META_EXAMPLE
     assert main([str(FULL), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "b"), "--ai", "manual",
                  "--no-metafile-conversion"]) == 1
-    assert "--ai-response で指定し" in capsys.readouterr().err
+    assert "--ai manual --ai-response 回答のファイル を指定し" in capsys.readouterr().err
 
 
 # ----------------------------------------------------------------------------- 読み取りの文字ポリシー（修正計画の G）
