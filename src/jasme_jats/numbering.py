@@ -83,7 +83,8 @@ _BULLET_MAP = {"\uf0b7": "•", "\uf0a7": "▪", "\uf076": "❖", "\uf0d8": "➢
 
 
 class Numbering:
-    def __init__(self, root):
+    def __init__(self, root, styles_root=None):
+        """root は numbering.xml、styles_root は styles.xml（番号付けスタイル経由の定義 w:numStyleLink をたどるときに使う。なくてもよい）。"""
         self.abstract = {}   # abstractNumId -> {ilvl: dict}
         self.nums = {}       # numId -> (abstractNumId, {ilvl: startOverride})
         self.counters = {}   # numId -> {ilvl: n}
@@ -110,6 +111,40 @@ class Numbering:
                 if so is not None:
                     overrides[il] = int(wval(so, "1"))
             self.nums[nid] = (aid, overrides)
+        self._follow_style_links(root, styles_root)
+
+    def _follow_style_links(self, root, styles_root):
+        """番号付けスタイル経由の定義（abstractNum の w:numStyleLink）の段の定義を、リンク先から得る。
+
+        ECMA-376: w:numStyleLink の abstractNum は自分では段を定義せず、styles.xml の番号付けスタイル（w:type="numbering"）の
+        w:pPr/w:numPr/w:numId が指す num の abstractNum（w:styleLink でそのスタイルを名乗る定義）の段を使う。リンク先がまた
+        w:numStyleLink なら、さらにたどる。循環・見つからない・段の定義がないときは、何もしない（自分の段の定義のまま。例外にしない）。
+        """
+        links = {an.get(w("abstractNumId")): wval(an.find(w("numStyleLink"))) for an in root.findall(w("abstractNum"))}
+        links = {a: s for a, s in links.items() if s}
+        if not links or styles_root is None:
+            return
+        style_num = {}
+        for st in styles_root.findall(w("style")):
+            if st.get(w("type")) == "numbering":
+                nid = wval(st.find(f"{w('pPr')}/{w('numPr')}/{w('numId')}"))
+                if nid:
+                    style_num[st.get(w("styleId"))] = nid
+
+        def resolve(aid, seen):
+            if aid in seen:
+                return None
+            seen = seen | {aid}
+            if aid not in links:
+                return self.abstract.get(aid) or None
+            nid = style_num.get(links[aid])
+            target = self.nums.get(nid, (None,))[0] if nid else None
+            return resolve(target, seen) if target is not None else None
+
+        resolved = {aid: resolve(aid, frozenset()) for aid in links}
+        for aid, levels in resolved.items():
+            if levels:
+                self.abstract[aid] = levels
 
     def label(self, num_id: str, ilvl: int) -> str:
         """番号付き段落が1つ現れるたびに呼ぶ。表示される番号文字列を返す。"""

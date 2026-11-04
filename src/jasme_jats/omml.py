@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from lxml import etree
 
-from .ooxml import BR_TEXT_TYPES, M_NS, W_NS, m, sym_char, w
+from .ooxml import BR_TEXT_TYPES, M_NS, W_NS, m, sym_char, text_of_element, w
 from .tracking import IMPLICIT, ORDER
 
 MML_NS = "http://www.w3.org/1998/Math/MathML"
@@ -276,7 +276,9 @@ class OmmlConverter:
         deg_el = el.find(m("deg"))
         deg_items = self.children(deg_el) if deg_el is not None else []
         e = self.arg(el, "e")
-        if hide or not deg_items:
+        # 非表示指定（degHide）でも m:deg に文字があれば mroot で出力する（文字を落とさないため。h_nary の subHide/supHide と同じ）。
+        # 文字がなければ（非表示指定の通常の形）msqrt
+        if not deg_items or (hide and not text_of_element(deg_el)):
             return self.node("msqrt", e)
         return self.node("mroot", e, self.row(deg_items))
 

@@ -104,7 +104,7 @@ class Reader:
     def __init__(self, path):
         self.pkg = DocxPackage(path)
         self.styles = read_styles(self.pkg)
-        self.numbering = Numbering(self.pkg.xml("word/numbering.xml"))
+        self.numbering = Numbering(self.pkg.xml("word/numbering.xml"), self.pkg.xml("word/styles.xml"))
         self.default_pstyle = next((s.sid for s in self.styles.values() if s.stype == "paragraph" and s.default), "")
         self.media = {}
         self.images = []

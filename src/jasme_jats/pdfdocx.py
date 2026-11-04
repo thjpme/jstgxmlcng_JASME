@@ -356,6 +356,8 @@ def paragraph_units(p, hidden=None) -> list:
             if tag in (w("footnoteRef"), w("endnoteRef")):
                 out.append((OBJ, None, 0))
                 continue
+            if tag in (w("drawing"), w("pict"), w("object")) and deleted:
+                continue        # 削除の変更履歴の中の図形は、承諾すると消える（読み取りも読まない）
             if tag in (w("drawing"), w("pict"), w("object"), w("ruby")):
                 raise _Complex
             if deleted or in_code() or hidden:

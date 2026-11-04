@@ -613,3 +613,57 @@ def test_joined_paragraphs_rules():
                            '</w:body>')
     assert joined_paragraphs(sdt) == {} and [why for _, why in unjoined_deleted_marks(sdt)] == [
         "コンテンツコントロールの最後の段落"]
+
+
+def _with_style_linked_numbering(src, dst, circular=False):
+    """numbering.xml に、番号付けスタイル経由の定義を足した docx を作る（Word の形: numId 91 → abstractNum 91〈w:numStyleLink〉→
+    スタイル LinkedList の numId 90 → abstractNum 90〈w:styleLink で LinkedList を名乗る。段の定義はここ〉）。circular なら、
+    スタイルが numId 91 自身を指す（たどれない）。"""
+    import zipfile
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "word/numbering.xml":
+                x = data.decode("utf-8")
+                a = ('<w:abstractNum w:abstractNumId="90"><w:multiLevelType w:val="multilevel"/><w:styleLink w:val="LinkedList"/>'
+                     '<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="(%1)"/></w:lvl>'
+                     '</w:abstractNum><w:abstractNum w:abstractNumId="91"><w:multiLevelType w:val="multilevel"/>'
+                     '<w:numStyleLink w:val="LinkedList"/></w:abstractNum>')
+                n = ('<w:num w:numId="90"><w:abstractNumId w:val="90"/></w:num>'
+                     '<w:num w:numId="91"><w:abstractNumId w:val="91"/></w:num>')
+                i = x.index("<w:num ")
+                x = x[:i].replace("</w:abstractNum><w:num", "</w:abstractNum><w:num") + a + x[i:]
+                x = x.replace("</w:numbering>", n + "</w:numbering>")
+                data = x.encode("utf-8")
+            elif item.filename == "word/styles.xml":
+                target = "91" if circular else "90"
+                st = ('<w:style w:type="numbering" w:styleId="LinkedList"><w:name w:val="LinkedList"/>'
+                      f'<w:pPr><w:numPr><w:numId w:val="{target}"/></w:numPr></w:pPr></w:style>')
+                data = data.decode("utf-8").replace("</w:styles>", st + "</w:styles>").encode("utf-8")
+            zout.writestr(item, data)
+
+
+def test_num_style_link_numbering_is_followed(tmp_path, journal, meta):
+    """abstractNum の w:numStyleLink（番号付けスタイル経由の定義）は、スタイルの numId が指す定義の段を使う（修正計画の R3）。
+    番号が出て <list> になる。たどれない（循環）ときは今までどおり番号なしで、例外にしない。"""
+    from jasme_jats.pipeline import Options, convert
+    S = mf.S
+
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"),
+                mf.list_item(S["body"], "一つ目の項目", num_id=91), mf.list_item(S["body"], "二つ目の項目", num_id=91),
+                mf.para(S["body"], "最後の文。")]
+    base = tmp_path / "base.docx"
+    mf.make_article(base, "番号付けスタイルの検証用文書", parts)
+    path = tmp_path / "linked.docx"
+    _with_style_linked_numbering(base, path)
+    doc = read_docx(path)
+    items = [p for p in doc.all_paragraphs() if p.numbering]
+    assert [p.autonum for p in items] == ["(1)", "(2)"]
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok
+    xml = (tmp_path / "out" / next(p.name for p in (tmp_path / "out").iterdir() if p.suffix == ".xml")).read_text("utf-8")
+    assert "<list" in xml and "(1)" in xml
+    bad = tmp_path / "circular.docx"
+    _with_style_linked_numbering(base, bad, circular=True)
+    assert [p.autonum for p in read_docx(bad).all_paragraphs() if p.numbering] == ["", ""]
