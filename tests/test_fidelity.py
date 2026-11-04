@@ -203,3 +203,24 @@ def test_textbox_in_deleted_run_is_not_counted(journal, meta, tmp_path):
     # 変換全体も不合格にならない
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
     assert res.fidelity.ok and res.fidelity.final_ok
+
+
+def test_unreadable_final_output_gets_its_own_notice(journal, meta, tmp_path, monkeypatch):
+    """最終出力が XML として読めないとき（実体参照の不備など）の要対応は、「本文が docx と一致していません」ではなく、
+    読めないこと・この XML は登載に使わないこと・開発者に知らせることを言う（F14）。文字の違いで不合格のときは従来の文。"""
+    from jasme_jats import pipeline
+    from jasme_jats.pipeline import Options, convert
+    from jasme_jats.report import NEEDS_ACTION, actions
+    real = pipeline.serialize
+    monkeypatch.setattr(pipeline, "serialize", lambda root: real(root).replace(b"</p>", b"&foo;</p>", 1))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "bad", convert_metafiles=False))
+    assert res.fidelity.final_ok is False and res.fidelity.final_unreadable and res.needs_action
+    [act] = [a for a in actions(res) if a.key == "fidelity"]
+    assert act.level == NEEDS_ACTION
+    for text in (act.top, act.box_detail, act.cli):
+        assert "読めません" in text and "登載に使わ" in text and "一致していません" not in text and "差分" not in text, text
+    assert "読めなかった理由" in act.box_detail and "開発者" in act.box_detail
+    monkeypatch.setattr(pipeline, "serialize", lambda root: real(root).replace("はじめに".encode(), "おわりに".encode(), 1))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "diff", convert_metafiles=False))
+    [act] = [a for a in actions(res) if a.key == "fidelity"]
+    assert not res.fidelity.final_unreadable and "一致していません" in act.box_detail and "5 章" in act.top

@@ -208,9 +208,11 @@ def test_images_box_uses_app_words(tmp_path, monkeypatch):
     st = filled(tmp_path, docx=TEMPLATE)
     st.convert()
     html = st.result_html()
-    assert "足りない図の画像」の欄（「画像を入れる」の上）で、図ごとにその図の画像を" in html and "{{" not in html
+    assert "「次の図の画像が必要です」の下に並ぶ、図ごとの欄（欄の名前は図のキャプションと出力ファイル名）で、図ごとにその図の画像を" in html
+    assert "\x00" not in html and "足りない図の画像" not in html
     assert "手順" not in result_boxes(st.res, screen="app")       # レポート全文（畳んだ部分）には「ノートブックは手順 N」と両方の言い方がある
     assert "手順 7「足りない画像をアップロード」で" in missing_images_box(st.res)
+    assert "次の図の画像が必要です" in st.images_markdown()          # 語の指す見出しが、実際の画面の欄の並びの見出しにある
 
 
 def test_unexpected_error_is_shown_and_old_result_dropped(tmp_path, monkeypatch):
@@ -233,6 +235,8 @@ def test_unexpected_error_is_shown_and_old_result_dropped(tmp_path, monkeypatch)
     assert st.res is None and not st.waiting_for_answer and not st.needs_action
     assert "想定外のエラーで止まりました" in out[0] and "RuntimeError: こわれた" in out[0] and "開発者に知らせてください" in out[0]
     assert "変換レポートは作られていません" in out[0] and out[1] == ""
+    # 変換で落ちたときは入力を確かめて変換し直す案内（F15）
+    assert "もう一度「変換する」を押してください" in out[0] and "入力（docx・PDF・書誌情報の欄）が正しいかを確かめ" in out[0]
     # 回答の反映（_run を直接呼ぶ）でも、前の結果を残さない
     st.res = types.SimpleNamespace(report_path=tmp_path / "ない.md", needs_action=True)
     with pytest.raises(RuntimeError):
@@ -246,10 +250,11 @@ def test_unexpected_error_is_shown_and_old_result_dropped(tmp_path, monkeypatch)
                                    xml_path=tmp_path / "a" / "x.xml")
     out = fns["on_download"](False)
     assert "想定外のエラーで止まりました" in out[0] and out[8] == ""
+    assert "もう一度ダウンロードの操作をしてかまいません" in out[0] and "もう一度「変換する」" not in out[0]     # 結果は残っている
 
 
 def test_unexpected_error_in_apply_answer(tmp_path, monkeypatch):
-    """回答の反映での想定外の例外も、枠に出す。変換レポートがあれば、その場所を書く。"""
+    """回答の反映での想定外の例外も、枠に出す。変換レポートがあれば、この画面の全文を案内する（場所のパスは書かない）。"""
     import types
     st = filled(tmp_path)
     st.set_inputs(ai_mode="manual")
@@ -264,8 +269,15 @@ def test_unexpected_error_in_apply_answer(tmp_path, monkeypatch):
     out = fns["on_apply"]('{"operations": []}')
     assert st.res is None and "OSError: 書けません" in out[0]
     assert "変換レポートは作られていません" in out[0] and str(report) not in out[0]     # 出力フォルダを消したので、前のレポートはない
-    # レポートが残っているときは、その場所を書く
+    # 反映で落ちたときは、回答や入力を消す「変換する」の押し直しを勧めない。別に保存することと、開発者に知らせることを案内する（F15）
+    assert "貼り付けた回答は、「変換する」を押し直すと使えなくなる" in out[0] and "もう一度「変換する」を押してください" not in out[0]
+    # レポートが残っているときも、サーバー側のパスは書かない（利用者は取り出せない）。この画面の変換レポートの全文を案内する
     st.res = types.SimpleNamespace(report_path=report)
     report.parent.mkdir(parents=True, exist_ok=True)
     report.write_text("x", encoding="utf-8")
-    assert str(report) in st.crash(RuntimeError("y")).html
+    html = st.crash(RuntimeError("y"), "images").html
+    assert str(report) not in html and "変換レポートの全文を見る" in html
+    assert "入れた画像と変換の結果は、この画面に残っています" in html and "押すと、入れた画像が消えます" in html
+    assert "もう一度「変換する」を押してください" not in html
+    with pytest.raises(ValueError):
+        st.crash(RuntimeError("y"), "other")

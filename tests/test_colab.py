@@ -225,7 +225,7 @@ def test_result_boxes_show_textbox_notices(journal, meta, tmp_path):
     assert result_boxes(res, level="要対応") == ""
     res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "m", ai_mode="manual", convert_metafiles=False))
     html = result_boxes(res)
-    assert "AI の回答を手順 6 に貼り付けて ▶ を押して変換し直すと、AI が囲みか注記かを判断します" in html
+    assert "手順 6 で AI の回答を貼り付けて変換し直すと、AI が囲みか注記かを判断します" in html
     assert "囲みか図の注記か決められなかったテキストボックス（3 章）は、AI の回答を反映するまで XML に出力していません。" in html
     assert "囲みか図の注記か決められなかったテキストボックス（3 章）は、AI の回答を反映するまで" in res.output_note
 
@@ -238,20 +238,25 @@ def test_step_words_cover_every_mark_in_report():
 
     import pytest
 
-    from jasme_jats import report
+    from jasme_jats import pipeline, report
     from jasme_jats.colab import STEP_WORDS, step_text
-    assert set(STEP_WORDS) == {"notebook", "app"}
+    assert set(STEP_WORDS) == {"notebook", "app", "cli"}
     for screen, words in STEP_WORDS.items():
         assert set(words) == set(report.STEP_NAMES), screen
-        assert all("{{" not in w and "手順" not in w or screen == "notebook" for w in words.values())
-    source = Path(report.__file__).read_text(encoding="utf-8")
-    used = set(re.findall(r"step\((?:'|\")(\w+)(?:'|\")\)", source))
+        assert all("\x00" not in w and ("手順" not in w or screen == "notebook") for w in words.values())
+    used = set()
+    for module in (report, pipeline):         # 目印は report.py と pipeline.py（AIRequiredError の文）で使う
+        used |= set(re.findall(r"step\((?:'|\")(\w+)(?:'|\")\)", Path(module.__file__).read_text(encoding="utf-8")))
     assert used == set(report.STEP_NAMES)                 # 使っていない目印・表にない目印がない
-    assert step_text("{{step:docx}}から", "notebook") == "手順 2から"
-    assert step_text("{{step:docx}}から", "app") == "「docx（論文の Word ファイル）」の欄から"
+    assert step_text(report.step("docx") + "から", "notebook") == "手順 2 から"     # 4e8c38a までの文と同じ（助詞の前の空白）
+    assert step_text(report.step("pdf") + "で選んだ", "notebook") == "手順 2 で選んだ"
+    assert step_text(report.step("images") + "で、", "notebook") == "手順 7「足りない画像をアップロード」で、"
+    assert step_text(report.step("docx") + "、", "notebook") == "手順 2、"
+    assert step_text(report.step("docx") + "から", "app") == "「docx（論文の Word ファイル）」の欄から"
+    assert step_text(report.step("docx") + "から", "cli") == "docx の指定から"
     assert step_text("目印なし", "app") == "目印なし"
     with pytest.raises(ValueError, match="知らない目印"):
-        step_text("{{step:nothing}}")
+        step_text("\x00step:nothing\x00")
     with pytest.raises(ValueError, match="知らない目印"):
         report.step("nothing")
     with pytest.raises(ValueError, match="知らない画面"):
@@ -293,16 +298,18 @@ def test_no_mark_left_in_any_screen(journal, meta, tmp_path):
             res = convert(docx, meta, journal, opts)
         except AIRequiredError:
             continue
-        assert "{{" not in res.report_path.read_text(encoding="utf-8")
+        assert "\x00" not in res.report_path.read_text(encoding="utf-8")
         for a in actions(res):
             seen.add(a.key)
-            assert not any("{{" in t for t in (a.top, a.checklist, a.cli)), a.key
-            assert "{{" not in step_text(a.box_title) + step_text(a.box_detail), a.key
-            assert "手順" not in step_text(a.box_detail, "app") + step_text(a.box_title, "app"), a.key
+            assert not any("\x00" in t for t in (a.top, a.checklist, a.cli)), a.key
+            for screen in ("notebook", "app", "cli"):
+                assert "\x00" not in step_text(a.box_title, screen) + step_text(a.box_detail, screen), a.key
+            for screen in ("app", "cli"):
+                assert "手順" not in step_text(a.box_detail, screen) + step_text(a.box_title, screen), a.key
         for screen in ("notebook", "app"):
             html = result_boxes(res, screen=screen) + missing_images_box(res, screen) + lost_images_box(res, screen) \
                 + pdf_diff_box(res, screen) + figure_body_box(res, screen) + unplaced_box(res.plan, res.ai.partial, screen)
-            assert "{{" not in html, screen
+            assert "\x00" not in html, screen
             assert screen == "notebook" or "手順" not in html
     assert {"ai_pending", "textbox_undecided"} <= seen      # 目印を使う知らせを実際に通した
 
@@ -318,3 +325,77 @@ def test_app_screen_words_in_boxes(journal, meta, tmp_path):
     page = result_boxes(res, level="要対応", screen="app")
     assert "手順 5 の依頼文を AI" in note and "手順 6 に貼り付けて ▶ を押してください" in note
     assert "依頼文を AI" in page and "「AI の回答」の欄に貼り付けて「反映」を押してください" in page and "手順" not in page
+
+
+def test_mark_lookalike_in_docx_text_is_shown_as_is(tmp_path, journal, meta, monkeypatch):
+    """docx の文字（段落の抜粋）に {{step:docx}}・{{step:x}} の形があっても、目印とは読まれない（F2）。書き換わらず、例外にならない。
+    PDF の文字の U+0000 は、枠に入らない（目印の区切りと紛れない）。"""
+    from test_pdfmatch import N10_TAIL, SMALL_FRONT, TALK, body_lines, convert_with_pages, n10_article, n10_pages
+
+    from jasme_jats.colab import result_boxes
+    from jasme_jats.report import actions
+    for word in ("{{step:docx}}", "{{step:x}}"):
+        docx = f"授業の最初に確認した値の{word}あ後ろで，生徒は話し合いを続け，その様子を記録した。"
+        pub = f"授業の最初に確認した値の{word}\x00後ろで，生徒は話し合いを続け，その様子を記録した。"
+        out = tmp_path / word[7:-2]
+        out.mkdir()
+        n10_article(out, journal, [("body", docx), ("body", TALK)])
+        pages = n10_pages([*SMALL_FRONT, *body_lines(pub), *body_lines(TALK), *N10_TAIL])
+        res = convert_with_pages(out, monkeypatch, journal, meta, pages, "docx", docx=out / "n10.docx")
+        assert any("step:" in a.box_detail for a in actions(res))        # 抜粋が枠に出る（抜粋は途中で切れることがあるので、中ほどで見る）
+        tail = word[3:]                                                   # "step:docx}}" / "step:x}}"
+        for screen in ("notebook", "app", "cli"):
+            html = result_boxes(res, screen=screen)         # 例外にならない
+            assert tail in html and "\x00" not in html, screen
+            assert "手順 2}}" not in html and "欄}}" not in html and "指定}}" not in html     # 抜粋の中の並びは語に書き換わらない
+
+
+def test_ai_required_message_names_the_modes_of_each_screen(journal, meta, tmp_path, capsys):
+    """AI を使わない設定で図表の位置を決められないときの例外の文は、画面ごとの選択肢の名前で出る（F5）。
+    ノートブックは 4e8c38a までと同じ文、1 画面版は app.AI_MODES の名前、コマンドラインは --ai の指定。目印が残らない。"""
+    import pytest
+    from conftest import FLOAT, META_EXAMPLE
+
+    from jasme_jats import app
+    from jasme_jats.cli import main
+    from jasme_jats.colab import ai_required_box, no_ai_box
+    from jasme_jats.pipeline import AIRequiredError, Options, convert
+    with pytest.raises(AIRequiredError) as e:
+        convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "a", convert_metafiles=False))
+    msg = str(e.value)
+    assert "AI による補完を「使わない」設定では変換できません。" in msg
+    note = ai_required_box(msg)                                   # ノートブック（既定）
+    assert "「API で自動実行」か「手動（チャットに貼り付け）」を選んで、もう一度変換してください。" in note and "\x00" not in note
+    page = ai_required_box(msg, "app")
+    labels = [label for label, _ in app.AI_MODES]
+    assert "「AI による補完の方法」の欄で「手動（チャットに貼り付け）」か「API（Claude）」を選んで、もう一度変換してください。" in page
+    assert "手動（チャットに貼り付け）" in labels and "API（Claude）" in labels             # 画面の選択肢の名前と同じ
+    assert "API で自動実行" not in page and "\x00" not in page
+    st = app.AppState(tmp_path / "work")
+    st.set_inputs(route="docx", docx=str(FLOAT), volume="31", issue="1", fpage="1", lpage="12", peer_review="査読あり",
+                  manuscript_type=app.type_choices()[0], ai_mode="none")
+    with pytest.raises(app.InputError) as ie:
+        st.convert()
+    assert "API で自動実行" not in ie.value.args[0] and "\x00" not in ie.value.args[0] and "\x00" not in ie.value.html
+    assert "「API（Claude）」を選んで" in ie.value.args[0] and "「API（Claude）」を選んで" in ie.value.html
+    assert "AI による補完を「使わない」設定" in no_ai_box("app") and "\x00" not in no_ai_box("app")
+    assert main([str(FLOAT), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli")]) == 2
+    err = capsys.readouterr().err
+    assert "--ai manual か --ai api を指定して、もう一度変換してください。" in err and "\x00" not in err and "API で自動実行" not in err
+
+
+def test_notebook_sentences_equal_those_before_marks(journal, meta, tmp_path):
+    """ノートブックの枠の文は、目印にする前（4e8c38a）の文と一字一句同じ（助詞の前の空白、「アップロードし直し」など）。
+    4e8c38a と今の両方で fixtures の変換結果の全 Action の box_detail を作って比べた確かめの代表（F3）。"""
+    from conftest import OUTSIDE, PDFCHECK, PDFCHECK_PDF, STRUCTURE
+
+    from jasme_jats.colab import result_boxes
+    from jasme_jats.pipeline import Options, convert
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "p", convert_metafiles=False, pdf_path=PDFCHECK_PDF,
+                                                   route="docx"))
+    assert ("校正の直しを補うときは、手順 2 で「docx から作り、出版版 PDF で補う」を選んで変換し直すか、docx を直して"
+            "手順 2 からやり直してください。") in result_boxes(res)
+    res = convert(OUTSIDE, meta, journal, Options(out_dir=tmp_path / "o", ai_mode="manual", convert_metafiles=False))
+    assert "Word で直した docx を手順 2 でアップロードし直し、そこから順にやり直してください" in result_boxes(res)
+    res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "s", ai_mode="manual", convert_metafiles=False))
+    assert "手順 6 で AI の回答を貼り付けて変換し直すと、AI が囲みか注記かを判断します" in result_boxes(res)

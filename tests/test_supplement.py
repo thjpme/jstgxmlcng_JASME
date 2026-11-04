@@ -453,3 +453,17 @@ def test_write_fixed_docx_spreads_reasons_in_group(journal, tmp_path):
     with pytest.raises(ValueError):
         pdfdocx.write_fixed_docx(src, src, plan, [])
     assert src.read_bytes() == before
+
+
+def test_report_shows_blank_only_cells_as_words(journal, meta, tmp_path, monkeypatch):
+    """レポート 13 章の表で、空白だけの文字（空白の削除の行の docx の欄）は空欄に見えないよう「（半角の空白）」と書く（F18）。
+    docx・XML の文字には影響しない（表示だけ）。他の欄の文字はそのまま。"""
+    pytest.importorskip("pypdfium2")
+    parts = ["授業の最初に確認した値 ", '<w:ins w:id="2" w:author="x"><w:r><w:t>(３)</w:t></w:r></w:ins>',
+             " の後ろで，生徒は話し合いを続け，その様子を記録した。"]
+    res = p1_convert(tmp_path, monkeypatch, journal, meta, parts)
+    report = res.report_path.read_text(encoding="utf-8")
+    rows = [line for line in report.splitlines() if "連動して直さない" in line]
+    assert len(rows) == 2 and all(line.startswith("| d12 |") for line in rows), rows
+    assert [line.split("|")[3].strip() for line in rows] == ["（半角の空白）"] * 2, rows          # docx の欄
+    assert P1_DOCX in xml_texts(load(res))

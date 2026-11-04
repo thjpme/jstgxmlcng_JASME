@@ -74,6 +74,7 @@ class FidelityResult:
     ai_additions: list = field(default_factory=list)  # (decision, 文字) AI が明示的に追加したもの
     final_ok: bool = None
     final_detail: str = ""
+    final_unreadable: bool = False  # 最終出力が XML として読めなかった（final_check。文字の違いではなく、読めないことが不合格の理由）
 
     def summary(self) -> str:
         if self.ok and self.final_ok is not False:
@@ -227,6 +228,7 @@ def final_check(tracked_root, final_bytes: bytes, res: FidelityResult):
         final = etree.fromstring(final_bytes, parser)
     except etree.XMLSyntaxError as e:
         res.final_ok, res.final_detail = False, f"最終出力が XML として読めない: {e}"
+        res.final_unreadable = True
         return False
     got = "".join(final.itertext())
     res.final_ok = expected == got
@@ -238,6 +240,7 @@ def final_check(tracked_root, final_bytes: bytes, res: FidelityResult):
         etree.fromstring(final_bytes, etree.XMLParser(load_dtd=False, no_network=True, resolve_entities=True, huge_tree=True))
     except etree.XMLSyntaxError as e:
         res.final_ok = False
+        res.final_unreadable = True
         res.final_detail = f"最終出力が XML として読めない（実体参照などの不備）: {e}" + (f"。{res.final_detail}" if res.final_detail else "")
     return res.final_ok
 
