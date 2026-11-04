@@ -967,6 +967,28 @@ def test_ai_kind_box_and_label_for_undecided_textboxes(journal, meta, tmp_path):
     assert "| 囲み・図の注記（テキストボックス） |" in report.split("## 2.")[1].split("## 3.")[0]
 
 
+@pytest.mark.parametrize("empty", ["", 0, False, None])
+def test_g5_falsy_caption_body_are_empty_lists(empty, journal, meta, tmp_path):
+    """G5: placements の items の caption・body が falsy な値（""・0・false・null）のときは、以前どおり空の一覧として扱う
+    （テキストボックスの box・label の指定は採用される）。真の値で一覧でないもの（"d16"・5）だけが不採用。"""
+    plan, ids = _boxes_by_text(journal)
+    hint, note = ids["（ヒント）"], ids["注"]
+    res = _manual_pl(STRUCTURE, [_box_pl(hint, _src(plan, "囲みの後の段落である。"), caption=empty, body=empty),
+                                 _box_pl(note, "", kind="label", caption=empty, body=empty)], meta, journal, tmp_path)
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    assert {op["src"] for op, _ in res.ai.accepted if op["op"] == "place_float"} == {hint, note}
+    assert res.ai.rejected == []
+    assert (res.plan.textboxes[hint].kind, res.plan.textboxes[note].kind) == ("box", "label")
+
+
+def test_g5_truthy_non_list_caption_is_still_rejected(journal, meta, tmp_path):
+    plan, ids = _boxes_by_text(journal)
+    hint = ids["（ヒント）"]
+    res = _manual_pl(STRUCTURE, [_box_pl(hint, _src(plan, "囲みの後の段落である。"), caption="d16", body=5)], meta, journal, tmp_path)
+    assert res.fidelity.ok and [why for _, why in res.ai.rejected] == ["items の caption は一覧（[ ]）で書く"]
+    assert res.plan.textboxes[hint].kind == "undecided"
+
+
 def test_ai_kind_box_restores_mechanical_label(journal, meta, tmp_path):
     # 図に重ねた注記と機械的に判断したテキストボックスも、本文の文字（問題文など）なら、AI が placements の kind box で本文の
     # 囲みに戻せる（F の確かめで足した暫定の判断。それまでは「扱いを機械的に決めたので変更できない」で採用せず、図の近くの

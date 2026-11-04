@@ -1283,8 +1283,8 @@ def _placement_problem(pl, plan: ArticlePlan, body: set, done: dict) -> str:
             continue                    # 形式の不備は、以降の検証が理由を示す
         for key in ("caption", "body"):
             v = it.get(key)
-            if v is None:
-                continue
+            if not v:
+                continue                # None・""・0・false は、以前どおり空の一覧として扱う（下の it.get(key) or []）
             if not isinstance(v, list):
                 return f"items の {key} は一覧（[ ]）で書く"
             if not all(isinstance(x, str) for x in v):

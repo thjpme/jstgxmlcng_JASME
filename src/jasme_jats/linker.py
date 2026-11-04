@@ -23,7 +23,7 @@ from typing import NamedTuple
 
 from .article import ArticlePlan, BoxNode, FigNode, FormulaNode, ListNode, PNode, QuoteNode, Sec, TableNode
 from .model import OBJ, Atom, LinkSpec, Para
-from .structure import CAP_BRANCH_SEP, RE_FIGCAP, RE_TABCAP, caption_label
+from .structure import CAP_BRANCH_NUM, CAP_BRANCH_SEP, RE_FIGCAP, RE_TABCAP, caption_label
 
 # URL（末尾の句読点・閉じ括弧は含めない）
 RE_URL = re.compile(r"(?:https?://|www\.)[^\s<>\"'「」『』、。，（）［］【】〔〕\u3000]+", re.I)
@@ -56,8 +56,8 @@ RE_EXP_BEFORE = re.compile(r"[A-Za-zＡ-Ｚａ-ｚ0-9０-９α-ωΑ-Ωµ\u00c5\u
 # 「図1」「表1」の直前に来てよい漢字（前掲図1・乃至図2・及表1）。ほかの漢字の直後は語の一部（地図1・付表1・発表1回目）
 FLOAT_REF_OK_BEFORE = "掲至及"
 RE_KANJI = re.compile(r"[\u3400-\u9fff々]")    # RE_FN_PLAIN の「注」の前の漢字と同じ範囲
-# 図・表の参照の番号のすぐ後ろの枝番（「図1-2」「図2.1」。キャプションの枝番〈structure.RE_CAP_BRANCH〉と同じ区切り）
-RE_BRANCH_REF = re.compile(rf"[{CAP_BRANCH_SEP}]{NUM}")
+# 図・表の参照の番号のすぐ後ろの枝番（「図1-2」「図2.1」。キャプションの枝番〈structure.RE_CAP_BRANCH〉と同じ区切り・同じ枝番の数字 CAP_BRANCH_NUM）
+RE_BRANCH_REF = re.compile(rf"[{CAP_BRANCH_SEP}]{CAP_BRANCH_NUM}")
 
 
 def fw_int(s: str) -> int:

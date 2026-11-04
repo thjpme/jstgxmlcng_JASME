@@ -2,6 +2,7 @@
 文字だけのテキストボックス（囲み・図に重ねた注記。修正計画の D1）。"""
 import dataclasses
 import functools
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -951,7 +952,7 @@ def test_real_notes_section_followed_by_text_ref_heading(journal, meta, tmp_path
     assert [s.heading.plain() for s in plan.body if getattr(s, "heading", None) is not None] == ["１．はじめに"]
 
 
-# ---- F10: K5 の戻しの条件（見出しのスタイルの段落 + 「注」の直後が注の番号で始まらない）と、文字から推定した注の節の知らせ
+# ---- F10: K5 の戻しの条件（見出しのスタイルの段落が、資料の見出しでない。G2 で「注」の直後が注の番号で始まらないことは外した）と、文字から推定した注の節の知らせ
 def fn_guess_article(tmp_path, middle, name):
     """章見出しの後ろに、本文スタイルの「注」だけの段落と middle（XML の一覧）が続く小さな論文（引用文献は make_article が足す）。"""
     def parts(b):
@@ -968,7 +969,7 @@ def fn_guess_action(res):
 
 @pytest.mark.parametrize("style, kind", [("sec2", "節"), ("sec3", "項")])
 def test_table_note_heading_before_sub_heading_returns_to_body(style, kind, journal, meta, tmp_path):
-    """F10 (1): 「注」の後ろが節・項の見出し（sec2・sec3）でも、「注」の直後が注の番号で始まらなければ本文に戻す
+    """F10 (1): 「注」の後ろが節・項の見出し（sec2・sec3）でも、資料の見出しでなければ本文に戻す
     （今までは章見出し〈sec1〉だけが戻し、節・項の見出し以降の本文がすべて 1 件の注になった）。要確認で知らせる。"""
     middle = [mf.para(S["body"], "表の下の説明である。"), mf.para(S[style], "（１）小節" if style == "sec2" else "① 小項"),
               mf.para(S["body"], "小節の本文である。")]
@@ -1035,3 +1036,137 @@ def test_real_notes_with_continuation_paragraphs_are_not_reported(journal, meta,
     assert [len(fn) for fn in [list(x.findall("p")) for x in load(res).iter("fn")]] == [2, 1]
     assert fn_guess_action(res) == [] and res.plan.fn_guess_checks == []
     assert not [d for d in res.plan.decisions if "注の節として扱った" in d.message or "本文に戻した" in d.message]
+
+
+# ---- G1・G2・G3: 英文の部分に切り替わるブロックが表のとき・注の番号で始まる表の注・知らせの助言
+def test_fn_guess_check_when_english_part_starts_with_a_table(journal, meta, tmp_path):
+    """G1: 文字から推定した注の節（表の注の「注」）が、英文の部分に切り替わるブロックが表（Table。src がなく tid）で終わっても、
+    変換が止まらず（今までは b.src を読んで AttributeError）、注の節として扱ったことを要確認で知らせる。段落のときと同じ。"""
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "架空の主張である。"), mf.para(S["body"], "注"),
+                mf.para(S["body"], "表の注の文である。"),
+                mf.table([[mf.cell([mf.para(S["author_en"], "Rokuro SHIKEN")]), mf.cell([mf.para(S["aff_en"], "Fictional University")])]]),
+                mf.para(S["title_en"], "A Small Article")]
+    path = tmp_path / "g1.docx"
+    mf.make_article(path, "表で英文の部分が始まる検証用文書", parts)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    [act] = fn_guess_action(res)
+    assert act.level == TO_CHECK and "注の節として扱" in act.top
+    [(_, kind, how)] = res.plan.fn_guess_checks
+    assert kind == "kept" and "後ろの英文の部分 t" in how             # 表の識別子（t1 など）で示す
+    [d] = [d for d in res.plan.decisions if "注の節として扱った" in d.message]
+    assert "後ろの英文の部分 t" in d.message
+
+
+NUMBERED_TABLE_NOTES = ["1) 数値は平均である。", "2) 欠損は除いた。"]
+
+
+@pytest.mark.parametrize("head_style, head_text, kind", [("sec1", "２．方法", "章"), ("sec2", "（１）小節", "節"),
+                                                          ("sec3", "① 小項", "項")])
+def test_numbered_table_notes_followed_by_heading_return_to_body(head_style, head_text, kind, journal, meta, tmp_path):
+    """G2: 注の番号で始まる表の注（「注」「1) 数値は平均である。」「2) 欠損は除いた。」）の後ろに章見出し・節見出し・項見出しが
+    続くときも、資料の見出しでなければ本文に戻す（「注」の直後が注の番号で始まるかは、戻すかどうかの条件にしない。今までは以降の
+    章がすべて 1 件の注に入った）。要確認で知らせ、判断の一覧に記録する。文字は 1 文字も変わらない。"""
+    middle = [mf.para(S["body"], t) for t in NUMBERED_TABLE_NOTES] + [mf.para(S[head_style], head_text), mf.para(S["body"], "続きの本文である。")]
+    path = fn_guess_article(tmp_path, middle, "g2_" + head_style)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    root = load(res)
+    assert root.find(".//fn-group") is None and res.plan.fns == []
+    body_text = text(root.find("body"))
+    for s in ("注", "1) 数値は平均である。", "2) 欠損は除いた。", head_text, "続きの本文である。"):
+        assert s in body_text
+    [d] = [d for d in res.plan.decisions if "本文に戻した" in d.message]
+    assert d.applied and kind + "見出し" in d.message and "注の番号で始まる表の注の可能性" in d.message
+    assert res.plan.paras[d.src].plain() == "注" and "3 ブロック" in d.message
+    [act] = fn_guess_action(res)
+    assert act.level == TO_CHECK and d.src in act.top and "本文に戻" in act.top
+    assert not res.needs_action
+
+
+@pytest.mark.parametrize("app", ["資料", "資料1　授業の記録", "Appendix 2"])
+def test_real_notes_followed_by_appendix_heading_stays(app, journal, meta, tmp_path):
+    """G2: 後ろの見出しのスタイルの段落が資料の見出し（appendix_heading）なら、今までどおり注の節として扱う（戻さない）。
+    注の一覧に見えない段落が続いたことは要確認で知らせる。"""
+    middle = [mf.para(S["body"], "（注1）一つ目の注である。"), mf.para(S["sec1"], app), mf.para(S["body"], "資料の本文である。")]
+    path = fn_guess_article(tmp_path, middle, "g2_app")
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    assert len(res.plan.fns) == 1 and not [d for d in res.plan.decisions if "本文に戻した" in d.message]
+    [act] = fn_guess_action(res)
+    assert act.level == TO_CHECK and "注の節として扱" in act.top
+
+
+def test_heading_that_is_an_appendix_sentence_returns_to_body(journal, meta, tmp_path):
+    """G2: 「資料1、2は授業の記録である。」のような文の形の章見出しは資料の見出しではない（appendix_sentence）ので、本文に戻す。"""
+    middle = [mf.para(S["body"], "1) 数値は平均である。"), mf.para(S["sec1"], "資料1、2は授業の記録である。"), mf.para(S["body"], "続き。")]
+    path = fn_guess_article(tmp_path, middle, "g2_sentence")
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    assert res.plan.fns == [] and [d for d in res.plan.decisions if "本文に戻した" in d.message]
+
+
+def test_pinned_shapes_after_g2(journal, meta, tmp_path):
+    """G2: 点検で使った形が、新しい条件でどうなるかを固定する。
+    k5b: 「注」+「（注1）…」で文書が終わる → 注の節（知らせなし）。k5b2: その後ろに節見出し → 本文に戻す（要確認）。
+    k5c: その後ろに資料の章見出し → 注の節のまま（要確認）。e3: 表の注の後ろに見出しがないまま引用文献 → 注の節のまま（要確認）。"""
+    def article(name, middle):
+        def parts(b):
+            return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "最初の本文である。（注1）"), mf.para(S["body"], "注"), *middle]
+        path = tmp_path / f"{name}.docx"
+        mf.make_article(path, "注の形の検証用文書", parts)
+        res = convert(path, meta, journal, Options(out_dir=tmp_path / name, convert_metafiles=False))
+        assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+        return res
+    note = mf.para(S["body"], "（注1）末尾の注である。")
+    res = article("k5b", [note])
+    assert len(res.plan.fns) == 1 and fn_guess_action(res) == []
+    res = article("k5b2", [note, mf.para(S["sec2"], "1.1 小節"), mf.para(S["body"], "小節本文")])
+    assert res.plan.fns == [] and res.plan.fn_guess_checks[0][1] == "returned"
+    assert "小節本文" in text(load(res).find("body")) and len(fn_guess_action(res)) == 1
+    res = article("k5c", [note, mf.para(S["sec1"], "資料"), mf.para(S["body"], "資料の本文。")])
+    assert len(res.plan.fns) == 1 and res.plan.fn_guess_checks[0][1] == "kept"
+    res = article("e3", [mf.para(S["body"], "表の注の文である。"), mf.para(S["body"], "最後の章のつづきの本文である。以上である。")])
+    assert len(res.plan.fns) == 1 and res.plan.fn_guess_checks[0][1] == "kept"
+
+
+def _manual_roles(path, ops, meta, journal, out):
+    resp = json.dumps({"operations": [{"op": "set_role", "src": s, "text": "", "occurrence": 1, "target": "", "role": r, "image": "",
+                                       "confidence": "高", "reason": "試験"} for s, r in ops], "placements": [], "notes": []},
+                      ensure_ascii=False)
+    return convert(path, meta, journal, Options(out_dir=out, ai_mode="manual", ai_response=resp, convert_metafiles=False))
+
+
+def test_fn_guess_advice_is_executable(journal, meta, tmp_path):
+    """G3: 要確認の助言（注の節なら「注見出し」スタイル、本文の続きなら AI による補完の set_role の p）に従うと、実際に推定が変わる。
+    「注」が本文スタイルのままでは、本文のスタイルに直しても同じ推定になる（助言にしない）。"""
+    middle = [mf.para(S["body"], "表の注の文である。"), mf.para(S["body"], "最後の章のつづきの本文である。以上である。")]
+    path = fn_guess_article(tmp_path, middle, "g3")
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    [act] = fn_guess_action(res)
+    for s in ("注見出し", "set_role", "p を指定"):
+        assert s in act.top and s in act.box_detail
+    assert "注見出し" in act.cli and "set_role" in act.cli
+    assert "本文のスタイルのままでは" in act.top and "本文のスタイルに直" not in act.top
+    # 一覧に段落の ID と文字の抜粋を付ける
+    [(src, kind, _)] = res.plan.fn_guess_checks
+    assert f"{src}「注」" in act.top and f"{src}「注」" in act.box_detail
+    # (1) 本文のスタイルのまま: 推定は変わらない（Word で本文のスタイルにしても同じ）
+    assert kind == "kept"
+    # (2) 注の節: 「注」のスタイルを「注見出し」にすると、推定ではなくスタイルで注の節になり、要確認は出ない
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "架空の主張である（注1）。"), mf.para(S["fn_head"], "注"),
+                mf.para(S["body"], "1) 一つ目の注である。")]
+    path2 = tmp_path / "g3_style.docx"
+    mf.make_article(path2, "注見出しの検証用文書", parts)
+    res2 = convert(path2, meta, journal, Options(out_dir=tmp_path / "out2", convert_metafiles=False))
+    assert res2.fidelity.ok and len(res2.plan.fns) == 1 and fn_guess_action(res2) == []
+    # (3) 本文の続き: AI の set_role p で「注」を本文の段落にすると、推定されず、知らせも出ない
+    res3 = _manual_roles(path, [(src, "p")], meta, journal, tmp_path / "out3")
+    assert res3.ai.rejected == [] and res3.fidelity.ok and res3.fidelity.final_ok and res3.dtd_valid
+    assert res3.plan.fns == [] and res3.plan.fn_guess_checks == [] and fn_guess_action(res3) == []
+    assert "注" in [text(q) for q in load(res3).find("body").iter("p")]
+    # (4) 注の節: AI の set_role fn_heading でも、スタイルで決めた注見出しと同じ（推定の要確認は出ない）
+    res4 = _manual_roles(path, [(src, "fn_heading")], meta, journal, tmp_path / "out4")
+    assert res4.ai.rejected == [] and res4.fidelity.ok and len(res4.plan.fns) == 1 and fn_guess_action(res4) == []
