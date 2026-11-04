@@ -1110,6 +1110,40 @@ def _note_overlap_action(r):
              "docx でどちらかの書き方にそろえて変換し直すこと"))
 
 
+FLOAT_REF_SHOWN = 6     # 図・表の参照の要確認に並べる参照の数（全件は 4 章の判断の一覧）
+
+
+def _float_ref_action(r):
+    """番号から図・表を決められず、リンクしなかった図・表の参照（plan.float_unlinked。linker.Linker.float_refs）。なければ None。
+
+    同じ種類のキャプションの番号が重なる（図1・図1）か、キャプションに枝番がある（図1-1・図1-2、図2.1）ときの、その番号の参照。
+    どの図・表への参照か決められないので、誤ったリンクを出さず、リンクしないで知らせる（手で確かめ、必要なら手でリンクを付ける）。
+    """
+    plan = r.plan
+    if not plan.float_unlinked:
+        return None
+    counts = {}
+    for _, _, text in plan.float_unlinked:
+        counts[text] = counts.get(text, 0) + 1
+    items = list(counts.items())
+    shown = "、".join(f"「{esc(t)}」" + (f"（{c} か所）" if c > 1 else "") for t, c in items[:FLOAT_REF_SHOWN]) \
+        + ("ほか" if len(items) > FLOAT_REF_SHOWN else "")
+    n = len(plan.float_unlinked)
+    return Action(
+        TO_CHECK, "float_ref",
+        top=("> **要確認: 図・表の番号が重なる、または枝番がある（図1-1・図1-2 など）ため、どの図・表か決められず、リンクしなかった"
+             f"参照があります（{n} か所。4 章）。** 参照: {shown}。誤ったリンクを出さないよう、これらの参照には図・表へのリンクを"
+             "付けていません。PDF と照らして確かめ、リンクが必要なら手で付けてください（AI による補完の link_figure・link_table でも"
+             "付けられます）。"),
+        checklist=f"- [ ] **リンクしなかった図・表の参照**（{n} か所。4 章）: 番号が重なる・枝番があるため。PDF と照らし、必要なら手でリンクを付ける",
+        box_title="図・表の参照のリンクを付けていない箇所があります（要確認）",
+        box_detail=("図・表の番号が重なる、または枝番がある（図1-1・図1-2 など）ため、どの図・表か決められない参照には、リンクを付けて"
+                    f"いません（誤ったリンクを出さないため）。\n対象の参照（{n} か所）: {shown}\n"
+                    "PDF と照らして確かめ、リンクが必要なら手で付けてください（レポートの 4 章に場所があります）。"),
+        cli=(f"要確認: 図・表の番号が重なる、または枝番があるため、リンクしなかった図・表の参照が {n} か所あります"
+             f"（{shown}。レポートの冒頭と 4 章）。PDF と照らして確かめ、必要なら手でリンクを付けること"))
+
+
 NEWLINE_SAMPLES = 5     # 改行の要確認に並べる段落の数（全件はレポートの 10 章）
 JOINED_SHOWN = 10       # 6 章の、つないだ段落・読み飛ばした表の行の一覧に並べる数（それより多ければ「ほか」）
 
@@ -1340,7 +1374,8 @@ def actions(r) -> list:
     head = [f(r) for f in (_fidelity_action, _supplement_action, _dtd_action, _upload_action, _ai_error_action, _ai_pending_action,
                            _partial_action, _forced_action, figure_body_action, _textbox_undecided_action,
                            _textbox_place_action, _textbox_figure_text_action, images_action, lost_action,
-                           _style_hidden_action, _abstract_ja_action, _app_after_refs_action, _note_overlap_action, _newline_action)]
+                           _style_hidden_action, _abstract_ja_action, _app_after_refs_action, _note_overlap_action, _float_ref_action,
+                           _newline_action)]
     return [a for a in head if a is not None] + pdf_actions(r)
 
 

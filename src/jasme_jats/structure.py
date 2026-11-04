@@ -101,6 +101,20 @@ RE_HEAD2 = re.compile(r"^[(（][0-9０-９]{1,2}[)）]\s*\S.{0,40}$")
 RE_HEAD3 = re.compile(r"^[①-⑳]\s*\S.{0,40}$")
 RE_FIGCAP = re.compile(r"^(?:図|Figure|Fig\.?)\s*([0-9０-９]+)")
 RE_TABCAP = re.compile(r"^(?:表|Table)\s*([0-9０-９]+)")
+# キャプションの番号のすぐ後ろの枝番（NFKC 後の文字に使う。「図1-2」「図2.1」。区切りは「-」「‐」「‑」「‒」「–」「—」「−」「.」で、
+# 後ろに数字が続くときだけ。builder の RE_LABEL_SPLIT の枝番〈ハイフン・ピリオド〉より広く読む）。枝番はキャプションの番号の
+# 一部で、整数だけを読む RE_FIGCAP・RE_TABCAP では「図1-1」「図1-2」がどちらも「図1」になる（linker が参照のリンクを決めるときに使う）
+RE_CAP_BRANCH = re.compile(r"[-\u2010-\u2015\u2212.](?=[0-9])")
+
+
+def caption_label(para: Para, regex) -> tuple:
+    """図・表のキャプションの段落 para の番号と、番号のすぐ後ろに枝番があるか: (番号, 枝番あり)。regex は RE_FIGCAP・RE_TABCAP。
+    番号を読めなければ (None, False)。番号は assign_ids が FigNode.number・TableNode.number に入れるものと同じ。"""
+    t = nfkc(_para_text(para)).strip()
+    m = regex.match(t)
+    if not m:
+        return None, False
+    return int(m.group(1)), RE_CAP_BRANCH.match(t, m.end(1)) is not None
 # テキストボックス内のキャプションの形（NFKC 後）。番号の直後がひらがな・読点・範囲の記号なら「図1は…」のような本文の文
 RE_TEXTBOX_CAP = re.compile(r"^(?:(?P<fig>図|Figure|Fig\.?)|(?P<tab>表|Table))\s*[0-9]+(?![0-9ぁ-ゟ,、・~〜\-–—])")
 RE_FORMULA_LABEL = re.compile(r"^[\s\u3000]*([(（][\s\u3000]*[0-9０-９]+(?:[.．\-－][0-9０-９]+)?[\s\u3000]*[)）])[\s\u3000]*$")
@@ -454,11 +468,31 @@ class Classifier:
         セクション区切りで本文に切り替えるため）。
         本文の外の段落に結び付いた図形（self.outside。2 回目の組み立て）の中身は、その時点の領域にかかわらず、本文の最後に
         回す（docx の順。領域は変えない。修正計画の N7）。
+        本文スタイルの「注」だけの段落（表の注の見出しなど）は、文字から注の見出しと推定して後付けに切り替える（back_heading_by_text）が、
+        引用文献・付記・謝辞などの見出しが続く前に、章見出しのスタイルの段落（スタイルから決まった sec1）が現れたら、注の節ではなく
+        本文の続きとして、その「注」の段落から章見出しの前までを本文に戻し、判断の一覧に記録する（点検の K5。fn_guess）。
         """
         regions = {"front_ja": [], "body": [], "back": [], "front_en": []}
         state = "front_ja"
         seen_title = False
+        # 本文から後付けへの切り替えが、文字から推定した注の見出し（本文スタイルの「注」だけの段落。表の注の見出しなど）によるとき、
+        # その段落の regions["back"] の中の位置。後付けの見出しが続けば本当の注の節（None に戻す）、章見出しのスタイルの段落が
+        # 先に現れれば、注の節ではなく本文の続きだったとして本文に戻す（K5）
+        fn_guess = None
         for b, role in flat:
+            if fn_guess is not None and state == "back" and not in_shape(b):
+                if role in BACK_HEADINGS or (isinstance(b, Para) and self.back_heading_by_text(b, role) not in (None, "fn_heading")):
+                    fn_guess = None         # 引用文献・付記・謝辞などの見出しが続く: 本当の注の節
+                elif role == "sec1" and isinstance(b, Para):
+                    moved = regions["back"][fn_guess:]
+                    del regions["back"][fn_guess:]
+                    regions["body"].extend(moved)
+                    state, fn_guess = "body", None
+                    self.plan.decide(
+                        "mechanical", "style", moved[0][0].src,
+                        f"本文スタイルの段落「{_para_text(moved[0][0]).strip()[:20]}」を、文字から注の見出しと推定して後付けに切り替えたが、"
+                        f"後ろに章見出しのスタイルの段落 {b.src}「{_para_text(b).strip()[:20]}」が続くため、注の節ではなく本文の続き"
+                        f"（表の注の見出しなど）とみなし、この段落から章見出しの前までの {len(moved)} ブロックを本文に戻した")
             if in_shape(b) and self.outside and ((b.float_id and b.float_id in self.outside)
                                                  or (b.textbox_id and b.textbox_id in self.outside)):
                 regions["body"].append((b, role))
@@ -482,8 +516,13 @@ class Classifier:
                 elif isinstance(b, Table) and seen_title and not troles & FRONT_JA_ROLES:
                     state = "body"
             elif state == "body":
-                if role in BACK_HEADINGS or (isinstance(b, Para) and self.back_heading_by_text(b, role)):
+                guess = None if role in BACK_HEADINGS or not isinstance(b, Para) else self.back_heading_by_text(b, role)
+                if role in BACK_HEADINGS or guess:
                     state = "back"
+                    if guess == "fn_heading":
+                        fn_guess = len(regions["back"])
+            if state != "back":
+                fn_guess = None
             regions[state].append((b, role))
             if state == "front_ja" and isinstance(b, Para) and b.section_break and seen_title:
                 state = "body"

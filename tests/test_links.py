@@ -22,7 +22,7 @@ from lxml import etree
 from jasme_jats.linker import RE_FIGREF, RE_TABREF, Linker, find_in_para
 from jasme_jats.model import Atom, LinkSpec, Para
 from jasme_jats.pipeline import Options, _mechanical, convert
-from jasme_jats.report import actions
+from jasme_jats.report import TO_CHECK, actions
 from jasme_jats.structure import ArticlePlan
 
 S = mf.S
@@ -641,3 +641,154 @@ def test_superscript_exponent_not_linked(journal, meta, tmp_path):
     links_ = [(text(x), x.get("rid")) for x in load(res).iter("xref") if x.get("ref-type") == "fn"]
     assert ("1)", "fn1") in links_
     assert ("2", "fn2") not in links_
+
+
+# ============================================================================= K3: キャプションの 2 段落目以降
+def test_caption_more_is_linked(journal, meta, tmp_path):
+    """図・表のキャプションの 2 段落目以降（出典の行など）の引用（試験（2024））・URL・上付きの注番号も、1 段落目と同じくリンクする
+    （linker.body_paragraphs が caption_more も文脈 "caption" で返す）。キャプションの中の「図1」「表1」は、1 段落目と同じく
+    図・表の参照にしない。不変性チェック・DTD・J-STAGE のチェックは合格。"""
+    def parts(b):
+        rid = b.add_image("links_k3_fig1.png", mf.png_bytes("K3 figure 1"))
+        return [mf.para(S["sec1"], "１．はじめに"),
+                mf.para(S["body"], mf.drawing(rid, 2880000, 1800000, 963), jc="center"),
+                mf.para(S["fig_cap"], "図1　架空の図"),
+                mf.para(S["fig_cap"], "出典：試験（2024）．http://example.com/fig1 を見る", mf.run("1)", sup=True), "（表1と同じ）"),
+                mf.para(S["tab_cap"], "表1　架空の表"),
+                mf.para(S["tab_cap"], "出典：試験（2024）．http://example.com/tab1"),
+                mf.table([[mf.cell("観点"), mf.cell("内容")], [mf.cell("架空"), mf.cell("架空の内容")]]),
+                mf.para(S["fn_head"], "注"), mf.para(S["body"], NOTES3[0])]
+    path = tmp_path / "k3.docx"
+    mf.make_article(path, "リンクの境界の検証用文書", parts)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
+    root = load(res)
+    [fig] = list(root.iter("fig"))
+    [tab] = list(root.iter("table-wrap"))
+    fig_p = fig.findall("caption/p")
+    tab_p = tab.findall("caption/p")
+    assert [text(p) for p in fig_p] == ["図1　架空の図", "出典：試験（2024）．http://example.com/fig1 を見る1)（表1と同じ）"]
+    assert [(x.tag, text(x)) for x in fig_p[1].iter() if x.tag in ("xref", "uri")] == [
+        ("xref", "2024"), ("uri", "http://example.com/fig1"), ("xref", "1)")]
+    assert [(x.tag, text(x)) for x in tab_p[1].iter() if x.tag in ("xref", "uri")] == [
+        ("xref", "2024"), ("uri", "http://example.com/tab1")]
+    assert fig_p[1].find("xref[@ref-type='table']") is None
+
+
+
+# ============================================================================= K4: 枝番つき・番号が重なる図表のキャプション
+def floats_article(tmp_path, body, fig_caps=(), tab_caps=(), name="k4"):
+    """本文の段落（XML の一覧）の後ろに、図（画像と図キャプション）と表（表キャプションと表）を並べた小さな論文。"""
+    def parts(b):
+        out = [mf.para(S["sec1"], "１．はじめに"), *body]
+        for k, cap in enumerate(fig_caps, 1):
+            rid = b.add_image(f"links_k4_fig{k}.png", mf.png_bytes(f"K4 figure {k}"))
+            out += [mf.para(S["body"], mf.drawing(rid, 2880000, 1800000, 970 + k), jc="center"), mf.para(S["fig_cap"], cap)]
+        for cap in tab_caps:
+            out += [mf.para(S["tab_cap"], cap), mf.table([[mf.cell("観点"), mf.cell("内容")], [mf.cell("架空"), mf.cell("内容")]])]
+        return out
+    path = tmp_path / f"{name}.docx"
+    mf.make_article(path, "リンクの境界の検証用文書", parts)
+    return path
+
+
+def float_links(root, prefix):
+    """文字が prefix で始まる段落の、図・表への参照: [(文字, ref-type, rid)]。"""
+    [q] = [q for q in root.iter("p") if text(q).startswith(prefix)]
+    return [(text(x), x.get("ref-type"), x.get("rid")) for x in q.iter("xref") if x.get("ref-type") in ("fig", "table")]
+
+
+def test_branch_figure_numbers_are_not_linked(journal, meta, tmp_path):
+    """図1-1・図1-2・図2.1 のように枝番のあるキャプションがあるとき、「図1-1」「図1-2」「図1」「図2」「図2.1」の参照はどれもリンクしない
+    （どの枝番の図か決められない。今までは図1-1・図1-2 が両方「図1」になり、後の図にリンクしていた）。枝番のない図3 の参照はリンクする。
+    判断の一覧（4 章）に 1 件ずつ記録し、要確認の知らせを 1 つ出す（終了コードは 0）。不変性チェック・DTD・J-STAGE のチェックは合格。"""
+    body = [mf.para(S["body"], "図1-1と図1-2を比べる。図1も見る。図2.1を参照する。図2と図3も見る。"),
+            mf.para(S["body"], "図1-2、図3は架空である。")]
+    path = floats_article(tmp_path, body, ["図1-1　架空の図", "図1-2　もう一つの図", "図2.1　枝番の図",
+                                                     "図3　ふつうの図"])
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
+    root = load(res)
+    assert float_links(root, "図1-1と図1-2を比べる") == [("3", "fig", "F4")]
+    assert float_links(root, "図1-2、図3は") == [("3", "fig", "F4")]
+    plan = res.plan
+    assert [(w, t) for w, s, t in plan.float_unlinked] == [
+        ("図", "図1-1"), ("図", "図1-2"), ("図", "図1"), ("図", "図2.1"), ("図", "図2"), ("図", "図1-2")]
+    recs = [d for d in plan.decisions if d.category == "figure" and not d.applied and "リンクしなかった" in d.message]
+    assert len(recs) == 6 and all("link_figure" in d.message for d in recs)
+    [act] = [a for a in actions(res) if a.key == "float_ref"]
+    assert act.level == TO_CHECK and "図1-1" in act.top and "図2.1" in act.top and not res.needs_action
+    assert "図1-1" in act.box_detail and "図1-1" in act.cli
+    assert "手順" not in act.top + act.box_detail + act.cli + act.checklist
+    assert "float_ref" in [a.key for a in actions(res)]
+    assert any("リンクしなかった図・表の参照" in line for line in act.checklist.splitlines())
+
+
+def test_duplicate_figure_numbers_are_not_linked(journal, meta, tmp_path):
+    """同じ番号の図のキャプションが 2 つ（図1 と図1）あるとき、「図1」の参照はリンクしない（今までは後のキャプションに黙ってリンクした）。
+    表も同じ（表2 が 2 つ）。重ならない番号の図2・表1 の参照はリンクする。"""
+    body = [mf.para(S["body"], "図1と図2を見る。表1と表2を見る。")]
+    path = floats_article(tmp_path, body, ["図1　一つ目の図", "図1　二つ目の図", "図2　三つ目の図"],
+                          ["表1　一つ目の表", "表2　二つ目の表", "表2　三つ目の表"])
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
+    assert float_links(load(res), "図1と図2を見る") == [("2", "fig", "F3"), ("表1", "table", "T1")]
+    assert [(w, t) for w, s, t in res.plan.float_unlinked] == [("図", "図1"), ("表", "表2")]
+    msgs = [d.message for d in res.plan.decisions if not d.applied and "リンクしなかった" in d.message]
+    assert len(msgs) == 2 and "キャプションが複数ある" in msgs[0] and "図1" in msgs[0]
+    assert [a.key for a in actions(res) if a.key == "float_ref"] == ["float_ref"]
+
+
+def test_branch_ref_not_range_only_with_branch_captions(journal, meta, tmp_path):
+    """枝番のキャプションがない論文では、「図1-2」は今までどおり範囲（図1〜図2）として読み、図1 と図2 にリンクする（知らせも出ない）。"""
+    body = [mf.para(S["body"], "図1-2を見る。表1、2も見る。")]
+    path = floats_article(tmp_path, body, ["図1　一つ目の図", "図2　二つ目の図"], ["表1　一つ目の表", "表2　二つ目の表"])
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert float_links(load(res), "図1-2を見る") == [("図1", "fig", "F1"), ("2", "fig", "F2"), ("表1", "table", "T1"),
+                                                  ("2", "table", "T2")]
+    assert res.plan.float_unlinked == [] and [a for a in actions(res) if a.key == "float_ref"] == []
+
+
+def test_branch_table_numbers_only_affect_tables(journal, meta, tmp_path):
+    """枝番があるのは表だけ（表1-1・表1-2）のときは、表の参照だけリンクしない。図の「図1-2」は範囲のままリンクする。"""
+    body = [mf.para(S["body"], "図1-2と表1-2と表3を見る。")]
+    path = floats_article(tmp_path, body, ["図1　一つ目の図", "図2　二つ目の図"],
+                          ["表1-1　一つ目の表", "表1-2　二つ目の表", "表3　三つ目の表"])
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert float_links(load(res), "図1-2と表1-2") == [("図1", "fig", "F1"), ("2", "fig", "F2"), ("3", "table", "T3")]
+    assert [(w, t) for w, s, t in res.plan.float_unlinked] == [("表", "表1-2")]
+
+
+def test_caption_label_branch():
+    """キャプションの番号と枝番（structure.caption_label）: 区切りは「-」「‐」「－」「.」「．」など、後ろに数字が続くときだけ。"""
+    from jasme_jats.structure import RE_FIGCAP, RE_TABCAP, caption_label
+    def cap(t):
+        return Para(src="d1", atoms=[Atom(kind="text", text=t)])
+    for t, want in [("図1-2　架空", (1, True)), ("図２．１　架空", (2, True)), ("図３－４　架空", (3, True)),
+                    ("図1‐2　架空", (1, True)), ("Figure 1-2 caption", (1, True)), ("図1　架空", (1, False)),
+                    ("図1.　架空", (1, False)), ("図1-　架空", (1, False)), ("図 12：架空", (12, False)),
+                    ("架空の図", (None, False))]:
+        assert caption_label(cap(t), RE_FIGCAP) == want, t
+    assert caption_label(cap("表2-3　架空"), RE_TABCAP) == (2, True)
+
+
+@pytest.mark.parametrize("plain, skip, want_links, want_unlinked", [
+    # 枝番つきのキャプションがある論文（branch）: 番号のすぐ後ろの枝番は 1 つの参照。リンクしない
+    ("図1-2を見る", {1: (["図1-1", "図1-2"], True)}, [], ["図1-2"]),
+    ("図1、図1-2と図3を見る", {1: (["図1-1", "図1-2"], True)}, [("3", "F3")], ["図1", "図1-2"]),
+    ("図3-4と図4.2を見る", {4: (["図4.1"], True)}, [], ["図3-4", "図4.2"]),
+    # 枝番の形でない並びは範囲のまま（空白を挟む・全角の「〜」）。並びの番号は番号だけにリンクする
+    ("図3 - 5を見る。図3〜4も見る", {}, [("図3", "F3"), ("5", "F5"), ("図3", "F3"), ("4", "F4")], []),
+])
+def test_float_refs_branch_rules(plain, skip, want_links, want_unlinked):
+    """float_refs の skip・branch: 枝番の形（番号のすぐ後ろの「-2」「.1」）は、枝番つきのキャプションがある論文では 1 つの参照として
+    リンクしない。skip の番号の参照もリンクしない。リンクした参照の文字と rid、リンクしなかった参照の文字を確かめる。"""
+    plan = ArticlePlan()
+    lk = Linker(plan)
+    q = Para(src="d1", atoms=[Atom(kind="text", text=plain)])
+    ids = {n: f"F{n}" for n in (1, 2, 3, 4, 5) if n not in skip}
+    lk.float_refs(q, RE_FIGREF, ids, "fig", "図", skip, True)
+    got = [(a.text, a.link.attrs["rid"]) for a in q.atoms if a.link is not None]
+    assert got == want_links
+    assert [t for _, _, t in plan.float_unlinked] == want_unlinked
+    assert q.plain() == plain
