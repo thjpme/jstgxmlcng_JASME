@@ -403,7 +403,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
                     why = (f"テキストボックス {sid} は、AI の役割の指定（set_role）を反映して組み直した後に文字だけのテキストボックスで"
                            "なくなったか、置く位置の段落が本文の段落でなくなったので、kind の指定は使わなかった")
                     outcome.rejected.append((spec["op"], why))
-            apply_ops(ops, plan, doc, outcome)
+            apply_ops(ops, plan, doc, outcome, split)
             cited = cited_refs(plan)
             plan.uncited_refs = [r.rid for r in plan.refs if r.rid not in cited]
             root, info = build(plan, meta, journal, split)
