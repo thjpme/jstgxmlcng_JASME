@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import re
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -1160,9 +1161,27 @@ def _note_overlap_action(r):
              "docx でどちらかの書き方にそろえて変換し直すこと"))
 
 
-FLOAT_REF_HOW = ('<xref ref-type="fig" rid="図の id"> （表への参照は ref-type="table"、rid は表の id）を手で足すか、'
-                 "AI による補完の回答で、その参照がどの図・表かを指定してください。")
-XREF_MD = '`<xref ref-type="fig" rid="図の id">`'       # レポート（Markdown）では、タグに見える文字を HTML にしないよう囲む
+XREF_TAG = '<xref ref-type="fig" rid="図の id">'
+FIG_ID_TAG, TABLE_ID_TAG = '<fig id="…">', '<table-wrap id="…">'
+
+
+def md_tag(text: str) -> str:
+    """文の中の XML のタグ（<xref …>・<label> など）を、Markdown のコード（バッククォート）で囲む。
+
+    レポート（Markdown）の文に生のタグを書くと、Markdown を HTML にしたときに HTML のタグとして扱われて消えるため
+    （Colab の「変換レポートの全文を見る」）。画面の枠（HTML をエスケープして出す）やコマンドラインの文には使わない。
+    """
+    return re.sub(r"(?<!`)<[A-Za-z][^<>\n]*>(?!`)", lambda m: f"`{m.group(0)}`", text)
+
+
+def float_ref_how(md: bool = False) -> str:
+    """リンクしなかった図・表の参照に、利用者がリンクを付ける方法の文（_float_ref_action）。md なら、タグを Markdown のコードで囲む。"""
+    text = (f'{XREF_TAG}（表への参照は ref-type="table"、rid は表の id）を手で足してください。図の id は XML の {FIG_ID_TAG}'
+            f'（表は {TABLE_ID_TAG}）にあります。手で足すほかに、AI による補完を使う設定（API か手動）で変換し直すと、AI が参照の'
+            '図・表を指定してリンクを付けることもあります（付いたリンクは確かめてください）。')
+    return md_tag(text) if md else text
+
+
 FLOAT_REF_SHOWN = 6     # 図・表の参照の要確認に並べる参照の数（全件は 4 章の判断の一覧）
 
 
@@ -1187,17 +1206,18 @@ def _float_ref_action(r):
         top=("> **要確認: 図・表の番号が重なる、または枝番がある（図1-1・図1-2 など）ため、どの図・表か決められず、リンクしなかった"
              f"参照があります（{n} か所。4 章）。** 参照: {shown}。誤ったリンクを出さないよう、これらの参照には図・表へのリンクを"
              "付けていません。リンクがなくても J-STAGE には登載できるので、そのままでもかまいません。付けるときは、PDF と照らして"
-             f"どの図・表への参照かを確かめ、XML の該当箇所に{FLOAT_REF_HOW.replace('<xref ref-type=\"fig\" rid=\"図の id\">', XREF_MD)}"),
+             "どの図・表への参照かを確かめ、XML の該当箇所に" + float_ref_how(md=True)),
         checklist=(f"- [ ] **リンクしなかった図・表の参照**（{n} か所。4 章）: 番号が重なる・枝番があるため。リンクがなくても登載できる。"
-                   "付けるなら、PDF と照らして XML に <xref> を足す"),
+                   "付けるなら、PDF と照らして XML に " + md_tag("<xref>") + " を足す"),
         box_title="図・表の参照のリンクを付けていない箇所があります（要確認）",
         box_detail=("図・表の番号が重なる、または枝番がある（図1-1・図1-2 など）ため、どの図・表か決められない参照には、リンクを付けて"
                     f"いません（誤ったリンクを出さないため）。\n対象の参照（{n} か所）: {shown}\n"
                     "リンクがなくても J-STAGE には登載できるので、そのままでもかまいません。付けるときは、PDF と照らしてどの図・表への参照かを"
-                    f"確かめ、XML の該当箇所に{FLOAT_REF_HOW}（レポートの 4 章に場所があります）"),
+                    "確かめ（場所はレポートの 4 章にあります）、XML の該当箇所に" + float_ref_how()),
         cli=(f"要確認: 図・表の番号が重なる、または枝番があるため、リンクしなかった図・表の参照が {n} か所あります"
              f"（{shown}。レポートの冒頭と 4 章）。リンクがなくても登載できる。付けるなら、PDF と照らしてどの図・表かを確かめ、"
-             "XML に <xref ref-type=\"fig\" rid=\"図の id\">（表は ref-type=\"table\"）を手で足すこと"))
+             "XML に <xref ref-type=\"fig\" rid=\"図の id\">（表は ref-type=\"table\"）を手で足すこと"
+             "（図の id は XML の <fig id=\"…\">、表は <table-wrap id=\"…\"> にある。AI による補完を使う設定で変換し直す方法もある）"))
 
 
 FN_GUESS_SHOWN = 5      # 注の扱いの要確認に並べる件数（全件は 4 章の判断の一覧）
@@ -1478,7 +1498,7 @@ def render(r) -> str:
     L.append("")
     L.append(f"- 作成日時: {r.created}")
     L.append(f"- ツール: jasme-jats {r.tool_version}")
-    L.append(f"- 図表番号の扱い: {'<label> とタイトルに分ける（間の空白のみ落とす）' if r.split_labels else '番号もタイトルと一緒に 1 つの要素に入れる（文字を落とさない）'}")
+    L.append(f"- 図表番号の扱い: {'`<label>` とタイトルに分ける（間の空白のみ落とす）' if r.split_labels else '番号もタイトルと一緒に 1 つの要素に入れる（文字を落とさない）'}")
     ai = r.ai
     api = f"API（{PROVIDERS.get(ai.provider, ai.provider)}: {ai.model}）"
     ai_mode = {"none": "使用しない", "api": api, "manual": "手動（チャットに貼り付け）"}.get(ai.mode, ai.mode)
@@ -1582,7 +1602,7 @@ def render(r) -> str:
             L.append("### AI の提案のうち、検証で採用しなかったもの")
             L.append("")
             rows = [(op.get("op"), op.get("src"), op.get("text") or op.get("role") or op.get("image"), op.get("target"),
-                     why, op.get("reason")) for op, why in ai.rejected]
+                     md_tag(why), op.get("reason")) for op, why in ai.rejected]
             L.append(table(["操作", "段落", "対象", "リンク先", "不採用の理由", "AI の根拠"], rows))
             L.append("")
         if ai.notes:
@@ -1751,7 +1771,7 @@ def render(r) -> str:
     if fid.ai_additions:
         L.append("### AI が画像から読み取って併記した数式（docx の文字ではない）")
         L.append("")
-        L.append("数式が画像で貼られていた箇所に、AI が読み取った MathML を元の画像と並べて（<alternatives>）出力しました。"
+        L.append("数式が画像で貼られていた箇所に、AI が読み取った MathML を元の画像と並べて（`<alternatives>`）出力しました。"
                  "本文の文字ではありませんが、読み取りに誤りがないか確認してください。")
         L.append("")
         L.append(table(["判断の番号", "読み取った数式（MathML の文字）"], fid.ai_additions))
@@ -1790,7 +1810,7 @@ def render(r) -> str:
     L.append("")
     if r.warnings:
         for w in r.warnings:
-            L.append(f"- {esc(w)}")
+            L.append(f"- {md_tag(esc(w))}")
     if r.not_zipped:
         L.append(f"- {not_zipped_note(r)}")
     if not r.warnings and not r.not_zipped:
@@ -1814,7 +1834,7 @@ def render(r) -> str:
             ("キーワード（日）", "；".join(m.keywords_ja) or "（なし）"),
             ("キーワード（英）", "; ".join(m.keywords_en) or "（なし）"),
             ("抄録の二次利用（specific-use）",
-             f"{j.abstract_specific_use}（英文の論文で英文要旨を <abstract> に入れるときだけ使う。学会の方針を確認すること）")]
+             f"{j.abstract_specific_use}（英文の論文で英文要旨を `<abstract>` に入れるときだけ使う。学会の方針を確認すること）")]
     L.append(table(["項目", "値"], rows))
     L.append("")
     for note in m.input_notes:
@@ -2105,7 +2125,7 @@ def render_ai_only(r) -> str:
     if ai.rejected:
         L += ["", "## 検証で採用しなかった提案", ""]
         for op, why in ai.rejected:
-            L.append(f"- {op.get('op')} [{op.get('src')}] 「{esc(op.get('text') or op.get('role') or op.get('image'))}」: {why}")
+            L.append(f"- {op.get('op')} [{op.get('src')}] 「{esc(op.get('text') or op.get('role') or op.get('image'))}」: {md_tag(why)}")
     if ai.notes:
         L += ["", "## AI からの気づき", ""]
         L += [f"- {esc(n)}" for n in ai.notes]

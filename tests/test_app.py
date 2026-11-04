@@ -250,7 +250,11 @@ def test_unexpected_error_is_shown_and_old_result_dropped(tmp_path, monkeypatch)
                                    xml_path=tmp_path / "a" / "x.xml")
     out = fns["on_download"](False)
     assert "想定外のエラーで止まりました" in out[0] and out[8] == ""
-    assert "もう一度ダウンロードの操作をしてかまいません" in out[0] and "もう一度「変換する」" not in out[0]     # 結果は残っている
+    # 結果は画面に残っているが、出力フォルダ（変換レポートのファイル）がない: 「作られていません」と「画面に残っている」を並べず、
+    # 画面の全文を添えて知らせ、同じ操作をもう一度しても止まることを案内する
+    assert "変換レポートは作られていません" not in out[0] and "この画面の「変換レポートの全文を見る」の内容" in out[0]
+    assert "出力フォルダが見つからず" in out[0] and "同じ例外で止まります" in out[0]
+    assert "もう一度ダウンロードの操作をしてかまいません" not in out[0] and "結果はこの画面に残っています" not in out[0]
 
 
 def test_unexpected_error_in_apply_answer(tmp_path, monkeypatch):
@@ -270,7 +274,9 @@ def test_unexpected_error_in_apply_answer(tmp_path, monkeypatch):
     assert st.res is None and "OSError: 書けません" in out[0]
     assert "変換レポートは作られていません" in out[0] and str(report) not in out[0]     # 出力フォルダを消したので、前のレポートはない
     # 反映で落ちたときは、回答や入力を消す「変換する」の押し直しを勧めない。別に保存することと、開発者に知らせることを案内する（F15）
-    assert "貼り付けた回答は、「変換する」を押し直すと使えなくなる" in out[0] and "もう一度「変換する」を押してください" not in out[0]
+    # 前の結果を捨てたので手動の欄は隠れる。貼り付けた文字は欄に残る（views に answer がない）ので、そのとおりに案内する
+    assert out[2]["visible"] is False and "手動の欄" in out[0] and "隠れています" in out[0] and "欄に残っているはず" in out[0]
+    assert "もう一度「変換する」を押してください" not in out[0] and "使えなくなる" not in out[0]
     # レポートが残っているときも、サーバー側のパスは書かない（利用者は取り出せない）。この画面の変換レポートの全文を案内する
     st.res = types.SimpleNamespace(report_path=report)
     report.parent.mkdir(parents=True, exist_ok=True)
@@ -281,3 +287,90 @@ def test_unexpected_error_in_apply_answer(tmp_path, monkeypatch):
     assert "もう一度「変換する」を押してください" not in html
     with pytest.raises(ValueError):
         st.crash(RuntimeError("y"), "other")
+
+
+def test_download_crash_with_output_folder_gone(tmp_path):
+    """結果が画面に残っているのに出力フォルダが消えていてダウンロードできないとき（実際に変換してから消す）、
+    「変換レポートは作られていません」と「結果はこの画面に残っています」を並べず、状況に合う 1 つの案内にする。"""
+    import shutil
+    st = filled(tmp_path)
+    st.convert()
+    shutil.rmtree(st.out_dir)
+    demo = app.build_app(st, app.IO())
+    fns = {f.fn.__name__: f.fn for f in demo.fns.values()}
+    out = fns["on_download"](False)
+    assert out[8] == "" and "想定外のエラーで止まりました" in out[0]
+    assert "変換レポートは作られていません" not in out[0] and "結果はこの画面に残っています" not in out[0]
+    assert "この画面の「変換レポートの全文を見る」" in out[0] and "同じ例外で止まります" in out[0]
+    assert "変換する」を押し直してください" in out[0]
+
+
+def test_manual_fields_stay_for_repaste(tmp_path):
+    """手動モードで回答を反映した後、回答を貼り直す必要がある枠（回答を読めない・途中で切れた・図表の位置が決まらない）が出ているときは、
+    枠の「「AI の回答」の欄に貼り付け直して「反映」を押し」のとおりに、手動の欄（依頼文・「AI の回答」・「反映」）を見せたままにする。
+    貼り直す必要がなくなったら隠す。画面の更新（on_apply の戻り）で確かめる。"""
+    import json
+    from conftest import FLOAT
+    from test_ai import FLOAT_RESPONSE, cut_cases
+    from jasme_jats.colab import result_boxes
+    from jasme_jats.report import actions
+    st = AppState(tmp_path / "work")
+    st.set_inputs(route="docx", docx=str(FLOAT), volume="31", issue="1", fpage="1", lpage="12", peer_review="査読あり",
+                  manuscript_type=type_choices()[0], ai_mode="manual")
+    demo = app.build_app(st, app.IO())
+    fns = {f.fn.__name__: f.fn for f in demo.fns.values()}
+    out = fns["on_convert"](*[st.inputs[n] for n in app.INPUT_NAMES])
+    assert out[2]["visible"] is True and out[3]                       # 回答待ち: 依頼文が出る
+    cases = {"ai_error": "これは JSON ではない", "forced": '{"placements": [], "operations": [], "notes": []}',
+             "partial": cut_cases()["c"]}
+    for key, text in cases.items():
+        out = fns["on_apply"](text)
+        assert key in [a.key for a in actions(st.res)], key
+        assert not st.waiting_for_answer
+        assert out[2]["visible"] is True, key                         # 手動の欄を見せたまま
+        assert out[3] == st.prompt_text() and out[3], key               # 依頼文も出る
+        boxes = result_boxes(st.res, screen="app")
+        # 枠が回答の貼り直しを案内している（途中で切れた回答の枠は「新しい回答を最初から最後まで貼り付けて変換し直します」）
+        assert ("新しい回答を最初から最後まで貼り付けて" if key == "partial" else "貼り付け直して「反映」を押し") in boxes, key
+    out = fns["on_apply"](json.dumps(FLOAT_RESPONSE, ensure_ascii=False))     # 貼り直した回答で決まれば、欄を隠す
+    assert not st.needs_action and out[2]["visible"] is False and out[3] == ""
+    # 手動でなければ欄は出ない
+    st.set_inputs(ai_mode="none")
+    assert not st.answer_box_open
+
+
+def test_apply_crash_hides_manual_fields_as_advised(tmp_path, monkeypatch):
+    """回答の反映の想定外の例外（前の結果を捨てる）のあとの画面は、案内のとおり: 手動の欄は隠れ、「変換する」を押すと欄が戻る。"""
+    st = filled(tmp_path)
+    st.set_inputs(ai_mode="manual")
+    demo = app.build_app(st, app.IO())
+    fns = {f.fn.__name__: f.fn for f in demo.fns.values()}
+    values = [st.inputs[n] for n in app.INPUT_NAMES]
+    assert fns["on_convert"](*values)[2]["visible"] is True
+    real = app.convert
+
+    def boom(*args, **kwargs):
+        raise OSError("書けません")
+    monkeypatch.setattr(app, "convert", boom)
+    out = fns["on_apply"]('{"operations": []}')
+    assert out[2]["visible"] is False and "隠れています" in out[0] and "「変換する」を押すと" in out[0]
+    monkeypatch.setattr(app, "convert", real)
+    assert fns["on_convert"](*values)[2]["visible"] is True            # 案内のとおり、欄が戻る
+
+
+def test_apply_crash_before_result_dropped_keeps_manual_fields(tmp_path, monkeypatch):
+    """回答の反映が、前の結果を捨てる前に想定外の例外で止まったとき（入力ファイルを作業用の場所に写せないなど）は、手動の欄も結果も
+    画面に残っている。案内も「欄は隠れている」ではなく、残っていることを言う。"""
+    st = filled(tmp_path)
+    st.set_inputs(ai_mode="manual")
+    demo = app.build_app(st, app.IO())
+    fns = {f.fn.__name__: f.fn for f in demo.fns.values()}
+    assert fns["on_convert"](*[st.inputs[n] for n in app.INPUT_NAMES])[2]["visible"] is True
+
+    def boom(*args, **kwargs):
+        raise OSError("写せません")
+    monkeypatch.setattr(app.shutil, "copyfile", boom)
+    out = fns["on_apply"]('{"operations": []}')
+    assert st.res is not None and out[2]["visible"] is True
+    assert "OSError: 写せません" in out[0] and "そのまま残っています" in out[0] and "隠れています" not in out[0]
+    assert "変換レポートは作られていません" not in out[0]

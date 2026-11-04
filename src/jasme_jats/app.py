@@ -228,6 +228,22 @@ class AppState:
         """手動モードで、AI の回答をまだ反映していない。"""
         return self.res is not None and self.inputs["ai_mode"] == "manual" and ai_pending(self.res)
 
+    # 手動モードで、AI の回答を貼り付け直す必要がある Action の key（report.py の ai_error・partial・forced の枠が「「AI の回答」の欄に
+    # 貼り付け直して「反映」を押し」と案内する）。これらが出ているときも、手動の欄（依頼文・「AI の回答」・「反映」）を見せたままにする
+    REPASTE_KEYS = ("ai_error", "partial", "forced")
+
+    @property
+    def answer_box_open(self) -> bool:
+        """手動の欄（依頼文・添付画像・「AI の回答」・「反映」）を見せるか。
+
+        AI の回答をまだ反映していないとき（waiting_for_answer）に加えて、反映した後も、回答を読めない（ai_error）・途中で切れた
+        （partial）・図表の位置が決まらない（forced）の枠が出ているあいだは、貼り付け直せるように見せたままにする。
+        回答の反映（apply_answer）ができるときだけ見せる（waiting_for_answer と同じく、「AI による補完の方法」の欄が手動のとき）。
+        """
+        if self.res is None or self.inputs["ai_mode"] != "manual":
+            return False
+        return ai_pending(self.res) or any(a.key in self.REPASTE_KEYS for a in actions(self.res))
+
     def prompt_text(self) -> str:
         if self.res is None or not self.res.prompt_path:
             return ""
@@ -299,16 +315,27 @@ class AppState:
     CRASH_ADVICE = {
         "convert": "入力（docx・PDF・書誌情報の欄）が正しいかを確かめ、直してから、もう一度「変換する」を押してください。"
                    "同じ例外で止まるときは、入力を変えずに、開発者に知らせてください。",
-        "apply": "貼り付けた回答は、「変換する」を押し直すと使えなくなるので、別の場所にも保存してください。"
-                 "この画面の入力は変えず、「変換する」も押し直さずに、開発者に知らせてください。",
+        "apply": "反映の途中で止まったため、前の結果は捨てており、手動の欄（依頼文・「AI の回答」・「反映」）は今は隠れています。"
+                 "貼り付けた回答は「AI の回答」の欄に残っているはずですが、念のため別の場所にも保存してください。"
+                 "「変換する」を押すと、AI の回答を反映する前の結果と手動の欄が戻りますが、同じ例外で止まるときは、"
+                 "入力は変えずに、開発者に知らせてください。",
         "images": "入れた画像と変換の結果は、この画面に残っています。入力は変えず、「変換する」も押し直さずに"
                   "（押すと、入れた画像が消えます）、開発者に知らせてください。",
         "download": "変換の結果は、この画面に残っています。もう一度ダウンロードの操作をしてかまいません。同じ例外で止まるときは、"
                     "入力は変えずに、開発者に知らせてください。"}
 
+    # 回答の反映の想定外のエラーで、前の結果がまだ残っているとき（変換に入る前に止まった）。手動の欄も、貼り付けた回答もそのまま
+    CRASH_ADVICE_APPLY_KEPT = ("前の結果と手動の欄（依頼文・「AI の回答」・「反映」）は、この画面にそのまま残っています。貼り付けた回答も"
+                               "欄に残っています。同じ例外で止まるときは、入力は変えずに、開発者に知らせてください。")
+
+    # ダウンロードの想定外のエラーで、出力フォルダが消えているとき（ZIP を作り直せない）。画面の結果は読めるが、同じ操作は同じ例外で止まる
+    CRASH_ADVICE_FOLDER_GONE = ("画面の結果は読めますが、サーバー側の出力フォルダがないので、ダウンロードの操作をもう一度しても同じ例外で"
+                                "止まります。必要な内容をこの画面から控えてから、入力を確かめて「変換する」を押し直してください。")
+
     def crash(self, error: Exception, operation: str = "convert") -> InputError:
         """想定外の例外（変換ツールの不具合の可能性）を、画面に出す赤い枠にする。例外の種類と文を載せ、操作（operation。
-        convert・apply・images・download）に合った案内を付ける。
+        convert・apply・images・download）に合った案内を付ける。案内は、そのときの画面の状態（結果が残っているか・手動の欄が見えるか・
+        出力フォルダがあるか）に合わせる。
 
         変換レポートの場所は、サーバー側のパスで利用者が取り出せないので書かない。結果が残っているときは、この画面の
         「変換レポートの全文を見る」を添えるよう案内する。
@@ -316,9 +343,19 @@ class AppState:
         if operation not in self.CRASH_ADVICE:
             raise ValueError(f"知らない操作: {operation}")
         report = self.report_location() if self.res is not None else ""
-        who = ("この画面の「変換レポートの全文を見る」の内容と、この例外の文を添えて、開発者に知らせてください。" if report
-               else "この例外の文を添えて、開発者に知らせてください（変換レポートは作られていません）。")
-        message = f"{type(error).__name__}: {error}\n\n変換ツールの不具合の可能性があります。{who}\n{self.CRASH_ADVICE[operation]}"
+        advice = self.CRASH_ADVICE[operation]
+        if operation == "apply" and self.res is not None:       # 前の結果を捨てる前に止まった: 手動の欄は見えたまま
+            advice = self.CRASH_ADVICE_APPLY_KEPT
+        if report:
+            who = "この画面の「変換レポートの全文を見る」の内容と、この例外の文を添えて、開発者に知らせてください。"
+        elif self.res is not None:      # 結果は画面に残っているが、出力フォルダ（変換レポートのファイル）が見つからない
+            who = ("この画面の「変換レポートの全文を見る」の内容と、この例外の文を添えて、開発者に知らせてください"
+                   "（サーバー側の出力フォルダが見つからず、変換レポートのファイルは取り出せません）。")
+            if operation == "download":
+                advice = self.CRASH_ADVICE_FOLDER_GONE
+        else:
+            who = "この例外の文を添えて、開発者に知らせてください（変換レポートは作られていません）。"
+        message = f"{type(error).__name__}: {error}\n\n変換ツールの不具合の可能性があります。{who}\n{advice}"
         return InputError(message, error_box("想定外のエラーで止まりました", message))
 
     # ---- 結果とダウンロード
@@ -462,7 +499,7 @@ def build_app(state: AppState, io: "IO | None" = None):
 
         def view(error: "InputError | None" = None, download: str = ""):
             """結果に応じた画面の更新（views の順）。"""
-            manual = state.waiting_for_answer
+            manual = state.answer_box_open
             slots = state.image_slots()
             return [message_html(error) if error else "",
                     state.result_html(),

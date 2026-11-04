@@ -224,3 +224,20 @@ def test_unreadable_final_output_gets_its_own_notice(journal, meta, tmp_path, mo
     res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "diff", convert_metafiles=False))
     [act] = [a for a in actions(res) if a.key == "fidelity"]
     assert not res.fidelity.final_unreadable and "一致していません" in act.box_detail and "5 章" in act.top
+
+
+def test_entity_declaration_in_final_output_is_unreadable_notice(journal, meta, tmp_path, monkeypatch):
+    """最終出力に実体の宣言（<!ENTITY）があるとき（F6 で不合格）も、「出力された XML の本文が docx と一致していません」ではなく、
+    読めない・登載に使わない・開発者に知らせる側の要対応（F14）を出す。文字は変わっていないので、差分の案内は誤りになる。"""
+    from jasme_jats import pipeline
+    from jasme_jats.pipeline import Options, convert
+    from jasme_jats.report import NEEDS_ACTION, actions
+    real = pipeline.serialize
+    monkeypatch.setattr(pipeline, "serialize", lambda root: real(root).replace(b'.dtd">', b'.dtd" [<!ENTITY foo "abc">]>', 1))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "ent", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok is False and res.fidelity.final_unreadable
+    assert "<!ENTITY" in res.fidelity.final_detail and res.needs_action
+    [act] = [a for a in actions(res) if a.key == "fidelity"]
+    assert act.level == NEEDS_ACTION
+    for text in (act.top, act.box_detail, act.cli):
+        assert "読めません" in text and "登載に使わ" in text and "一致していません" not in text and "差分" not in text, text
