@@ -385,8 +385,8 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
                 if plan.undecided_boxes:
                     output_note += BOX_PENDING_NOTE
         if data is not None:
-            ops = split_ops(data)
-            outcome.notes = [str(n) for n in data.get("notes", []) if str(n).strip()]
+            ops = split_ops(data, outcome)
+            outcome.notes = [n for n in data.get("notes", []) if isinstance(n, str) and n.strip()]
             overrides = role_overrides(ops, plan, outcome)
             placements = float_placements(data, plan, outcome)
             keys = target_keys(plan)

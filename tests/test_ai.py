@@ -1303,3 +1303,118 @@ def test_english_one_word_name_is_listed_and_warned(journal, meta, tmp_path):
                                                 ai_response=json.dumps({"operations": [op]}, ensure_ascii=False)))
     assert [why for _, why in res2.ai.rejected] == ["英文氏名は空白の位置で姓と名を分けるため、分割の指定は和文氏名だけに使える"]
     assert res2.ai.accepted == [] and res2.xml_path.read_bytes() == res.xml_path.read_bytes()
+
+
+# ----------------------------------------------------------------------------- 点検 2026-11（A1・A2・A3・A6・A8）
+def _op(**kw):
+    base = {"op": "", "src": "", "text": "", "occurrence": 1, "target": "", "role": "", "image": "", "mathml": "",
+            "surname": "", "given": "", "reason": "試験", "confidence": "高"}
+    base.update(kw)
+    return base
+
+
+def _manual_raw(ops, meta, journal, out, notes=(), placements=()):
+    resp = json.dumps({"operations": ops, "placements": list(placements), "notes": notes}, ensure_ascii=False)
+    return convert(FULL, meta, journal, Options(out_dir=out, ai_mode="manual", ai_response=resp, convert_metafiles=False))
+
+
+def test_a1_op_field_types(journal, meta, tmp_path):
+    """A1: 操作の項目が一覧・辞書・bool だと理由付きで不採用、数値は文字列にして照合に使う（変換は止まらない）。"""
+    ops = [_op(op="link_citation", src=["d18"], text="2001", target="B2"),
+           _op(op="link_citation", src="d18", text={"a": 1}, target="B2"),
+           _op(op="set_role", src="d46", role=True),
+           _op(op="formula_image", image="img3", mathml=2001),
+           _op(op="link_citation", src="d18", text=2001, target="B2")]
+    res = _manual_raw(ops, meta, journal, tmp_path)
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    whys = [why for _, why in res.ai.rejected]
+    assert sum("文字列でない" in w for w in whys) == 4
+    assert any("項目 mathml" in w for w in whys)
+
+
+def test_a1_placements_types(journal, meta, tmp_path):
+    pls = [{"float": ["s1"], "after": "d18", "items": [], "reason": "x", "confidence": "高"},
+           {"float": "s1", "after": {"x": 1}, "items": [], "reason": 5, "confidence": "高"},
+           {"float": "s1", "after": "d18", "items": [{"kind": "fig", "caption": [["a"]], "body": [{}]}],
+            "reason": "x", "confidence": "高"}]
+    res = _manual_raw([], meta, journal, tmp_path, placements=pls)
+    assert res.fidelity.ok and len(res.ai.rejected) == 3
+
+
+def test_a1_a2_parse_paths_do_not_raise():
+    data = parse_response(json.dumps({"operations": [_op(op="link_figure", text=1.5)], "placements": [], "notes": 3}))
+    out = ai_assist.AIOutcome()
+    ops = ai_assist.split_ops(data, out)
+    assert ops[0]["text"] == "1.5" and out.rejected == []
+    cut = ai_assist.parse_cut_response('{"placements": [{"float": ["s1"], "after": 3, "items": 1}, {"fl')
+    out2 = ai_assist.AIOutcome()
+    plan_like = types.SimpleNamespace(body_seq=[], floats={}, textboxes={}, region={})
+    assert ai_assist.float_placements(cut, plan_like, out2) == {} and len(out2.rejected) == 1
+
+
+def test_a2_notes_types():
+    def notes(v):
+        return parse_response(json.dumps({"operations": [], "placements": [], "notes": v}))["notes"]
+    assert notes("気づき") == ["気づき"]
+    assert notes(["a", 2, ["b"]])[:2] == ["a", "2"] and "使わなかった" in notes(["a", 2, ["b"]])[2]
+    [n] = notes(5)
+    assert "使わなかった" in n
+    [n] = notes({"a": 1})
+    assert "使わなかった" in n
+
+
+def test_a2_notes_in_convert(journal, meta, tmp_path):
+    res = _manual_raw([], meta, journal, tmp_path, notes="気づき")
+    assert res.ai.notes == ["気づき"]
+    res = _manual_raw([], meta, journal, tmp_path / "b", notes=7)
+    assert len(res.ai.notes) == 1 and "使わなかった" in res.ai.notes[0]
+
+
+def test_a3_mathml_entities_comments_pi():
+    m = '<math xmlns="http://www.w3.org/1998/Math/MathML">{}</math>'
+    for inner in ("<mi>&foo;</mi>", "<!-- c --><mi>a</mi>", "<?pi x?><mi>a</mi>"):
+        s = '<!DOCTYPE math [<!ENTITY foo "abc">]>' + m.format(inner)
+        assert parse_mathml(s)[0] is None
+    assert parse_mathml(m.format("<mi>&foo;</mi>"))[0] is None
+    assert parse_mathml(m.format("<!-- c --><mi>a</mi>"))[0] is None
+    assert parse_mathml(m.format("<?pi x?><mi>a</mi>"))[0] is None
+    assert parse_mathml(m.format("<mi>a</mi>"))[0] is not None
+
+
+def test_a3_final_check_unreadable_entity():
+    from jasme_jats.fidelity import FidelityResult, final_check
+    root = etree.fromstring(b"<a>x</a>")
+    res = FidelityResult()
+    assert final_check(root, b"<a>x<b>&foo;</b></a>", res) is False        # 未定義の実体参照
+    assert res.final_ok is False and "XML として読めない" in res.final_detail
+    res = FidelityResult()
+    assert final_check(root, b'<!DOCTYPE a [<!ENTITY foo "abc">]><a>x</a>', res) is True       # 実体を使っていなければ読める
+    res = FidelityResult()
+    assert final_check(root, b"<a>x</a>", res) is True
+
+
+def test_a6_links_in_nolink_paragraphs_rejected(journal):
+    _, plan, _ = _mechanical(FULL, journal, {}, {})
+    title = plan.title[0]
+    ref = plan.refs[0].para
+    ops = [_op(op="link_figure", src=title.src, text=title.plain()[:1], target=plan.figures[0].fid),
+           _op(op="link_citation", src=ref.src, text="2001", target="B2")]
+    out = ai_assist.AIOutcome()
+    ai_assist.apply_ops(ops, plan, None, out)
+    assert out.accepted == [] and len(out.rejected) == 2
+    assert "題目" in out.rejected[0][1] and "引用文献" in out.rejected[1][1]
+
+
+def test_a8_formula_image_with_extra_content_rejected(journal):
+    _, plan, _ = _mechanical(FULL, journal, {}, {})
+    fig = next(f for f in plan.figures if any(i.image_id == "img3" for ip in f.image_paras for i in ip.images))
+    mml = '<math xmlns="http://www.w3.org/1998/Math/MathML"><mi>a</mi></math>'
+    for attr in ("tables", "extra_images", "caption_more"):
+        setattr(fig, attr, [object()])
+        out = ai_assist.AIOutcome()
+        ai_assist.apply_ops([_op(op="formula_image", image="img3", mathml=mml)], plan, None, out)
+        assert out.accepted == [] and "数式画像" in out.rejected[0][1] and fig.formula is None
+        setattr(fig, attr, [])
+    out = ai_assist.AIOutcome()
+    ai_assist.apply_ops([_op(op="formula_image", image="img3", mathml=mml)], plan, None, out)
+    assert len(out.accepted) == 1
