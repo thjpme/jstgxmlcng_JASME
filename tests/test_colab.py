@@ -225,6 +225,96 @@ def test_result_boxes_show_textbox_notices(journal, meta, tmp_path):
     assert result_boxes(res, level="要対応") == ""
     res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "m", ai_mode="manual", convert_metafiles=False))
     html = result_boxes(res)
-    assert "手順 6 で AI の回答を貼り付けて変換し直すと、AI が囲みか注記かを判断します" in html
+    assert "AI の回答を手順 6 に貼り付けて ▶ を押して変換し直すと、AI が囲みか注記かを判断します" in html
     assert "囲みか図の注記か決められなかったテキストボックス（3 章）は、AI の回答を反映するまで XML に出力していません。" in html
     assert "囲みか図の注記か決められなかったテキストボックス（3 章）は、AI の回答を反映するまで" in res.output_note
+
+
+# ---------------------------------------------------------------------------- 画面の操作の目印（O2）
+def test_step_words_cover_every_mark_in_report():
+    """report.py が使う目印の名前と、colab.STEP_WORDS の両方の画面の語がそろっている。知らない目印・画面は例外。"""
+    import re
+    from pathlib import Path
+
+    import pytest
+
+    from jasme_jats import report
+    from jasme_jats.colab import STEP_WORDS, step_text
+    assert set(STEP_WORDS) == {"notebook", "app"}
+    for screen, words in STEP_WORDS.items():
+        assert set(words) == set(report.STEP_NAMES), screen
+        assert all("{{" not in w and "手順" not in w or screen == "notebook" for w in words.values())
+    source = Path(report.__file__).read_text(encoding="utf-8")
+    used = set(re.findall(r"step\((?:'|\")(\w+)(?:'|\")\)", source))
+    assert used == set(report.STEP_NAMES)                 # 使っていない目印・表にない目印がない
+    assert step_text("{{step:docx}}から", "notebook") == "手順 2から"
+    assert step_text("{{step:docx}}から", "app") == "「docx（論文の Word ファイル）」の欄から"
+    assert step_text("目印なし", "app") == "目印なし"
+    with pytest.raises(ValueError, match="知らない目印"):
+        step_text("{{step:nothing}}")
+    with pytest.raises(ValueError, match="知らない目印"):
+        report.step("nothing")
+    with pytest.raises(ValueError, match="知らない画面"):
+        step_text("x", "other")
+
+
+def test_report_text_names_no_step_number_outside_marks():
+    """report.py の文（コメント以外の文字列）に、手順の番号を直接書かない（box_detail は目印で書く）。レポートの文（top・checklist）に
+    書くときは、ノートブックと 1 画面版の両方の利用者に通じるよう「ノートブックは手順 N、1 画面版は…」の形にする。"""
+    import io
+    import re
+    import tokenize
+    from pathlib import Path
+
+    from jasme_jats import report
+    text = Path(report.__file__).read_text(encoding="utf-8")
+    for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+        if tok.type == tokenize.STRING and tok.string.lstrip("rbf")[:3] not in ('"""', "'''"):      # docstring は対象外
+            for m in re.finditer(r"手順 \d", tok.string):
+                assert tok.string[:m.start()].endswith("ノートブックは"), f"report.py:{tok.start[0]}: {tok.string}"
+
+
+def test_no_mark_left_in_any_screen(journal, meta, tmp_path):
+    """いろいろな結果の actions() のすべての Action で、両方の画面の枠に目印が残らない。1 画面版の枠には手順の番号も出ない。
+    レポート（.md）と top・checklist・cli の文にも目印は出ない。make_notebook.py が使う box_detail も、置き換えれば目印は残らない。"""
+    from conftest import EDGE, FLOAT, FULL, OUTSIDE, PDFCHECK, PDFCHECK_PDF, PLACE, STRUCTURE, TABLEFIG
+
+    from jasme_jats.colab import (figure_body_box, lost_images_box, missing_images_box, pdf_diff_box, result_boxes,
+                                  step_text, unplaced_box)
+    from jasme_jats.pipeline import AIRequiredError, Options, convert
+    from jasme_jats.report import actions
+    cases = [(docx, Options(out_dir=tmp_path / f"c{k}{mode}", ai_mode=mode, convert_metafiles=False))
+             for k, docx in enumerate([FULL, EDGE, FLOAT, PLACE, OUTSIDE, STRUCTURE, TABLEFIG]) for mode in ("none", "manual")]
+    cases += [(PDFCHECK, Options(out_dir=tmp_path / f"p{route}", ai_mode="none", convert_metafiles=False,
+                                 pdf_path=PDFCHECK_PDF, route=route)) for route in ("docx", "pdf")]
+    seen = set()
+    for docx, opts in cases:
+        try:
+            res = convert(docx, meta, journal, opts)
+        except AIRequiredError:
+            continue
+        assert "{{" not in res.report_path.read_text(encoding="utf-8")
+        for a in actions(res):
+            seen.add(a.key)
+            assert not any("{{" in t for t in (a.top, a.checklist, a.cli)), a.key
+            assert "{{" not in step_text(a.box_title) + step_text(a.box_detail), a.key
+            assert "手順" not in step_text(a.box_detail, "app") + step_text(a.box_title, "app"), a.key
+        for screen in ("notebook", "app"):
+            html = result_boxes(res, screen=screen) + missing_images_box(res, screen) + lost_images_box(res, screen) \
+                + pdf_diff_box(res, screen) + figure_body_box(res, screen) + unplaced_box(res.plan, res.ai.partial, screen)
+            assert "{{" not in html, screen
+            assert screen == "notebook" or "手順" not in html
+    assert {"ai_pending", "textbox_undecided"} <= seen      # 目印を使う知らせを実際に通した
+
+
+def test_app_screen_words_in_boxes(journal, meta, tmp_path):
+    """同じ Action の文を、ノートブックでは手順の番号で、1 画面版では欄の名前で読む。"""
+    from conftest import FULL
+
+    from jasme_jats.colab import result_boxes
+    from jasme_jats.pipeline import Options, convert
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", convert_metafiles=False))
+    note = result_boxes(res, level="要対応")
+    page = result_boxes(res, level="要対応", screen="app")
+    assert "手順 5 の依頼文を AI" in note and "手順 6 に貼り付けて ▶ を押してください" in note
+    assert "依頼文を AI" in page and "「AI の回答」の欄に貼り付けて「反映」を押してください" in page and "手順" not in page

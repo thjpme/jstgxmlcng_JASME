@@ -9,6 +9,7 @@ Colab の出力欄は暗い配色のこともあるので、枠の中の文字�
 from __future__ import annotations
 
 import html
+import re
 import unicodedata
 import uuid
 
@@ -186,38 +187,71 @@ def ai_required_box(message: str) -> str:
     return error_box("AI による補完が必要です（変換を中止しました）", message)
 
 
-def _box(action) -> str:
-    """report.Action を枠にする（要対応は赤、要確認は黄。枠の見出しがなければ空文字）。"""
+# ---------------------------------------------------------------------------- 画面の操作の言い方（画面ごと）
+# report.Action.box_detail は、画面の操作を目印 {{step:名前}}（report.step）で書く。ノートブックの手順番号と 1 画面版（app.py）の
+# 欄の名前の違いは、ここ 1 か所の表だけで決める。目印の名前は report.STEP_NAMES と同じ（食い違いはテストで見つける）。
+# 語は、前後の文に合わせて「〜から」「〜で」「〜してください」に続けて読める形にする。1 画面版の語は app.py の部品のラベルに合わせる。
+STEP_WORDS = {
+    "notebook": {
+        "docx": "手順 2", "pdf": "手順 2", "route": "手順 2", "meta": "手順 3",
+        "ai_choose": "手順 4 で AI による補完の方法を「API で自動実行」か「手動（チャットに貼り付け）」にして ▶ を押し、手順 5 から",
+        "prompt": "手順 5 の依頼文", "paste": "手順 6 に貼り付けて ▶ を押", "convert_again": "手順 5 をもう一度実行",
+        "images": "手順 7「足りない画像をアップロード」"},
+    "app": {
+        "docx": "「docx（論文の Word ファイル）」の欄", "pdf": "「PDF（J-STAGE に登載する PDF）」の欄", "route": "「作り方」の欄",
+        "meta": "巻・号・ページなどの入力欄",
+        "ai_choose": "「AI による補完の方法」の欄を「手動（チャットに貼り付け）」か「API（Claude）」にして「変換する」を押し、",
+        "prompt": "依頼文", "paste": "「AI の回答」の欄に貼り付けて「反映」を押", "convert_again": "「変換する」をもう一度押",
+        "images": "「足りない図の画像」の欄（「画像を入れる」の上）"},
+}
+_STEP_MARK = re.compile(r"\{\{step:([^{}]*)\}\}")
+
+
+def step_text(text: str, screen: str = "notebook") -> str:
+    """文の中の目印 {{step:名前}} を、画面（"notebook" か "app"）の語に置き換える。知らない画面・目印は ValueError。"""
+    if screen not in STEP_WORDS:
+        raise ValueError(f"知らない画面: {screen}")
+    words = STEP_WORDS[screen]
+
+    def word(m):
+        if m.group(1) not in words:
+            raise ValueError(f"知らない目印: {m.group(0)}")
+        return words[m.group(1)]
+    return _STEP_MARK.sub(word, text)
+
+
+def _box(action, screen: str = "notebook") -> str:
+    """report.Action を枠にする（要対応は赤、要確認は黄。枠の見出しがなければ空文字）。screen は目印の置き換え先（step_text）。"""
     from .report import NEEDS_ACTION
     if action is None or not action.box_title:
         return ""
     make = error_box if action.level == NEEDS_ACTION else check_box
-    return make(action.box_title, action.box_detail)
+    return make(step_text(action.box_title, screen), step_text(action.box_detail, screen))
 
 
-def result_boxes(res, level=None, skip=()) -> str:
+def result_boxes(res, level=None, skip=(), screen: str = "notebook") -> str:
     """変換の結果の、要対応（赤）・要確認（黄）の枠（report.actions の順。なければ空文字）。手順 5・6・8 で使う。
 
     level を "要対応" にすると要対応だけ（手順 8 で一度止めるとき）。skip は出さない知らせの key（手順 5 の手動モードでは、
-    依頼文の枠を出すので ai_pending を出さない）。
+    依頼文の枠を出すので ai_pending を出さない）。screen は "notebook"（既定。手順の番号）か "app"（1 画面版。欄の名前）。
     """
     from .report import actions
-    return "".join(_box(a) for a in actions(res) if (level is None or a.level == level) and a.key not in skip)
+    return "".join(_box(a, screen) for a in actions(res) if (level is None or a.level == level) and a.key not in skip)
 
 
-def missing_images_box(res) -> str:
+def missing_images_box(res, screen: str = "notebook") -> str:
     """画像ファイルを用意できなかった図（Word の図形で描かれた図など）があるときの表示（赤い枠）。なければ空文字。"""
     from .report import images_action
-    return _box(images_action(res))
+    return _box(images_action(res), screen)
 
 
-def lost_images_box(res) -> str:
+def lost_images_box(res, screen: str = "notebook") -> str:
     """docx にあるのに XML に入らなかった画像（引用文献の段落の中の画像など）があるときの表示（赤い枠）。なければ空文字。"""
     from .report import lost_action
-    return _box(lost_action(res))
+    return _box(lost_action(res), screen)
 
 
-def pdf_diff_box(res) -> str:
+def pdf_diff_box(res, screen: str = "notebook") -> str:
     """出版版 PDF との照合で確認が必要なことがあるときの表示（要対応は赤、要確認は黄の枠。report.pdf_actions）。なければ空文字。
 
     ルート1（docx から作る）: docx と PDF で文字が違う箇所。PDF の文字を読めなければ「照合できませんでした」（要確認）。
@@ -227,17 +261,17 @@ def pdf_diff_box(res) -> str:
     見つからなければ「別の記事の PDF かもしれません」、照合に使わなかった PDF の文字があればその枠も出す。
     """
     from .report import pdf_actions
-    return "".join(_box(a) for a in pdf_actions(res))
+    return "".join(_box(a, screen) for a in pdf_actions(res))
 
 
-def unplaced_box(plan, partial="") -> str:
+def unplaced_box(plan, partial="", screen: str = "notebook") -> str:
     """AI の回答を反映した後も、位置を決められない図表が残っているときの表示（report.unplaced_text）。なければ空文字。"""
     from .report import unplaced_text
     text = unplaced_text(plan, partial)
-    return error_box(*text) if text else ""
+    return error_box(*(step_text(t, screen) for t in text)) if text else ""
 
 
-def figure_body_box(res) -> str:
+def figure_body_box(res, screen: str = "notebook") -> str:
     """図の本体（画像・表）が見つからない図があるときの表示（赤い枠）。なければ空文字。"""
     from .report import figure_body_action
-    return _box(figure_body_action(res))
+    return _box(figure_body_action(res), screen)

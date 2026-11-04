@@ -6,7 +6,7 @@
   - build_app(state, io): gr.Blocks を組み立て、ボタンの処理を AppState につなぐ。Colab に依存する操作（シークレットの読み出し・
     LibreOffice の待ち合わせ）は io に切り出す（テストでは偽物を渡す）。
 
-知らせは report.actions() から colab.result_boxes() で出す。この画面に個別の表示は足さない（docs/DEVELOPMENT.md の原則 8）。
+知らせは report.actions() から colab.result_boxes(screen="app") で出す（文の中の画面の操作は、この画面の欄の名前に置き換わる）。この画面に個別の表示は足さない（docs/DEVELOPMENT.md の原則 8）。
 未公開の原稿を Gradio の中継サーバーに通さないため、launch() の share は必ず False。
 Gradio の版は pyproject の gui の extra で固定している（上げるときは人が Colab で確かめてから）。
 """
@@ -185,6 +185,7 @@ class AppState:
             local_pdf = self.work / "input" / pdf.name
             if pdf.resolve() != local_pdf.resolve():
                 shutil.copyfile(pdf, local_pdf)
+        self.res = None                        # 出力フォルダを消すので、前の結果は先に捨てる（途中で止まったとき、消えたファイルを指さないため）
         shutil.rmtree(self.out_dir, ignore_errors=True)
         try:
             res = convert(local, self._meta, self._journal, Options(
@@ -286,6 +287,22 @@ class AppState:
         self.user_images.update(supplied)
         return added
 
+    # ---- 想定外のエラー
+    def report_location(self) -> str:
+        """変換レポート（Markdown）の場所。なければ空文字。"""
+        if self.res is not None and self.res.report_path.exists():
+            return str(self.res.report_path)
+        found = sorted(self.out_dir.glob("*_変換レポート.md")) if self.out_dir.exists() else []
+        return str(found[0]) if found else ""
+
+    def crash(self, error: Exception) -> InputError:
+        """想定外の例外（変換ツールの不具合の可能性）を、画面に出す赤い枠にする。例外の種類と文、変換レポートの場所を載せる。"""
+        report = self.report_location()
+        where = f"変換レポート（{report}）を" if report else "この画面の表示を"
+        message = (f"{type(error).__name__}: {error}\n\n変換ツールの不具合の可能性があります。{where}添えて、開発者に知らせてください"
+                   + ("" if report else "（変換レポートは作られていません）") + "。もう一度「変換する」を押すと、やり直せます。")
+        return InputError(message, error_box("想定外のエラーで止まりました", message))
+
     # ---- 結果とダウンロード
     @property
     def needs_action(self) -> bool:
@@ -300,7 +317,7 @@ class AppState:
             return ""
         res = self.res
         parts = [no_ai_box()] if self.inputs["ai_mode"] == "none" else []
-        parts.append(result_boxes(res, skip=("ai_pending",) if self.waiting_for_answer else ()))
+        parts.append(result_boxes(res, skip=("ai_pending",) if self.waiting_for_answer else (), screen="app"))
         parts.append(summary_box(res))
         parts.append(report_details(res.report_path.read_text(encoding="utf-8")))
         return "".join(parts)
@@ -452,6 +469,8 @@ def build_app(state: AppState, io: "IO | None" = None):
                 state.convert(io, progress)
             except InputError as e:
                 return view(e)
+            except Exception as e:                 # 想定外の例外。Gradio の「Error」だけにせず、枠に出す
+                return view(state.crash(e))
             return view()
 
         def on_apply(text, progress=gr.Progress()):
@@ -459,6 +478,8 @@ def build_app(state: AppState, io: "IO | None" = None):
                 state.apply_answer(text, io, progress)
             except InputError as e:
                 return view(e)
+            except Exception as e:
+                return view(state.crash(e))
             return view()
 
         def on_images(*paths):
@@ -467,11 +488,17 @@ def build_app(state: AppState, io: "IO | None" = None):
                 state.add_images(dict(zip(names, paths)))
             except InputError as e:
                 return view(e)
+            except Exception as e:
+                return view(state.crash(e))
             return view()
 
         def on_download(accept_todo):
-            path, note = state.download(accept_todo)
             out = [gr.update()] * len(views)               # 結果などはそのまま（message と download_html だけ変える）
+            try:
+                path, note = state.download(accept_todo)
+            except Exception as e:                         # ZIP を作れなかった（出力フォルダが消えているなど）
+                out[0], out[8] = state.crash(e).html, ""
+                return out
             out[0] = error_box("ダウンロードの前に", note) if note else ""
             out[8] = download_button_html(path) if path else ""
             return out

@@ -197,3 +197,75 @@ def test_download_button_fetches_in_page():
     assert "window.URL.createObjectURL" in html and "=URL.createObjectURL" not in html
     assert "a.download=&#x27;変換結果_31_1.zip&#x27;" in html and "ZIP を保存（変換結果_31_1.zip）" in html and "<a " not in html
 
+
+
+def test_images_box_uses_app_words(tmp_path, monkeypatch):
+    """足りない画像の知らせは、1 画面版では手順の番号ではなく欄の名前で書く（O2）。ノートブックの枠（既定）は手順 7 のまま。"""
+    import dataclasses
+    from jasme_jats.colab import missing_images_box, result_boxes
+    real = app.convert
+    monkeypatch.setattr(app, "convert", lambda d, m, j, o: real(d, m, j, dataclasses.replace(o, convert_metafiles=False)))
+    st = filled(tmp_path, docx=TEMPLATE)
+    st.convert()
+    html = st.result_html()
+    assert "足りない図の画像」の欄（「画像を入れる」の上）で、図ごとにその図の画像を" in html and "{{" not in html
+    assert "手順" not in result_boxes(st.res, screen="app")       # レポート全文（畳んだ部分）には「ノートブックは手順 N」と両方の言い方がある
+    assert "手順 7「足りない画像をアップロード」で" in missing_images_box(st.res)
+
+
+def test_unexpected_error_is_shown_and_old_result_dropped(tmp_path, monkeypatch):
+    """変換が想定外の例外で止まったとき、前の結果を捨てる（消えた出力フォルダを指さない）。画面には例外の種類と文を赤い枠で出す（O1）。"""
+    import types
+    st = filled(tmp_path)
+    st.convert()
+    zip_before, _ = st.download()
+    assert st.res is not None and zip_before
+    st.set_inputs(ai_mode="manual")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("こわれた")
+    monkeypatch.setattr(app, "convert", boom)
+    demo = app.build_app(st, app.IO())
+    fns = {f.fn.__name__: f.fn for f in demo.fns.values()}
+    values = [st.inputs[n] for n in app.INPUT_NAMES]
+    st.inputs["ai_mode"] = "manual"
+    out = fns["on_convert"](*values)                   # 例外を画面の外へ出さない
+    assert st.res is None and not st.waiting_for_answer and not st.needs_action
+    assert "想定外のエラーで止まりました" in out[0] and "RuntimeError: こわれた" in out[0] and "開発者に知らせてください" in out[0]
+    assert "変換レポートは作られていません" in out[0] and out[1] == ""
+    # 回答の反映（_run を直接呼ぶ）でも、前の結果を残さない
+    st.res = types.SimpleNamespace(report_path=tmp_path / "ない.md", needs_action=True)
+    with pytest.raises(RuntimeError):
+        st._run("manual", "{}")
+    assert st.res is None
+    st.res = None
+    out = fns["on_download"](False)
+    assert "先に変換してください" in out[0]
+    # 結果があるのに ZIP を作れない（出力フォルダが消えている）ときも、例外を出さずに枠で知らせる
+    st.res = types.SimpleNamespace(report_path=tmp_path / "ない.md", needs_action=False,
+                                   xml_path=tmp_path / "a" / "x.xml")
+    out = fns["on_download"](False)
+    assert "想定外のエラーで止まりました" in out[0] and out[8] == ""
+
+
+def test_unexpected_error_in_apply_answer(tmp_path, monkeypatch):
+    """回答の反映での想定外の例外も、枠に出す。変換レポートがあれば、その場所を書く。"""
+    import types
+    st = filled(tmp_path)
+    st.set_inputs(ai_mode="manual")
+    st.convert()
+    report = st.res.report_path
+    demo = app.build_app(st, app.IO())
+    fns = {f.fn.__name__: f.fn for f in demo.fns.values()}
+
+    def boom(*args, **kwargs):
+        raise OSError("書けません")
+    monkeypatch.setattr(app, "convert", boom)
+    out = fns["on_apply"]('{"operations": []}')
+    assert st.res is None and "OSError: 書けません" in out[0]
+    assert "変換レポートは作られていません" in out[0] and str(report) not in out[0]     # 出力フォルダを消したので、前のレポートはない
+    # レポートが残っているときは、その場所を書く
+    st.res = types.SimpleNamespace(report_path=report)
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text("x", encoding="utf-8")
+    assert str(report) in st.crash(RuntimeError("y")).html

@@ -150,8 +150,8 @@ def export_images(doc, images, out_dir: Path, convert_metafiles=True, *, keep_di
         name = img.export_name
         if img.shape_only or not img.target:
             results.append(ImageResult(img.image_id, name, "", "missing",
-                                       "Word の図形・グラフなどで画像ファイルがない。PDF 等から画像を作り、Colab の手順 7"
-                                       "（コマンドラインでは --images）で入れること（記事フォルダの Graphics/ に手で置いても ZIP には"
+                                       "Word の図形・グラフなどで画像ファイルがない。PDF 等から画像を作り、Colab（ノートブックは手順 7、"
+                                       "1 画面版は「画像を入れる」の欄）かコマンドラインの --images で入れること（記事フォルダの Graphics/ に手で置いても ZIP には"
                                        "入らない）"))
             continue
         data = doc.media.get(img.target)
