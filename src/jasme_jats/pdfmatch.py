@@ -334,7 +334,8 @@ class PdfCheck:
     drops: dict = field(default_factory=dict)       # src -> {plain 上の位置（落とす半角の空白）}
     # 空白を落とす根拠: src -> {落とす空白の位置: {根拠}}。根拠は ("width", 全角・半角を直す文字の plain 上の位置)（width の文字の
     # すぐ隣）か ("number", 種類, ID)（Word が付ける番号のすぐ隣。numbers の鍵と同じ）。ルート2 の pdfdocx.plan_fixes が、
-    # 空白の削除を根拠の全角・半角の直しと連動させる（どちらかを直さないときは両方を直さない）
+    # 空白の削除を根拠の全角・半角の直しに従わせる（根拠の直しを直さないときは空白の削除も直さない。
+    # 空白の削除が直せなくても根拠の直しは直す。根拠に番号がある空白は、番号だけで消してよい根拠なので従わせない）
     drop_basis: dict = field(default_factory=dict)
     diffs: list = field(default_factory=list)       # TextDiff
     numbers: dict = field(default_factory=dict)     # Word が付ける番号: (種類, 段落 ID または注の鍵) -> {番号の中の位置: PDF の文字}
