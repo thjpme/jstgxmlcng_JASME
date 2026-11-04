@@ -232,6 +232,10 @@ class ArticlePlan:
     # （次の後付けの見出し・英文の部分・文書の終わりの手前まで。本文に戻した後ろの章見出しとその本文も含む。空白だけの段落・
     # 図形の中の段落は除く）。要確認 fn_guess の助言「注見出しにする」が何を注の節に入れるかを知らせる（report._fn_guess_action）
     fn_guess_span: dict = field(default_factory=dict)
+    # 文字から注の見出しと推定される「注」だけの段落 ID（本文・後付けの領域にあるもの。図形の中は除く）の一覧。出現順。
+    # 要確認 fn_guess の助言「注見出しにする」が、「注」が 2 つ以上あるときに全部の扱いを決めるよう添えるための記録
+    # （「注見出し」の段落は 1 つしか持てず、ほかの「注」が文字から推定されると先の見出しが出力されない。docs/REVIEW_2026-11.md の K1）
+    fn_guess_notes: list = field(default_factory=list)
     # 手で書いた注と Word の脚注・文末脚注の両方にある注の番号（Word の注の番号は 1 から付けるので重なる。要確認）
     note_overlap: list = field(default_factory=list)
     # 番号から図・表を決められず、リンクしなかった図・表の参照（UnlinkedRef: 「図」か「表」, 段落 ID, 参照の文字, 段落の中の範囲）。

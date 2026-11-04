@@ -1333,15 +1333,74 @@ def test_fn_guess_span_matches_notes_when_each_note_is_made_heading(case, journa
             continue
         res2 = convert(fn_span_article(tmp_path, tokens, f"{case}_{k}", k), meta, journal,
                        Options(out_dir=tmp_path / f"s_{case}_{k}", convert_metafiles=False))
-        # 注見出しが後ろにもう 1 つあると、見出しは 1 つしか持てず、先の見出しの段落が出力されない（この点検の対象外。別に直す）。
-        # それ以外の不合格は許さない
+        # 注見出しが後ろにもう 1 つあると、見出しは 1 つしか持てず、先の見出しの段落が出力されない（K1 の形。直していない。その形では
+        # 助言に、すべての「注」の扱いを決めてから変換し直すよう添える。test_fn_guess_advice_for_several_notes...）。
+        # k より後ろに別の「注」があるときだけ許し、k が最後の「注」なら不変性チェックの合格を求める
         assert res2.fidelity.final_ok and res2.dtd_valid, (case, k)
-        assert all(t == "注" for _, t in res2.fidelity.missing) and (res2.fidelity.ok or res2.fidelity.missing), (case, k)
+        if k < len(notes) - 1:
+            assert all(t == "注" for _, t in res2.fidelity.missing) and (res2.fidelity.ok or res2.fidelity.missing), (case, k)
+        else:
+            assert res2.fidelity.ok and not res2.fidelity.missing, (case, k)
         actual = [p.src for fn in res2.plan.fns for p in fn.paras]
         assert plan.fn_guess_span[head] == actual, (case, head)
         assert not set(plan.fn_guess_span[head]) & set(notes), (case, head)       # 別の「注」の段落は数えない
         checked += 1
     assert checked >= 1
+
+
+def fn_styled_article(tmp_path, tokens, name, styles):
+    """fn_span_article と同じ並びで、k 番目の「注」のスタイルを styles[k]（S のキー。足りない分は body）にする。"""
+    def parts(b):
+        out = [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "架空の主張である（注1）。")]
+        k = 0
+        for t in tokens:
+            if t == "注":
+                out.append(mf.para(S[styles[k] if k < len(styles) else "body"], "注"))
+                k += 1
+            else:
+                out.append(FN_SPAN_PIECES[t]())
+        return out
+    path = tmp_path / f"{name}.docx"
+    mf.make_article(path, "注の扱いの検証用文書", parts)
+    return path
+
+
+@pytest.mark.parametrize("case", list(FN_SPAN_CASES))
+def test_fn_guess_advice_for_several_notes_decides_all_notes_before_reconverting(case, journal, meta, tmp_path):
+    """0.29.0 の 5 回目の点検: 文字から注の見出しと推定される「注」が 2 つ以上ある結果では、要確認 fn_guess の助言（冒頭・14 章・枠・
+    コマンドライン）に、「注見出し」にするのは注の節の「注」1 つだけにし、ほかの「注」は「注本文」スタイルにするなど、すべての「注」の
+    扱いを決めてから変換し直す注意と、対象の「注」の段落 ID と抜粋を添える（先の「注」だけを「注見出し」にして変換し直すと、後ろの
+    「注」も注の見出しと推定されて先の見出しが出力されず、要対応で止まる。K1 と同じ仕組みで構造は直していない）。1 つのときは添えない。
+    その助言どおり（先の「注」を注見出し、後ろの「注」を注本文）にした docx は不変性チェックに合格する。"""
+    tokens = FN_SPAN_CASES[case]
+    n = tokens.count("注")
+    res = convert(fn_span_article(tmp_path, tokens, case), meta, journal, Options(out_dir=tmp_path / "o", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok
+    [act] = fn_guess_action(res)
+    notes = [s for s, p in res.plan.paras.items() if p.plain() == "注"]
+    assert res.plan.fn_guess_notes == notes and len(notes) == n
+    marker = "すべての「注」の扱いを決めてから"
+    for t in fn_guess_texts(act):
+        if t == act.box_title:
+            continue
+        assert "set_role" not in t and "fn_heading" not in t and "\x00" not in t
+        if n < 2:
+            assert marker not in t, (case, t)
+            continue
+        assert marker in t and "ほかの「注」（表の注の見出しなど）は「注本文」スタイル" in t and f"{n} 件あります" in t, (case, t)
+        assert all(f"{s}「注」" in t for s in notes), (case, t)
+    if n < 2:
+        return
+    # 助言どおり: 先の「注」を「注見出し」、ほかの「注」を「注本文」にして変換し直すと、不変性チェックに合格する
+    res2 = convert(fn_styled_article(tmp_path, tokens, case + "_advice", ["fn_head"] + ["fn_body"] * (n - 1)), meta, journal,
+                   Options(out_dir=tmp_path / "o2", convert_metafiles=False))
+    assert res2.fidelity.ok and res2.fidelity.final_ok and res2.dtd_valid and not res2.fidelity.missing, case
+    assert res2.plan.fn_heading is not None and res2.plan.fn_heading.src == notes[0] and not res2.needs_action
+    # 先の「注」だけを直して、後ろの「注」を本文スタイルのままにすると、後ろの「注」も注の見出しと推定されて先の見出しが出力されず、
+    # 不変性チェックが不合格になる（助言が止める形。K1 と同じ仕組みで、構造は直していない）
+    res3 = convert(fn_styled_article(tmp_path, tokens, case + "_first", ["fn_head"]), meta, journal,
+                   Options(out_dir=tmp_path / "o3", convert_metafiles=False))
+    assert res3.fidelity.final_ok and not res3.fidelity.ok and (notes[0], "注") in res3.fidelity.missing, case
 
 
 def test_fn_guess_advice_counts_each_note_range(journal, meta, tmp_path):

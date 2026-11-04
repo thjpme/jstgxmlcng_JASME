@@ -1003,6 +1003,50 @@ def test_textbox_undecided_advice_after_ai_names_operation_of_each_screen(journa
     assert "反映" not in step_text(act.box_detail, "app").split("AI に出し直してもらうには")[1].split("。")[0]
 
 
+def test_textbox_undecided_advice_when_ai_failed_and_checklist_follows_mode(journal, meta, tmp_path):
+    """0.29.0 の 5 回目の点検: (1) AI の呼び出しが失敗した・回答を読めなかった（ai.error がある）ときは、「AI の回答に指定がない」と言わず、
+    float_ref_ai と同じく「AI による補完ができていません（要対応の知らせを参照）」の側の文にする。API は「もう一度変換」、手動は「回答を反映」。
+    (2) 14 章の checklist も AI の状態（使っていない・回答待ち・失敗・使った後）で変わり、AI を使った後に「AI による補完を使って
+    変換し直す」のままにならない。"""
+    from jasme_jats.ai_assist import AIOutcome
+    from jasme_jats.colab import step_text
+    plan, ids = _boxes_by_text(journal)
+    hint, note = ids["（ヒント）"], ids["注"]
+    # 使っていない
+    none = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "none", convert_metafiles=False))
+    act = next(a for a in actions(none) if a.key == "textbox_undecided")
+    assert "AI による補完を使って変換し直すか" in act.checklist
+    # 手動で回答を貼り戻す前
+    pend = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "pend", ai_mode="manual", convert_metafiles=False))
+    act = next(a for a in actions(pend) if a.key == "textbox_undecided")
+    assert "AI の回答を反映するか" in act.checklist and "AI による補完を使って" not in act.checklist
+    # AI を使った後（指定なし）
+    done = _manual_pl(STRUCTURE, [_box_pl(hint, _src(plan, "囲みの後の段落である。")), _box_pl(note, "", kind="label")],
+                      meta, journal, tmp_path / "done")
+    assert not done.ai.error
+    act = next(a for a in actions(done) if a.key == "textbox_undecided")
+    assert "AI に出し直してもらうか" in act.checklist and "AI による補完を使って" not in act.checklist
+    # AI が失敗した（API / 手動）
+    for mode, want_top, want_cli, want_app, want_nb in (
+            ("api", "もう一度変換して AI による補完ができれば", "--ai api でもう一度実行して", "「変換する」をもう一度押して",
+             "手順 5 をもう一度実行して"),
+            ("manual", "AI の回答を反映できたら", "AI の回答を直して --ai manual --ai-response", None, None)):
+        res = _manual_pl(STRUCTURE, [_box_pl(hint, _src(plan, "囲みの後の段落である。")), _box_pl(note, "", kind="label")],
+                         meta, journal, tmp_path / ("err_" + mode))
+        res.ai = AIOutcome(mode=mode)
+        res.ai.raw = "{}"
+        res.ai.error = "AI の呼び出しに失敗しました: 試験"
+        assert res.plan.undecided_boxes
+        act = next(a for a in actions(res) if a.key == "textbox_undecided")
+        for t in (act.top, act.box_detail, act.cli):
+            assert "AI の回答に、これらの種類" not in t and "（要対応の知らせを参照）" in t, (mode, t)
+        assert want_top in act.top and want_cli in act.cli
+        assert "できるようにして変換し直すか" in act.checklist and "AI による補完を使って" not in act.checklist
+        if want_app:
+            assert want_app in step_text(act.box_detail, "app") and want_nb in step_text(act.box_detail, "notebook")
+        assert "\x00" not in step_text(act.box_detail, "cli") + act.top + act.cli
+
+
 @pytest.mark.parametrize("empty", ["", 0, False, None])
 def test_g5_falsy_caption_body_are_empty_lists(empty, journal, meta, tmp_path):
     """G5: placements の items の caption・body が falsy な値（""・0・false・null）のときは、以前どおり空の一覧として扱う

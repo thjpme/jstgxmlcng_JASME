@@ -489,7 +489,8 @@ class Classifier:
         注の一覧に見えない段落が続いたまま後付けの見出し（または文書の終わり）に着いたときは、注の節として扱ったまま、要確認で
         知らせる（plan.fn_guess_checks。check_fn_guess）。ブロックは段落でも表でもよい（表の識別子は tid。block_id）。
         文字から注の見出しと推定した「注」ごとに、その段落を「注見出し」スタイルにしたときに注の一覧に入る段落を plan.fn_guess_span に
-        記録する（feed_fn_span。助言が言う範囲）。
+        記録する（feed_fn_span。助言が言う範囲）。文字から注の見出しと推定される「注」の段落はすべて plan.fn_guess_notes に記録する
+        （「注」が 2 つ以上あるときの助言に使う。構造は変えない）。
         """
         regions = {"front_ja": [], "body": [], "back": [], "front_en": []}
         state = "front_ja"
@@ -505,6 +506,9 @@ class Classifier:
         for b, role in flat:
             if fn_open and not in_shape(b):
                 self.feed_fn_span(fn_open, b, role)
+            if (state in ("body", "back") and isinstance(b, Para) and not in_shape(b) and role not in BACK_HEADINGS
+                    and self.back_heading_by_text(b, role) == "fn_heading"):
+                self.plan.fn_guess_notes.append(b.src)        # 記録だけ（助言に添える。fn_guess_notes）
             if fn_guess is not None and state == "back" and not in_shape(b):
                 if role in BACK_HEADINGS or (isinstance(b, Para) and self.back_heading_by_text(b, role) not in (None, "fn_heading")):
                     self.check_fn_guess(regions["back"][fn_guess:], f"後ろの後付けの見出し {block_id(b)}")    # 引用文献・付記・謝辞などの見出しが続く: 本当の注の節
