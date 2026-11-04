@@ -101,7 +101,7 @@ PDF       pdfmatch.py（照合）  pdfdocx.py（補った docx を書く）
 | `model.Para` | docx_reader | すべて | `src`（段落 ID: 本文 d1, d2…、脚注 f…、文末脚注 e…）、`atoms`、`style_id`、`numbering`/`autonum`、`float_id`/`textbox_id`、`role`（structure が決める） |
 | `model.Atom` | docx_reader | linker, emit | `kind` が text / math / image / fnref / gen。`text`、`fmt`（bold など）、`href`、`link`（LinkSpec）。`plain()` は文字でないものを U+FFFC にする |
 | `model.LinkSpec` | linker, refparse, ai_assist | emit | `kind`（xref / uri / ext-link / pub-id / year / article-title / source / label）、`attrs`、`origin`（word / mechanical / ai） |
-| `article.ArticlePlan` | `structure.classify` | linker, ai_assist, builder, report, pipeline, pdfmatch, pdfdocx | 論文の構造（`title`、`authors`、`body`〈Sec の木〉、`fns`、`refs`、`abstract`、`apps`…）、`paras`（src → Para）、`region`（src → 領域）、`locations`（src → 人が読む位置）、`exclusions`、`decisions`、`floats`（FloatInfo）、`textboxes`（BoxInfo）、`figures`/`tables`/`formulas`、`body_seq`、`float_unlinked`（リンクしなかった図・表の参照。`UnlinkedRef`〈図か表, 段落 ID, 文字, 段落の中の範囲〉）、`fn_guess_checks`・`fn_guess_numbered`・`fn_guess_span`（文字から推定した「注」の扱い。要確認 `fn_guess`。`fn_guess_span` は「注見出し」にしたとき注の節に入る段落） |
+| `article.ArticlePlan` | `structure.classify` | linker, ai_assist, builder, report, pipeline, pdfmatch, pdfdocx | 論文の構造（`title`、`authors`、`body`〈Sec の木〉、`fns`、`refs`、`abstract`、`apps`…）、`paras`（src → Para）、`region`（src → 領域）、`locations`（src → 人が読む位置）、`exclusions`、`decisions`、`floats`（FloatInfo）、`textboxes`（BoxInfo）、`figures`/`tables`/`formulas`、`body_seq`、`float_unlinked`（リンクしなかった図・表の参照。`UnlinkedRef`〈図か表, 段落 ID, 文字, 段落の中の範囲〉）、`fn_guess_checks`・`fn_guess_numbered`・`fn_guess_span`（文字から推定した「注」の扱い。要確認 `fn_guess`。`fn_guess_span` は「注見出し」にしたとき注の節に入る段落、`fn_guess_notes` は文字から注の見出しと推定した「注」の段落 ID） |
 | `article` のノード | structure | builder, report | `Sec`、`PNode`、`ListNode`、`QuoteNode`、`FigNode`、`TableNode`、`FormulaNode`、`BoxNode`、`FnNode`、`RefNode`、`BackSec`、`AppNode`、`Author`、`Aff` |
 | `model.Decision` | `plan.decide()`（structure・linker・ai_assist） | report, ai_assist（依頼文の「推定:」） | 機械処理・AI の判断の記録（did は M-001 / A-001） |
 | `model.Exclusion` | `plan.exclude()`/`exclude_blank()`、builder | fidelity, report（6 章）, pipeline.lost_images | 出力しない段落の ID・理由・全文。`blank` は空白だけの段落 |
@@ -149,7 +149,7 @@ XML の要素の ID は `structure.Classifier.assign_ids` が付ける: 図 `F1`
 
 | ファイル | 行 | 役割 | 入口 |
 |---|---|---|---|
-| `article.py` | 368 | `ArticlePlan` とノードの型、`FloatInfo`/`BoxInfo`、`plan.decide`（段階ごとの件数を持ち O(1) で番号を付ける）/`exclude`/`exclude_blank`/`float_place`/`box_place`/`no_link_paras`、`float_unlinked`・`fn_guess_checks`・`fn_guess_numbered`。規則は置かない | 型 |
+| `article.py` | 368 | `ArticlePlan` とノードの型、`FloatInfo`/`BoxInfo`、`plan.decide`（段階ごとの件数を持ち O(1) で番号を付ける）/`exclude`/`exclude_blank`/`float_place`/`box_place`/`no_link_paras`、`float_unlinked`・`fn_guess_checks`・`fn_guess_numbered`・`fn_guess_span`・`fn_guess_notes`。規則は置かない | 型 |
 | `structure.py` | 2408 | 段落の役割の決定と構造の組み立て。`classify(doc, journal, overrides, placements)` → `Classifier.run`。流れ（冒頭の docstring に目次）: ① `role_of`（AI の指定 → スタイル → 推定）② `split_regions`（和文の冒頭 / 本文 / 後付け / 英文の部分）③ `build_front_ja`（題目・著者・所属）④ `build_body`（`place_floats` 浮動配置の図表、`place_boxes` 文字だけのテキストボックス、`assemble_floats` 図表・箇条書き・引用・別行数式に組む、`nest` 章節項、`compute_locations`）⑤ `build_back`（付記・謝辞・注・引用文献）⑥ `build_front_en`（英文題目・著者・要旨・資料）⑦ `attach_word_notes`（Word の脚注・文末脚注を通し番号の注に）⑧ `assign_ids` ⑨ `joined_styles`。②では、本文スタイルの「注」だけの段落を文字から注の見出しと推定して後付けに切り替えた後、見出しのスタイル（sec1〜sec3）の段落が資料の見出し以外で現れたら本文に戻し、要確認 `fn_guess` の材料（`plan.fn_guess_checks`・`fn_guess_numbered`）を記録する（`check_fn_guess`。ブロックの識別は `block_id`）。「注見出しにすると注の節に入る段落」（`plan.fn_guess_span`）は、推定した「注」ごとに `feed_fn_span` が、その「注」を「注見出し」スタイルにしたときの `build_back` と同じ規則（別の「注」は見出しとして数えない）で数える。⑤の付記・謝辞・資料の自動番号の段落は `add_back_para` で `ListNode` にする。図表のキャプションの番号と枝番は `caption_label`・`RE_CAP_BRANCH`（区切り `CAP_BRANCH_SEP`・数字 `CAP_BRANCH_NUM` は builder・linker が共有）で読む。本文の外の段落に結び付いた図形があれば 2 回組み立てる（`Classifier.outside`）。正規表現（`RE_FIGCAP`、`RE_TABCAP`、`RE_APPENDIX` など）と除外の理由の文言もここ | `classify`, `float_caption`, `float_targets`, `appendix_heading` |
 | `floats.py` | 193 | 浮動配置の図形の位置の判定（`at_anchor`: 機械的に置けるか）、AI に渡す説明（`describe`）と行数の推定（`para_lines`, `box_lines`）、文字だけのテキストボックスが囲みか注記か（`textbox_kind`。しきい値 `BOX_CHARS` など） | `at_anchor`, `textbox_kind`, `describe` |
 
@@ -279,7 +279,7 @@ pipeline.Result ──▶ report.actions(res) ──▶ [Action(level, key, top,
 
 ## 7. テストの地図
 
-`python -m pytest -q`（0.29.0 で 1272 件）。各ファイルが何を守っているかの詳細は `docs/DEVELOPMENT.md` の「テスト」。
+`python -m pytest -q`（0.29.0 で 1298 件）。各ファイルが何を守っているかの詳細は `docs/DEVELOPMENT.md` の「テスト」。
 
 | テスト | 守っている動き |
 |---|---|
