@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 from .ai_assist import API_KEY_NAMES, DEFAULT_MODEL
+from .colab import step_text
 from .config import ArticleMeta, JournalConfig
 from .pipeline import AIRequiredError, Options, add_images, convert
 from .report import actions, images_to_prepare, pdf_summary, upload_issues
@@ -84,7 +85,7 @@ def main(argv=None):
     try:
         res = convert(a.docx, meta, journal, opts)
     except AIRequiredError as e:
-        print(e, file=sys.stderr)
+        print(step_text(str(e), "cli"), file=sys.stderr)       # 画面の操作の目印をコマンドラインの指定に置き換える
         return 2
     fid = res.fidelity
     print(f"文字の不変性チェック: {fid.summary()}（段落 {fid.units} 件中 {fid.mapped} 件を出力、{len(fid.excluded)} 件は除外）")

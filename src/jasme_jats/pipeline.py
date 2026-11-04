@@ -48,7 +48,7 @@ from .package import article_dir, make_zip, unzipped_files, write_package, zip_i
 from .pdfdocx import DocxFix, make_fixed_docx, same_file
 from .pdfmatch import PdfCheck, check_pdf
 from .report import (BOX_PENDING_NOTE, NEEDS_ACTION, actions, figure_body_detail, images_to_prepare, render,
-                     render_ai_only)
+                     render_ai_only, step)
 from .report import pdf_fallback as report_pdf_fallback
 from .structure import classify, float_caption, float_targets
 from .tracking import SPAN
@@ -56,7 +56,11 @@ from .validate import validate
 
 
 class AIRequiredError(Exception):
-    """位置を機械的に決められない図表があるのに、AI による補完を使わない設定で変換しようとした。"""
+    """位置を機械的に決められない図表があるのに、AI による補完を使わない設定で変換しようとした。
+
+    文の中の画面の操作は目印（report.step）で書く。画面に出すときは colab.step_text で（ノートブックは colab.ai_required_box、
+    1 画面版は app.py、コマンドラインは cli.py が screen を指定して）語に置き換える。
+    """
 
     def __init__(self, plan):
         self.floats = [plan.floats[fid] for fid in plan.unplaced_floats]
@@ -65,7 +69,7 @@ class AIRequiredError(Exception):
         super().__init__(
             f"この原稿には、位置を機械的に決められない図表（テキストボックス・グループ図形に入った図表）が {len(self.floats)} 件"
             "あります。これらの位置と組み合わせは AI に判断させる必要があるため、AI による補完を「使わない」設定では変換できません。"
-            "「API で自動実行」か「手動（チャットに貼り付け）」を選んで、もう一度変換してください。\n" + "\n".join(lines))
+            + step("ai_modes") + "、もう一度変換してください。\n" + "\n".join(lines))
 
 
 def _head(plan, src) -> str:

@@ -19,7 +19,7 @@ from pathlib import Path
 
 from . import __version__
 from .ai_assist import API_KEY_NAMES, DEFAULT_MODEL
-from .colab import (ai_required_box, error_box, no_ai_box, report_details, result_boxes, summary_box)
+from .colab import (ai_required_box, error_box, no_ai_box, report_details, result_boxes, step_text, summary_box)
 from .config import ArticleMeta, JournalConfig, keyword_language_mismatch, keyword_problem
 from .pipeline import AIRequiredError, Options, add_images, convert
 from .report import NEEDS_ACTION, actions, ai_pending, images_to_prepare
@@ -194,7 +194,7 @@ class AppState:
                 ai_api_key=self._api_key, ai_response=ai_response, pdf_path=local_pdf, route=f["route"],
                 split_labels=bool(f["split_labels"])))
         except AIRequiredError as e:
-            raise InputError(str(e), ai_required_box(str(e)))
+            raise InputError(step_text(str(e), "app"), ai_required_box(str(e), "app"))
         step(0.9, "画像を入れ直しています…")
         if self.user_images:
             add_images(res, self.user_images, skip_unneeded=True)     # 変換をやり直したときに、受け取った画像を入れ直す
@@ -295,12 +295,30 @@ class AppState:
         found = sorted(self.out_dir.glob("*_変換レポート.md")) if self.out_dir.exists() else []
         return str(found[0]) if found else ""
 
-    def crash(self, error: Exception) -> InputError:
-        """想定外の例外（変換ツールの不具合の可能性）を、画面に出す赤い枠にする。例外の種類と文、変換レポートの場所を載せる。"""
-        report = self.report_location()
-        where = f"変換レポート（{report}）を" if report else "この画面の表示を"
-        message = (f"{type(error).__name__}: {error}\n\n変換ツールの不具合の可能性があります。{where}添えて、開発者に知らせてください"
-                   + ("" if report else "（変換レポートは作られていません）") + "。もう一度「変換する」を押すと、やり直せます。")
+    # 操作ごとの案内（crash の operation）。入力や、貼り付けた回答・入れた画像を消す操作を勧めない
+    CRASH_ADVICE = {
+        "convert": "入力（docx・PDF・書誌情報の欄）が正しいかを確かめ、直してから、もう一度「変換する」を押してください。"
+                   "同じ例外で止まるときは、入力を変えずに、開発者に知らせてください。",
+        "apply": "貼り付けた回答は、「変換する」を押し直すと使えなくなるので、別の場所にも保存してください。"
+                 "この画面の入力は変えず、「変換する」も押し直さずに、開発者に知らせてください。",
+        "images": "入れた画像と変換の結果は、この画面に残っています。入力は変えず、「変換する」も押し直さずに"
+                  "（押すと、入れた画像が消えます）、開発者に知らせてください。",
+        "download": "変換の結果は、この画面に残っています。もう一度ダウンロードの操作をしてかまいません。同じ例外で止まるときは、"
+                    "入力は変えずに、開発者に知らせてください。"}
+
+    def crash(self, error: Exception, operation: str = "convert") -> InputError:
+        """想定外の例外（変換ツールの不具合の可能性）を、画面に出す赤い枠にする。例外の種類と文を載せ、操作（operation。
+        convert・apply・images・download）に合った案内を付ける。
+
+        変換レポートの場所は、サーバー側のパスで利用者が取り出せないので書かない。結果が残っているときは、この画面の
+        「変換レポートの全文を見る」を添えるよう案内する。
+        """
+        if operation not in self.CRASH_ADVICE:
+            raise ValueError(f"知らない操作: {operation}")
+        report = self.report_location() if self.res is not None else ""
+        who = ("この画面の「変換レポートの全文を見る」の内容と、この例外の文を添えて、開発者に知らせてください。" if report
+               else "この例外の文を添えて、開発者に知らせてください（変換レポートは作られていません）。")
+        message = f"{type(error).__name__}: {error}\n\n変換ツールの不具合の可能性があります。{who}\n{self.CRASH_ADVICE[operation]}"
         return InputError(message, error_box("想定外のエラーで止まりました", message))
 
     # ---- 結果とダウンロード
@@ -316,7 +334,7 @@ class AppState:
         if self.res is None:
             return ""
         res = self.res
-        parts = [no_ai_box()] if self.inputs["ai_mode"] == "none" else []
+        parts = [no_ai_box("app")] if self.inputs["ai_mode"] == "none" else []
         parts.append(result_boxes(res, skip=("ai_pending",) if self.waiting_for_answer else (), screen="app"))
         parts.append(summary_box(res))
         parts.append(report_details(res.report_path.read_text(encoding="utf-8")))
@@ -470,7 +488,7 @@ def build_app(state: AppState, io: "IO | None" = None):
             except InputError as e:
                 return view(e)
             except Exception as e:                 # 想定外の例外。Gradio の「Error」だけにせず、枠に出す
-                return view(state.crash(e))
+                return view(state.crash(e, "convert"))
             return view()
 
         def on_apply(text, progress=gr.Progress()):
@@ -479,7 +497,7 @@ def build_app(state: AppState, io: "IO | None" = None):
             except InputError as e:
                 return view(e)
             except Exception as e:
-                return view(state.crash(e))
+                return view(state.crash(e, "apply"))
             return view()
 
         def on_images(*paths):
@@ -489,7 +507,7 @@ def build_app(state: AppState, io: "IO | None" = None):
             except InputError as e:
                 return view(e)
             except Exception as e:
-                return view(state.crash(e))
+                return view(state.crash(e, "images"))
             return view()
 
         def on_download(accept_todo):
@@ -497,7 +515,7 @@ def build_app(state: AppState, io: "IO | None" = None):
             try:
                 path, note = state.download(accept_todo)
             except Exception as e:                         # ZIP を作れなかった（出力フォルダが消えているなど）
-                out[0], out[8] = state.crash(e).html, ""
+                out[0], out[8] = state.crash(e, "download").html, ""
                 return out
             out[0] = error_box("ダウンロードの前に", note) if note else ""
             out[8] = download_button_html(path) if path else ""

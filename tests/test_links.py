@@ -720,6 +720,11 @@ def test_branch_figure_numbers_are_not_linked(journal, meta, tmp_path):
     assert act.level == TO_CHECK and "図1-1" in act.top and "図2.1" in act.top and not res.needs_action
     assert "図1-1" in act.box_detail and "図1-1" in act.cli
     assert "手順" not in act.top + act.box_detail + act.cli + act.checklist
+    # 内部の操作名を出さず、そのままでもよいこと・付けるなら XML のどこをどうするかを言う（F13）
+    assert "link_figure" not in act.checklist
+    for text in (act.top, act.box_detail, act.cli):
+        assert "link_" not in text and "登載できる" in text and 'ref-type="fig"' in text and "xref" in text, text
+    assert "AI による補完の回答" in act.box_detail
     assert "float_ref" in [a.key for a in actions(res)]
     assert any("リンクしなかった図・表の参照" in line for line in act.checklist.splitlines())
 

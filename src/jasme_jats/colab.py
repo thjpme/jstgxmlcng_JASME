@@ -70,9 +70,9 @@ NO_AI_DETAIL = ("機械的な変換だけでは、テンプレートのスタイ
                 "API キーがなくても使える「手動（チャットに貼り付け）」を選ぶことをお勧めします。")
 
 
-def no_ai_box() -> str:
-    """AI による補完を使わないときに出す注意（赤い枠）。"""
-    return error_box(NO_AI_TITLE, NO_AI_DETAIL)
+def no_ai_box(screen: str = "notebook") -> str:
+    """AI による補完を使わないときに出す注意（赤い枠）。screen は目印の置き換え先（step_text）。"""
+    return error_box(step_text(NO_AI_TITLE, screen), step_text(NO_AI_DETAIL, screen))
 
 
 def _notice(title: str, detail: str, border: str, background: str, heading: str) -> str:
@@ -182,42 +182,68 @@ def next_article_box(previous_docx: str = "") -> str:
         "手順 1 からやり直すほうが確実です。GitHub のノートブックを開き直すと、入力欄は初期の値に戻ります。")
 
 
-def ai_required_box(message: str) -> str:
-    """AI による補完を使わない設定で、位置を決められない図表があったときの表示（変換は中止）。"""
-    return error_box("AI による補完が必要です（変換を中止しました）", message)
+def ai_required_box(message: str, screen: str = "notebook") -> str:
+    """AI による補完を使わない設定で、位置を決められない図表があったときの表示（変換は中止）。
+
+    message は pipeline.AIRequiredError の文（画面の操作の目印つき）。screen は目印の置き換え先（step_text）。
+    """
+    return error_box("AI による補完が必要です（変換を中止しました）", step_text(message, screen))
 
 
 # ---------------------------------------------------------------------------- 画面の操作の言い方（画面ごと）
-# report.Action.box_detail は、画面の操作を目印 {{step:名前}}（report.step）で書く。ノートブックの手順番号と 1 画面版（app.py）の
-# 欄の名前の違いは、ここ 1 か所の表だけで決める。目印の名前は report.STEP_NAMES と同じ（食い違いはテストで見つける）。
-# 語は、前後の文に合わせて「〜から」「〜で」「〜してください」に続けて読める形にする。1 画面版の語は app.py の部品のラベルに合わせる。
+# report.Action.box_detail などの文は、画面の操作を目印（report.step）で書く。ノートブックの手順番号・1 画面版（app.py）の欄の名前・
+# コマンドラインの指定の違いは、ここ 1 か所の表だけで決める。目印の名前は report.STEP_NAMES と同じ（食い違いはテストで見つける）。
+# 目印は U+0000 で区切る（report.step）。U+0000 は XML 1.0 の文字ではなく、docx の文字（w:t）・ファイル名・PDF の文字
+# （pdfmatch が制御文字を除く）のどれにも入らないので、docx 由来の文字（段落の抜粋など）に {{step:x}} のような並びがあっても
+# 目印とは読まれない。語は、前後の文に合わせて「〜から」「〜で」「〜してください」に続けて読める形にする（ノートブックの語は
+# 4e8c38a までの文と一字一句同じになる形。「手順 2」のように数字で終わる語の後ろの助詞の前の空白は step_text が補う）。
+# 1 画面版の語は app.py の部品のラベルに合わせる。
 STEP_WORDS = {
     "notebook": {
         "docx": "手順 2", "pdf": "手順 2", "route": "手順 2", "meta": "手順 3",
         "ai_choose": "手順 4 で AI による補完の方法を「API で自動実行」か「手動（チャットに貼り付け）」にして ▶ を押し、手順 5 から",
-        "prompt": "手順 5 の依頼文", "paste": "手順 6 に貼り付けて ▶ を押", "convert_again": "手順 5 をもう一度実行",
+        "ai_modes": "「API で自動実行」か「手動（チャットに貼り付け）」を選んで",
+        "prompt": "手順 5 の依頼文", "paste": "手順 6 に貼り付けて ▶ を押", "repaste": "手順 6 で貼り付け直し",
+        "answer_paste": "手順 6 で AI の回答を貼り付けて", "convert_again": "手順 5 をもう一度実行",
         "images": "手順 7「足りない画像をアップロード」"},
     "app": {
         "docx": "「docx（論文の Word ファイル）」の欄", "pdf": "「PDF（J-STAGE に登載する PDF）」の欄", "route": "「作り方」の欄",
         "meta": "巻・号・ページなどの入力欄",
         "ai_choose": "「AI による補完の方法」の欄を「手動（チャットに貼り付け）」か「API（Claude）」にして「変換する」を押し、",
-        "prompt": "依頼文", "paste": "「AI の回答」の欄に貼り付けて「反映」を押", "convert_again": "「変換する」をもう一度押",
-        "images": "「足りない図の画像」の欄（「画像を入れる」の上）"},
+        "ai_modes": "「AI による補完の方法」の欄で「手動（チャットに貼り付け）」か「API（Claude）」を選んで",
+        "prompt": "依頼文", "paste": "「AI の回答」の欄に貼り付けて「反映」を押",
+        "repaste": "「AI の回答」の欄に貼り付け直して「反映」を押し",
+        "answer_paste": "AI の回答を「AI の回答」の欄に貼り付けて「反映」を押して", "convert_again": "「変換する」をもう一度押",
+        # 欄の並びの見出し（AppState.images_markdown の「次の図の画像が必要です」）の下に、図ごとの欄が並ぶ。欄の名前は図のキャプション
+        # （出力ファイル名）（AppState.slot_label）
+        "images": "「次の図の画像が必要です」の下に並ぶ、図ごとの欄（欄の名前は図のキャプションと出力ファイル名）"},
+    "cli": {
+        "docx": "docx の指定", "pdf": "--pdf の指定", "route": "--route の指定", "meta": "--meta の指定",
+        "ai_choose": "--ai manual か --ai api を指定して",
+        "ai_modes": "--ai manual か --ai api を指定して",
+        "prompt": "AI依頼文.txt", "paste": "ファイルに保存して --ai-response で指定", "repaste": "ファイルに保存して --ai-response で指定し直し",
+        "answer_paste": "AI の回答をファイルに保存して --ai-response で指定して", "convert_again": "--ai api でもう一度実行",
+        "images": "--images の指定"},
 }
-_STEP_MARK = re.compile(r"\{\{step:([^{}]*)\}\}")
+_HIRAGANA = re.compile("[\u3041-\u309f]")
 
 
 def step_text(text: str, screen: str = "notebook") -> str:
-    """文の中の目印 {{step:名前}} を、画面（"notebook" か "app"）の語に置き換える。知らない画面・目印は ValueError。"""
+    """文の中の目印（report.step）を、画面（"notebook"・"app"・"cli"）の語に置き換える。知らない画面・目印は ValueError。
+
+    「手順 2」のように数字で終わる語の直後にひらがな（「から」「で」など）が続くときは、間に半角の空白を入れる（「手順 2 から」）。
+    """
+    from .report import STEP_MARK_PATTERN
     if screen not in STEP_WORDS:
         raise ValueError(f"知らない画面: {screen}")
     words = STEP_WORDS[screen]
 
     def word(m):
         if m.group(1) not in words:
-            raise ValueError(f"知らない目印: {m.group(0)}")
-        return words[m.group(1)]
-    return _STEP_MARK.sub(word, text)
+            raise ValueError(f"知らない目印: {m.group(1)}")
+        w = words[m.group(1)]
+        return w + " " if w[-1:].isdigit() and _HIRAGANA.match(m.string, m.end()) else w
+    return re.sub(STEP_MARK_PATTERN, word, text)
 
 
 def _box(action, screen: str = "notebook") -> str:

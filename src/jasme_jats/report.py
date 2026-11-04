@@ -31,6 +31,19 @@ def esc(s, n=None) -> str:
     return s
 
 
+BLANK_NAMES = {" ": "半角の空白", "\u3000": "全角の空白", "\t": "タブ", "\u00a0": "改行しない空白"}
+
+
+def esc_blank(s, n=None) -> str:
+    """esc と同じ。ただし、空白の文字だけの文字列は、空欄に見えないよう「（半角の空白）」のような見える表記にする
+    （13 章の表の docx・PDF の欄。レポートの表示だけで、XML や docx の文字には影響しない）。空の文字列はそのまま空欄。"""
+    s = "" if s is None else str(s)
+    if s and not s.strip():
+        name = BLANK_NAMES.get(s[0], "空白") if len(set(s)) == 1 else "空白"
+        return f"（{name}）" if len(s) == 1 else f"（{name} {len(s)} 文字）"
+    return esc(s, n)
+
+
 def table(headers, rows) -> str:
     out = ["| " + " | ".join(headers) + " |", "|" + "|".join("---" for _ in headers) + "|"]
     for r in rows:
@@ -487,7 +500,7 @@ def _skipped_docx(f, text, n=8) -> str:
     """ルート2 の 13.3 の docx の欄: 直さなかった箇所の docx の文字（数式・画像は 〓）。docx の側に文字がない箇所（PDF にだけある
     文字。f.start == f.end）は、docx の段落の文字 text の、その位置の前後 n 文字（「…確率［］が…」）。"""
     if f.start != f.end or not text:
-        return esc(f.old.replace(chr(0xFFFC), "〓"), 30)
+        return esc_blank(f.old.replace(chr(0xFFFC), "〓"), 30)
     q = f.start
     return _clean(("…" if q > n else "") + text[max(0, q - n):q] + INSERT_AT + text[q:q + n]
                   + ("…" if q + n < len(text) else ""))
@@ -594,17 +607,22 @@ NEEDS_ACTION = "要対応"     # コマンドラインの終了コード 1、Col
 TO_CHECK = "要確認"         # 黄色い枠、レポートの冒頭・14 章だけ（終了コードは 0）
 
 
-# box_detail（Colab の枠の本文）の中の、画面の操作を指す目印。ノートブックの手順番号や 1 画面版の欄の名前は、ここには書かず、
-# 目印 {{step:名前}} で書く（step()）。目印を画面ごとの語に置き換えるのは colab.step_text の 1 か所（colab.STEP_WORDS）。
-# 目印の名前を足すときは、colab.STEP_WORDS の両方の画面に語を足す（足りなければ、置き換えのときに例外になる）。
-STEP_NAMES = ("docx", "pdf", "route", "meta", "ai_choose", "prompt", "paste", "convert_again", "images")
+# box_detail（Colab の枠の本文）などの文の中の、画面の操作を指す目印。ノートブックの手順番号や 1 画面版の欄の名前は、ここには書かず、
+# 目印 step() で書く。目印を画面ごとの語に置き換えるのは colab.step_text の 1 か所（colab.STEP_WORDS）。
+# 目印の名前を足すときは、colab.STEP_WORDS のすべての画面に語を足す（足りなければ、置き換えのときに例外になる）。
+# 目印は U+0000 で挟む。U+0000 は XML 1.0 の文字ではなく、docx の文字（w:t）・ファイル名・PDF の文字（pdfmatch が制御文字を除く）の
+# どれにも入らないので、文の中の docx 由来の文字（段落の抜粋など）が目印と読まれることがない。
+STEP_NAMES = ("docx", "pdf", "route", "meta", "ai_choose", "ai_modes", "prompt", "paste", "repaste", "answer_paste", "convert_again",
+              "images")
+STEP_MARK = "\x00"
+STEP_MARK_PATTERN = STEP_MARK + "step:([^\x00]*)" + STEP_MARK
 
 
 def step(name: str) -> str:
-    """画面の操作を指す目印（box_detail に書く。画面ごとの語への置き換えは colab.step_text）。"""
+    """画面の操作を指す目印（box_detail などに書く。画面ごとの語への置き換えは colab.step_text）。"""
     if name not in STEP_NAMES:
         raise ValueError(f"知らない目印: {name}")
-    return "{{step:" + name + "}}"
+    return STEP_MARK + "step:" + name + STEP_MARK
 
 
 @dataclass
@@ -629,6 +647,20 @@ def _fidelity_action(r):
     fid = r.fidelity
     if fid.ok and fid.final_ok:
         return None
+    if fid.ok and fid.final_unreadable:         # 文字は合っているが、最終出力を XML として読めない（実体参照などの不備）
+        return Action(
+            NEEDS_ACTION, "fidelity",
+            top=("> **注意: 出力された XML を XML として読めませんでした（実体参照などの不備）。** 本文が docx と一致しているかを"
+                 "確かめられないので、この XML は登載に使わず、変換レポートを添えて開発者に知らせてください（変換ツールの不具合の"
+                 "可能性があります。読めなかった理由は 5 章）。"),
+            checklist=("- [ ] **出力された XML を XML として読めない**（5 章）: この XML は登載に使わない"
+                       "（変換レポートを添えて開発者に知らせる）"),
+            box_title="出力された XML を XML として読めません（この XML は登載に使わないでください）",
+            box_detail=("出力された XML を、XML として読めませんでした（実体参照などの不備）。本文が docx と一致しているかを確かめられない"
+                        "ため、この XML は登載に使わず、変換レポートを添えて開発者に知らせてください（変換ツールの不具合の可能性が"
+                        "あります。読めなかった理由はレポートの 5 章にあります）。"),
+            cli=("要対応: 出力された XML を XML として読めませんでした（実体参照などの不備）。この XML は登載に使わないこと"
+                 "（レポートの冒頭と 5 章。変換ツールの不具合の可能性がある）"))
     return Action(
         NEEDS_ACTION, "fidelity",
         top=("> **注意: 文字の不変性チェックが不合格です。** 出力された XML の本文が docx と一致していません。"
@@ -800,7 +832,7 @@ def unplaced_text(plan, partial="") -> tuple:
     else:
         intro = "AI の回答に、次の図表の位置（placements）の指定がないか、指定が検証で採用されませんでした（レポートの 2 章・3 章）。"
         again = ("AI に出し直してもらう場合は、手動モードではチャットで「位置を決められなかった図表をすべて placements に書いて、"
-                 "回答の書き方に従って出し直してください」と頼み、返ってきた回答を" + step("paste") + "してください。API モードでは"
+                 "回答の書き方に従って出し直してください」と頼んで" + step("repaste") + "、API モードでは"
                  + step("convert_again") + "してください。")
     return ("位置を決められなかった図表があります（仮の位置に置いています。手作業で直してください）",
             intro + "これらは仮の位置に置いているので、登載の前に、XML の中で手作業で正しい位置（Word で表示したときに、図の左上の"
@@ -873,7 +905,7 @@ def _textbox_undecided_action(r):
         cli_how = "--ai manual か --ai api で AI による補完を使うか、docx でその文字をテキストボックスの外に出して変換し直すこと"
     elif ai_pending(r):
         how = "AI の回答を反映すると、AI が囲みか注記かを判断し、囲みは本文に出します。"
-        box_how = f"AI の回答を{step('paste')}して変換し直すと、AI が囲みか注記かを判断します"
+        box_how = step("answer_paste") + "変換し直すと、AI が囲みか注記かを判断します"
         cli_how = "AI の回答を --ai-response で指定して変換し直すこと"
     else:
         how = ("AI の回答に、これらの種類（kind）の指定がないか、指定が検証で採用されませんでした（2 章）。AI に出し直してもらうか、"
@@ -1006,7 +1038,7 @@ def lost_action(r):
         checklist=(f"- [ ] **XML に入らなかった画像 {len(lost)} 件**（9 章）が本文に必要か確かめ、必要なら Word でその画像を本文の段落に"
                    "移して変換し直す: " + "、".join(esc(lost_image_label(li)) for li in lost)),
         box_title=f"XML に入らなかった画像が {len(lost)} 件あります（要対応）",
-        box_detail=(f"{LOST_IMAGES_WHY}{LOST_IMAGES_ACTION}変換し直すときは、Word で直した docx を{step('docx')}で選び直し、そこから"
+        box_detail=(f"{LOST_IMAGES_WHY}{LOST_IMAGES_ACTION}変換し直すときは、Word で直した docx を{step('docx')}でアップロードし直し、そこから"
                     "順にやり直してください（レポートの冒頭と 9 章）。\n"
                     + "\n".join(f"・{lost_image_label(li)}: {li.reason}" for li in lost)),
         cli=(f"要対応: XML に入らなかった画像 {len(lost)} 件（画像を出力できない引用文献・題目・著者名・所属の段落や、"
@@ -1128,6 +1160,9 @@ def _note_overlap_action(r):
              "docx でどちらかの書き方にそろえて変換し直すこと"))
 
 
+FLOAT_REF_HOW = ('<xref ref-type="fig" rid="図の id"> （表への参照は ref-type="table"、rid は表の id）を手で足すか、'
+                 "AI による補完の回答で、その参照がどの図・表かを指定してください。")
+XREF_MD = '`<xref ref-type="fig" rid="図の id">`'       # レポート（Markdown）では、タグに見える文字を HTML にしないよう囲む
 FLOAT_REF_SHOWN = 6     # 図・表の参照の要確認に並べる参照の数（全件は 4 章の判断の一覧）
 
 
@@ -1151,15 +1186,18 @@ def _float_ref_action(r):
         TO_CHECK, "float_ref",
         top=("> **要確認: 図・表の番号が重なる、または枝番がある（図1-1・図1-2 など）ため、どの図・表か決められず、リンクしなかった"
              f"参照があります（{n} か所。4 章）。** 参照: {shown}。誤ったリンクを出さないよう、これらの参照には図・表へのリンクを"
-             "付けていません。PDF と照らして確かめ、リンクが必要なら手で付けてください（AI による補完の link_figure・link_table でも"
-             "付けられます）。"),
-        checklist=f"- [ ] **リンクしなかった図・表の参照**（{n} か所。4 章）: 番号が重なる・枝番があるため。PDF と照らし、必要なら手でリンクを付ける",
+             "付けていません。リンクがなくても J-STAGE には登載できるので、そのままでもかまいません。付けるときは、PDF と照らして"
+             f"どの図・表への参照かを確かめ、XML の該当箇所に{FLOAT_REF_HOW.replace('<xref ref-type=\"fig\" rid=\"図の id\">', XREF_MD)}"),
+        checklist=(f"- [ ] **リンクしなかった図・表の参照**（{n} か所。4 章）: 番号が重なる・枝番があるため。リンクがなくても登載できる。"
+                   "付けるなら、PDF と照らして XML に <xref> を足す"),
         box_title="図・表の参照のリンクを付けていない箇所があります（要確認）",
         box_detail=("図・表の番号が重なる、または枝番がある（図1-1・図1-2 など）ため、どの図・表か決められない参照には、リンクを付けて"
                     f"いません（誤ったリンクを出さないため）。\n対象の参照（{n} か所）: {shown}\n"
-                    "PDF と照らして確かめ、リンクが必要なら手で付けてください（レポートの 4 章に場所があります）。"),
+                    "リンクがなくても J-STAGE には登載できるので、そのままでもかまいません。付けるときは、PDF と照らしてどの図・表への参照かを"
+                    f"確かめ、XML の該当箇所に{FLOAT_REF_HOW}（レポートの 4 章に場所があります）"),
         cli=(f"要確認: 図・表の番号が重なる、または枝番があるため、リンクしなかった図・表の参照が {n} か所あります"
-             f"（{shown}。レポートの冒頭と 4 章）。PDF と照らして確かめ、必要なら手でリンクを付けること"))
+             f"（{shown}。レポートの冒頭と 4 章）。リンクがなくても登載できる。付けるなら、PDF と照らしてどの図・表かを確かめ、"
+             "XML に <xref ref-type=\"fig\" rid=\"図の id\">（表は ref-type=\"table\"）を手で足すこと"))
 
 
 NEWLINE_SAMPLES = 5     # 改行の要確認に並べる段落の数（全件はレポートの 10 章）
@@ -1841,8 +1879,8 @@ def _diff_table(L, plan, diffs):
     PDF の文字を長めに出し（行の変わり目は LINE_MARK）、その旨を添える。表に FORMULA_MARK があれば、表の前に説明を添える。"""
     _formula_note(L, [x for d in diffs for x in (d.docx, d.pdf, d.context)])
     L.append(table(["段落", "場所", "docx", PDF_COLUMN if any(d.why for d in diffs) else "PDF", "docx の前後（［］が違う部分）"],
-                   [(d.src, plan.locations.get(d.src, ""), esc(d.docx, 40),
-                     esc(d.pdf, 80) + why_mark(d.why) if d.why else esc(d.pdf, 40), esc(d.context, 60))
+                   [(d.src, plan.locations.get(d.src, ""), esc_blank(d.docx, 40),
+                     esc_blank(d.pdf, 80) + why_mark(d.why) if d.why else esc_blank(d.pdf, 40), esc_blank(d.context, 60))
                     for d in diffs]))
 
 
@@ -1941,7 +1979,7 @@ def render_route2(L, r, pc, fx):
         L.append("直せなかった組版の違い（ほかの直す箇所と重なる、直せない文字にかかる、などの理由で直していません。"
                  "組版の違いなので確認は要りません）:")
         L.append("")
-        rows = [(f.src, fx.locations.get(f.src, ""), _skipped_docx(f, fx.texts.get(f.src, "")), esc(f.new, 30), f.reason)
+        rows = [(f.src, fx.locations.get(f.src, ""), _skipped_docx(f, fx.texts.get(f.src, "")), esc_blank(f.new, 30), f.reason)
                 for f in fx.skipped_typeset]
         _formula_note(L, [x for row in rows for x in row[2:4]])
         L.append(table(["段落", "場所", "docx", "PDF", "直さなかった理由"], rows))
@@ -1957,7 +1995,7 @@ def render_route2(L, r, pc, fx):
             L.append(f"docx の欄の「{INSERT_AT}」は、docx に文字がなく PDF にだけ文字がある位置です（前後は docx の文字）。")
             L.append("")
         rows = [(f.src, fx.locations.get(f.src, ""), _skipped_docx(f, fx.texts.get(f.src, "")),
-                 esc(f.new, 80 if f.reason in WHY_MARKS else 30), f.reason) for f in fx.skipped_text]
+                 esc_blank(f.new, 80 if f.reason in WHY_MARKS else 30), f.reason) for f in fx.skipped_text]
         _formula_note(L, [x for row in rows for x in row[2:4]])
         L.append(table(["段落", "場所", "docx", PDF_COLUMN if long else "PDF", "直さなかった理由"], rows))
     else:
