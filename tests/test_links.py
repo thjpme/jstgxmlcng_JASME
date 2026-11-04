@@ -22,7 +22,7 @@ from lxml import etree
 from jasme_jats.linker import RE_FIGREF, RE_TABREF, Linker, find_in_para
 from jasme_jats.model import Atom, LinkSpec, Para
 from jasme_jats.pipeline import Options, _mechanical, convert
-from jasme_jats.report import TO_CHECK, actions
+from jasme_jats.report import TO_CHECK, actions, step
 from jasme_jats.structure import ArticlePlan
 
 S = mf.S
@@ -725,8 +725,10 @@ def test_branch_figure_numbers_are_not_linked(journal, meta, tmp_path):
     for text in (act.top, act.box_detail, act.cli):
         assert "link_" not in text and "登載できる" in text and 'ref-type="fig"' in text and "xref" in text, text
     # 利用者が取れる手段の文: 手で足す・AI による補完を使う設定で変換し直す（回答を編集するようには読めない）。図の id の場所も言う
+    assert "AI による補完を使う設定" in act.top and "変換し直すと" in act.top and "AI による補完の回答" not in act.top
+    assert step("ai_choose") + "変換し直すと" in act.box_detail and "AI による補完の回答" not in act.box_detail     # 画面ごとの語は colab が置き換える
+    assert "--ai manual か --ai api を指定して変換し直すと" in act.cli
     for text in (act.top, act.box_detail):
-        assert "AI による補完を使う設定" in text and "変換し直すと" in text and "AI による補完の回答" not in text, text
         assert '<fig id="…">' in text and "<table-wrap id=" in text, text
         assert "> （" not in text and "`（表への" in text or ">（表への" in text, text    # タグの後ろに余分な空白がない
     assert " （表への参照は" not in act.top + act.box_detail
@@ -882,3 +884,67 @@ def test_year_after_dash_is_not_a_branch(split, journal, meta, tmp_path):
         assert [text(c) for c in root.iter("caption")] == ["図1―2019年度の推移", "図2　別の図"]
     assert float_links(root, "図1を見る") == [("図1", "fig", "F1")]
     assert not res.plan.float_unlinked
+
+
+def _float_ref_states(tmp_path, journal, meta):
+    """図1 が 2 つあるため、「図1」の参照が 2 か所、リンクされない小さな論文。(docx, 参照の段落 ID) を返す。"""
+    body = [mf.para(S["body"], "図1を見る。図1も見る。")]
+    path = floats_article(tmp_path, body, ["図1　一つ目の図", "図1　二つ目の図"], [], name="h3")
+    _, plan, _ = _mechanical(path, journal)
+    src = next(s for s, p in plan.paras.items() if p.plain().startswith("図1を見る"))
+    return path, src
+
+
+def _manual(path, ops, meta, journal, out):
+    resp = json.dumps({"operations": ops, "placements": [], "notes": []}, ensure_ascii=False)
+    return convert(path, meta, journal, Options(out_dir=out, ai_mode="manual", ai_response=resp, convert_metafiles=False))
+
+
+def _link_op(src, target, occurrence=1, text="図1"):
+    return {"op": "link_figure", "src": src, "text": text, "occurrence": occurrence, "target": target, "role": "", "image": "",
+            "mathml": "", "surname": "", "given": "", "reason": "試験", "confidence": "高"}
+
+
+def _float_ref(res):
+    [act] = [a for a in actions(res) if a.key == "float_ref"]
+    return act
+
+
+def test_h3_float_ref_advice_follows_the_ai_state(journal, meta, tmp_path):
+    """H3: 図・表の参照のリンクを付けていない箇所の案内は、AI による補完の状態（使っていない・回答待ち・AI を使った後）で文を分ける
+    （以前は、回答待ちや AI を使った後にも「AI による補完を使う設定で変換し直すと…」と勧めた）。AI がリンクを付けた参照は残りから除く。"""
+    path, src = _float_ref_states(tmp_path, journal, meta)
+    # (1) AI を使っていない: AI による補完を使う設定にして変換し直すことを勧める（画面ごとの語は目印）
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "none", convert_metafiles=False))
+    assert len(res.plan.float_unlinked) == 2
+    act = _float_ref(res)
+    assert "AI による補完を使う設定（API か手動）で変換し直すと" in act.top and step("ai_choose") + "変換し直すと" in act.box_detail
+    assert "--ai manual か --ai api を指定して変換し直すと" in act.cli
+    # (2) 手動で回答待ち: 回答を反映すると AI がリンクを付けること、反映した後に残る分をこの知らせで確かめることを言う。設定の変更は勧めない
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "pending", ai_mode="manual", convert_metafiles=False))
+    act = _float_ref(res)
+    assert "AI の回答を反映すると" in act.top and "もう一度出る" in act.top and "設定（API か手動）" not in act.top
+    assert step("answer_paste") + "変換し直すと" in act.box_detail and step("ai_choose") not in act.box_detail
+    assert "--ai-response で指定して変換し直すと" in act.cli and "--ai manual か --ai api を指定して" not in act.cli
+    # (3) AI を使った後、一部だけリンクが付いた: 付いた分は除き、残りは「AI もリンクを付けなかった参照」。設定の変更は勧めない
+    res = _manual(path, [_link_op(src, "F1", 1)], meta, journal, tmp_path / "part")
+    assert res.fidelity.ok and res.ai.rejected == [] and len(res.plan.float_unlinked) == 1
+    assert float_links(load(res), "図1を見る") == [("図1", "fig", "F1")]
+    act = _float_ref(res)
+    assert "（1 か所）" not in act.top and "対象の参照（1 か所）" in act.box_detail
+    for t in (act.top, act.box_detail, act.cli):
+        assert "AI もリンクを付けませんでした" in t and "設定（API か手動）" not in t and "ai_choose" not in t, t
+        assert "--ai manual か --ai api" not in t
+    # (4) 全部にリンクが付いた: 知らせは出ない
+    res = _manual(path, [_link_op(src, "F1", 1), _link_op(src, "F2", 2)], meta, journal, tmp_path / "all")
+    assert res.plan.float_unlinked == [] and [a for a in actions(res) if a.key == "float_ref"] == []
+    # (5) AI の回答が採用されなかった（リンク先がない）: 残りは全部
+    res = _manual(path, [_link_op(src, "F99", 1)], meta, journal, tmp_path / "none_ok")
+    assert len(res.plan.float_unlinked) == 2 and "AI もリンクを付けませんでした" in _float_ref(res).top
+    # (6) 回答を読み込めなかった: AI は反映されていない。設定の変更ではなく回答を反映できたらと言う
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "bad", ai_mode="manual", ai_response="これは JSON ではない",
+                                               convert_metafiles=False))
+    assert res.ai.error
+    act = _float_ref(res)
+    assert "AI による補完が反映できていません" in act.top and "AI の回答を反映できたら" in act.top
+    assert "設定（API か手動）" not in act.top and "--ai manual か --ai api" not in act.cli

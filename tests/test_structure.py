@@ -3,6 +3,7 @@
 import dataclasses
 import functools
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -1138,17 +1139,24 @@ def _manual_roles(path, ops, meta, journal, out):
     return convert(path, meta, journal, Options(out_dir=out, ai_mode="manual", ai_response=resp, convert_metafiles=False))
 
 
+def fn_guess_texts(act):
+    """利用者向けの文（レポートの冒頭・14 章・Colab の枠・コマンドライン）をまとめて返す。"""
+    return [act.top, act.checklist, act.box_title, act.box_detail, act.cli]
+
+
 def test_fn_guess_advice_is_executable(journal, meta, tmp_path):
-    """G3: 要確認の助言（注の節なら「注見出し」スタイル、本文の続きなら AI による補完の set_role の p）に従うと、実際に推定が変わる。
+    """G3・H2: 要確認の助言（注の節なら Word の「注見出し」スタイル、本文の続きなら Word の「注本文」スタイル）に従うと、実際に
+    推定が変わる。助言に内部の操作名（set_role・fn_heading・p を指定）を出さない（利用者が指定できない書き方になるため）。
     「注」が本文スタイルのままでは、本文のスタイルに直しても同じ推定になる（助言にしない）。"""
     middle = [mf.para(S["body"], "表の注の文である。"), mf.para(S["body"], "最後の章のつづきの本文である。以上である。")]
     path = fn_guess_article(tmp_path, middle, "g3")
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
     [act] = fn_guess_action(res)
-    for s in ("注見出し", "set_role", "p を指定"):
-        assert s in act.top and s in act.box_detail
-    assert "注見出し" in act.cli and "set_role" in act.cli
-    assert "本文のスタイルのままでは" in act.top and "本文のスタイルに直" not in act.top
+    for s in ("注見出し", "注本文"):
+        assert s in act.top and s in act.box_detail and s in act.checklist and s in act.cli
+    for t in fn_guess_texts(act):
+        assert not any(w in t for w in ("set_role", "fn_heading", "p を指定", "AI による補完"))
+    assert "本文・標準・章見出しのスタイルのままでは" in act.top and "本文のスタイルに直" not in act.top
     # 一覧に段落の ID と文字の抜粋を付ける
     [(src, kind, _)] = res.plan.fn_guess_checks
     assert f"{src}「注」" in act.top and f"{src}「注」" in act.box_detail
@@ -1162,11 +1170,71 @@ def test_fn_guess_advice_is_executable(journal, meta, tmp_path):
     mf.make_article(path2, "注見出しの検証用文書", parts)
     res2 = convert(path2, meta, journal, Options(out_dir=tmp_path / "out2", convert_metafiles=False))
     assert res2.fidelity.ok and len(res2.plan.fns) == 1 and fn_guess_action(res2) == []
-    # (3) 本文の続き: AI の set_role p で「注」を本文の段落にすると、推定されず、知らせも出ない
-    res3 = _manual_roles(path, [(src, "p")], meta, journal, tmp_path / "out3")
-    assert res3.ai.rejected == [] and res3.fidelity.ok and res3.fidelity.final_ok and res3.dtd_valid
-    assert res3.plan.fns == [] and res3.plan.fn_guess_checks == [] and fn_guess_action(res3) == []
-    assert "注" in [text(q) for q in load(res3).find("body").iter("p")]
-    # (4) 注の節: AI の set_role fn_heading でも、スタイルで決めた注見出しと同じ（推定の要確認は出ない）
-    res4 = _manual_roles(path, [(src, "fn_heading")], meta, journal, tmp_path / "out4")
-    assert res4.ai.rejected == [] and res4.fidelity.ok and len(res4.plan.fns) == 1 and fn_guess_action(res4) == []
+    # (3) 本文の続き: 「注」のスタイルを「注本文」にすると、推定されず、本文の段落として出て、要確認も出ない（H2。Word で取れる手段）
+    def parts3(b):
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "架空の主張である（注1）。"), mf.para(S["fn_body"], "注"), *middle]
+    path3 = tmp_path / "g3_fnbody.docx"
+    mf.make_article(path3, "注本文の検証用文書", parts3)
+    res3 = convert(path3, meta, journal, Options(out_dir=tmp_path / "out3", convert_metafiles=False))
+    assert res3.fidelity.ok and res3.fidelity.final_ok and res3.dtd_valid and res3.jstage_issues == []
+    assert res3.plan.fn_guess_checks == [] and fn_guess_action(res3) == [] and res3.plan.fns == []
+    assert [text(q) for q in load(res3).find("body").iter("p")][1:] == ["注", "表の注の文である。", "最後の章のつづきの本文である。以上である。"]
+    assert res3.plan.region[next(s for s, q in res3.plan.paras.items() if q.plain() == "注")] == "body"
+    # (4) 本文のスタイルのまま、章見出しの前までを戻す場合（returned）も、「注」を「注本文」にすれば推定されない
+    tail = [mf.para(S["sec2"], "（１）小節"), mf.para(S["body"], "小節の本文である。")]
+    for name, style, want in (("g3_ret_body", "body", 1), ("g3_ret_fnbody", "fn_body", 0)):
+        def parts4(b, style=style):
+            return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "架空の主張である。"), mf.para(S[style], "注"),
+                    mf.para(S["body"], "表の下の説明である。"), *tail]
+        path4 = tmp_path / f"{name}.docx"
+        mf.make_article(path4, "戻しの検証用文書", parts4)
+        res4 = convert(path4, meta, journal, Options(out_dir=tmp_path / name, convert_metafiles=False))
+        assert res4.fidelity.ok and res4.fidelity.final_ok and res4.dtd_valid and len(fn_guess_action(res4)) == want
+        assert "表の下の説明である。" in text(load(res4).find("body")) and res4.plan.fns == []
+    # (5) AI の補完が役割を指定した段落も推定しない（利用者への案内にはしないが、仕組みとして働く）
+    res5 = _manual_roles(path, [(src, "p")], meta, journal, tmp_path / "out5")
+    assert res5.ai.rejected == [] and res5.fidelity.ok and res5.fidelity.final_ok and res5.dtd_valid
+    assert res5.plan.fns == [] and res5.plan.fn_guess_checks == [] and fn_guess_action(res5) == []
+    assert "注" in [text(q) for q in load(res5).find("body").iter("p")]
+    res6 = _manual_roles(path, [(src, "fn_heading")], meta, journal, tmp_path / "out6")
+    assert res6.ai.rejected == [] and res6.fidelity.ok and len(res6.plan.fns) == 1 and fn_guess_action(res6) == []
+
+
+def test_fn_guess_style_note_body_in_template():
+    """H2: 助言の「注見出し」「注本文」は、テンプレートのスタイルの名前で、設定のとおりの役割になる（役割 fn_heading と fn）。
+    「注本文」は本文の領域に現れても本文の段落（structure.BODY_ROLES）。ほかのスタイル（キャプション・ブロック引用）を勧めない根拠は
+    上のテストの (3)・docs/STYLE_MAPPING.md（別の要素になる）。"""
+    from jasme_jats.structure import BODY_ROLES, BACK_HEADINGS
+    from jasme_jats.config import JournalConfig
+    styles = JournalConfig.load().styles
+    assert styles["注見出し"] == "fn_heading" and styles["注本文"] == "fn"
+    # テストの docx が使うスタイル ID（S["fn_head"]・S["fn_body"]）は、テンプレートの「注見出し」「注本文」
+    import re
+    import zipfile
+    xml = zipfile.ZipFile(Path(__file__).parent / "fixtures" / "JASME_template_20261009.docx").read("word/styles.xml").decode("utf-8")
+    names = dict(re.findall(r'<w:style [^>]*w:styleId="([^"]+)"[^>]*>\s*<w:name w:val="([^"]+)"', xml))
+    assert (names[S["fn_head"]], names[S["fn_body"]]) == ("注見出し", "注本文")
+    assert "fn" in BODY_ROLES and "fn_heading" in BACK_HEADINGS
+
+
+def test_fn_guess_numbered_paragraphs_in_returned_range_are_reported(journal, meta, tmp_path):
+    """H7: 本文に戻した範囲に注の番号で始まる段落（「1) …」）が含まれるとき、件数と抜粋を要確認の文に出し、注の節にする手段
+    （「注見出し」スタイル）を添える。含まれないときは、その文は出ない。"""
+    middle = [mf.para(S["body"], "1) 一つ目の注である。"), mf.para(S["body"], "2) 二つ目の注である。"),
+              mf.para(S["sec1"], "補足"), mf.para(S["body"], "補足の本文である。")]
+    path = fn_guess_article(tmp_path, middle, "h7")
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    [(head, kind, how)] = res.plan.fn_guess_checks
+    assert kind == "returned" and len(res.plan.fn_guess_numbered[head]) == 2 and "注の番号で始まる段落が 2 件ある" in how
+    [act] = fn_guess_action(res)
+    for t in (act.top, act.box_detail):
+        assert "注の番号で始まる段落が 2 件ありました" in t and "「1) 一つ目の注である。」" in t and "「2) 二つ目の注である。」" in t
+        assert "注見出し" in t and "後ろの章見出しなども注の節に入る" in t
+    assert "注の番号で始まる段落が 2 件" in act.cli and "注見出し" in act.cli
+    # 注の番号で始まる段落がなければ、触れない
+    path2 = fn_guess_article(tmp_path, [mf.para(S["body"], "表の下の説明である。"), *middle[2:]], "h7_none")
+    res2 = convert(path2, meta, journal, Options(out_dir=tmp_path / "out2", convert_metafiles=False))
+    [act2] = fn_guess_action(res2)
+    assert res2.plan.fn_guess_numbered == {} and "注の番号で始まる段落が" not in act2.top + act2.box_detail + act2.cli
+    assert "後ろの章見出しなども注の節に入る" not in act2.top

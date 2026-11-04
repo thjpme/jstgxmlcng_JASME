@@ -648,7 +648,23 @@ def _fidelity_action(r):
     fid = r.fidelity
     if fid.ok and fid.final_ok:
         return None
-    if fid.ok and fid.final_unreadable:         # 文字は合っているが、最終出力を XML として読めない（実体参照などの不備）
+    unreadable = fid.final_unreadable
+    differs = not fid.ok or fid.final_differs
+    if unreadable and differs:          # 読めないことと、文字の差分の両方（どちらも、この XML は登載に使わない）
+        return Action(
+            NEEDS_ACTION, "fidelity",
+            top=("> **注意: 出力された XML を XML として読めませんでした（実体参照などの不備）。さらに、文字の不変性チェックも不合格で、"
+                 "出力された XML の本文が docx と一致していません。** この XML は登載に使わず、変換レポートを添えて開発者に知らせて"
+                 "ください（変換ツールの不具合の可能性があります。読めなかった理由と文字の差分は 5 章）。"),
+            checklist=("- [ ] **出力された XML を XML として読めず、文字の不変性チェックも不合格**（5 章）: この XML は登載に使わない"
+                       "（変換レポートを添えて開発者に知らせる）"),
+            box_title="出力された XML を読めず、文字の不変性チェックも不合格です（この XML は登載に使わないでください）",
+            box_detail=("出力された XML を、XML として読めませんでした（実体参照などの不備）。さらに、出力された XML の本文が docx と"
+                        "一致していません。この XML は登載に使わず、変換レポートを添えて開発者に知らせてください（変換ツールの不具合の"
+                        "可能性があります。読めなかった理由と文字の差分はレポートの 5 章にあります）。"),
+            cli=("要対応: 出力された XML を XML として読めず（実体参照などの不備）、文字の不変性チェックも不合格です。出力された XML の"
+                 "本文が docx と一致していないので、この XML は登載に使わないこと（レポートの冒頭と 5 章。変換ツールの不具合の可能性がある）"))
+    if unreadable:                      # 文字は合っているが、最終出力を XML として読めない（実体参照などの不備）
         return Action(
             NEEDS_ACTION, "fidelity",
             top=("> **注意: 出力された XML を XML として読めませんでした（実体参照などの不備）。** 本文が docx と一致しているかを"
@@ -1165,21 +1181,60 @@ XREF_TAG = '<xref ref-type="fig" rid="図の id">'
 FIG_ID_TAG, TABLE_ID_TAG = '<fig id="…">', '<table-wrap id="…">'
 
 
+# タグの形: <名前>・<名前/>・<名前 属性="値" …>（属性は 名前="値" の形だけ）。名前が JATS の要素名のときだけ、md_tag が囲む
+RE_MD_TAG = re.compile(r'(?<!`)<([A-Za-z][\w:.-]*)(?:\s+[\w:.-]+="[^"<>\n]*")*\s*/?>(?!`)')
+
+
 def md_tag(text: str) -> str:
     """文の中の XML のタグ（<xref …>・<label> など）を、Markdown のコード（バッククォート）で囲む。
 
     レポート（Markdown）の文に生のタグを書くと、Markdown を HTML にしたときに HTML のタグとして扱われて消えるため
-    （Colab の「変換レポートの全文を見る」）。画面の枠（HTML をエスケープして出す）やコマンドラインの文には使わない。
+    （Colab の「変換レポートの全文を見る」）。囲むのは、名前が JATS の要素名（validate.jats_element_names）のタグの形だけ。
+    docx の文字を引用した文（10 章の警告に引用した段落の抜粋など）の「x<y かつ z>w」のような < > は、タグの形でも要素名でもないので
+    変えない（文字を書き換えない）。画面の枠（HTML をエスケープして出す）やコマンドラインの文には使わない。
     """
-    return re.sub(r"(?<!`)<[A-Za-z][^<>\n]*>(?!`)", lambda m: f"`{m.group(0)}`", text)
+    from .validate import jats_element_names
+    names = jats_element_names()
+    return RE_MD_TAG.sub(lambda m: f"`{m.group(0)}`" if m.group(1) in names else m.group(0), text)
 
 
-def float_ref_how(md: bool = False) -> str:
-    """リンクしなかった図・表の参照に、利用者がリンクを付ける方法の文（_float_ref_action）。md なら、タグを Markdown のコードで囲む。"""
-    text = (f'{XREF_TAG}（表への参照は ref-type="table"、rid は表の id）を手で足してください。図の id は XML の {FIG_ID_TAG}'
-            f'（表は {TABLE_ID_TAG}）にあります。手で足すほかに、AI による補完を使う設定（API か手動）で変換し直すと、AI が参照の'
-            '図・表を指定してリンクを付けることもあります（付いたリンクは確かめてください）。')
-    return md_tag(text) if md else text
+def float_ref_manual() -> str:
+    """リンクしなかった図・表の参照に、利用者が手でリンクを付ける方法の文（_float_ref_action。AI の状態によらない）。"""
+    return (f'{XREF_TAG}（表への参照は ref-type="table"、rid は表の id）を手で足してください。図の id は XML の {FIG_ID_TAG}'
+            f'（表は {TABLE_ID_TAG}）にあります。')
+
+
+def float_ref_ai(r, screen: str = "report") -> str:
+    """リンクしなかった図・表の参照について、AI による補完の状態に合わせた文（_float_ref_action）。
+
+    AI を使っていない・回答待ち（手動モードで回答を貼り戻す前）・AI の回答を反映できなかった・AI を使った後、で文を分ける
+    （plan.float_unlinked は、AI が link_figure・link_table でリンクを付けた参照を除いた残りなので、AI を使った後は
+    「AI もリンクを付けなかった参照」になる。ai_assist.apply_ops）。screen は "report"（レポートの冒頭。画面の操作を両方の言い方で書く）・
+    "box"（Colab の枠。目印 step() で書く）・"cli"（コマンドラインの指定で書く）。
+    """
+    ai = r.ai
+    checked = "（付いたリンクは確かめてください）。"
+    if ai.mode == "none":
+        how = {"report": "AI による補完を使う設定（API か手動）で変換し直すと、", "box": step("ai_choose") + "変換し直すと、",
+               "cli": "--ai manual か --ai api を指定して変換し直すと、"}[screen]
+        return f"手で足すほかに、{how}AI が参照の図・表を指定してリンクを付けることもあります{checked}"
+    if ai_pending(r):
+        how = {"report": "AI の回答を反映すると", "box": step("answer_paste") + "変換し直すと",
+               "cli": "AI の回答を --ai-response で指定して変換し直すと"}[screen]
+        return (f"手で足すほかに、{how}、AI が指定した参照にリンクが付くことがあります{checked}回答を反映した後にも"
+                "リンクが付かずに残った参照は、この知らせにもう一度出るので、残った分を手で足してください。")
+    if ai.error:
+        return ("AI による補完が反映できていません（要対応の知らせを参照）。AI の回答を反映できたら、AI が参照の図・表を指定して"
+                f"リンクを付けることもあります{checked}")
+    return ("AI の回答は反映済みですが、これらの参照には AI もリンクを付けませんでした（AI がリンクを指定しなかったか、指定が採用されな"
+            "かったため。2 章）。手で足すか、AI に出し直してもらってください。")
+
+
+def float_ref_how(r, screen: str = "report") -> str:
+    """リンクしなかった図・表の参照に、利用者がリンクを付ける方法の文（_float_ref_action）。レポートの文（screen が "report"）は
+    タグを Markdown のコードで囲む。"""
+    text = float_ref_manual() + float_ref_ai(r, screen)
+    return md_tag(text) if screen == "report" else text
 
 
 FLOAT_REF_SHOWN = 6     # 図・表の参照の要確認に並べる参照の数（全件は 4 章の判断の一覧）
@@ -1206,18 +1261,18 @@ def _float_ref_action(r):
         top=("> **要確認: 図・表の番号が重なる、または枝番がある（図1-1・図1-2 など）ため、どの図・表か決められず、リンクしなかった"
              f"参照があります（{n} か所。4 章）。** 参照: {shown}。誤ったリンクを出さないよう、これらの参照には図・表へのリンクを"
              "付けていません。リンクがなくても J-STAGE には登載できるので、そのままでもかまいません。付けるときは、PDF と照らして"
-             "どの図・表への参照かを確かめ、XML の該当箇所に" + float_ref_how(md=True)),
+             "どの図・表への参照かを確かめ、XML の該当箇所に" + float_ref_how(r)),
         checklist=(f"- [ ] **リンクしなかった図・表の参照**（{n} か所。4 章）: 番号が重なる・枝番があるため。リンクがなくても登載できる。"
                    "付けるなら、PDF と照らして XML に " + md_tag("<xref>") + " を足す"),
         box_title="図・表の参照のリンクを付けていない箇所があります（要確認）",
         box_detail=("図・表の番号が重なる、または枝番がある（図1-1・図1-2 など）ため、どの図・表か決められない参照には、リンクを付けて"
                     f"いません（誤ったリンクを出さないため）。\n対象の参照（{n} か所）: {shown}\n"
                     "リンクがなくても J-STAGE には登載できるので、そのままでもかまいません。付けるときは、PDF と照らしてどの図・表への参照かを"
-                    "確かめ（場所はレポートの 4 章にあります）、XML の該当箇所に" + float_ref_how()),
+                    "確かめ（場所はレポートの 4 章にあります）、XML の該当箇所に" + float_ref_how(r, "box")),
         cli=(f"要確認: 図・表の番号が重なる、または枝番があるため、リンクしなかった図・表の参照が {n} か所あります"
              f"（{shown}。レポートの冒頭と 4 章）。リンクがなくても登載できる。付けるなら、PDF と照らしてどの図・表かを確かめ、"
              "XML に <xref ref-type=\"fig\" rid=\"図の id\">（表は ref-type=\"table\"）を手で足すこと"
-             "（図の id は XML の <fig id=\"…\">、表は <table-wrap id=\"…\"> にある。AI による補完を使う設定で変換し直す方法もある）"))
+             "（図の id は XML の <fig id=\"…\">、表は <table-wrap id=\"…\"> にある）。" + float_ref_ai(r, "cli")))
 
 
 FN_GUESS_SHOWN = 5      # 注の扱いの要確認に並べる件数（全件は 4 章の判断の一覧）
@@ -1244,21 +1299,31 @@ def _fn_guess_action(r):
                "（または文書の終わり）に着いたため、その範囲を注の節として扱いました。" if kept else "")
             + ("後ろに見出しのスタイルの段落（資料の見出しではないもの）が続くため、注の節ではなく本文の続きとみなして"
                "本文に戻しました。" if returned else ""))
-    # 「注」の段落は、本文・標準・章見出しのスタイルだと文字から注の見出しと推定される（structure.back_heading_by_text）ので、
-    # 本文のスタイルのままでは推定は変わらない。実際に取れる手段: 注の節なら Word で「注見出し」スタイル（AI による補完なら set_role の
-    # fn_heading）、本文の続きなら AI による補完の set_role の p（AI が役割を指定した段落は推定しない）
-    how = ("注の節なら、Word で「注」の段落のスタイルを「注見出し」にして変換し直してください（AI による補完なら、その段落に set_role の "
-           "fn_heading を指定）。表の注の見出しなど本文の続きなら、「注」の段落は本文のスタイルのままでは注の見出しと推定されるので、"
-           "AI による補完で、その段落に set_role の p を指定してください（Word のスタイルだけでは避けられません）。")
+    # 戻した範囲に注の番号で始まる段落があったとき（本当の注の一覧かもしれない。H7）は、件数と抜粋、注の節にする手段を添える
+    numbered = [src for head, kind, _ in checks if kind == "returned" for src in r.plan.fn_guess_numbered.get(head, ())]
+    if numbered:
+        listed = _para_samples([(src, paras[src].text_only()) for src in numbered if src in paras])
+        what += f"戻した範囲に、注の番号で始まる段落が {len(numbered)} 件ありました（{listed}）。本当の注の一覧かもしれません。"
+    # 「注」の段落は、本文・標準・章見出しのスタイルだと文字から注の見出しと推定される（structure.back_heading_by_text が見る役割は
+    # sec1・normal・p）。Word で実際に取れる手段は、注の節なら「注見出し」スタイル（役割 fn_heading）、本文の続きなら「注本文」スタイル
+    # （役割 fn。本文では本文の段落として出て、文字からは推定されない。tests/test_structure.py の test_fn_guess_advice_is_executable）。
+    # 表の注・図表のキャプション・ブロック引用のスタイルは、別の要素（表・図・引用）になるので勧めない
+    how = ("注の節なら、Word で「注」の段落のスタイルを「注見出し」にして変換し直してください"
+           + ("（注の節にすると、後ろの章見出しなども注の節に入るので、注の一覧が論文の最後にあるときの方法です）" if numbered else "")
+           + "。表の注の見出しなど本文の続きなら、"
+           "Word で「注」の段落のスタイルを「注本文」にして変換し直してください（本文・標準・章見出しのスタイルのままでは、"
+           "「注」だけの段落は文字から注の見出しと推定されます）。")
     return Action(
         TO_CHECK, "fn_guess",
         top=f"> **要確認: 「注」だけの段落の扱いを、文字から推定しました（{n} 件。4 章）。** {what}{how}対象の段落: {samples}",
-        checklist=f"- [ ] **文字から推定した「注」の扱い**（{n} 件。4 章）: 注の節か本文の続きかを確かめ、違えば「注見出し」スタイル（注の節）か AI による補完の set_role の p（本文の続き）で直して変換し直す",
+        checklist=(f"- [ ] **文字から推定した「注」の扱い**（{n} 件。4 章）: 注の節か本文の続きかを確かめ、違えば Word で「注」の段落の"
+                   "スタイルを「注見出し」（注の節）か「注本文」（本文の続き）にして変換し直す"),
         box_title="「注」の段落の扱いを推定しました（要確認）",
         box_detail=f"{what}{how}（レポートの冒頭と 4 章）\n対象の段落: {samples}\n{detail}",
-        cli=(f"要確認: 「注」だけの段落を文字から注の見出しと推定して扱いました（{n} 件。レポートの冒頭と 4 章）。注の節か本文の続きかを"
-             "確かめ、注の節なら docx で「注」の段落のスタイルを「注見出し」にして変換し直し、本文の続きなら AI による補完で set_role の p を"
-             "指定すること"))
+        cli=(f"要確認: 「注」だけの段落を文字から注の見出しと推定して扱いました（{n} 件。レポートの冒頭と 4 章）。"
+             + (f"戻した範囲に注の番号で始まる段落が {len(numbered)} 件あります。" if numbered else "")
+             + "注の節か本文の続きかを確かめ、docx で「注」の段落のスタイルを、注の節なら「注見出し」、本文の続きなら「注本文」にして"
+             "変換し直すこと"))
 
 
 NEWLINE_SAMPLES = 5     # 改行の要確認に並べる段落の数（全件はレポートの 10 章）

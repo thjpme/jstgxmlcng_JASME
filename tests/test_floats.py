@@ -767,3 +767,34 @@ def test_unreadable_cut_response_is_reported(journal, meta, tmp_path):
     assert after(body_sequence(load(res)), "この段落に図1のテキ") == ["F1"]
     detail = {u[1]: u[3] for u in res.unresolved_after if u[0] == "float"}
     assert all("AI の回答を反映できなかったため（2 章）" in d for d in detail.values())
+
+
+@pytest.mark.parametrize("val", ["OMIT", None, "", 0, False])
+@pytest.mark.parametrize("key", ["caption", "body"])
+def test_h1_falsy_caption_body_of_float_items_do_not_stop(key, val, journal, meta, tmp_path):
+    """H1: placements の items の caption・body が 0・false・null・空文字・キーなしのとき、検証（_placement_problem）は空の一覧として
+    通すので、組み立て（structure.float_from_spec）も同じ扱いにする（以前は TypeError・KeyError で変換が止まった）。"""
+    data = json.loads(RESPONSE)
+    item = data["placements"][0]["items"][0]
+    if val == "OMIT":
+        item.pop(key)
+    else:
+        item[key] = val
+    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=json.dumps(data),
+                                                convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    if key == "body":
+        assert any("body" in why for _, why in res.ai.rejected)      # 本体のない図は不採用（止まらない）
+    else:
+        assert not any("caption" in why for _, why in res.ai.rejected)
+        assert "s1" not in res.plan.unplaced_floats                 # キャプションのない図として採用された
+
+
+def test_h1_label_placement_without_after_key(journal, meta, tmp_path):
+    """H1: テキストボックスの label の指定は after を使わないので、after のキーがなくても（検証が通すので）止まらない。"""
+    from test_ai import STRUCTURE, _box_pl, _boxes_by_text, _manual_pl
+    plan, ids = _boxes_by_text(journal)
+    pl = _box_pl(ids["注"], "", kind="label")
+    del pl["after"]
+    res = _manual_pl(STRUCTURE, [pl], meta, journal, tmp_path)
+    assert res.fidelity.ok and res.ai.rejected == [] and res.plan.textboxes[ids["注"]].kind == "label"

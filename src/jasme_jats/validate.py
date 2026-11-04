@@ -17,6 +17,7 @@ from lxml import etree
 
 DTD_PATH = Path(__file__).resolve().parent / "dtd" / "JATS-journalpublishing1.dtd"
 _DTD = None
+_NAMES = None
 
 
 def load_dtd():
@@ -24,6 +25,15 @@ def load_dtd():
     if _DTD is None:
         _DTD = etree.DTD(str(DTD_PATH))
     return _DTD
+
+
+def jats_element_names() -> frozenset:
+    """JATS（同梱の DTD）の要素名の集合（このツールが出力する要素名は、DTD に合うので、すべてここに入る）。
+    変換レポートの文の中の「タグの形」が、ツールの書いたタグか、docx の文字（x<y かつ z>w など）かを見分けるのに使う（report.md_tag）。"""
+    global _NAMES
+    if _NAMES is None:
+        _NAMES = frozenset(e.name for e in load_dtd().iterelements())
+    return _NAMES
 
 
 def validate(xml_bytes: bytes):

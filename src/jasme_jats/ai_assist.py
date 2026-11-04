@@ -1258,7 +1258,7 @@ def float_placements(data, plan: ArticlePlan, outcome: AIOutcome) -> dict:
                 ends[fid] = ({"where": "end", "after": after, "op": op}, len(outcome.rejected))
             outcome.rejected.append((op, why))
             continue
-        spec = {"after": pl["after"], "items": pl["items"], "reason": op["reason"],
+        spec = {"after": pl.get("after"), "items": pl["items"], "reason": op["reason"],     # label は after を使わない（書かなくてよい）
                 "confidence": op["confidence"] if op["confidence"] in ("高", "中", "低") else "低", "op": op}
         if pl["float"] in plan.textboxes:
             spec["kind"] = pl["items"][0]["kind"]       # 文字だけのテキストボックス: box（囲み）か label（図の注記）
@@ -1518,6 +1518,14 @@ def apply_ops(ops, plan: ArticlePlan, doc, outcome: AIOutcome, split: bool = Fal
                             f"「{text}」を{what}として {target} にリンクした。{op['reason']}", op["confidence"])
             spec.decision_id = d.did
             outcome.accepted.append((op, d))
+            if kind in ("link_figure", "link_table"):
+                # 機械的にはリンクしなかった図・表の参照（plan.float_unlinked）に AI がリンクを付けたら、その分は残りから除く
+                # （要確認の知らせ〈report.float_ref_ai〉は「AI もリンクを付けなかった参照」だけを挙げる）
+                word = "図" if kind == "link_figure" else "表"
+                for k, (w, s, t) in enumerate(plan.float_unlinked):
+                    if (w, s, t) == (word, src, text):
+                        del plan.float_unlinked[k]
+                        break
             continue
         if kind == "formula_image":
             fig = images.get(op["image"])

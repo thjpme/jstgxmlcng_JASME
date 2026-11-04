@@ -212,6 +212,8 @@ class ArticlePlan:
     # 文字から推定した注の見出し（本文スタイルの「注」だけの段落）の扱いの記録: (「注」の段落 ID, "returned"（本文に戻した）か "kept"
     # （注の番号で始まらない段落が続いたまま注の節として扱った）, 説明)。要確認で知らせる（Classifier.split_regions。report._fn_guess_action）
     fn_guess_checks: list = field(default_factory=list)
+    # 本文に戻した（"returned"）範囲に、注の番号で始まる段落（本当の注の一覧かもしれない）があったときの、「注」の段落 ID -> その段落 ID の一覧
+    fn_guess_numbered: dict = field(default_factory=dict)
     # 手で書いた注と Word の脚注・文末脚注の両方にある注の番号（Word の注の番号は 1 から付けるので重なる。要確認）
     note_overlap: list = field(default_factory=list)
     # 番号から図・表を決められず、リンクしなかった図・表の参照: (「図」か「表」, 段落 ID, 参照の文字)。同じ種類のキャプションの番号が

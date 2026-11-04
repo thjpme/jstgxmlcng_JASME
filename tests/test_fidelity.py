@@ -1,6 +1,7 @@
 """文字の不変性チェックそのものが、改変を確実に検出できることを確かめる（わざと壊して試す）。"""
 import copy
 
+import pytest
 from lxml import etree
 
 from conftest import FULL
@@ -241,3 +242,37 @@ def test_entity_declaration_in_final_output_is_unreadable_notice(journal, meta, 
     assert act.level == NEEDS_ACTION
     for text in (act.top, act.box_detail, act.cli):
         assert "読めません" in text and "登載に使わ" in text and "一致していません" not in text and "差分" not in text, text
+
+
+@pytest.mark.parametrize("unreadable", [b'.dtd">|.dtd" [<!ENTITY foo "abc">]>', b"</p>|&foo;</p>"], ids=["entity-declaration", "undefined-entity"])
+def test_h6_unreadable_and_different_text_both_reported(unreadable, journal, meta, tmp_path, monkeypatch):
+    """H6: 最終出力が読めない（実体の宣言・未定義の実体参照）うえに、本文の文字も違うときは、読めないことと文字の差分の両方を
+    要対応の文に出す（以前は、読めない側の文だけで、差分があることが消えた）。どちらも、この XML は登載に使わない。
+    読めないだけのとき・文字の差分だけのときの文は変えない。"""
+    from jasme_jats import pipeline
+    from jasme_jats.pipeline import Options, convert
+    from jasme_jats.report import NEEDS_ACTION, actions
+    real = pipeline.serialize
+    a, b = unreadable.split(b"|")
+
+    def broken(root):
+        return real(root).replace(a, b, 1).replace("はじめに".encode(), "おわりに".encode(), 1)
+    monkeypatch.setattr(pipeline, "serialize", broken)
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "both", convert_metafiles=False))
+    fid = res.fidelity
+    assert fid.final_ok is False and fid.final_unreadable and fid.final_differs and res.needs_action
+    [act] = [x for x in actions(res) if x.key == "fidelity"]
+    assert act.level == NEEDS_ACTION
+    for text in (act.top, act.checklist, act.box_title, act.box_detail, act.cli):
+        assert "読め" in text, text
+    for text in (act.top, act.box_detail, act.cli):
+        assert "XML として読めません" in text or "XML として読めず" in text
+        assert "docx と一致していません" in text or "docx と一致していないので" in text, text
+        assert "登載に使わ" in text and "5 章" in text, text
+    assert fid.final_detail
+    # 読めないだけのときは、差分の文を出さない
+    monkeypatch.setattr(pipeline, "serialize", lambda root: real(root).replace(a, b, 1))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "only", convert_metafiles=False))
+    assert res.fidelity.final_unreadable and not res.fidelity.final_differs
+    [act] = [x for x in actions(res) if x.key == "fidelity"]
+    assert "一致していません" not in act.top + act.box_detail and "一致していないので" not in act.cli

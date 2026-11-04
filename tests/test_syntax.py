@@ -92,3 +92,29 @@ def test_md_tag_wraps_tags_in_code():
     from jasme_jats.report import md_tag
     assert md_tag("a <label> b <xref ref-type=\"fig\" rid=\"x\"> c") == "a `<label>` b `<xref ref-type=\"fig\" rid=\"x\">` c"
     assert md_tag("`<label>` と 1 < 2 > 0") == "`<label>` と 1 < 2 > 0"       # 囲み済み・タグでない < はそのまま
+
+
+def test_md_tag_leaves_angle_brackets_of_docx_text(journal, meta, tmp_path):
+    """H4: md_tag は、名前が JATS の要素名のタグの形だけを囲む。docx の文字を引用した文（10 章の警告の段落の抜粋など）の
+    「x<y かつ z>w」のような < > は変えない（以前は「x`<y かつ z>`w」になり、レポートの文字が docx と違って見えた）。"""
+    from jasme_jats.report import md_tag
+    assert md_tag("x<y かつ z>w") == "x<y かつ z>w"
+    assert md_tag("x<b かつ y>c") == "x<b かつ y>c"                       # 名前が JATS の要素名でも、属性の形でなければタグの形ではない
+    assert md_tag("a<label>b と <break/> と <fig id=\"…\">") == "a`<label>`b と `<break/>` と `<fig id=\"…\">`"
+    assert md_tag("<unknown-tag> と <xref ref-type=\"fig\" rid=\"F1\">") == "<unknown-tag> と `<xref ref-type=\"fig\" rid=\"F1\">`"
+    # 実際の変換: 引用文献の段落の中の改行の警告が、段落の文字の冒頭（20 字）を引用する。ツールの書いたタグ（改行の警告の <break/>）は囲まれる
+    import make_fixtures as mf
+    S = mf.S
+
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "架空の主張である。"),
+                mf.table([[mf.cell(mf.para(S["body"], "表の", mf.br(), "セル"))]])]
+    path = tmp_path / "h4.docx"
+    mf.make_article(path, "x<y かつ z>w の検証用文書", parts, refs=lambda b: [mf.para(S["ref"], "x<y かつ z>w", mf.br(), "続き")])
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok
+    [warn] = [w for w in res.warnings if "x<y かつ z>w" in w]
+    report = res.report_path.read_text(encoding="utf-8")
+    line = next(x for x in report.splitlines() if x.startswith("- ") and "x<y かつ z>w" in x and "改行" in x)
+    assert "「x<y かつ z>w" in line and "`" not in line.split("改行が要らなければ")[1]      # 警告の抜粋は docx のまま（囲まない）
+    assert "`<break/>`" in report                                              # ツールの書いたタグは囲む

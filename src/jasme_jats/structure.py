@@ -518,8 +518,13 @@ class Classifier:
                         f"後ろに{kind}見出しのスタイルの段落 {b.src}「{_para_text(b).strip()[:20]}」が続き、資料の見出しではなく、{after}、"
                         f"注の節ではなく本文の続き（表の注の見出しなど）とみなし、この段落から{kind}見出しの前までの {len(moved)} "
                         "ブロックを本文に戻した")
+                    # 戻した範囲の、注の番号で始まる段落（本当の注の一覧かもしれない。知らせの文に件数と抜粋を出す。H7）
+                    numbered = [x.src for x, _ in moved[1:] if isinstance(x, Para) and not in_shape(x) and self.note_starts(x)]
+                    if numbered:
+                        self.plan.fn_guess_numbered[head.src] = numbered
                     self.plan.fn_guess_checks.append(
-                        (head.src, "returned", f"{len(moved)} ブロックを本文に戻した（後ろの{kind}見出し {b.src}）"))
+                        (head.src, "returned", f"{len(moved)} ブロックを本文に戻した（後ろの{kind}見出し {b.src}）"
+                         + (f"。戻した範囲に注の番号で始まる段落が {len(numbered)} 件ある" if numbered else "")))
             if in_shape(b) and self.outside and ((b.float_id and b.float_id in self.outside)
                                                  or (b.textbox_id and b.textbox_id in self.outside)):
                 regions["body"].append((b, role))
@@ -1466,7 +1471,7 @@ class Classifier:
         used, used_tables, dissolved, entries, descs = set(), set(), set(), [], []
         for item in spec["items"]:
             caps = []
-            for src in item["caption"]:
+            for src in item.get("caption") or []:       # 検証（ai_assist._placement_problem）は falsy を空の一覧として通す
                 q = paras.get(src) or cell_paras[src]
                 if src in cells:
                     dissolved.add(cells[src].tid)
@@ -1475,7 +1480,7 @@ class Classifier:
                 caps.append(q)
                 used.add(q.src)
             image_paras, extra, tbls, mixed = [], [], [], []
-            for x in item["body"]:
+            for x in item.get("body") or []:
                 if x in tables:
                     tbls.append(tables[x])
                     used_tables.add(x)

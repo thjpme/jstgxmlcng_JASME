@@ -275,7 +275,10 @@ def test_unexpected_error_in_apply_answer(tmp_path, monkeypatch):
     assert "変換レポートは作られていません" in out[0] and str(report) not in out[0]     # 出力フォルダを消したので、前のレポートはない
     # 反映で落ちたときは、回答や入力を消す「変換する」の押し直しを勧めない。別に保存することと、開発者に知らせることを案内する（F15）
     # 前の結果を捨てたので手動の欄は隠れる。貼り付けた文字は欄に残る（views に answer がない）ので、そのとおりに案内する
-    assert out[2]["visible"] is False and "手動の欄" in out[0] and "隠れています" in out[0] and "欄に残っているはず" in out[0]
+    assert out[2]["visible"] is False and "手動の欄" in out[0] and "隠れています" in out[0] and "欄に残っています" in out[0]
+    # H5: 欄が隠れている間は保存できないので、「別の場所にも保存」は、欄が戻る「変換する」の案内の後に言う
+    assert out[0].index("隠れています") < out[0].index("「変換する」を押すと") < out[0].index("欄が戻ったら") < out[0].index("別の場所")
+    assert "欄に残っているはず" not in out[0] and "隠れています。貼り付けた回答" not in out[0]
     assert "もう一度「変換する」を押してください" not in out[0] and "使えなくなる" not in out[0]
     # レポートが残っているときも、サーバー側のパスは書かない（利用者は取り出せない）。この画面の変換レポートの全文を案内する
     st.res = types.SimpleNamespace(report_path=report)
