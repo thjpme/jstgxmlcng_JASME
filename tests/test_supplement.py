@@ -15,8 +15,9 @@ from jasme_jats import pdfdocx, pdfmatch, pipeline
 from jasme_jats.fidelity import (NUMBER_WHY, UNIT_WHY, UNTRACKED_WHY, UNWRITTEN_WHY, _pair, _unit_ends, source_texts,
                                  supplement_targets, verify_supplement)
 from jasme_jats.pipeline import Options, convert
-from test_pdfmatch import (FRONT, N10_TAIL, PUB12, REST, SMALL_FRONT, TALK, body_lines, convert_with_pages,
+from test_pdfmatch import (FRONT, N10_TAIL, PUB12, REST, SMALL_FRONT, TALK, body_lines, convert_with_pages, load,
                            n10_article, n10_pages)
+from test_pdfmatch import texts as xml_texts
 
 SUP_ROW = "出版版 PDF による補完の確かめ（ルート2）"
 
@@ -323,3 +324,132 @@ def test_source_texts_unchanged_by_check(journal, tmp_path):
     texts = source_texts(fx.path)
     verify_supplement(PDFCHECK, fx.path, fx.fixes, fx.check.case_srcs, fx.check.original, {})
     assert fx.path.read_bytes() == before and source_texts(fx.path) == texts
+
+
+# ---------------------------------------------------------------------------- 19. 全角・半角の直しと隣の空白の削除は連動する
+P1_DOCX = "授業の最初に確認した値 (３) の後ろで，生徒は話し合いを続け，その様子を記録した。"
+P1_PUB = "授業の最初に確認した値（３）の後ろで，生徒は話し合いを続け，その様子を記録した。"
+
+
+def p1_convert(tmp_path, monkeypatch, journal, meta, parts):
+    """本文の段落 parts（plain は P1_DOCX）を、P1_PUB（全角の括弧で、括弧の外に空白がない）の PDF で補う。"""
+    n10_article(tmp_path, journal, [("body", parts), ("body", TALK)])
+    pages = n10_pages([*SMALL_FRONT, *body_lines(P1_PUB), *body_lines(TALK), *N10_TAIL])
+    return convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "pdf", docx=tmp_path / "n10.docx")
+
+
+def p1_summary(res):
+    return [(f.kind, f.old, f.new, f.applied) for f in res.docx_fix.fixes if f.src == "d12"]
+
+
+def test_supplement_space_goes_with_width_when_fixed(journal, meta, tmp_path, monkeypatch):
+    """対照: 全角・半角の直しが通るときは、隣の空白の削除も今までどおり通る（「値 (３) の後ろ」→「値（３）の後ろ」）。
+    空白の削除は根拠の全角・半角の直しと同じ組（Fix.group）で、PdfCheck.drop_basis が根拠を示す。"""
+    pytest.importorskip("pypdfium2")
+    res = p1_convert(tmp_path, monkeypatch, journal, meta, P1_DOCX)
+    assert p1_summary(res) == [("space", " ", "", True), ("width", "(", "（", True), ("width", ")", "）", True),
+                               ("space", " ", "", True)]
+    assert res.docx_fix.check.drop_basis == {"d12": {11: {("width", 12)}, 15: {("width", 14)}}}
+    f = [f for f in res.docx_fix.fixes if f.src == "d12"]
+    assert f[0].group is f[1].group is not None and f[3].group is f[2].group is not None and f[0].group is not f[3].group
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.supplement.ok and res.ok
+    assert P1_PUB in xml_texts(load(res))
+
+
+def test_supplement_space_not_left_alone_inside_other_authors_insertion(journal, meta, tmp_path, monkeypatch):
+    """(b) 全角・半角にする括弧が、ほかの作成者の挿入（w:ins）の中にあって直せないとき、その外の隣の空白の削除だけが残らない
+    （「値 (３) の後ろ」が「値(３) の後ろ」になって、docx にも PDF にもない文字になり、補完の確かめが不合格になっていた）。
+    理由には、どの直しに連動して直さなかったかが出る。"""
+    pytest.importorskip("pypdfium2")
+    parts = ["授業の最初に確認した値 ", '<w:ins w:id="2" w:author="x"><w:r><w:t>(３)</w:t></w:r></w:ins>',
+             " の後ろで，生徒は話し合いを続け，その様子を記録した。"]
+    res = p1_convert(tmp_path, monkeypatch, journal, meta, parts)
+    fixes = [f for f in res.docx_fix.fixes if f.src == "d12"]
+    assert [(f.kind, f.old, f.applied) for f in fixes] == [("space", " ", False), ("width", "(", False),
+                                                           ("width", ")", False), ("space", " ", False)]
+    assert fixes[1].reason.startswith("直せない文字")
+    assert fixes[0].reason == f"全角・半角の直し「(」→「（」を直さないので、連動して直さない（その理由: {fixes[1].reason}）"
+    assert fixes[3].reason.startswith("全角・半角の直し「)」→「）」を直さないので")
+    assert not res.docx_fix.applied
+    assert res.fidelity.ok and res.fidelity.final_ok and res.supplement.ok and res.supplement.problems == []
+    assert P1_DOCX in xml_texts(load(res))
+
+
+def test_supplement_space_not_left_alone_when_structure_check_stops_width(journal, meta, tmp_path, monkeypatch):
+    """(a) 構造の確かめ（_lost → _protect → _kept）が「(」の全角・半角の直しを止めるとき（「(」の範囲にかかるリンクが崩れる
+    ものとして）、その前の空白の削除だけが残らない。「)」と後ろの空白は止められた範囲にかからないので、今までどおり直す。"""
+    pytest.importorskip("pypdfium2")
+    calls = []
+    orig = pdfdocx._lost
+
+    def lost(original, fixed):
+        calls.append(1)
+        found = orig(original, fixed)
+        if len(calls) == 1:
+            q = P1_DOCX.index("(")
+            found.append(("d12", (q, q + 1), pdfdocx.STRUCTURE_REASON, ""))
+        return found
+    monkeypatch.setattr(pdfdocx, "_lost", lost)
+    res = p1_convert(tmp_path, monkeypatch, journal, meta, P1_DOCX)
+    assert len(calls) >= 2
+    assert p1_summary(res) == [("space", " ", "", False), ("width", "(", "（", False), ("width", ")", "）", True),
+                               ("space", " ", "", True)]
+    space, width = [f for f in res.docx_fix.fixes if f.src == "d12"][:2]
+    assert width.reason == pdfdocx.STRUCTURE_REASON
+    assert space.reason == f"全角・半角の直し「(」→「（」を直さないので、連動して直さない（その理由: {pdfdocx.STRUCTURE_REASON}）"
+    assert res.fidelity.ok and res.supplement.ok and res.supplement.problems == []
+    assert "授業の最初に確認した値 (３）の後ろで，生徒は話し合いを続け，その様子を記録した。" in xml_texts(load(res))
+
+
+def test_supplement_space_not_left_alone_when_note_number_is_kept(journal, meta, tmp_path, monkeypatch):
+    """(c) ある注の番号を直すと注を認識できなくなるとき、すべての注の番号を docx のままにする（NOTE_REASON）。別の注の番号の
+    括弧を半角にする直し（PDF「注(注3)もある」）と、その前の空白の削除（docx「注 （注3）もある」）は、いっしょに直さない。
+    注の番号でない文字の全角・半角（箇条の番号）は今までどおり直す。"""
+    from conftest import NOTES
+    pytest.importorskip("pypdfium2")
+    src = tmp_path / "notes.docx"
+    with zipfile.ZipFile(NOTES) as zin, zipfile.ZipFile(src, "w") as zout:
+        for item in zin.infolist():
+            blob = zin.read(item.filename)
+            if item.filename == "word/document.xml":
+                text = blob.decode("utf-8")
+                assert text.count("注（注3）") == 1
+                blob = text.replace("注（注3）", "注 （注3）").encode("utf-8")
+            zout.writestr(item, blob)
+    pages = ["本文の大きさで書いた注番号1）と，角括弧の注番号［注2］がある文。\n"
+             "箇条の番号（1）と（2）は注へのリンクにしない。2 段落からなる注(注3)もある。\n"
+             "引用および参考文献\n試験三郎（2022）．「注の書き方」．『架空誌』，第3巻，pp.5-6．\n"
+             "注\n１）本文の大きさで書かれた注番号の注である。\n［注2］角括弧で書かれた注番号の注である。\n"
+             "３）2 段落からなる注の 1 段落目である。\n"]
+    monkeypatch.setattr(pdfmatch, "extract_pages", lambda path: pages)
+    (tmp_path / "dummy.pdf").write_bytes(b"%PDF-1.4\n")
+    res = convert(src, meta, journal, Options(out_dir=tmp_path / "o", pdf_path=tmp_path / "dummy.pdf", route="pdf",
+                                              convert_metafiles=False))
+    note = [f for f in res.docx_fix.fixes if f.src == "d13" and f.reason]
+    assert [(f.kind, f.old, f.new) for f in note] == [("space", " ", ""), ("width", "（", "("), ("width", "）", ")")]
+    assert note[1].reason == pdfdocx.NOTE_REASON
+    assert note[0].reason == f"全角・半角の直し「（」→「(」を直さないので、連動して直さない（その理由: {pdfdocx.NOTE_REASON}）"
+    assert ("d13", "(", "（") in {(f.src, f.old, f.new) for f in res.docx_fix.applied}
+    assert res.fidelity.ok and res.fidelity.final_ok and res.supplement.ok and res.supplement.problems == []
+    assert any("2 段落からなる注 （注3）もある。" in t for t in xml_texts(load(res)))
+
+
+def test_write_fixed_docx_spreads_reasons_in_group(journal, tmp_path):
+    """write_fixed_docx と _apply_paragraph は、組（Fix.group）の一部が直せない（既存の変更履歴の中など）と分かったとき、組の全部を
+    直さない。書き込みの前に決めるので、直せる側は書き込まれない。入力と書き出し先が同じファイルなら、書き込む前に ValueError。"""
+    src = tmp_path / "in.docx"
+    mf.make_article(src, "ページ番号の判定の検証用文書", lambda b: [
+        mf.para(mf.S["sec1"], "１．はじめに"),
+        mf.para(mf.S["body"], "値 ", '<w:ins w:id="2" w:author="x"><w:r><w:t>(</w:t></w:r></w:ins>', "３) の後ろ。")])
+    _, plan = pdfdocx._mechanical(src, journal)
+    s = next(k for k, p in plan.paras.items() if p.plain().startswith("値 "))
+    space, width = pdfdocx.Fix(s, 1, 2, "", "space", " "), pdfdocx.Fix(s, 2, 3, "（", "width", "(")
+    other = pdfdocx.Fix(s, 4, 5, "）", "width", ")")
+    pdfdocx.link_fixes(space, width, paired=True)
+    pdfdocx.write_fixed_docx(src, tmp_path / "out.docx", plan, [space, width, other])
+    assert [(f.applied, bool(f.reason)) for f in (space, width, other)] == [(False, True), (False, True), (True, False)]
+    assert "連動して直さない" in space.reason
+    before = src.read_bytes()
+    with pytest.raises(ValueError):
+        pdfdocx.write_fixed_docx(src, src, plan, [])
+    assert src.read_bytes() == before
