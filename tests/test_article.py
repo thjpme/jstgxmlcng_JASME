@@ -117,3 +117,113 @@ def test_ack_notes_app_display_elements_and_autonum(journal, meta, tmp_path):
     assert [x.get("list-type") for x in lists] == ["order", "bullet"]
     assert [txt(x) for x in lists[0].findall("list-item/label")] == ["5.", "6."]
     assert [txt(x) for x in lists[1].findall("list-item/p")] == ["資料の箇条"]
+
+
+# ----------------------------------------------------------------------------- 後付けの自動番号の段落（点検の F8・F9）
+def _tags(p):
+    """段落 p の中の要素（label を除く）の並び: ((タグ, 属性の名前)...)。リンクの種類（uri か ext-link か）まで見る。"""
+    return [(c.tag, tuple(sorted(k.split("}")[-1] for k in c.attrib))) for c in p.iter() if c is not p and c.tag != "label"]
+
+
+def test_autonum_items_in_back_sections_are_written_like_plain_paragraphs(journal, meta, tmp_path):
+    """F8: 付記・謝辞・資料の自動番号の段落（箇条）の中のリンク（URL・引用文献）は、その節の番号のない段落と同じ書き方になる
+    （付記・資料は <ext-link>、謝辞は本文と同じ <uri>。箇条だけ本文の書き方になっていた）。"""
+    import make_fixtures as mf
+    S = mf.S
+    cite = "試験（2024）に https://example.org/%s を見よ。"
+
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "本文。"),
+                mf.para(S["notes_head"], "付記"), mf.list_item(S["body"], "箇条 " + cite % "n1", num_id=7),
+                mf.para(S["body"], "段落 " + cite % "n2"),
+                mf.para(S["ack_head"], "謝辞"), mf.list_item(S["body"], "箇条 " + cite % "a1", num_id=7),
+                mf.para(S["body"], "段落 " + cite % "a2")]
+    appendix = [mf.para(S["abs"], "資料　ワークシート"), mf.list_item(S["body"], "箇条 " + cite % "p1", num_id=7),
+                mf.para(S["body"], "段落 " + cite % "p2")]
+    res, root = _convert_small(tmp_path, journal, meta, parts, appendix=appendix)
+    for sec in ("notes", "ack", "app"):
+        el = root.find(f".//{sec}")
+        [item] = el.findall(".//list-item/p")
+        [plain] = [p for p in el.findall("p") if "".join(p.itertext()).startswith("段落")]
+        assert _tags(item), sec
+        assert _tags(item) == _tags(plain), sec
+    # 付記・資料は ext-link、謝辞は uri（番号のない段落と同じ）
+    assert [len(root.find(f".//{s}").findall(".//list-item//ext-link")) for s in ("notes", "ack", "app")] == [1, 0, 1]
+    assert [len(root.find(f".//{s}").findall(".//list-item//uri")) for s in ("notes", "ack", "app")] == [0, 1, 0]
+
+
+def test_heading_with_autonum_in_back_sections_is_not_joined_to_lists(journal, meta, tmp_path):
+    """F9: 付記・謝辞・資料の中の、自動番号つきの見出しのスタイル（sec1・sec2）の段落は、前後の同じ番号の箇条の <list> にまとめない
+    （本文で見出しは節の見出しで、箇条にならない）。前後の箇条は別の <list> になり、見出しは番号を先頭に補った <p> になる
+    （番号は生成した文字。docx の文字は変えない）。"""
+    import make_fixtures as mf
+    S = mf.S
+
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "本文。"),
+                mf.para(S["notes_head"], "付記"), mf.list_item(S["body"], "付記の項目一", num_id=7),
+                mf.list_item(S["sec2"], "付記の中の見出し", num_id=7), mf.list_item(S["body"], "付記の項目二", num_id=7),
+                mf.para(S["ack_head"], "謝辞"), mf.list_item(S["body"], "謝辞の項目一", num_id=7),
+                mf.list_item(S["sec1"], "謝辞の中の見出し", num_id=7), mf.list_item(S["body"], "謝辞の項目二", num_id=7)]
+    appendix = [mf.para(S["sec1"], "資料　ワークシート"), mf.list_item(S["body"], "資料の項目一", num_id=7),
+                mf.list_item(S["sec1"], "資料の中の見出し", num_id=7), mf.list_item(S["body"], "資料の項目二", num_id=7),
+                mf.list_item(S["body"], "資料の項目三", num_id=7)]
+    res, root = _convert_small(tmp_path, journal, meta, parts, appendix=appendix)
+
+    def txt(e):
+        return "".join(e.itertext())
+    for sec, head, wrap in (("notes", "付記の中の見出し", False), ("ack", "謝辞の中の見出し", True), ("app", "資料の中の見出し", False)):
+        el = root.find(f".//{sec}")
+        lists = el.findall("p/list") if wrap else el.findall("list")
+        assert len(lists) == 2, sec                                      # 見出しの前と後ろで別の <list>
+        assert all(head not in txt(x) for x in lists), sec               # 見出しは箇条の中に入らない
+        [h] = [p for p in el.findall("p") if head in txt(p)]
+        assert txt(h).endswith(head) and txt(h)[:-len(head)].strip().rstrip(".").isdigit(), (sec, txt(h))
+    # 見出しの後ろの箇条は、見出しで切れた新しい <list> から始まる（資料は 2 つの項目が同じ <list>）
+    assert [len(x.findall("list-item")) for x in root.find(".//app").findall("list")] == [1, 2]
+    assert [len(x.findall("list-item")) for x in root.find(".//notes").findall("list")] == [1, 1]
+    # 見出しの数字は生成した文字（jx:gen）で、docx の文字ではない（不変性チェックは合格している）
+    assert res.fidelity.ok and res.fidelity.final_ok
+
+
+# ----------------------------------------------------------------------------- 判断の記録の数え方（点検の F11）
+def test_decide_cost_does_not_grow_with_decisions(journal, tmp_path, monkeypatch):
+    """F11: 判断の番号を数えるために、判断のたびに判断の一覧を頭から数え直さない（枝番のある大きな論文で 2 乗の時間になった）。
+    枝番つきのキャプションの論文に、リンクしない参照の判断を 600 件作らせ、判断の一覧を読んだ回数（要素数）を数える。"""
+    import make_fixtures as mf
+    from jasme_jats.pipeline import _mechanical
+    S = mf.S
+    n_paras = 600
+    count = [0]
+
+    class Counting(list):
+        def __iter__(self):
+            for x in super().__iter__():
+                count[0] += 1
+                yield x
+
+    orig = article.ArticlePlan.__init__
+
+    def init(self, *a, **kw):
+        orig(self, *a, **kw)
+        self.decisions = Counting(self.decisions)
+    monkeypatch.setattr(article.ArticlePlan, "__init__", init)
+
+    def parts(b):
+        out = [mf.para(S["sec1"], "１．はじめに")]
+        for k in (1, 2):
+            rid = b.add_image(f"f11_{k}.png", mf.png_bytes(f"F11 {k}"))
+            out += [mf.para(S["body"], mf.drawing(rid, 2880000, 1800000, 970 + k), jc="center"), mf.para(S["fig_cap"], f"図1-{k}　架空の図")]
+        out += [mf.para(S["body"], f"段落{i}の本文。図1-2を見る。") for i in range(n_paras)]
+        return out
+    path = tmp_path / "f11.docx"
+    mf.make_article(path, "判断の数え方の検証用文書", parts)
+    _, plan, _ = _mechanical(path, journal)
+    n = len(plan.decisions)
+    assert n >= n_paras
+    # 判断の一覧を 1 回ずつ読む程度（件数の定数倍）。判断のたびに数え直すと n*n/2 以上になる
+    assert count[0] < 10 * n, (count[0], n)
+    # 番号は段階ごとに 1 から連番で、重ならない
+    for stage in {d.stage for d in plan.decisions}:
+        nums = [int(d.did[2:]) for d in plan.decisions if d.stage == stage]
+        assert nums == list(range(1, len(nums) + 1)), stage

@@ -797,3 +797,41 @@ def test_float_refs_branch_rules(plain, skip, want_links, want_unlinked):
     assert got == want_links
     assert [t for _, _, t in plan.float_unlinked] == want_unlinked
     assert q.plain() == plain
+
+
+# ---- F12: 枝番の区切りは 1 か所の定義（structure.CAP_BRANCH_SEP）。キャプションの枝番・<label> の切り方・参照の枝番が一致する
+BRANCH_SEPS = ["-", "‐", "‑", "‒", "–", "—", "―", "−", ".", "－", "．"]
+
+
+@pytest.mark.parametrize("sep", BRANCH_SEPS)
+def test_branch_separator_is_one_definition(sep):
+    """枝番とみなすキャプションの番号（structure.caption_label）・<label> に切り分ける番号（builder.RE_LABEL_SPLIT）・参照の枝番
+    （linker.RE_BRANCH_REF）が、同じ区切りで枝番を読む（en ダッシュなどでキャプションは枝番とみなすのに <label> は「図1」で切っていた）。"""
+    from jasme_jats.builder import RE_LABEL_SPLIT
+    from jasme_jats.linker import RE_BRANCH_REF
+    from jasme_jats.structure import RE_FIGCAP, caption_label
+    cap = f"図1{sep}2　架空の図"
+    assert caption_label(Para(src="d1", atoms=[Atom(kind="text", text=cap)]), RE_FIGCAP) == (1, True)
+    assert RE_LABEL_SPLIT.match(cap).group(2) == f"図1{sep}2"
+    assert RE_BRANCH_REF.match(f"{sep}2") is not None
+
+
+@pytest.mark.parametrize("split", [True, False])
+def test_en_dash_branch_caption_label_and_links(split, journal, meta, tmp_path):
+    """キャプション「図1–2」（en ダッシュ）は枝番なので、<label> も「図1–2」で切り（split_labels のとき）、参照「図1–2」「図1」は
+    リンクせず要確認で知らせる。split_labels=False では <label> を作らず、キャプションの文字は変わらない。"""
+    body = [mf.para(S["body"], "図1–2を見る。図1も見る。図3を見る。")]
+    path = floats_article(tmp_path, body, ["図1–1　最初の図", "図1–2　次の図", "図3　別の図"])
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False, split_labels=split))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    root = load(res)
+    caps = ["".join(c.itertext()) for c in root.iter("caption")]
+    if split:
+        assert [text(x) for x in root.iter("label") if text(x).startswith("図")] == ["図1–1", "図1–2", "図3"]
+        assert caps == ["最初の図", "次の図", "別の図"]
+    else:
+        assert not [x for x in root.iter("label") if text(x).startswith("図")]
+        assert caps == ["図1–1　最初の図", "図1–2　次の図", "図3　別の図"]
+    assert float_links(root, "図1–2を見る") == [("図3", "fig", "F3")]
+    assert sorted(t for _, _, t in res.plan.float_unlinked) == ["図1", "図1–2"]
+    assert "float_ref" in [a.key for a in actions(res)]
