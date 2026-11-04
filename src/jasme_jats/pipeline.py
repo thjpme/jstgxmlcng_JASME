@@ -45,7 +45,7 @@ from .jstage_rules import check as jstage_check
 from .linker import cited_refs, link
 from .model import Decision, LostImage
 from .package import article_dir, make_zip, unzipped_files, write_package, zip_image_names, zip_problems
-from .pdfdocx import DocxFix, make_fixed_docx
+from .pdfdocx import DocxFix, make_fixed_docx, same_file
 from .pdfmatch import PdfCheck, check_pdf
 from .report import (BOX_PENDING_NOTE, NEEDS_ACTION, actions, figure_body_detail, images_to_prepare, render,
                      render_ai_only)
@@ -299,6 +299,22 @@ def _mechanical(docx_path, journal, overrides=None, placements=None):
     return doc, plan, linker
 
 
+def fixed_docx_path(docx_path, out_dir, article_id: str) -> Path:
+    """ルート2 の、出版版 PDF で補った docx の書き出し先。出力フォルダの「<記事 ID>_PDFで補完した原稿.docx」。
+
+    入力の docx がそのファイル（利用者が前回の補った docx を保存して、同じ出力フォルダでかけ直した）なら、入力を読みながら
+    上書きして壊してしまうので、末尾に番号を付けた別の名前（「…_PDFで補完した原稿_2.docx」…）にする。別の名前は、入力とも、
+    すでにあるファイルとも重ならないものにする。"""
+    out_dir = Path(out_dir)
+    path = out_dir / f"{article_id}_PDFで補完した原稿.docx"
+    n = 1
+    if same_file(docx_path, path):
+        while path.exists():            # 入力とも、すでにあるファイルとも重ならない名前
+            n += 1
+            path = out_dir / f"{article_id}_PDFで補完した原稿_{n}.docx"
+    return path
+
+
 def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options) -> Result:
     docx_path = Path(docx_path)
     out_dir = Path(opts.out_dir)
@@ -312,7 +328,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         # ルート2: 出版版 PDF で補った docx（変更履歴つき）を作り、以降はそれを変換する
         if not opts.pdf_path:
             raise ValueError("docx から作り、出版版 PDF で補う（ルート2）には、記事の PDF が必要です")
-        fixed = out_dir / f"{meta.article_id(journal)}_PDFで補完した原稿.docx"
+        fixed = fixed_docx_path(docx_path, out_dir, meta.article_id(journal))
         docx_fix = make_fixed_docx(docx_path, opts.pdf_path, fixed, journal)
         if docx_fix.check.ok:
             docx_path = fixed

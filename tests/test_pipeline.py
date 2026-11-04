@@ -1087,3 +1087,35 @@ def test_body_line_break_is_only_listed(journal, meta, tmp_path):
     ch6 = chapter(report, 6)
     assert "隠し文字（Word で非表示に設定された文字）: ［" in ch6 and "上の隠し文字のうち" not in ch6
     assert load(res).find(".//body//break") is None
+
+
+def test_route2_rerun_on_its_own_fixed_docx_keeps_input(journal, meta, tmp_path):
+    """入力の docx が出力フォルダの「…_PDFで補完した原稿.docx」そのもの（補った docx を保存して、同じ出力フォルダでルート2 を
+    かけ直した）でも、入力を壊さずに変換が終わり、補った docx は別の名前（末尾に番号）で作る。レポート・Result に記録される
+    パスは実際のもの。さらにかけ直すと、既にあるファイルと重ならない次の番号になる。"""
+    pytest.importorskip("pypdfium2")
+    from conftest import PDFCHECK, PDFCHECK_PDF
+    from jasme_jats import pdfdocx
+    from jasme_jats.pipeline import fixed_docx_path
+    out = tmp_path / "out"
+    opts = Options(out_dir=out, pdf_path=PDFCHECK_PDF, route="pdf", convert_metafiles=False)
+    first = convert(PDFCHECK, meta, journal, opts)
+    fixed = first.docx_fix.path
+    assert fixed.name == "31_1_PDFで補完した原稿.docx" and fixed.parent == out
+    before = fixed.read_bytes()
+    second = convert(fixed, meta, journal, opts)
+    assert fixed.read_bytes() == before and zipfile.is_zipfile(fixed)          # 入力は壊れない
+    assert second.docx_fix is not None and second.docx_fix.path == out / "31_1_PDFで補完した原稿_2.docx"
+    assert second.docx_fix.path.is_file() and zipfile.is_zipfile(second.docx_fix.path)
+    assert second.fidelity.ok and second.fidelity.final_ok and second.dtd_valid
+    assert second.supplement is not None and second.supplement.ok
+    assert "31_1_PDFで補完した原稿_2.docx" in second.report_path.read_text(encoding="utf-8")
+    third = convert(fixed, meta, journal, opts)
+    assert third.docx_fix.path == out / "31_1_PDFで補完した原稿_3.docx" and fixed.read_bytes() == before
+    # 入力が別の場所なら、今までどおりの名前
+    assert fixed_docx_path(PDFCHECK, out, "31_1") == fixed
+    assert fixed_docx_path(fixed, out, "31_1") == out / "31_1_PDFで補完した原稿_4.docx"
+    # 書き出し先が入力と同じファイルなら、書き込む前に止める（入力を壊さない）
+    with pytest.raises(ValueError):
+        pdfdocx.write_fixed_docx(fixed, fixed, second.plan, [])
+    assert fixed.read_bytes() == before

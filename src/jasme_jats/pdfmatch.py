@@ -332,6 +332,10 @@ class PdfCheck:
     unmatched: list = field(default_factory=list)   # PDF の中に見つからなかった段落の src
     width: dict = field(default_factory=dict)       # src -> {plain 上の位置: PDF の文字}
     drops: dict = field(default_factory=dict)       # src -> {plain 上の位置（落とす半角の空白）}
+    # 空白を落とす根拠: src -> {落とす空白の位置: {根拠}}。根拠は ("width", 全角・半角を直す文字の plain 上の位置)（width の文字の
+    # すぐ隣）か ("number", 種類, ID)（Word が付ける番号のすぐ隣。numbers の鍵と同じ）。ルート2 の pdfdocx.plan_fixes が、
+    # 空白の削除を根拠の全角・半角の直しと連動させる（どちらかを直さないときは両方を直さない）
+    drop_basis: dict = field(default_factory=dict)
     diffs: list = field(default_factory=list)       # TextDiff
     numbers: dict = field(default_factory=dict)     # Word が付ける番号: (種類, 段落 ID または注の鍵) -> {番号の中の位置: PDF の文字}
     original: dict = field(default_factory=dict)    # Word が付ける番号の元の文字列: (種類, ID) -> 文字列
@@ -2586,7 +2590,7 @@ def _classify(p, seq, gens, win, ops, unsure, st: PdfStream, owner, owned_lines,
     _report_regions(p, seq, gens, st, win, regions, mine, used, locked, forced, width, res, case=case)
     if width:
         res.width[p.src] = {seq[i][1]: c for i, c in width.items()}
-    drops = set()
+    drops = {}        # 落とす空白の位置 -> 根拠（PdfCheck.drop_basis）
     for i in set(width) | numbers:
         for j, k in ((i - 1, i), (i, i + 1)):          # 前の文字との間・後ろの文字との間
             if j < 0 or k >= len(seq) or j not in d2w or k not in d2w or d2w[k] != d2w[j] + 1:
@@ -2604,9 +2608,13 @@ def _classify(p, seq, gens, win, ops, unsure, st: PdfStream, owner, owned_lines,
                 continue
             pk = d2w[k]
             if not _pdf_space(st, pk):
-                drops.update(x for x in gap if x not in locked)
+                basis = ("width", seq[i][1]) if i in width else ("number", *gens[i][:2])
+                for x in gap:
+                    if x not in locked:
+                        drops.setdefault(x, set()).add(basis)
     if drops:
-        res.drops[p.src] = drops
+        res.drops[p.src] = set(drops)
+        res.drop_basis[p.src] = drops
     return tail_short
 
 
