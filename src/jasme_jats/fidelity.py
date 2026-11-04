@@ -223,10 +223,22 @@ def final_check(tracked_root, final_bytes: bytes, res: FidelityResult):
     etree.strip_elements(t, DROP, with_tail=False)
     expected = "".join(t.itertext())
     parser = etree.XMLParser(load_dtd=False, no_network=True, resolve_entities=False, huge_tree=True)
-    final = etree.fromstring(final_bytes, parser)
+    try:
+        final = etree.fromstring(final_bytes, parser)
+    except etree.XMLSyntaxError as e:
+        res.final_ok, res.final_detail = False, f"最終出力が XML として読めない: {e}"
+        return False
     got = "".join(final.itertext())
     res.final_ok = expected == got
     res.final_detail = "" if res.final_ok else _diff(expected, got)
+    # 実体を解決する通常のパーサでも読めること（DOCTYPE の内部サブセットで定義した実体は、上の resolve_entities=False では
+    # 実体参照のまま通り、文字としては数えられない。外部実体とネットワークは読まない）。読めなければ最終出力の不合格として、
+    # 要対応に乗せる
+    try:
+        etree.fromstring(final_bytes, etree.XMLParser(load_dtd=False, no_network=True, resolve_entities=True, huge_tree=True))
+    except etree.XMLSyntaxError as e:
+        res.final_ok = False
+        res.final_detail = f"最終出力が XML として読めない（実体参照などの不備）: {e}" + (f"。{res.final_detail}" if res.final_detail else "")
     return res.final_ok
 
 
