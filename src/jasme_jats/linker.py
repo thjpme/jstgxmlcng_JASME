@@ -1,7 +1,9 @@
 """機械的なリンク付け（生成 AI は使わない）。
 
   図・表   : 本文中の「図1」「表2」「Figure 1」などを <xref ref-type="fig|table">。「図」「表」の直前が漢字（前掲・乃至・及を
-             除く）なら、語の一部（地図1・付表1・発表1回目）とみなしてリンクしない
+             除く）なら、語の一部（地図1・付表1・発表1回目）とみなしてリンクしない。同じ種類のキャプションの番号が重なる・キャプションに
+             枝番がある（図1-1・図1-2）ときは、その番号の参照と、番号のすぐ後ろに枝番が続く参照（図1-2）をリンクしない（どの図か決め
+             られない。plan.float_unlinked に記録し、要確認で知らせる）
   数式     : 「式(1)」「(1)式」を <xref ref-type="disp-formula">
   注       : 上付きの「1)」「注1」などを <xref ref-type="fn">。数字だけの上付きは、論文の注番号の書き方（Linker.bare_notes）と、
              指数・単位の形（cm²・x²・s⁻¹）かどうかで決める
@@ -10,7 +12,8 @@
 
 リンクはアトムの範囲に LinkSpec を付けるだけで、文字列は変えない。リンクにしなかった上付きの数字・語の中の図表番号は、その番号の
 注・図表があれば、判断の一覧（Decision。applied=False）に記録する（レポートの 4 章と AI 依頼文の「推定:」に載る。要対応・要確認には
-しない）。
+しない。ただし、番号が重なる・枝番のある図・表の参照をリンクしなかったものは、誤ったリンクを出さないための判断なので、要確認で知らせる。
+report._float_ref_action）。
 """
 from __future__ import annotations
 
@@ -20,6 +23,7 @@ from typing import NamedTuple
 
 from .article import ArticlePlan, BoxNode, FigNode, FormulaNode, ListNode, PNode, QuoteNode, Sec, TableNode
 from .model import OBJ, Atom, LinkSpec, Para
+from .structure import RE_FIGCAP, RE_TABCAP, caption_label
 
 # URL（末尾の句読点・閉じ括弧は含めない）
 RE_URL = re.compile(r"(?:https?://|www\.)[^\s<>\"'「」『』、。，（）［］【】〔〕\u3000]+", re.I)
@@ -52,6 +56,8 @@ RE_EXP_BEFORE = re.compile(r"[A-Za-zＡ-Ｚａ-ｚ0-9０-９α-ωΑ-Ωµ\u00c5\u
 # 「図1」「表1」の直前に来てよい漢字（前掲図1・乃至図2・及表1）。ほかの漢字の直後は語の一部（地図1・付表1・発表1回目）
 FLOAT_REF_OK_BEFORE = "掲至及"
 RE_KANJI = re.compile(r"[\u3400-\u9fff々]")    # RE_FN_PLAIN の「注」の前の漢字と同じ範囲
+# 図・表の参照の番号のすぐ後ろの枝番（「図1-2」「図2.1」。キャプションの枝番〈structure.RE_CAP_BRANCH〉と同じ区切り）
+RE_BRANCH_REF = re.compile(rf"[-\u2010-\u2015\u2212－.．]{NUM}")
 
 
 def fw_int(s: str) -> int:
@@ -127,6 +133,8 @@ def body_paragraphs(plan: ArticlePlan):
 
     docx の表のセルの段落を表の外に出したもの（表のセルの画像とキャプションで組んだ図のキャプションと、画像と同じ段落の文字。
     plan.cell_paras）は、今までどおり cell とする（出版版 PDF との照合で、表のセルとして照合しない・直さない。pdfmatch）。
+    図・表のキャプションの 2 段落目以降（caption_more。出典の行など）も、キャプションと同じ文脈 caption で返す（引用・URL・注番号を
+    リンクにし、出版版 PDF との照合にも入れる）。
     囲み（文字だけのテキストボックス。BoxNode）の段落も cell とする（別行数式は formula。リンクは本文と同じく付ける。出版版 PDF
     との照合では、テキストボックスの段落として照合しない・ルート2 で直さない。0.24.1 と同じ扱い）。
     """
@@ -149,12 +157,16 @@ def body_paragraphs(plan: ArticlePlan):
             elif isinstance(node, FigNode):
                 if node.caption is not None:
                     yield node.caption, "cell" if node.caption.src in cells else "caption"
+                for p in node.caption_more:
+                    yield p, "cell" if p.src in cells else "caption"
                 for t in node.tables:
                     for p in t.paragraphs():
                         yield p, "cell"
             elif isinstance(node, TableNode):
                 if node.caption is not None:
                     yield node.caption, "caption"
+                for p in node.caption_more:
+                    yield p, "cell" if p.src in cells else "caption"
                 if node.table is not None:
                     for p in node.table.paragraphs():
                         yield p, "cell"
@@ -201,23 +213,25 @@ class Linker:
             self.word_hyperlinks(p, where)
         for p, where in paras:
             self.urls(p, where)
-        fig_ids = {f.number: f.fid for f in plan.figures if f.number is not None and f.fid}
-        tab_ids = {t.number: t.tid for t in plan.tables if t.number is not None and t.tid}
+        # 図・表のキャプションの番号が重なるとき、枝番があるときは、その番号の参照をリンクしない（float_numbers）
+        fig_ids, fig_skip, fig_branch = self.float_numbers(plan.figures, RE_FIGCAP, "fid", "図")
+        tab_ids, tab_skip, tab_branch = self.float_numbers(plan.tables, RE_TABCAP, "tid", "表")
         eq_ids = {}
         for f in plan.formulas:
             if f.fid and f.label:
                 eq_ids[re.sub(r"[\s\u3000()（）]", "", unicodedata.normalize("NFKC", f.label))] = f.fid
         fn_ids = {fn.number: fn.fid for fn in plan.fns if fn.number is not None and not fn.word_note}
         captions = {id(f.caption) for f in plan.figures if f.caption is not None} | \
-                   {id(t.caption) for t in plan.tables if t.caption is not None}
+                   {id(t.caption) for t in plan.tables if t.caption is not None} | \
+                   {id(q) for f in plan.figures for q in f.caption_more} | {id(q) for t in plan.tables for q in t.caption_more}
         if fn_ids:
             self.bare_notes = self.note_style(paras)
         for p, where in paras:
             if where == "ref":
                 continue
             if id(p) not in captions:
-                self.float_refs(p, RE_FIGREF, fig_ids, "fig", "図")
-                self.float_refs(p, RE_TABREF, tab_ids, "table", "表")
+                self.float_refs(p, RE_FIGREF, fig_ids, "fig", "図", fig_skip, fig_branch)
+                self.float_refs(p, RE_TABREF, tab_ids, "table", "表", tab_skip, tab_branch)
             if where != "formula":
                 self.eq_refs(p, eq_ids)
             if where not in ("fn",):
@@ -303,7 +317,31 @@ class Linker:
                 if apply_span(p, s, e, spec):
                     self.count["doi"] += 1
 
-    def float_refs(self, p: Para, regex, ids, ref_type, word):
+    def float_numbers(self, nodes, regex, id_attr: str, word: str) -> tuple:
+        """図または表の参照のリンク先を、キャプションの番号から決める: (番号 -> ID, リンクしない番号 -> (キャプションの冒頭の一覧,
+        枝番つきのキャプションがあるか), 枝番つきのキャプションが 1 つでもあるか)。
+
+        同じ種類のキャプションの番号が重なる（図1・図1。図1-1・図1-2 は枝番を読まないと両方「図1」）番号と、枝番つきのキャプション
+        〈structure.caption_label〉の番号（整数部分。図2.1 の「2」）は、どのキャプションへの参照か決められないので、リンク先にせず
+        リンクしない番号（float_refs が記録して要確認で知らせる）にする。枝番つきのキャプションが 1 つでもあるときは、その種類の
+        参照の「図1-2」を範囲とは読まない（float_refs の branch）。"""
+        caps = {}
+        for node in nodes:
+            if node.number is None or not getattr(node, id_attr):
+                continue
+            n, branch = caption_label(node.caption, regex) if node.caption is not None else (None, False)
+            caps.setdefault(node.number if n is None else n, []).append((node, branch))
+        ids, skip = {}, {}
+        for n, items in caps.items():
+            if len(items) > 1 or any(branch for _, branch in items):
+                heads = [(_para_head(node.caption) if node.caption is not None else getattr(node, id_attr))
+                         for node, _ in items]
+                skip[n] = (heads, any(branch for _, branch in items))
+            else:
+                ids[n] = getattr(items[0][0], id_attr)
+        return ids, skip, any(branch for items in caps.values() for _, branch in items)
+
+    def float_refs(self, p: Para, regex, ids, ref_type, word, skip=None, branch=False):
         """「図1」「表1、2」などを図・表へのリンクにする（regex は RE_FIGREF・RE_TABREF）。
 
         「図」「表」の直前の文字が漢字で FLOAT_REF_OK_BEFORE（前掲・乃至・及）に入らなければ、語の一部（地図1・付表1・発表1回目・
@@ -316,7 +354,11 @@ class Linker:
         直後なので、直前の数字を指数の底とはみなさない〈_exponent_like〉。「1)」などの形なら注番号で、番号だけの数字は論文の注番号の
         書き方による）。先頭の番号の途中で切ったときは、上付きの文字の後ろの並びの番号（「図1¹、2」の「、2」）はリンクしない（「図1¹と
         図2」の「図2」は、上付きの手前から探し直すので、次の参照としてリンクする）。
+        skip・branch は float_numbers の結果で、番号が skip にある参照はリンクしない。branch が真（枝番つきのキャプションがある論文）
+        のときは、番号のすぐ後ろに枝番の形（RE_BRANCH_REF。「図1-2」「図2.1」）が続く参照を、範囲（図1〜図2）ではなく 1 つの枝番の
+        参照とみなして、リンクしない。リンクしなかった参照は _unlinked が判断の一覧と plan.float_unlinked に記録する。
         """
+        skip = skip or {}
         plain = p.plain()
         sup = _sup_chars(p)
         pos = 0
@@ -330,13 +372,50 @@ class Linker:
                     self._word_part(p, plain, s, e, prev, n, ids[n], ref_type, word)
                 pos = e
                 continue
-            self._link_num(p, s, e, n, ids, ref_type, word, plain[s:end])
+            # 番号の並び: [(開始, 終了)]。先頭の番号の途中で切ったときは plain[base:end] が空になり、並びの番号はリンクしない
+            nums = [(m.start(2), e)]
             if m.group(3):
-                base = m.start(3)       # 先頭の番号の途中で切ったときは plain[base:end] が空になり、並びの番号はリンクしない
-                for t in re.finditer(NUM, plain[base:end]):
-                    self._link_num(p, base + t.start(), base + t.end(), fw_int(t.group(0)), ids, ref_type, word,
-                                   plain[s:end])
-            pos = end
+                base = m.start(3)
+                nums += [(base + t.start(), base + t.end()) for t in re.finditer(NUM, plain[base:end])]
+            context = plain[s:end]
+            last, skip_next = end, False
+            for k, (a, b) in enumerate(nums):
+                if skip_next:
+                    skip_next = False       # 直前の枝番つきの参照の、枝番の数字
+                    continue
+                n = fw_int(plain[a:b])
+                start = s if k == 0 else (a - 1 if plain[a - 1:a] == word else a)
+                br = RE_BRANCH_REF.match(plain, b) if branch else None
+                if br is not None and any(i in sup for i in range(br.start(), br.end())):
+                    br = None
+                if br is not None:
+                    skip_next = k + 1 < len(nums) and nums[k + 1][0] == br.start() + 1
+                    last = max(last, br.end())
+                    self._unlinked(p, plain, start, br.end(), n, ref_type, word, skip, branched=True)
+                elif n in skip:
+                    self._unlinked(p, plain, start, b, n, ref_type, word, skip)
+                else:
+                    self._link_num(p, s if k == 0 else a, b, n, ids, ref_type, word, context)
+            pos = last
+
+    def _unlinked(self, p, plain, s, e, n, ref_type, word, skip, branched=False):
+        """番号からどの図・表か決められず、リンクしなかった参照（plain[s:e]。「図1」「図1-2」）を、判断の一覧（applied=False）と
+        plan.float_unlinked に記録する（要確認で知らせる。report の _float_ref_action）。n は参照の番号（枝番の前の整数）。"""
+        text = plain[s:e]
+        heads, has_branch = skip.get(n, ([], False))
+        caps = "、".join(f"「{h}」" for h in heads[:3]) + ("ほか" if len(heads) > 3 else "")
+        if branched:
+            why = (f"番号のすぐ後ろに枝番が続く形なので、枝番つきの{word}の参照とみなし（この論文には枝番つきの{word}のキャプションが"
+                   f"ある）、{word}{n} から続く範囲とは読まず、どの{word}か決められないので")
+        elif has_branch:
+            why = f"{word}{n} のキャプションに枝番がある（{caps}）ので、どの枝番の{word}への参照か決められず"
+        else:
+            why = f"{word}{n} のキャプションが複数ある（{caps}）ので、どの{word}への参照か決められず"
+        op = "link_figure" if ref_type == "fig" else "link_table"
+        self.note("figure" if ref_type == "fig" else "table", p.src,
+                  f"「{text}」は、{why}、リンクしなかった。手で確かめ、リンクが必要なら、AI による補完の {op}（text「{text}」、"
+                  f"occurrence {occurrence_at(p, s, text)}）でリンクできる", applied=False)
+        self.plan.float_unlinked.append((word, p.src, text))
 
     def _word_part(self, p, plain, s, e, prev, n, rid, ref_type, word):
         """語の一部とみなしてリンクしなかった図・表の参照（plain[s:e]。「図1」）を、判断の一覧に記録する。"""
@@ -451,6 +530,11 @@ class Linker:
             if apply_span(p, s, e, LinkSpec(kind="xref", attrs={"ref-type": "fn", "rid": rid})):
                 self.count["fn"] += 1
                 self.note("note", p.src, f"上付きでない注番号「{m.group(0)}」を注 {rid} にリンクした")
+
+
+def _para_head(p: Para) -> str:
+    """キャプションの冒頭（判断の一覧に書く目印。先頭の 12 文字）。"""
+    return p.plain().strip()[:12]
 
 
 def occurrence_at(p: Para, pos: int, text: str) -> int:

@@ -878,3 +878,70 @@ def test_near_image_counts_two_elements(between, kind, journal, meta, tmp_path):
     row = ("| テキストボックスの文字（4 章・6 章・10 章） | 図の注記として除外 1 件 |" if kind == "label"
            else "| テキストボックスの文字（3 章・4 章・6 章） | 決められずに除外 1 件（要確認） |")
     assert row in res.report_path.read_text(encoding="utf-8").split("## 2.")[0]
+
+
+# ---- K5: 本文スタイルの「注」だけの段落（表の注の見出しなど）で、後付けに切り替えたまま本文に戻らない
+def table_note_article(tmp_path, tail, note_style=None):
+    """表の後ろに本文スタイル（既定。note_style で変える）の「注」だけの段落と注の説明があり、その後ろに tail（XML の一覧）が続く小さな論文。"""
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "表1に結果を示す。"),
+                mf.para(S["tab_cap"], "表1　架空の表"),
+                mf.table([[mf.cell("観点"), mf.cell("内容")], [mf.cell("架空"), mf.cell("内容")]]),
+                mf.para(note_style or S["body"], "注"), mf.para(S["body"], "表の下の説明である。"),
+                mf.para(S["body"], "もう一つの説明である。"), *tail]
+    path = tmp_path / "k5.docx"
+    mf.make_article(path, "表の注の検証用文書", parts)
+    return path
+
+
+def test_table_note_heading_returns_to_body(journal, meta, tmp_path):
+    """本文スタイルの「注」だけの段落（表の注の見出し）の後ろに章見出しのスタイルの段落が現れたら、文字から推定した注の節ではなく
+    本文の続きとして、「注」の段落から章見出しの前までを本文に戻す（今までは以降の章見出し・本文がすべて 1 件の注の段落になった）。
+    判断の一覧に記録する。文字は 1 文字も変わらない（不変性チェック合格）。"""
+    tail = [mf.para(S["sec1"], "２．おわりに"), mf.para(S["body"], "終わりの本文である。"),
+            mf.para(S["sec2"], "（１）まとめ"), mf.para(S["body"], "まとめの本文である。")]
+    path = table_note_article(tmp_path, tail)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
+    root = load(res)
+    assert root.find(".//fn-group") is None and res.plan.fns == []
+    secs = list(root.find("body"))
+    assert [text(s.find("title")) for s in secs] == ["１．はじめに", "２．おわりに"]
+    assert [text(q) for q in secs[0].findall("p")] == ["表1に結果を示す。", "注", "表の下の説明である。", "もう一つの説明である。"]
+    assert [text(q) for q in root.iter("title") if text(q) == "（１）まとめ"] == ["（１）まとめ"]
+    [d] = [d for d in res.plan.decisions if "本文に戻した" in d.message]
+    assert d.category == "style" and d.applied and res.plan.paras[d.src].plain() == "注" and "3 ブロック" in d.message
+    assert {res.plan.region[s] for s, q in res.plan.paras.items() if q.plain() in ("注", "表の下の説明である。")} == {"body"}
+
+
+@pytest.mark.parametrize("note_style", [None, S["sec1"]], ids=["body-style", "sec1-style"])
+def test_real_notes_section_stays(note_style, journal, meta, tmp_path):
+    """対照: 「注」の後ろに注が並び、引用文献の見出し（スタイル）が続く原稿は、今までどおり注の節（fn-group）になる。「注」が本文
+    スタイルでも章見出しのスタイルでも同じ。"""
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "架空の主張である。"),
+                mf.para(note_style or S["body"], "注"), mf.para(S["body"], "1) 一つ目の注である。"),
+                mf.para(S["body"], "2) 二つ目の注である。")]
+    path = tmp_path / "k5_real.docx"
+    mf.make_article(path, "注の節の検証用文書", parts)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    root = load(res)
+    assert [text(q) for q in root.find(".//fn-group").findall("fn/p")] == ["1) 一つ目の注である。", "2) 二つ目の注である。"]
+    assert not [d for d in res.plan.decisions if "本文に戻した" in d.message]
+    assert [text(s.find("title")) for s in root.find("body")] == ["１．はじめに"]
+
+
+def test_real_notes_section_followed_by_text_ref_heading(journal, meta, tmp_path):
+    """対照: 「注」（本文スタイル）の後ろの注の一覧のあとに、章見出しのスタイルで書いた「引用文献」（文字から推定する後付けの見出し）が
+    続く原稿は、注の節のまま（引用文献の見出しが先に現れるので本文に戻さない）。引用文献は 2 件目の見出しとして扱う。"""
+    tail = [mf.para(S["sec1"], "引用文献"), mf.para(S["ref"], "試験六郎（2023）．「別の論文」．『架空誌』，第4巻，pp.1-2．")]
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "架空の主張である。"),
+                mf.para(S["body"], "注"), mf.para(S["body"], "1) 一つ目の注である。"), *tail]
+    path = tmp_path / "k5_ref.docx"
+    mf.make_article(path, "注の節の検証用文書", parts)
+    _, plan, _ = _mechanical(path, journal)
+    assert [fn.number for fn in plan.fns] == [1] and plan.fn_heading is not None
+    assert not [d for d in plan.decisions if "本文に戻した" in d.message]
+    assert [s.heading.plain() for s in plan.body if getattr(s, "heading", None) is not None] == ["１．はじめに"]

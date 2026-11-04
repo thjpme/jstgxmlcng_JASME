@@ -208,6 +208,9 @@ class ArticlePlan:
     app_after_refs: list = field(default_factory=list)   # 引用文献などの後ろの、資料の見出しと思われる段落 ID（暫定で警告だけ）
     # 手で書いた注と Word の脚注・文末脚注の両方にある注の番号（Word の注の番号は 1 から付けるので重なる。要確認）
     note_overlap: list = field(default_factory=list)
+    # 番号から図・表を決められず、リンクしなかった図・表の参照: (「図」か「表」, 段落 ID, 参照の文字)。同じ種類のキャプションの番号が
+    # 重なる・キャプションに枝番がある（図1-1・図1-2）ときの参照（linker.Linker.float_refs。要確認）
+    float_unlinked: list = field(default_factory=list)
     # 文字だけのテキストボックスの ID -> BoxInfo（Classifier.place_boxes が扱ったもの。空白だけのものも。出現順）
     textboxes: dict = field(default_factory=dict)
 
