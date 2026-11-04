@@ -661,6 +661,8 @@ class Builder:
                 n_head += 1
             else:
                 break
+        if n_head == len(t.rows):
+            n_head = 0      # すべての行が見出し行なら <thead> は作らない（DTD は thead? の後に tbody+ が必要）
         sections = []
         if n_head:
             sections.append(("thead", t.rows[:n_head]))
@@ -764,18 +766,26 @@ class Builder:
         if sec.heading is not None:
             t = _sub(el, "title")
             self.em.span(t, sec.heading, E.SECTITLE)
+        # <ack> の内容は <p> と <sec> だけ（別行数式・表・リストは <p> で包む）。<notes> は本文と同じ要素を直接置ける
+        wrap = el.tag == "ack"
         for node in sec.children:
             if isinstance(node, PNode):
                 self.paragraph_or_formula(el, node.para, ctx)
-            elif isinstance(node, FormulaNode):
-                self.formula(el, node)
-            elif isinstance(node, TableNode):
-                self.table_wrap(el, node)
+            elif isinstance(node, (FormulaNode, TableNode, ListNode)):
+                holder = _sub(el, "p") if wrap else el
+                if isinstance(node, FormulaNode):
+                    self.formula(holder, node)
+                elif isinstance(node, TableNode):
+                    self.table_wrap(holder, node)
+                else:
+                    self.list_node(holder, node)
 
     def app_children(self, ap, children):
         for node in children:
             if isinstance(node, PNode):
                 self.paragraph_or_formula(ap, node.para, E.BACKP)
+            elif isinstance(node, ListNode):
+                self.list_node(ap, node)
             elif isinstance(node, FormulaNode):
                 self.formula(ap, node)
             elif isinstance(node, TableNode):

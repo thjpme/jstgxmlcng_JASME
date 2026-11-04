@@ -1709,6 +1709,20 @@ class Classifier:
             for p in self.node_paras(node):
                 plan.locations.setdefault(p.src, f"{where} / 第{count}要素")
 
+    def add_back_para(self, children, b: Para, formula: bool = True):
+        """付記・謝辞・資料の段落を children に足す: 別行数式は FormulaNode、Word の自動番号の段落は同じ番号の定義が続く間 ListNode
+        （本文と同じ。番号は <list-item> の <label> に出る）、それ以外は PNode。"""
+        fnode = self.formula_node(b) if formula else None
+        if fnode:
+            children.append(fnode)
+        elif b.numbering and b.autonum:
+            if children and isinstance(children[-1], ListNode) and children[-1].items[-1].numbering[0] == b.numbering[0]:
+                children[-1].items.append(b)
+            else:
+                children.append(ListNode(items=[b], ordered=not self.doc_numbering_is_bullet(b)))
+        else:
+            children.append(PNode(b))
+
     @staticmethod
     def node_paras(node):
         if isinstance(node, PNode):
@@ -1830,8 +1844,7 @@ class Classifier:
                 plan.locations[b.src] = f"注 {len(plan.fns)}件目"
             elif state in ("notes", "ack"):
                 target = plan.notes if state == "notes" else plan.ack
-                fnode = self.formula_node(b)
-                target.children.append(fnode or PNode(b))
+                self.add_back_para(target.children, b)
                 plan.locations[b.src] = ("付記" if state == "notes" else "謝辞") + f" 第{len(target.children)}段落"
             else:
                 plan.exclude(b, "位置づけが不明な段落（本文と後付けの間）")
@@ -1940,10 +1953,11 @@ class Classifier:
                 if sentence:
                     self.note_appendix_sentence(b, text, sentence, first=False)
                 if role in HEADING_LEVEL or self.guess_heading(b, strict=False):
-                    app.children.append(PNode(b))   # 資料内の見出しは段落として出力
+                    self.add_back_para(app.children, b, formula=False)   # 資料内の見出しは段落として出力
+                elif self.is_image_para(b) and not self.formula_node(b):
+                    app.children.append(FigNode(image_paras=[b]))
                 else:
-                    fnode = self.formula_node(b)
-                    app.children.append(fnode or (FigNode(image_paras=[b]) if self.is_image_para(b) else PNode(b)))
+                    self.add_back_para(app.children, b)
                 continue
             if role == "title_en":
                 plan.title_en.append(b)
