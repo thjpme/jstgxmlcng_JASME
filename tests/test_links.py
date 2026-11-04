@@ -724,7 +724,21 @@ def test_branch_figure_numbers_are_not_linked(journal, meta, tmp_path):
     assert "link_figure" not in act.checklist
     for text in (act.top, act.box_detail, act.cli):
         assert "link_" not in text and "登載できる" in text and 'ref-type="fig"' in text and "xref" in text, text
-    assert "AI による補完の回答" in act.box_detail
+    # 利用者が取れる手段の文: 手で足す・AI による補完を使う設定で変換し直す（回答を編集するようには読めない）。図の id の場所も言う
+    for text in (act.top, act.box_detail):
+        assert "AI による補完を使う設定" in text and "変換し直すと" in text and "AI による補完の回答" not in text, text
+        assert '<fig id="…">' in text and "<table-wrap id=" in text, text
+        assert "> （" not in text and "`（表への" in text or ">（表への" in text, text    # タグの後ろに余分な空白がない
+    assert " （表への参照は" not in act.top + act.box_detail
+    # レポート（Markdown）では、生のタグは Markdown を HTML にすると消えるので、バッククォートで囲む。画面の枠と標準エラーは囲まない
+    assert '`<xref ref-type="fig" rid="図の id">`' in act.top and '`<fig id="…">`' in act.top and "`<xref>`" in act.checklist
+    assert "`" not in act.box_detail and "`" not in act.cli
+    from jasme_jats.colab import report_details
+    shown = report_details(act.top + "\n" + act.checklist)
+    assert "xref" in shown and "&lt;xref" in shown and "<xref" not in shown.replace("&lt;xref", "")
+    # 変換レポートの全文でも、冒頭・14 章の文のタグは HTML にしても残る
+    page = report_details(res.report_path.read_text(encoding="utf-8"))
+    assert "&lt;xref" in page and "&lt;fig id" in page
     assert "float_ref" in [a.key for a in actions(res)]
     assert any("リンクしなかった図・表の参照" in line for line in act.checklist.splitlines())
 

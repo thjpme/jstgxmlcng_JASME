@@ -238,6 +238,7 @@ def final_check(tracked_root, final_bytes: bytes, res: FidelityResult):
     # lxml 5.0 以降でしか使えず、下限（pyproject.toml の lxml>=4.9）では使えないため、宣言を見つけたら解決せずに止める
     if b"<!ENTITY" in final_bytes:
         res.final_ok = False
+        res.final_unreadable = True         # 文字の違いではなく、読めない・実体の宣言がある側の知らせ（report._fidelity_action）にする
         res.final_detail = ("最終出力に実体の宣言（<!ENTITY）がある。このツールは出力しないので、外部の実体を読まないよう解決せずに不合格とした"
                             + (f"。{res.final_detail}" if res.final_detail else ""))
         return False
