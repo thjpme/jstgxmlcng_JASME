@@ -225,6 +225,241 @@ def test_result_boxes_show_textbox_notices(journal, meta, tmp_path):
     assert result_boxes(res, level="要対応") == ""
     res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "m", ai_mode="manual", convert_metafiles=False))
     html = result_boxes(res)
-    assert "手順 6 で AI の回答を貼り付けて変換し直すと、AI が囲みか注記かを判断します" in html
+    assert "手順 6 で AI の回答を貼り付けて ▶ を押すと、AI が囲みか注記かを判断します" in html
     assert "囲みか図の注記か決められなかったテキストボックス（3 章）は、AI の回答を反映するまで XML に出力していません。" in html
     assert "囲みか図の注記か決められなかったテキストボックス（3 章）は、AI の回答を反映するまで" in res.output_note
+
+
+# ---------------------------------------------------------------------------- 画面の操作の目印（O2）
+def test_step_words_cover_every_mark_in_report():
+    """report.py が使う目印の名前と、colab.STEP_WORDS の両方の画面の語がそろっている。知らない目印・画面は例外。"""
+    import re
+    from pathlib import Path
+
+    import pytest
+
+    from jasme_jats import app, pipeline, report
+    from jasme_jats.colab import STEP_WORDS, step_text
+    assert set(STEP_WORDS) == {"notebook", "app", "cli"}
+    for screen, words in STEP_WORDS.items():
+        assert set(words) == set(report.STEP_NAMES), screen
+        assert all("\x00" not in w and ("手順" not in w or screen == "notebook") for w in words.values())
+    used = set()
+    for module in (report, pipeline, app):    # 目印は report.py・pipeline.py（AIRequiredError の文）・app.py（CRASH_ADVICE）で使う
+        used |= set(re.findall(r"step\((?:'|\")(\w+)(?:'|\")\)", Path(module.__file__).read_text(encoding="utf-8")))
+    assert used == set(report.STEP_NAMES)                 # 使っていない目印・表にない目印がない
+    assert step_text(report.step("docx") + "から", "notebook") == "手順 2 から"     # 4e8c38a までの文と同じ（助詞の前の空白）
+    assert step_text(report.step("pdf") + "で選んだ", "notebook") == "手順 2 で選んだ"
+    assert step_text(report.step("images") + "で、", "notebook") == "手順 7「足りない画像をアップロード」で、"
+    assert step_text(report.step("docx") + "、", "notebook") == "手順 2、"
+    assert step_text(report.step("docx") + "から", "app") == "「docx（論文の Word ファイル）」の欄から"
+    assert step_text(report.step("docx") + "から", "cli") == "docx の指定から"
+    assert step_text("目印なし", "app") == "目印なし"
+    with pytest.raises(ValueError, match="知らない目印"):
+        step_text("\x00step:nothing\x00")
+    with pytest.raises(ValueError, match="知らない目印"):
+        report.step("nothing")
+    with pytest.raises(ValueError, match="知らない画面"):
+        step_text("x", "other")
+
+
+def test_report_text_names_no_step_number_outside_marks():
+    """report.py の文（コメント以外の文字列）に、手順の番号を直接書かない（box_detail は目印で書く）。レポートの文（top・checklist）に
+    書くときは、ノートブックと 1 画面版の両方の利用者に通じるよう「ノートブックは手順 N、1 画面版は…」の形にする。"""
+    import io
+    import re
+    import tokenize
+    from pathlib import Path
+
+    from jasme_jats import report
+    text = Path(report.__file__).read_text(encoding="utf-8")
+    for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+        if tok.type == tokenize.STRING and tok.string.lstrip("rbf")[:3] not in ('"""', "'''"):      # docstring は対象外
+            for m in re.finditer(r"手順 \d", tok.string):
+                assert tok.string[:m.start()].endswith("ノートブックは"), f"report.py:{tok.start[0]}: {tok.string}"
+
+
+def test_no_mark_left_in_any_screen(journal, meta, tmp_path):
+    """いろいろな結果の actions() のすべての Action で、両方の画面の枠に目印が残らない。1 画面版の枠には手順の番号も出ない。
+    レポート（.md）と top・checklist・cli の文にも目印は出ない。make_notebook.py が使う box_detail も、置き換えれば目印は残らない。"""
+    from conftest import EDGE, FLOAT, FULL, OUTSIDE, PDFCHECK, PDFCHECK_PDF, PLACE, STRUCTURE, TABLEFIG
+
+    from jasme_jats.colab import (figure_body_box, lost_images_box, missing_images_box, pdf_diff_box, result_boxes,
+                                  step_text, unplaced_box)
+    from jasme_jats.pipeline import AIRequiredError, Options, convert
+    from jasme_jats.report import actions
+    cases = [(docx, Options(out_dir=tmp_path / f"c{k}{mode}", ai_mode=mode, convert_metafiles=False))
+             for k, docx in enumerate([FULL, EDGE, FLOAT, PLACE, OUTSIDE, STRUCTURE, TABLEFIG]) for mode in ("none", "manual")]
+    cases += [(PDFCHECK, Options(out_dir=tmp_path / f"p{route}", ai_mode="none", convert_metafiles=False,
+                                 pdf_path=PDFCHECK_PDF, route=route)) for route in ("docx", "pdf")]
+    seen = set()
+    for docx, opts in cases:
+        try:
+            res = convert(docx, meta, journal, opts)
+        except AIRequiredError:
+            continue
+        assert "\x00" not in res.report_path.read_text(encoding="utf-8")
+        for a in actions(res):
+            seen.add(a.key)
+            assert not any("\x00" in t for t in (a.top, a.checklist, a.cli)), a.key
+            for screen in ("notebook", "app", "cli"):
+                assert "\x00" not in step_text(a.box_title, screen) + step_text(a.box_detail, screen), a.key
+            for screen in ("app", "cli"):
+                assert "手順" not in step_text(a.box_detail, screen) + step_text(a.box_title, screen), a.key
+        for screen in ("notebook", "app"):
+            html = result_boxes(res, screen=screen) + missing_images_box(res, screen) + lost_images_box(res, screen) \
+                + pdf_diff_box(res, screen) + figure_body_box(res, screen) + unplaced_box(res.plan, res.ai.partial, screen)
+            assert "\x00" not in html, screen
+            assert screen == "notebook" or "手順" not in html
+    assert {"ai_pending", "textbox_undecided"} <= seen      # 目印を使う知らせを実際に通した
+
+
+def test_app_screen_words_in_boxes(journal, meta, tmp_path):
+    """同じ Action の文を、ノートブックでは手順の番号で、1 画面版では欄の名前で読む。"""
+    from conftest import FULL
+
+    from jasme_jats.colab import result_boxes
+    from jasme_jats.pipeline import Options, convert
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", convert_metafiles=False))
+    note = result_boxes(res, level="要対応")
+    page = result_boxes(res, level="要対応", screen="app")
+    assert "手順 5 の依頼文を AI" in note and "手順 6 に貼り付けて ▶ を押してください" in note
+    assert "依頼文を AI" in page and "「AI の回答（json のコードブロック）を貼り付ける」の欄に貼り付けて「反映」を押してください" in page and "手順" not in page
+
+
+def test_mark_lookalike_in_docx_text_is_shown_as_is(tmp_path, journal, meta, monkeypatch):
+    """docx の文字（段落の抜粋）に {{step:docx}}・{{step:x}} の形があっても、目印とは読まれない（F2）。書き換わらず、例外にならない。
+    PDF の文字の U+0000 は、枠に入らない（目印の区切りと紛れない）。"""
+    from test_pdfmatch import N10_TAIL, SMALL_FRONT, TALK, body_lines, convert_with_pages, n10_article, n10_pages
+
+    from jasme_jats.colab import result_boxes
+    from jasme_jats.report import actions
+    for word in ("{{step:docx}}", "{{step:x}}"):
+        docx = f"授業の最初に確認した値の{word}あ後ろで，生徒は話し合いを続け，その様子を記録した。"
+        pub = f"授業の最初に確認した値の{word}\x00後ろで，生徒は話し合いを続け，その様子を記録した。"
+        out = tmp_path / word[7:-2]
+        out.mkdir()
+        n10_article(out, journal, [("body", docx), ("body", TALK)])
+        pages = n10_pages([*SMALL_FRONT, *body_lines(pub), *body_lines(TALK), *N10_TAIL])
+        res = convert_with_pages(out, monkeypatch, journal, meta, pages, "docx", docx=out / "n10.docx")
+        assert any("step:" in a.box_detail for a in actions(res))        # 抜粋が枠に出る（抜粋は途中で切れることがあるので、中ほどで見る）
+        tail = word[3:]                                                   # "step:docx}}" / "step:x}}"
+        for screen in ("notebook", "app", "cli"):
+            html = result_boxes(res, screen=screen)         # 例外にならない
+            assert tail in html and "\x00" not in html, screen
+            assert "手順 2}}" not in html and "欄}}" not in html and "指定}}" not in html     # 抜粋の中の並びは語に書き換わらない
+
+
+def test_ai_required_message_names_the_modes_of_each_screen(journal, meta, tmp_path, capsys):
+    """AI を使わない設定で図表の位置を決められないときの例外の文は、画面ごとの選択肢の名前で出る（F5）。
+    ノートブックは 4e8c38a までと同じ文、1 画面版は app.AI_MODES の名前、コマンドラインは --ai の指定。目印が残らない。"""
+    import pytest
+    from conftest import FLOAT, META_EXAMPLE
+
+    from jasme_jats import app
+    from jasme_jats.cli import main
+    from jasme_jats.colab import ai_required_box, no_ai_box
+    from jasme_jats.pipeline import AIRequiredError, Options, convert
+    with pytest.raises(AIRequiredError) as e:
+        convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "a", convert_metafiles=False))
+    msg = str(e.value)
+    assert "AI による補完を「使わない」設定では変換できません。" in msg
+    note = ai_required_box(msg)                                   # ノートブック（既定）
+    assert "「API で自動実行」か「手動（チャットに貼り付け）」を選んで、もう一度変換してください。" in note and "\x00" not in note
+    page = ai_required_box(msg, "app")
+    labels = [label for label, _ in app.AI_MODES]
+    assert "「AI による補完の方法」の欄で「手動（チャットに貼り付け）」か「API（Claude）」を選んで、もう一度変換してください。" in page
+    assert "手動（チャットに貼り付け）" in labels and "API（Claude）" in labels             # 画面の選択肢の名前と同じ
+    assert "API で自動実行" not in page and "\x00" not in page
+    st = app.AppState(tmp_path / "work")
+    st.set_inputs(route="docx", docx=str(FLOAT), volume="31", issue="1", fpage="1", lpage="12", peer_review="査読あり",
+                  manuscript_type=app.type_choices()[0], ai_mode="none")
+    with pytest.raises(app.InputError) as ie:
+        st.convert()
+    assert "API で自動実行" not in ie.value.args[0] and "\x00" not in ie.value.args[0] and "\x00" not in ie.value.html
+    assert "「API（Claude）」を選んで" in ie.value.args[0] and "「API（Claude）」を選んで" in ie.value.html
+    assert "AI による補完を「使わない」設定" in no_ai_box("app") and "\x00" not in no_ai_box("app")
+    assert main([str(FLOAT), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli")]) == 2
+    err = capsys.readouterr().err
+    assert "--ai manual か --ai api を指定して、もう一度変換してください。" in err and "\x00" not in err and "API で自動実行" not in err
+
+
+def test_notebook_sentences_equal_those_before_marks(journal, meta, tmp_path):
+    """ノートブックの枠の文は、目印にする前（4e8c38a）の文と一字一句同じ（助詞の前の空白、「アップロードし直し」など）。
+    4e8c38a と今の両方で fixtures の変換結果の全 Action の box_detail を作って比べた確かめの代表（F3）。"""
+    from conftest import OUTSIDE, PDFCHECK, PDFCHECK_PDF, STRUCTURE
+
+    from jasme_jats.colab import result_boxes
+    from jasme_jats.pipeline import Options, convert
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "p", convert_metafiles=False, pdf_path=PDFCHECK_PDF,
+                                                   route="docx"))
+    assert ("校正の直しを補うときは、手順 2 で「docx から作り、出版版 PDF で補う」を選んで変換し直すか、docx を直して"
+            "手順 2 からやり直してください。") in result_boxes(res)
+    res = convert(OUTSIDE, meta, journal, Options(out_dir=tmp_path / "o", ai_mode="manual", convert_metafiles=False))
+    assert "Word で直した docx を手順 2 でアップロードし直し、そこから順にやり直してください" in result_boxes(res)
+    res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "s", ai_mode="manual", convert_metafiles=False))
+    assert "手順 6 で AI の回答を貼り付けて ▶ を押すと、AI が囲みか注記かを判断します" in result_boxes(res)
+
+
+def _html_text_and_tags(html):
+    from html.parser import HTMLParser
+
+    class P(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.text, self.tags = [], []
+
+        def handle_starttag(self, tag, attrs):
+            self.tags.append(tag)
+
+        def handle_data(self, data):
+            self.text.append(data)
+    p = P()
+    p.feed(html)
+    return "".join(p.text), p.tags
+
+
+def test_report_details_shows_angle_brackets(journal, meta, tmp_path):
+    """0.29.0 の最後の点検: レポートに引用した docx の文字に「x<y>z」「<y かつ z>」「<b>」のような、タグに見える並びがあっても、
+    「変換レポートの全文を見る」（Markdown → HTML）で文字が消えない。.md の文字は docx のまま。ツールのタグ（md_tag でコードにしたもの）は
+    今までどおりコードで出る。"""
+    import make_fixtures as mf
+    from conftest import ALL_DOCS, FLOAT, FLOAT_TEXT, OUTSIDE, PLACE
+
+    from jasme_jats.colab import markdown_text_only, report_details
+    from jasme_jats.pipeline import AIRequiredError, Options, convert
+    S = mf.S
+    md = ("# 変換レポート\n\n> **要確認**: 「x<y>z」「<y かつ z>」「<b>」「a&amp;b」「<http://example.org>」 と `<xref>` と "
+          "`<fig id=\"…\">`\n\n- 引用: 「<i>強調」\n\n```\n<pre>の中の <b> は文字のまま\n```\n\n| 項目 | 結果 |\n|---|---|\n| x<y | <z> |\n")
+    text, tags = _html_text_and_tags(report_details(md))
+    for s in ("x<y>z", "<y かつ z>", "<b>", "a&amp;b", "<http://example.org>", "<xref>", '<fig id="…">', "<i>強調", "<pre>の中の <b> は文字のまま",
+              "x<y", "<z>"):
+        assert s in text, s
+    assert set(tags) <= {"style", "details", "summary", "div", "h1", "blockquote", "p", "strong", "code", "ul", "li", "pre", "table",
+                         "thead", "tbody", "tr", "th", "td"}, tags
+    assert "<code>&lt;xref&gt;</code>" in report_details(md)           # ツールのタグはコードのまま
+    # 実際の docx の経路: 引用文献の段落の文字がレポートの 10 章の警告などに載り、Colab の全文表示で消えない
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "架空の主張である。"),
+                mf.table([[mf.cell(mf.para(S["body"], "表の", mf.br(), "セル"))]])]
+    path = tmp_path / "x.docx"
+    mf.make_article(path, "t", parts, refs=lambda b: [mf.para(S["ref"], "x<y>z", mf.br(), "続き")])
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    rep = res.report_path.read_text(encoding="utf-8")
+    assert "x<y>z" in rep                                               # .md の文字は docx のまま
+    text, _ = _html_text_and_tags(report_details(rep))
+    assert "x<y>z" in text and "xz" not in text.replace("x<y>z", "")
+    # レポートは生の HTML を使わない: すべての fixture のレポートで、生の HTML を無効にして HTML にしても、無効にしない場合と同じ
+    # （違うのは docx の文字にタグ・実体参照に見える並びがあるときだけ）。許す要素を限る必要がない
+    import markdown
+    checked = 0
+    for docx in ALL_DOCS + [FLOAT, FLOAT_TEXT, PLACE, OUTSIDE]:
+        for mode in ("none", "manual"):
+            try:
+                r = convert(docx, meta, journal, Options(out_dir=tmp_path / f"r{checked}", ai_mode=mode, convert_metafiles=False))
+            except AIRequiredError:
+                continue
+            checked += 1
+            rep = r.report_path.read_text(encoding="utf-8")
+            assert markdown_text_only(rep) == markdown.markdown(rep, extensions=["tables", "fenced_code"]), (docx.name, mode)
+    assert checked >= 15

@@ -16,13 +16,13 @@ import re
 
 import make_fixtures as mf
 import pytest
-from conftest import LINKS, LINKS_BARE
+from conftest import FULL, LINKS, LINKS_BARE
 from lxml import etree
 
 from jasme_jats.linker import RE_FIGREF, RE_TABREF, Linker, find_in_para
 from jasme_jats.model import Atom, LinkSpec, Para
 from jasme_jats.pipeline import Options, _mechanical, convert
-from jasme_jats.report import actions
+from jasme_jats.report import TO_CHECK, actions, step
 from jasme_jats.structure import ArticlePlan
 
 S = mf.S
@@ -641,3 +641,445 @@ def test_superscript_exponent_not_linked(journal, meta, tmp_path):
     links_ = [(text(x), x.get("rid")) for x in load(res).iter("xref") if x.get("ref-type") == "fn"]
     assert ("1)", "fn1") in links_
     assert ("2", "fn2") not in links_
+
+
+# ============================================================================= K3: キャプションの 2 段落目以降
+def test_caption_more_is_linked(journal, meta, tmp_path):
+    """図・表のキャプションの 2 段落目以降（出典の行など）の引用（試験（2024））・URL・上付きの注番号も、1 段落目と同じくリンクする
+    （linker.body_paragraphs が caption_more も文脈 "caption" で返す）。キャプションの中の「図1」「表1」は、1 段落目と同じく
+    図・表の参照にしない。不変性チェック・DTD・J-STAGE のチェックは合格。"""
+    def parts(b):
+        rid = b.add_image("links_k3_fig1.png", mf.png_bytes("K3 figure 1"))
+        return [mf.para(S["sec1"], "１．はじめに"),
+                mf.para(S["body"], mf.drawing(rid, 2880000, 1800000, 963), jc="center"),
+                mf.para(S["fig_cap"], "図1　架空の図"),
+                mf.para(S["fig_cap"], "出典：試験（2024）．http://example.com/fig1 を見る", mf.run("1)", sup=True), "（表1と同じ）"),
+                mf.para(S["tab_cap"], "表1　架空の表"),
+                mf.para(S["tab_cap"], "出典：試験（2024）．http://example.com/tab1"),
+                mf.table([[mf.cell("観点"), mf.cell("内容")], [mf.cell("架空"), mf.cell("架空の内容")]]),
+                mf.para(S["fn_head"], "注"), mf.para(S["body"], NOTES3[0])]
+    path = tmp_path / "k3.docx"
+    mf.make_article(path, "リンクの境界の検証用文書", parts)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
+    root = load(res)
+    [fig] = list(root.iter("fig"))
+    [tab] = list(root.iter("table-wrap"))
+    fig_p = fig.findall("caption/p")
+    tab_p = tab.findall("caption/p")
+    assert [text(p) for p in fig_p] == ["図1　架空の図", "出典：試験（2024）．http://example.com/fig1 を見る1)（表1と同じ）"]
+    assert [(x.tag, text(x)) for x in fig_p[1].iter() if x.tag in ("xref", "uri")] == [
+        ("xref", "2024"), ("uri", "http://example.com/fig1"), ("xref", "1)")]
+    assert [(x.tag, text(x)) for x in tab_p[1].iter() if x.tag in ("xref", "uri")] == [
+        ("xref", "2024"), ("uri", "http://example.com/tab1")]
+    assert fig_p[1].find("xref[@ref-type='table']") is None
+
+
+
+# ============================================================================= K4: 枝番つき・番号が重なる図表のキャプション
+def floats_article(tmp_path, body, fig_caps=(), tab_caps=(), name="k4"):
+    """本文の段落（XML の一覧）の後ろに、図（画像と図キャプション）と表（表キャプションと表）を並べた小さな論文。"""
+    def parts(b):
+        out = [mf.para(S["sec1"], "１．はじめに"), *body]
+        for k, cap in enumerate(fig_caps, 1):
+            rid = b.add_image(f"links_k4_fig{k}.png", mf.png_bytes(f"K4 figure {k}"))
+            out += [mf.para(S["body"], mf.drawing(rid, 2880000, 1800000, 970 + k), jc="center"), mf.para(S["fig_cap"], cap)]
+        for cap in tab_caps:
+            out += [mf.para(S["tab_cap"], cap), mf.table([[mf.cell("観点"), mf.cell("内容")], [mf.cell("架空"), mf.cell("内容")]])]
+        return out
+    path = tmp_path / f"{name}.docx"
+    mf.make_article(path, "リンクの境界の検証用文書", parts)
+    return path
+
+
+def float_links(root, prefix):
+    """文字が prefix で始まる段落の、図・表への参照: [(文字, ref-type, rid)]。"""
+    [q] = [q for q in root.iter("p") if text(q).startswith(prefix)]
+    return [(text(x), x.get("ref-type"), x.get("rid")) for x in q.iter("xref") if x.get("ref-type") in ("fig", "table")]
+
+
+def test_branch_figure_numbers_are_not_linked(journal, meta, tmp_path):
+    """図1-1・図1-2・図2.1 のように枝番のあるキャプションがあるとき、「図1-1」「図1-2」「図1」「図2」「図2.1」の参照はどれもリンクしない
+    （どの枝番の図か決められない。今までは図1-1・図1-2 が両方「図1」になり、後の図にリンクしていた）。枝番のない図3 の参照はリンクする。
+    判断の一覧（4 章）に 1 件ずつ記録し、要確認の知らせを 1 つ出す（終了コードは 0）。不変性チェック・DTD・J-STAGE のチェックは合格。"""
+    body = [mf.para(S["body"], "図1-1と図1-2を比べる。図1も見る。図2.1を参照する。図2と図3も見る。"),
+            mf.para(S["body"], "図1-2、図3は架空である。")]
+    path = floats_article(tmp_path, body, ["図1-1　架空の図", "図1-2　もう一つの図", "図2.1　枝番の図",
+                                                     "図3　ふつうの図"])
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
+    root = load(res)
+    assert float_links(root, "図1-1と図1-2を比べる") == [("3", "fig", "F4")]
+    assert float_links(root, "図1-2、図3は") == [("3", "fig", "F4")]
+    plan = res.plan
+    assert [(u.word, u.text) for u in plan.float_unlinked] == [
+        ("図", "図1-1"), ("図", "図1-2"), ("図", "図1"), ("図", "図2.1"), ("図", "図2"), ("図", "図1-2")]
+    recs = [d for d in plan.decisions if d.category == "figure" and not d.applied and "リンクしなかった" in d.message]
+    assert len(recs) == 6 and all("link_figure" in d.message for d in recs)
+    [act] = [a for a in actions(res) if a.key == "float_ref"]
+    assert act.level == TO_CHECK and "図1-1" in act.top and "図2.1" in act.top and not res.needs_action
+    assert "図1-1" in act.box_detail and "図1-1" in act.cli
+    assert "手順" not in act.top + act.box_detail + act.cli + act.checklist
+    # 内部の操作名を出さず、そのままでもよいこと・付けるなら XML のどこをどうするかを言う（F13）
+    assert "link_figure" not in act.checklist
+    for text in (act.top, act.box_detail, act.cli):
+        assert "link_" not in text and "登載できる" in text and 'ref-type="fig"' in text and "xref" in text, text
+    # 利用者が取れる手段の文: 手で足す・AI による補完を使う設定で変換し直す（回答を編集するようには読めない）。図の id の場所も言う
+    assert "AI による補完を使う設定" in act.top and "変換し直すと" in act.top and "AI による補完の回答" not in act.top
+    assert step("ai_choose") + "変換し直すと" in act.box_detail and "AI による補完の回答" not in act.box_detail     # 画面ごとの語は colab が置き換える
+    assert "--ai manual か --ai api を指定して変換し直すと" in act.cli
+    for text in (act.top, act.box_detail):
+        assert '<fig id="…">' in text and "<table-wrap id=" in text, text
+        assert "> （" not in text and "`（表への" in text or ">（表への" in text, text    # タグの後ろに余分な空白がない
+    assert " （表への参照は" not in act.top + act.box_detail
+    # レポート（Markdown）では、生のタグは Markdown を HTML にすると消えるので、バッククォートで囲む。画面の枠と標準エラーは囲まない
+    assert '`<xref ref-type="fig" rid="図の id">`' in act.top and '`<fig id="…">`' in act.top and "`<xref>`" in act.checklist
+    assert "`" not in act.box_detail and "`" not in act.cli
+    from jasme_jats.colab import report_details
+    shown = report_details(act.top + "\n" + act.checklist)
+    assert "xref" in shown and "&lt;xref" in shown and "<xref" not in shown.replace("&lt;xref", "")
+    # 変換レポートの全文でも、冒頭・14 章の文のタグは HTML にしても残る
+    page = report_details(res.report_path.read_text(encoding="utf-8"))
+    assert "&lt;xref" in page and "&lt;fig id" in page
+    assert "float_ref" in [a.key for a in actions(res)]
+    assert any("リンクしなかった図・表の参照" in line for line in act.checklist.splitlines())
+
+
+def test_duplicate_figure_numbers_are_not_linked(journal, meta, tmp_path):
+    """同じ番号の図のキャプションが 2 つ（図1 と図1）あるとき、「図1」の参照はリンクしない（今までは後のキャプションに黙ってリンクした）。
+    表も同じ（表2 が 2 つ）。重ならない番号の図2・表1 の参照はリンクする。"""
+    body = [mf.para(S["body"], "図1と図2を見る。表1と表2を見る。")]
+    path = floats_article(tmp_path, body, ["図1　一つ目の図", "図1　二つ目の図", "図2　三つ目の図"],
+                          ["表1　一つ目の表", "表2　二つ目の表", "表2　三つ目の表"])
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
+    assert float_links(load(res), "図1と図2を見る") == [("2", "fig", "F3"), ("表1", "table", "T1")]
+    assert [(u.word, u.text) for u in res.plan.float_unlinked] == [("図", "図1"), ("表", "表2")]
+    msgs = [d.message for d in res.plan.decisions if not d.applied and "リンクしなかった" in d.message]
+    assert len(msgs) == 2 and "キャプションが複数ある" in msgs[0] and "図1" in msgs[0]
+    assert [a.key for a in actions(res) if a.key == "float_ref"] == ["float_ref"]
+
+
+def test_branch_ref_not_range_only_with_branch_captions(journal, meta, tmp_path):
+    """枝番のキャプションがない論文では、「図1-2」は今までどおり範囲（図1〜図2）として読み、図1 と図2 にリンクする（知らせも出ない）。"""
+    body = [mf.para(S["body"], "図1-2を見る。表1、2も見る。")]
+    path = floats_article(tmp_path, body, ["図1　一つ目の図", "図2　二つ目の図"], ["表1　一つ目の表", "表2　二つ目の表"])
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert float_links(load(res), "図1-2を見る") == [("図1", "fig", "F1"), ("2", "fig", "F2"), ("表1", "table", "T1"),
+                                                  ("2", "table", "T2")]
+    assert res.plan.float_unlinked == [] and [a for a in actions(res) if a.key == "float_ref"] == []
+
+
+def test_branch_table_numbers_only_affect_tables(journal, meta, tmp_path):
+    """枝番があるのは表だけ（表1-1・表1-2）のときは、表の参照だけリンクしない。図の「図1-2」は範囲のままリンクする。"""
+    body = [mf.para(S["body"], "図1-2と表1-2と表3を見る。")]
+    path = floats_article(tmp_path, body, ["図1　一つ目の図", "図2　二つ目の図"],
+                          ["表1-1　一つ目の表", "表1-2　二つ目の表", "表3　三つ目の表"])
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert float_links(load(res), "図1-2と表1-2") == [("図1", "fig", "F1"), ("2", "fig", "F2"), ("3", "table", "T3")]
+    assert [(u.word, u.text) for u in res.plan.float_unlinked] == [("表", "表1-2")]
+
+
+def test_caption_label_branch():
+    """キャプションの番号と枝番（structure.caption_label）: 区切りは「-」「‐」「－」「.」「．」など、後ろに数字が続くときだけ。"""
+    from jasme_jats.structure import RE_FIGCAP, RE_TABCAP, caption_label
+    def cap(t):
+        return Para(src="d1", atoms=[Atom(kind="text", text=t)])
+    for t, want in [("図1-2　架空", (1, True)), ("図２．１　架空", (2, True)), ("図３－４　架空", (3, True)),
+                    ("図1‐2　架空", (1, True)), ("Figure 1-2 caption", (1, True)), ("図1　架空", (1, False)),
+                    ("図1.　架空", (1, False)), ("図1-　架空", (1, False)), ("図 12：架空", (12, False)),
+                    ("架空の図", (None, False))]:
+        assert caption_label(cap(t), RE_FIGCAP) == want, t
+    assert caption_label(cap("表2-3　架空"), RE_TABCAP) == (2, True)
+
+
+@pytest.mark.parametrize("plain, skip, want_links, want_unlinked", [
+    # 枝番つきのキャプションがある論文（branch）: 番号のすぐ後ろの枝番は 1 つの参照。リンクしない
+    ("図1-2を見る", {1: (["図1-1", "図1-2"], True)}, [], ["図1-2"]),
+    ("図1、図1-2と図3を見る", {1: (["図1-1", "図1-2"], True)}, [("3", "F3")], ["図1", "図1-2"]),
+    ("図3-4と図4.2を見る", {4: (["図4.1"], True)}, [], ["図3-4", "図4.2"]),
+    # 枝番の形でない並びは範囲のまま（空白を挟む・全角の「〜」）。並びの番号は番号だけにリンクする
+    ("図3 - 5を見る。図3〜4も見る", {}, [("図3", "F3"), ("5", "F5"), ("図3", "F3"), ("4", "F4")], []),
+])
+def test_float_refs_branch_rules(plain, skip, want_links, want_unlinked):
+    """float_refs の skip・branch: 枝番の形（番号のすぐ後ろの「-2」「.1」）は、枝番つきのキャプションがある論文では 1 つの参照として
+    リンクしない。skip の番号の参照もリンクしない。リンクした参照の文字と rid、リンクしなかった参照の文字を確かめる。"""
+    plan = ArticlePlan()
+    lk = Linker(plan)
+    q = Para(src="d1", atoms=[Atom(kind="text", text=plain)])
+    ids = {n: f"F{n}" for n in (1, 2, 3, 4, 5) if n not in skip}
+    lk.float_refs(q, RE_FIGREF, ids, "fig", "図", skip, True)
+    got = [(a.text, a.link.attrs["rid"]) for a in q.atoms if a.link is not None]
+    assert got == want_links
+    assert [u.text for u in plan.float_unlinked] == want_unlinked
+    assert q.plain() == plain
+
+
+# ---- F12: 枝番の区切りは 1 か所の定義（structure.CAP_BRANCH_SEP）。キャプションの枝番・<label> の切り方・参照の枝番が一致する
+BRANCH_SEPS = ["-", "‐", "‑", "‒", "–", "—", "―", "−", ".", "－", "．"]
+
+
+@pytest.mark.parametrize("sep", BRANCH_SEPS)
+def test_branch_separator_is_one_definition(sep):
+    """枝番とみなすキャプションの番号（structure.caption_label）・<label> に切り分ける番号（builder.RE_LABEL_SPLIT）・参照の枝番
+    （linker.RE_BRANCH_REF）が、同じ区切りで枝番を読む（en ダッシュなどでキャプションは枝番とみなすのに <label> は「図1」で切っていた）。"""
+    from jasme_jats.builder import RE_LABEL_SPLIT
+    from jasme_jats.linker import RE_BRANCH_REF
+    from jasme_jats.structure import RE_FIGCAP, caption_label
+    cap = f"図1{sep}2　架空の図"
+    assert caption_label(Para(src="d1", atoms=[Atom(kind="text", text=cap)]), RE_FIGCAP) == (1, True)
+    assert RE_LABEL_SPLIT.match(cap).group(2) == f"図1{sep}2"
+    assert RE_BRANCH_REF.match(f"{sep}2") is not None
+
+
+@pytest.mark.parametrize("split", [True, False])
+def test_en_dash_branch_caption_label_and_links(split, journal, meta, tmp_path):
+    """キャプション「図1–2」（en ダッシュ）は枝番なので、<label> も「図1–2」で切り（split_labels のとき）、参照「図1–2」「図1」は
+    リンクせず要確認で知らせる。split_labels=False では <label> を作らず、キャプションの文字は変わらない。"""
+    body = [mf.para(S["body"], "図1–2を見る。図1も見る。図3を見る。")]
+    path = floats_article(tmp_path, body, ["図1–1　最初の図", "図1–2　次の図", "図3　別の図"])
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False, split_labels=split))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    root = load(res)
+    caps = ["".join(c.itertext()) for c in root.iter("caption")]
+    if split:
+        assert [text(x) for x in root.iter("label") if text(x).startswith("図")] == ["図1–1", "図1–2", "図3"]
+        assert caps == ["最初の図", "次の図", "別の図"]
+    else:
+        assert not [x for x in root.iter("label") if text(x).startswith("図")]
+        assert caps == ["図1–1　最初の図", "図1–2　次の図", "図3　別の図"]
+    assert float_links(root, "図1–2を見る") == [("図3", "fig", "F3")]
+    assert sorted(u.text for u in res.plan.float_unlinked) == ["図1", "図1–2"]
+    assert "float_ref" in [a.key for a in actions(res)]
+
+
+# ---- G4: 枝番とみなす数字は 1〜2 桁（直後に数字が続かない）。「図1―2019年度の推移」の年は枝番にしない
+@pytest.mark.parametrize("sep", BRANCH_SEPS)
+def test_branch_number_is_short_in_all_three_definitions(sep):
+    """枝番の数字は 1〜2 桁で、直後に数字が続かないもの（CAP_BRANCH_NUM）。年のような長い数字は、キャプションの枝番・<label> に
+    切り分ける番号・参照の枝番のどれでも枝番にしない（今までは <label> が「図1―2019」になった）。短い数字は今までどおり枝番。"""
+    from jasme_jats.builder import RE_LABEL_SPLIT
+    from jasme_jats.linker import RE_BRANCH_REF
+    from jasme_jats.structure import RE_FIGCAP, caption_label
+    for digits, branch in (("2019", False), ("123", False), ("2", True), ("12", True), ("１２", True)):
+        cap = f"図1{sep}{digits}年度の推移"
+        assert caption_label(Para(src="d1", atoms=[Atom(kind="text", text=cap)]), RE_FIGCAP) == (1, branch), cap
+        assert RE_LABEL_SPLIT.match(cap).group(2) == (f"図1{sep}{digits}" if branch else "図1"), cap
+        assert (RE_BRANCH_REF.match(f"{sep}{digits}") is not None) == branch, cap
+
+
+@pytest.mark.parametrize("split", [True, False])
+def test_year_after_dash_is_not_a_branch(split, journal, meta, tmp_path):
+    """G4: キャプション「図1―2019年度の推移」の <label> は「図1」になり（split_labels のとき）、枝番のない図として本文の「図1」を
+    リンクする。split_labels=False ではキャプションの文字は変わらない。"""
+    body = [mf.para(S["body"], "図1を見る。")]
+    path = floats_article(tmp_path, body, ["図1―2019年度の推移", "図2　別の図"], name="g4")
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False, split_labels=split))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    root = load(res)
+    if split:
+        assert [text(x) for x in root.iter("label") if text(x).startswith("図")] == ["図1", "図2"]
+        assert [text(c) for c in root.iter("caption")] == ["―2019年度の推移", "別の図"]
+    else:
+        assert [text(c) for c in root.iter("caption")] == ["図1―2019年度の推移", "図2　別の図"]
+    assert float_links(root, "図1を見る") == [("図1", "fig", "F1")]
+    assert not res.plan.float_unlinked
+
+
+def _float_ref_states(tmp_path, journal, meta):
+    """図1 が 2 つあるため、「図1」の参照が 2 か所、リンクされない小さな論文。(docx, 参照の段落 ID) を返す。"""
+    body = [mf.para(S["body"], "図1を見る。図1も見る。")]
+    path = floats_article(tmp_path, body, ["図1　一つ目の図", "図1　二つ目の図"], [], name="h3")
+    _, plan, _ = _mechanical(path, journal)
+    src = next(s for s, p in plan.paras.items() if p.plain().startswith("図1を見る"))
+    return path, src
+
+
+def _manual(path, ops, meta, journal, out):
+    resp = json.dumps({"operations": ops, "placements": [], "notes": []}, ensure_ascii=False)
+    return convert(path, meta, journal, Options(out_dir=out, ai_mode="manual", ai_response=resp, convert_metafiles=False))
+
+
+def _link_op(src, target, occurrence=1, text="図1"):
+    return {"op": "link_figure", "src": src, "text": text, "occurrence": occurrence, "target": target, "role": "", "image": "",
+            "mathml": "", "surname": "", "given": "", "reason": "試験", "confidence": "高"}
+
+
+def _float_ref(res):
+    [act] = [a for a in actions(res) if a.key == "float_ref"]
+    return act
+
+
+def test_h3_float_ref_advice_follows_the_ai_state(journal, meta, tmp_path):
+    """H3: 図・表の参照のリンクを付けていない箇所の案内は、AI による補完の状態（使っていない・回答待ち・AI を使った後）で文を分ける
+    （以前は、回答待ちや AI を使った後にも「AI による補完を使う設定で変換し直すと…」と勧めた）。AI がリンクを付けた参照は残りから除く。"""
+    path, src = _float_ref_states(tmp_path, journal, meta)
+    # (1) AI を使っていない: AI による補完を使う設定にして変換し直すことを勧める（画面ごとの語は目印）
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "none", convert_metafiles=False))
+    assert len(res.plan.float_unlinked) == 2
+    act = _float_ref(res)
+    assert "AI による補完を使う設定（API か手動）で変換し直すと" in act.top and step("ai_choose") + "変換し直すと" in act.box_detail
+    assert "--ai manual か --ai api を指定して変換し直すと" in act.cli
+    # (2) 手動で回答待ち: 回答を反映すると AI がリンクを付けること、反映した後に残る分をこの知らせで確かめることを言う。設定の変更は勧めない
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "pending", ai_mode="manual", convert_metafiles=False))
+    act = _float_ref(res)
+    assert "AI の回答を反映すると" in act.top and "もう一度出る" in act.top and "設定（API か手動）" not in act.top
+    assert step("answer_apply") + "と" in act.box_detail and step("ai_choose") not in act.box_detail
+    assert "--ai manual --ai-response 回答のファイル を指定して変換し直すと" in act.cli and "--ai manual か --ai api を指定して" not in act.cli
+    # (3) AI を使った後、一部だけリンクが付いた: 付いた分は除き、残りは「AI もリンクを付けなかった参照」。設定の変更は勧めない
+    res = _manual(path, [_link_op(src, "F1", 1)], meta, journal, tmp_path / "part")
+    assert res.fidelity.ok and res.ai.rejected == [] and len(res.plan.float_unlinked) == 1
+    assert float_links(load(res), "図1を見る") == [("図1", "fig", "F1")]
+    act = _float_ref(res)
+    assert "（1 か所）" not in act.top and "対象の参照（1 か所）" in act.box_detail
+    for t in (act.top, act.box_detail, act.cli):
+        assert "AI もリンクを付けませんでした" in t and "設定（API か手動）" not in t and "ai_choose" not in t, t
+        assert "--ai manual か --ai api" not in t
+    # (4) 全部にリンクが付いた: 知らせは出ない
+    res = _manual(path, [_link_op(src, "F1", 1), _link_op(src, "F2", 2)], meta, journal, tmp_path / "all")
+    assert res.plan.float_unlinked == [] and [a for a in actions(res) if a.key == "float_ref"] == []
+    # (5) AI の回答が採用されなかった（リンク先がない）: 残りは全部
+    res = _manual(path, [_link_op(src, "F99", 1)], meta, journal, tmp_path / "none_ok")
+    assert len(res.plan.float_unlinked) == 2 and "AI もリンクを付けませんでした" in _float_ref(res).top
+    # (6) 回答を読み込めなかった: AI は反映されていない。設定の変更ではなく回答を反映できたらと言う
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "bad", ai_mode="manual", ai_response="これは JSON ではない",
+                                               convert_metafiles=False))
+    assert res.ai.error
+    act = _float_ref(res)
+    assert "AI による補完が反映できていません" in act.top and "AI の回答を反映できたら" in act.top
+    assert "設定（API か手動）" not in act.top and "--ai manual か --ai api" not in act.cli
+
+
+def test_manual_fields_hidden_when_result_was_not_made_in_manual_mode(journal, meta, tmp_path):
+    """0.29.0 の 4 回目の点検: AI を使っていない（または API の）結果のまま、変換し直さずに「AI による補完の方法」の欄だけを手動に切り替えても、
+    手動の欄（依頼文・「反映」）は出さない（図・表の参照の知らせ float_ref が出ていても。空の依頼文と回答を反映できない「反映」になるため）。
+    手動モードで作った結果（依頼文がある）では出る。"""
+    from jasme_jats.app import AppState
+    path, src = _float_ref_states(tmp_path, journal, meta)
+    none = convert(path, meta, journal, Options(out_dir=tmp_path / "none", convert_metafiles=False))
+    assert none.ai.mode == "none" and [a for a in actions(none) if a.key == "float_ref"]
+    st = AppState(tmp_path / "w")
+    st.set_inputs(ai_mode="none")
+    st.res = none
+    assert not st.answer_box_open
+    st.set_inputs(ai_mode="manual")
+    assert not st.answer_box_open and st.prompt_text() == ""
+    # API の結果も同じ
+    done = _manual(path, [_link_op(src, "F1", 1)], meta, journal, tmp_path / "api_like")
+    done.ai.mode, done.prompt_path = "api", None
+    st.res = done
+    assert not st.answer_box_open
+    # 手動モードで作った結果（AI を使った後）は、貼り直せるように見える
+    done = _manual(path, [_link_op(src, "F1", 1)], meta, journal, tmp_path / "manual_done")
+    st.res = done
+    assert st.answer_box_open and st.prompt_text()
+
+
+def test_ai_link_on_lookalike_text_keeps_the_unlinked_reference(journal, meta, tmp_path):
+    """0.29.0 の最後の点検: AI がリンクを付けた参照を plan.float_unlinked から除く一致は、段落の中の位置（範囲）を見る。
+    リンクの対象でない同じ文字（「地図1」の「図1」）に AI がリンクを付けても、本当にリンクされていない「図1」の要確認 float_ref は消えない。
+    AI がその参照そのものにリンクを付ければ消える。"""
+    body = [mf.para(S["body"], "地図1を見る。図1も見る。")]
+    path = floats_article(tmp_path, body, ["図1　一つ目の図", "図1　二つ目の図"], [], name="fu")
+    _, plan, _ = _mechanical(path, journal)
+    src = next(s for s, p in plan.paras.items() if p.plain().startswith("地図1"))
+    plain = plan.paras[src].plain()
+    [ref] = plan.float_unlinked
+    assert (ref.word, ref.src, ref.text) == ("図", src, "図1") and plain[ref.start:ref.end] == "図1"
+    assert ref.start == plain.index("。図1") + 1                      # 「地図1」の「図1」ではなく、2 つ目の「図1」
+    # (1) 1 回目の「図1」（地図1 の中）にリンクを付けた: 本当にリンクされていない 2 つ目の参照は残り、知らせも出る
+    res = _manual(path, [_link_op(src, "F1", 1)], meta, journal, tmp_path / "lookalike")
+    assert res.fidelity.ok and res.ai.rejected == []
+    assert [(u.src, u.text, u.start) for u in res.plan.float_unlinked] == [(src, "図1", ref.start)]
+    act = _float_ref(res)
+    assert "AI もリンクを付けませんでした" in act.top and "対象の参照（1 か所）" in act.box_detail
+    # (2) 2 回目の「図1」（本当にリンクされていない参照）にリンクを付けた: 除かれ、知らせも出ない
+    res = _manual(path, [_link_op(src, "F1", 2)], meta, journal, tmp_path / "real")
+    assert res.fidelity.ok and res.ai.rejected == [] and res.plan.float_unlinked == []
+    assert [a for a in actions(res) if a.key == "float_ref"] == []
+
+
+def test_float_ref_advice_names_operations_each_screen_can_take(journal, meta, tmp_path):
+    """0.29.0 の最後の点検の小さいもの (a)〜(d): 図・表の参照の知らせの案内が、画面ごとに取れる操作を言う。
+    (a) API の呼び出しが失敗したときは、回答を反映する言い方（手動の言い方）にしない。(b) 回答待ちは、1 画面版では「反映」を押すだけ
+    （押した後にさらに「変換する」を押す操作に読ませない）、ノートブックでは ▶ を押す。(c) AI を使った後の「AI に出し直してもらう」は、
+    手動なら貼り直し、API ならもう一度変換する。(d) コマンドラインは --ai manual と --ai-response を一緒に言う。"""
+    from jasme_jats import pipeline
+    from jasme_jats.ai_assist import AIOutcome
+    from jasme_jats.colab import step_text
+    path, src = _float_ref_states(tmp_path, journal, meta)
+
+    def texts(res):
+        act = _float_ref(res)
+        return {"report": act.top, "notebook": step_text(act.box_detail, "notebook"), "app": step_text(act.box_detail, "app"),
+                "cli": act.cli}
+    # (b) 回答待ち（手動）
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "pending", ai_mode="manual", convert_metafiles=False))
+    t = texts(res)
+    assert "手順 6 で AI の回答を貼り付けて ▶ を押すと" in t["notebook"]
+    assert "「反映」を押すと、AI が指定した参照にリンクが付く" in t["app"] and "「反映」を押して変換し直すと" not in t["app"]
+    assert "「変換する」" not in t["app"]                            # 回答なしで作り直す操作を勧めない
+    assert "--ai manual --ai-response 回答のファイル を指定して変換し直すと" in t["cli"]
+    # (c) AI を使った後（手動）: 貼り直す。1 画面版は手動の欄が見えたまま（AppState.answer_box_open）
+    res = _manual(path, [_link_op(src, "F1", 1)], meta, journal, tmp_path / "manual_done")
+    t = texts(res)
+    assert "手順 6 で貼り付け直してください" in t["notebook"]
+    assert "「AI の回答（json のコードブロック）を貼り付ける」の欄に貼り付け直して「反映」を押してください" in t["app"]
+    assert "--ai manual --ai-response 回答のファイル を指定し直して実行してください" in t["cli"]
+    assert "貼り付け直して反映" in t["report"] and "手順" not in t["app"] and "\x00" not in "".join(t.values())
+    from jasme_jats.app import AppState
+    st = AppState(tmp_path / "work")
+    st.set_inputs(ai_mode="manual")
+    st.res = res
+    assert st.answer_box_open                                   # 案内のとおり、貼り付け直す欄が見えている
+    # (c) AI を使った後（API）: もう一度変換する
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "api_done", convert_metafiles=False))
+    res.ai = AIOutcome(mode="api")
+    res.ai.raw = "{}"
+    t = texts(res)
+    assert "手順 5 をもう一度実行してください" in t["notebook"] and "「変換する」をもう一度押してください" in t["app"]
+    assert "--ai api でもう一度実行してください" in t["cli"] and "もう一度変換すると" in t["report"]
+    # (a) API の呼び出しが失敗した: 回答を反映する言い方ではなく、もう一度変換して補完ができれば、と言う
+    real = pipeline.call_provider
+    pipeline.call_provider = lambda *a, **k: _api_failed()
+    try:
+        res = convert(path, meta, journal, Options(out_dir=tmp_path / "api_err", ai_mode="api", ai_api_key="x", convert_metafiles=False))
+    finally:
+        pipeline.call_provider = real
+    assert res.ai.error and res.ai.mode == "api"
+    t = texts(res)
+    for screen, text in t.items():
+        assert "AI の回答を反映できたら" not in text and "AI による補完ができていません" in text, screen
+    assert "手順 5 をもう一度実行して AI による補完ができれば" in t["notebook"]
+    assert "「変換する」をもう一度押して AI による補完ができれば" in t["app"]
+    assert "--ai api でもう一度実行して AI による補完ができれば" in t["cli"]
+    # 回答を読めなかった手動モードは、今までどおり「AI の回答を反映できたら」
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "bad", ai_mode="manual", ai_response="これは JSON ではない",
+                                               convert_metafiles=False))
+    assert "AI の回答を反映できたら" in texts(res)["report"]
+
+
+def _api_failed():
+    from jasme_jats.ai_assist import AIOutcome
+    o = AIOutcome(mode="api")
+    o.error = "接続できません"
+    return o
+
+
+def test_cli_ai_response_needs_ai_manual(journal, meta, tmp_path, capsys):
+    """0.29.0 の最後の点検の (d): --ai の既定は none なので、--ai-response だけでは回答が読まれない。黙って無視せず、引数の誤り
+    （標準エラー・終了コード 2。変換の前に止める）にする。--ai api でも同じ。--ai manual と一緒なら読む。"""
+    from conftest import META_EXAMPLE
+
+    from jasme_jats.cli import main
+    resp = tmp_path / "回答.json"
+    resp.write_text('{"operations": [], "placements": [], "notes": []}', encoding="utf-8")
+    base = [str(FULL), "--meta", str(META_EXAMPLE), "--no-metafile-conversion", "--ai-response", str(resp)]
+    for extra in ([], ["--ai", "none"], ["--ai", "api"]):
+        with pytest.raises(SystemExit) as e:
+            main(base + extra + ["--out", str(tmp_path / "out")])
+        err = capsys.readouterr().err
+        assert e.value.code == 2 and "--ai-response" in err and "--ai manual" in err, extra
+    assert not (tmp_path / "out").exists()
+    assert main(base + ["--ai", "manual", "--out", str(tmp_path / "ok")]) in (0, 1)
+    assert (tmp_path / "ok").exists()

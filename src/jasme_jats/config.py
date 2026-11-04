@@ -1,4 +1,4 @@
-"""雑誌の設定（config/*.toml）と記事ごとの書誌情報。"""
+"""雑誌の設定（data/jasme.toml。--config で別のファイルも指定できる）と記事ごとの書誌情報。"""
 from __future__ import annotations
 
 import datetime as _dt

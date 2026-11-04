@@ -12,7 +12,7 @@
   文字列を書き換えるコードは書きません（具体的な決まりは DEVELOPMENT.md の「守るべき原則」）。
 - **正本は GitHub の `main` ブランチです。** 利用者のノートブックは、実行のたびに `main` からツールを入れます。
   つまり **`main` に入れた変更は、その時点で利用者に届きます。** テストを通してから反映してください。
-- 読む順番: README.md → USAGE.md（利用者向けの使い方。USAGE_AI.md は API キーと手動モード）→ DESIGN.md → DEVELOPMENT.md →（必要に応じて）JSTAGE_NOTES.md・STYLE_MAPPING.md・GUI_PLAN.md（操作画面の整理計画）。
+- 読む順番: README.md → USAGE.md（利用者向けの使い方。USAGE_AI.md は API キーと手動モード）→ ARCHITECTURE.md（コードの地図）→ DESIGN.md → DEVELOPMENT.md → REVIEW_2026-11.md（点検で見つかった問題）→（必要に応じて）JSTAGE_NOTES.md・STYLE_MAPPING.md・GUI_PLAN.md（操作画面の整理計画）。
   Claude Code に頼めば、要点をまとめて説明してくれます（下の 4.）。
 
 ## 1. 必要なもの

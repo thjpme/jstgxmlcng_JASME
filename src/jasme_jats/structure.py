@@ -101,6 +101,27 @@ RE_HEAD2 = re.compile(r"^[(（][0-9０-９]{1,2}[)）]\s*\S.{0,40}$")
 RE_HEAD3 = re.compile(r"^[①-⑳]\s*\S.{0,40}$")
 RE_FIGCAP = re.compile(r"^(?:図|Figure|Fig\.?)\s*([0-9０-９]+)")
 RE_TABCAP = re.compile(r"^(?:表|Table)\s*([0-9０-９]+)")
+# キャプションの番号のすぐ後ろの枝番（「図1-2」「図2.1」）の区切りの文字（正規表現の文字クラスの中身。枝番の区切りの定義はここ
+# 1 か所で、builder の RE_LABEL_SPLIT〈split_labels のときに <label> に分ける番号の形〉と linker の RE_BRANCH_REF〈参照の枝番〉が
+# これを使う）。「-」「‐」「‑」「‒」「–」「—」「―」「−」「.」と、NFKC 前の全角の「．」「－」。後ろに枝番の数字（CAP_BRANCH_NUM）が
+# 続くときだけ区切りとする
+CAP_BRANCH_SEP = "\\-\u2010-\u2015\u2212.\uff0e\uff0d"
+# 枝番の数字: 1〜2 桁で、直後に数字が続かないもの（「図1―2019年度の推移」の「2019」は年なので枝番にしない。区切りと同じく 3 か所
+# で使う定義）。NFKC 前の全角の数字も含める
+CAP_BRANCH_NUM = "[0-9０-９]{1,2}(?![0-9０-９])"
+# キャプションの番号のすぐ後ろの枝番（NFKC 後の文字に使う）。枝番はキャプションの番号の一部で、整数だけを読む RE_FIGCAP・RE_TABCAP
+# では「図1-1」「図1-2」がどちらも「図1」になる（linker が参照のリンクを決めるときに使う）
+RE_CAP_BRANCH = re.compile(rf"[{CAP_BRANCH_SEP}](?={CAP_BRANCH_NUM})")
+
+
+def caption_label(para: Para, regex) -> tuple:
+    """図・表のキャプションの段落 para の番号と、番号のすぐ後ろに枝番があるか: (番号, 枝番あり)。regex は RE_FIGCAP・RE_TABCAP。
+    番号を読めなければ (None, False)。番号は assign_ids が FigNode.number・TableNode.number に入れるものと同じ。"""
+    t = nfkc(_para_text(para)).strip()
+    m = regex.match(t)
+    if not m:
+        return None, False
+    return int(m.group(1)), RE_CAP_BRANCH.match(t, m.end(1)) is not None
 # テキストボックス内のキャプションの形（NFKC 後）。番号の直後がひらがな・読点・範囲の記号なら「図1は…」のような本文の文
 RE_TEXTBOX_CAP = re.compile(r"^(?:(?P<fig>図|Figure|Fig\.?)|(?P<tab>表|Table))\s*[0-9]+(?![0-9ぁ-ゟ,、・~〜\-–—])")
 RE_FORMULA_LABEL = re.compile(r"^[\s\u3000]*([(（][\s\u3000]*[0-9０-９]+(?:[.．\-－][0-9０-９]+)?[\s\u3000]*[)）])[\s\u3000]*$")
@@ -186,6 +207,11 @@ def appendix_sentence(text: str) -> str:
     if RE_APPENDIX_SENTENCE.match(rest) and RE_EN_SENTENCE_END.search(rest):
         return "番号などの後ろが英小文字の語で、「.」などで終わる英文の文"
     return ""
+
+
+def block_id(b) -> str:
+    """本文のブロック b（段落・表）の識別子（段落は src、表は tid）。文言に使う。"""
+    return b.src if isinstance(b, Para) else b.tid
 
 
 def appendix_heading(text: str) -> bool:
@@ -454,11 +480,62 @@ class Classifier:
         セクション区切りで本文に切り替えるため）。
         本文の外の段落に結び付いた図形（self.outside。2 回目の組み立て）の中身は、その時点の領域にかかわらず、本文の最後に
         回す（docx の順。領域は変えない。修正計画の N7）。
+        本文スタイルの「注」だけの段落（表の注の見出しなど）は、文字から注の見出しと推定して後付けに切り替える（back_heading_by_text）が、
+        引用文献・付記・謝辞などの見出しが続く前に、見出しのスタイルの段落（スタイルから決まった sec1・sec2・sec3）が現れ、かつ
+        その段落が資料の見出し（appendix_heading）でなければ、注の節ではなく本文の続きとして、その「注」の段落から見出しの前までを
+        本文に戻し、判断の一覧に記録して要確認で知らせる（点検の K5・F10・G2。fn_guess）。「注」の直後が注の番号で始まるか
+        （note_list_follows）は戻すかどうかの条件にせず、知らせの文に使うだけにする（注の番号で始まる表の注〈「1) 数値は平均である。」〉
+        の後ろに章見出しが続く原稿も戻す）。資料の見出しが続いたときは、今までどおり注の節として扱う。文字から推定した注の節の中に
+        注の一覧に見えない段落が続いたまま後付けの見出し（または文書の終わり）に着いたときは、注の節として扱ったまま、要確認で
+        知らせる（plan.fn_guess_checks。check_fn_guess）。ブロックは段落でも表でもよい（表の識別子は tid。block_id）。
+        文字から注の見出しと推定した「注」ごとに、その段落を「注見出し」スタイルにしたときに注の一覧に入る段落を plan.fn_guess_span に
+        記録する（feed_fn_span。助言が言う範囲）。文字から注の見出しと推定される「注」の段落はすべて plan.fn_guess_notes に記録する
+        （「注」が 2 つ以上あるときの助言に使う。構造は変えない）。
         """
         regions = {"front_ja": [], "body": [], "back": [], "front_en": []}
         state = "front_ja"
         seen_title = False
+        # 本文から後付けへの切り替えが、文字から推定した注の見出し（本文スタイルの「注」だけの段落。表の注の見出しなど）によるとき、
+        # その段落の regions["back"] の中の位置。後付けの見出しが続けば本当の注の節（None に戻す。注の番号で始まらない段落が続いた
+        # ままなら要確認で知らせる）、見出しのスタイルの段落が先に現れ、それが資料の見出しでなければ、注の節ではなく本文の続き
+        # だったとして本文に戻す（K5・F10・G2）
+        fn_guess = None
+        # 文字から注の見出しと推定した「注」の段落 ID → その後ろが今、注の節の中か（その段落を「注見出し」スタイルにしたとき、
+        # 後ろの段落が注の節に入るかを数えている間。plan.fn_guess_span。feed_fn_span）。英文の部分に切り替わると数えるのをやめる
+        fn_open = {}
         for b, role in flat:
+            if fn_open and not in_shape(b):
+                self.feed_fn_span(fn_open, b, role)
+            if (state in ("body", "back") and isinstance(b, Para) and not in_shape(b) and role not in BACK_HEADINGS
+                    and self.back_heading_by_text(b, role) == "fn_heading"):
+                self.plan.fn_guess_notes.append(b.src)        # 記録だけ（助言に添える。fn_guess_notes）
+            if fn_guess is not None and state == "back" and not in_shape(b):
+                if role in BACK_HEADINGS or (isinstance(b, Para) and self.back_heading_by_text(b, role) not in (None, "fn_heading")):
+                    self.check_fn_guess(regions["back"][fn_guess:], f"後ろの後付けの見出し {block_id(b)}")    # 引用文献・付記・謝辞などの見出しが続く: 本当の注の節
+                    fn_guess = None
+                elif role in HEADING_LEVEL and isinstance(b, Para) and not appendix_heading(_para_text(b)):
+                    listed = self.note_list_follows(regions["back"][fn_guess + 1:])      # 知らせの文の材料（戻すかどうかには使わない）
+                    moved = regions["back"][fn_guess:]
+                    del regions["back"][fn_guess:]
+                    regions["body"].extend(moved)
+                    state, fn_guess = "body", None
+                    head = moved[0][0]
+                    kind = {"sec1": "章", "sec2": "節", "sec3": "項"}[role]
+                    after = ("「注」の直後は注の番号で始まるが、注の番号で始まる表の注の可能性もあるため" if listed
+                             else "「注」の直後が注の番号で始まらないため")
+                    self.plan.decide(
+                        "mechanical", "style", head.src,
+                        f"本文スタイルの段落「{_para_text(head).strip()[:20]}」を、文字から注の見出しと推定して後付けに切り替えたが、"
+                        f"後ろに{kind}見出しのスタイルの段落 {b.src}「{_para_text(b).strip()[:20]}」が続き、資料の見出しではなく、{after}、"
+                        f"注の節ではなく本文の続き（表の注の見出しなど）とみなし、この段落から{kind}見出しの前までの {len(moved)} "
+                        "ブロックを本文に戻した")
+                    # 戻した範囲の、注の番号で始まる段落（本当の注の一覧かもしれない。知らせの文に件数と抜粋を出す。H7）
+                    numbered = [x.src for x, _ in moved[1:] if isinstance(x, Para) and not in_shape(x) and self.note_starts(x)]
+                    if numbered:
+                        self.plan.fn_guess_numbered[head.src] = numbered
+                    self.plan.fn_guess_checks.append(
+                        (head.src, "returned", f"{len(moved)} ブロックを本文に戻した（後ろの{kind}見出し {b.src}）"
+                         + (f"。戻した範囲に注の番号で始まる段落が {len(numbered)} 件ある" if numbered else "")))
             if in_shape(b) and self.outside and ((b.float_id and b.float_id in self.outside)
                                                  or (b.textbox_id and b.textbox_id in self.outside)):
                 regions["body"].append((b, role))
@@ -482,16 +559,98 @@ class Classifier:
                 elif isinstance(b, Table) and seen_title and not troles & FRONT_JA_ROLES:
                     state = "body"
             elif state == "body":
-                if role in BACK_HEADINGS or (isinstance(b, Para) and self.back_heading_by_text(b, role)):
+                guess = None if role in BACK_HEADINGS or not isinstance(b, Para) else self.back_heading_by_text(b, role)
+                if role in BACK_HEADINGS or guess:
                     state = "back"
+                    if guess == "fn_heading":
+                        fn_guess = len(regions["back"])
+                        fn_open[b.src] = True
+                        self.plan.fn_guess_span[b.src] = []
+            if state != "back":
+                if fn_guess is not None:
+                    self.check_fn_guess(regions["back"][fn_guess:], f"後ろの英文の部分 {block_id(b)}")      # 英文の部分に切り替わった
+                fn_guess = None
             regions[state].append((b, role))
             if state == "front_ja" and isinstance(b, Para) and b.section_break and seen_title:
                 state = "body"
+        if fn_guess is not None and state == "back":
+            self.check_fn_guess(regions["back"][fn_guess:], "文書の終わり")       # 後付けの見出しが続かないまま文書が終わった
         return regions
 
+    def feed_fn_span(self, fn_open, b, role):
+        """ブロック b（図形の外）を、文字から推定した「注」の段落（fn_open のキー）ごとの plan.fn_guess_span に足す。
+
+        その「注」を「注見出し」スタイルにすると、後付けの領域は「注」から英文の部分まで続き、build_back が段落を分ける:
+        後付けの見出し（役割かテキストから決まるもの）に着くと、その節に切り替わる。注の見出し（別の「注」の段落）は見出しとして注の節に
+        戻るだけで、注の一覧の段落には入らない。注の節の中の段落（空白だけの段落と表を除く）が、助言が言う「注の節に入る段落」。
+        英文の部分に切り替わる段落・表からは数えない（fn_open を空にする）。
+        """
+        if role in FRONT_EN_ROLES or (isinstance(b, Table) and self.table_roles(b) & {"author_en", "aff_en"}):
+            fn_open.clear()
+            return
+        if not isinstance(b, Para):
+            return
+        heading = role if role in BACK_HEADINGS else self.back_heading_by_text(b, role)
+        if heading:
+            for head in fn_open:
+                fn_open[head] = heading == "fn_heading"
+        elif not b.is_blank:
+            for head, in_fn in fn_open.items():
+                if in_fn:
+                    self.plan.fn_guess_span[head].append(b.src)
+
+    def note_lead(self, b: Para) -> tuple:
+        """注の一覧の中の段落 b の、新しい注の始まりを示す番号: (Word の自動番号の注の番号、手で打った番号、上付きの数字)。どれもなければ
+        すべて None（前の注の続きの段落）。build_back が注を分けるときと、split_regions が注の一覧に見えるかを確かめるときに使う。"""
+        auto = note_mark(b.autonum) if b.autonum else None
+        mark = None if auto else note_mark(b.plain())
+        sup_lead = None
+        if not (auto or mark) and b.atoms and b.atoms[0].kind == "text" and "sup" in b.atoms[0].fmt:
+            sup_lead = re.match(r"^[\s\u3000]*([0-9０-９]+)", b.atoms[0].text)
+        return auto, mark, sup_lead
+
+    def note_starts(self, b) -> bool:
+        """段落 b が新しい注の始まり（注の番号で始まる。AI の fn_start の指定を含む）か。"""
+        if not isinstance(b, Para):
+            return False
+        return any(self.note_lead(b)) or self.overrides.get(b.src) == "fn_start"
+
+    def note_list_follows(self, items) -> bool:
+        """文字から推定した「注」の段落の後ろの items（[(段落・表, 役割)]）の、図形の中と空白だけの段落を除く最初の段落が、注の番号で
+        始まるか（注の一覧が続くか）。items が空・最初が表・番号で始まらない段落なら False。"""
+        for b, _ in items:
+            if in_shape(b) or (isinstance(b, Para) and b.is_blank):
+                continue
+            return self.note_starts(b)
+        return False
+
+    def check_fn_guess(self, items, where):
+        """文字から推定した注の節 items（先頭が「注」の段落。[(段落・表, 役割)]）が、後付けの見出し・英文の部分・文書の終わり（where。
+        文言）に着いたとき、注の一覧に見えない段落が残っていれば、注の節として扱ったまま plan.fn_guess_checks に記録する（要確認。F10）:
+        「注」の直後が注の番号で始まらない（表の注のあとの本文が続いたままなど）か、見出しのスタイルの段落が混じっている。"""
+        first = items[0][0]
+        rest = [b for b, _ in items[1:] if not in_shape(b) and isinstance(b, Para) and not b.is_blank]
+        no_list = not self.note_list_follows(items[1:])
+        heads = [b for b, r in items[1:] if r in HEADING_LEVEL and not in_shape(b) and isinstance(b, Para)]
+        if not rest or not (no_list or heads):
+            return
+        why = "「注」の直後が注の番号で始まらない" if no_list else f"見出しのスタイルの段落 {heads[0].src} が含まれる"
+        plain = sum(1 for x in rest if not self.note_starts(x))
+        self.plan.decide(
+            "mechanical", "style", first.src,
+            f"本文スタイルの段落「{_para_text(first).strip()[:20]}」を、文字から注の見出しと推定して後付けに切り替え、{where}までを注の節と"
+            f"して扱った（{why}。注の番号で始まらない段落 {plain} 件を含む）。表の注の見出しなど、本文の続きなら、Word でその段落の"
+            "スタイルを確かめる")
+        self.plan.fn_guess_checks.append(
+            (first.src, "kept", f"{where}まで {len(items)} ブロックを注の節として扱った（{why}）"))
+
     def back_heading_by_text(self, para: Para, role: str) -> Optional[str]:
-        """スタイル違反の後付け見出し（「引用文献」を章見出しスタイルで書いた等）をテキストから推定。"""
-        if role not in ("sec1", "normal", "p"):
+        """スタイル違反の後付け見出し（「引用文献」を章見出しスタイルで書いた等）をテキストから推定。
+
+        AI の補完が役割を指定した段落（overrides。後付けの見出しの役割 BACK_HEADINGS なら呼ぶ前に決まっている）は推定しない:
+        「注」だけの段落に set_role の p を指定すれば、後付けの見出しと推定されない本文の段落にできる（表の注の見出しなど）。
+        """
+        if role not in ("sec1", "normal", "p") or para.src in self.overrides:
             return None
         t = nfkc(_para_text(para)).strip()
         if RE_REF_HEADING_TEXT.match(t):
@@ -1347,7 +1506,7 @@ class Classifier:
         used, used_tables, dissolved, entries, descs = set(), set(), set(), [], []
         for item in spec["items"]:
             caps = []
-            for src in item["caption"]:
+            for src in item.get("caption") or []:       # 検証（ai_assist._placement_problem）は falsy を空の一覧として通す
                 q = paras.get(src) or cell_paras[src]
                 if src in cells:
                     dissolved.add(cells[src].tid)
@@ -1356,7 +1515,7 @@ class Classifier:
                 caps.append(q)
                 used.add(q.src)
             image_paras, extra, tbls, mixed = [], [], [], []
-            for x in item["body"]:
+            for x in item.get("body") or []:
                 if x in tables:
                     tbls.append(tables[x])
                     used_tables.add(x)
@@ -1709,6 +1868,22 @@ class Classifier:
             for p in self.node_paras(node):
                 plan.locations.setdefault(p.src, f"{where} / 第{count}要素")
 
+    def add_back_para(self, children, b: Para, formula: bool = True, heading: bool = False):
+        """付記・謝辞・資料の段落を children に足す: 別行数式は FormulaNode、Word の自動番号の段落は同じ番号の定義が続く間 ListNode
+        （本文と同じ。番号は <list-item> の <label> に出る）、それ以外は PNode。heading: 見出しの役割（章・節・項見出しのスタイル）の
+        段落。自動番号があっても箇条にせず（前後の同じ番号の <list> にまとめない。本文では見出しは節の見出しで、箇条にならない）、
+        PNode にする。次の同じ番号の段落は、見出しで切れた新しい ListNode から始まる。"""
+        fnode = self.formula_node(b) if formula else None
+        if fnode:
+            children.append(fnode)
+        elif b.numbering and b.autonum and not heading:
+            if children and isinstance(children[-1], ListNode) and children[-1].items[-1].numbering[0] == b.numbering[0]:
+                children[-1].items.append(b)
+            else:
+                children.append(ListNode(items=[b], ordered=not self.doc_numbering_is_bullet(b)))
+        else:
+            children.append(PNode(b))
+
     @staticmethod
     def node_paras(node):
         if isinstance(node, PNode):
@@ -1803,11 +1978,7 @@ class Classifier:
             elif state == "fn":
                 # 番号（Word の自動番号の「1)」、手で打った「1)」「（注1）」、上付きの数字）で始まる段落から新しい注。
                 # 番号のない段落は前の注の続き。AI の指定（fn_start: 新しい注の始まり / p: 前の注の続き）があればそれに従う
-                auto = note_mark(b.autonum) if b.autonum else None
-                mark = None if auto else note_mark(b.plain())
-                sup_lead = None
-                if not (auto or mark) and b.atoms and b.atoms[0].kind == "text" and "sup" in b.atoms[0].fmt:
-                    sup_lead = re.match(r"^[\s\u3000]*([0-9０-９]+)", b.atoms[0].text)
+                auto, mark, sup_lead = self.note_lead(b)
                 starts = bool(auto or mark or sup_lead)
                 ai_role = self.overrides.get(b.src)
                 if ai_role == "fn_start":
@@ -1830,8 +2001,7 @@ class Classifier:
                 plan.locations[b.src] = f"注 {len(plan.fns)}件目"
             elif state in ("notes", "ack"):
                 target = plan.notes if state == "notes" else plan.ack
-                fnode = self.formula_node(b)
-                target.children.append(fnode or PNode(b))
+                self.add_back_para(target.children, b, heading=role in HEADING_LEVEL)
                 plan.locations[b.src] = ("付記" if state == "notes" else "謝辞") + f" 第{len(target.children)}段落"
             else:
                 plan.exclude(b, "位置づけが不明な段落（本文と後付けの間）")
@@ -1940,10 +2110,11 @@ class Classifier:
                 if sentence:
                     self.note_appendix_sentence(b, text, sentence, first=False)
                 if role in HEADING_LEVEL or self.guess_heading(b, strict=False):
-                    app.children.append(PNode(b))   # 資料内の見出しは段落として出力
+                    self.add_back_para(app.children, b, formula=False, heading=True)   # 資料内の見出しは段落として出力（箇条にしない）
+                elif self.is_image_para(b) and not self.formula_node(b):
+                    app.children.append(FigNode(image_paras=[b]))
                 else:
-                    fnode = self.formula_node(b)
-                    app.children.append(fnode or (FigNode(image_paras=[b]) if self.is_image_para(b) else PNode(b)))
+                    self.add_back_para(app.children, b)
                 continue
             if role == "title_en":
                 plan.title_en.append(b)

@@ -2,6 +2,7 @@
 
 論文の docx を J-STAGE 全文 XML（JATS 1.1）に変換するツール（『全国数学教育学会誌 数学教育学研究』用）。
 作業の前に `docs/DEVELOPMENT.md`（コードの構成・守るべき原則・反映の流れ）と `docs/DESIGN.md`（設計）を読むこと。
+コードの地図（層・依存・データの流れ・逆引き）は `docs/ARCHITECTURE.md`、未修正の問題の一覧は `docs/REVIEW_2026-11.md`。
 新しく引き継いだ人向けの環境の作り方は `docs/HANDOFF.md`。
 
 ## 最優先の原則
@@ -22,13 +23,14 @@
     （`pdfdocx.py`）、それをルート1 と同じ処理で変換する。docx を直すのは `pdfdocx.py` だけで、XML は補った docx と 1 文字も違わない。
     (A) の直しは、`pdfmatch` の `typeset_pair` の対と、全角・半角の文字か Word が付ける番号（自動番号・脚注番号）のすぐ隣の半角の空白の削除（`drops`）を超えて文字を変えない。変換の最後に、補った docx が元の docx から (A) と報告した (B) 以外に
     変わっていないことを、照合・直しとは別の実装で確かめる（補完の確かめ。`fidelity.verify_supplement`。不合格は要対応）。
+    空白の削除は、根拠の全角・半角の直しを直さないことになったら直さない（片方向。`pdfdocx.Fix.needs`）。
     Word が付ける番号（自動番号・脚注番号）は docx の文字ではないので、変換のときに全角・半角と字形を PDF に合わせる。
     PDF のページ番号・誌名の行・柱・投稿受付日など（組版で入る文字）と、docx にない図・表の中の文字は docx に足さない（`pdfmatch.pdf_stream`。足さなかった文字はレポートの 13 章）。
     足すか・消すかを PDF から決められない違いは直さず、理由（`TextDiff.why`）を付けて 13 章に出す。
 - 「docx の文字」は Word で表示される文字（変更履歴を承諾し、隠し文字を隠した状態）。段落のつながり（段落記号の削除。`ooxml.joined_paragraphs`）と
   隠し文字の判定（スタイルの `w:vanish`。`ooxml.HiddenRule`）の規則は、読み取り（`docx_reader`）・検証（`fidelity.source_texts`）・ルート2（`pdfdocx`）で共有する。
 - 利用者に知らせること（要対応・要確認）は `report.actions()` に `Action` を足すだけで、レポートの冒頭・14 章・Colab の枠（要対応は赤、要確認は黄）・コマンドラインの標準エラーに出る
-  （個別の表示を render・colab・cli・make_notebook.py に足さない）。コマンドラインの終了コードは、0 が要対応なし、1 が要対応あり（`Result.needs_action`）、2 が中止。
+  （個別の表示を render・colab・cli・make_notebook.py に足さない。画面の操作は手順番号や欄の名前を直接書かず、目印 `report.step()` で書く）。コマンドラインの終了コードは、0 が要対応なし、1 が要対応あり（`Result.needs_action`）、2 が中止。
 - 詳しくは `docs/DEVELOPMENT.md` の「守るべき原則」。
 
 ## 環境とテスト
@@ -38,6 +40,8 @@ pip install -e ".[dev]"     # セッションの最初に 1 回
 python -m pytest -q         # 変更のたびに。すべて通ってから反映する
 ```
 
+- Python 3.10 でも読めること: f 文字列の式の中にバックスラッシュ・外側と同じ引用符を書かない（`tests/test_syntax.py`）。
+  レポート（Markdown）の文の生のタグは `report.md_tag()` で囲む。
 - ノートブック（`notebooks/*.ipynb`）は `tools/make_notebook.py` で生成する。ipynb を直接編集せず、スクリプトを直して
   `python tools/make_notebook.py` を実行する。
 - テスト用の docx は `tests/make_fixtures.py` で生成する（内容は架空）。

@@ -3875,3 +3875,37 @@ def test_fullwidth_space_next_to_width_fix_is_kept(space, dropped, journal, tmp_
     assert fixes == [("1", "１", "width")] + ([(" ", "", "space")] if dropped else [])
     want = text.replace("図1", "図１").replace("図１ ", "図１") if dropped else text.replace("図1", "図１")
     assert fixed_texts(plan, pc)[s] == want
+
+
+# ---- K3: キャプションの 2 段落目以降（出典の行など）も照合する
+CAP_SRC = "出典：架空の調査（2024年）による。"
+
+
+def caption_more_article(tmp_path, journal):
+    cap = "図１　架空の授業の流れ"
+    plan, src = n10_article(tmp_path, journal, [("body", TALK), ("image", "fig"), ("fig_cap", cap), ("fig_cap", CAP_SRC),
+                                                ("body", LESSON)])
+    return plan, src, cap
+
+
+def test_caption_more_is_target_paragraph(journal, tmp_path):
+    """図のキャプションの 2 段落目以降（caption_more）も照合する段落に入る（pdfmatch.target_paragraphs。docstring どおり）。"""
+    from jasme_jats.pdfmatch import target_paragraphs
+    plan, src, _ = caption_more_article(tmp_path, journal)
+    assert {src[CAP_SRC], src["図１　架空の授業の流れ"]} <= {p.src for p in target_paragraphs(plan)}
+
+
+def test_caption_more_typeset_difference_is_fixed(journal, meta, tmp_path, monkeypatch):
+    """キャプションの 2 段落目（出典の行）の組版の違い（半角の「2024」と全角の「２０２４」）も、ルート2 で PDF に合わせる。
+    直した後の docx でも、その段落の役割とリンクは元の docx と同じに決まる。"""
+    plan, src, cap = caption_more_article(tmp_path, journal)
+    pub = CAP_SRC.replace("2024", "２０２４")
+    pages = n10_pages([*SMALL_FRONT, *body_lines(TALK), cap, pub, *body_lines(LESSON), *N10_TAIL])
+    pc = compare(plan, pages)
+    assert pc.typeset_count == 4 and pc.text_diffs == []
+    assert {f.src for f in plan_fixes(plan, pc)} == {src[CAP_SRC]}
+    assert changed_paragraphs(plan, pc, {src[CAP_SRC]: pub}) == {}
+    res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "pdf", docx=tmp_path / "n10.docx")
+    assert len(res.docx_fix.applied_typeset) == 4
+    xml = res.xml_path.read_text(encoding="utf-8")
+    assert f"<p>{pub}</p>" in xml

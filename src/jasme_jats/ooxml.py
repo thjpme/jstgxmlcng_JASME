@@ -9,11 +9,11 @@
   「docx の文字」は、Word で表示される文字（変更履歴をすべて承諾し、隠し文字を隠した状態）とする。読み取り（docx_reader）・
   検証（canonical_text・canonical_texts。fidelity.source_texts）・ルート2（pdfdocx.paragraph_units・write_fixed_docx）の 3 か所は、
   ここに置く規則（段落のつながり joined_paragraphs と、隠し文字の判定 HiddenRule）を共有し、文字の取り出しはそれぞれ別の実装で行う。
-  含める: w:t, m:t（数式中の文字）, w:tab（タブ文字）, 改行 w:br / w:cr（改行文字）,
+  含める: w:t, m:t（数式中の文字）, w:tab / w:ptab（タブ文字）, 改行 w:br / w:cr（改行文字）,
           w:noBreakHyphen（U+2011）, w:softHyphen（U+00AD）, w:sym（記号フォントは Unicode に対応付け）
   含めない: 削除された変更履歴（w:del, w:moveFrom）, フィールドコード, 隠し文字（HiddenRule。ランの直接の w:vanish・w:specVanish、
           文字スタイル・段落スタイル〈w:basedOn をたどる〉と既定の書式〈w:docDefaults〉の w:vanish）,
-          ページ区切り・段区切り, テキストボックス内の段落（別の段落として扱う）, ルビの読み（w:rt）,
+          ページ区切り・段区切り, テキストボックス内の段落（別の段落として扱う。削除の変更履歴の中の図形の段落は欠番）, ルビの読み（w:rt）,
           Word が自動生成する文字（脚注番号・自動段落番号。これらは XML では「生成文字」として区別する）
   段落の区切り: 段落記号が削除された段落（w:pPr/w:rPr の w:del・w:moveFrom）は、Word で承諾した状態と同じく、同じ親の中の次の
           段落とつないで 1 段落にする（joined_paragraphs。段落の ID は連鎖の最初の段落のもので、後ろの段落の ID は欠番）。
@@ -346,17 +346,27 @@ def unjoined_deleted_marks(root) -> list:
     return out
 
 
+def in_deleted_run(p) -> bool:
+    """段落 p が、変更履歴で削除された要素（w:del・w:moveFrom）の中にあるか。
+
+    段落が削除の中に入るのは、削除されたランの図形（テキストボックス）の中の段落だけ。Word で承諾すると図形ごと消えるので、
+    読み取りは図形を読まない（その段落の ID は欠番になる）。検証・ルート2 も同じ規則で、その段落を数えない。
+    """
+    return any(a.tag in (w("del"), w("moveFrom")) for a in p.iterancestors())
+
+
 def canonical_texts(root, prefix: str, hidden=None) -> dict:
     """部品（root）のすべての段落の文字 {段落 ID: 文字}（検証用。fidelity.source_texts）。
 
     段落 ID は paragraph_ids と同じ番号。段落記号の削除でつないだ連鎖（joined_paragraphs）は、最初の段落の ID に、連鎖の段落
-    ごとの canonical_text を順に連結した文字を入れ、後ろの段落の ID は入れない（欠番）。hidden は隠し文字の判定（HiddenRule）。
+    ごとの canonical_text を順に連結した文字を入れ、後ろの段落の ID は入れない（欠番）。削除の変更履歴の中の図形の段落
+    （in_deleted_run）も入れない（欠番）。hidden は隠し文字の判定（HiddenRule）。
     """
     chains = joined_paragraphs(root)
     later = {q for c in chains.values() for q in c[1:]}
     out = {}
     for p, pid in paragraph_ids(root, prefix).items():
-        if p not in later:
+        if p not in later and not in_deleted_run(p):
             out[pid] = "".join(canonical_text(q, hidden) for q in chains.get(p, [p]))
     return out
 

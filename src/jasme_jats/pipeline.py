@@ -45,10 +45,10 @@ from .jstage_rules import check as jstage_check
 from .linker import cited_refs, link
 from .model import Decision, LostImage
 from .package import article_dir, make_zip, unzipped_files, write_package, zip_image_names, zip_problems
-from .pdfdocx import DocxFix, make_fixed_docx
+from .pdfdocx import DocxFix, make_fixed_docx, same_file
 from .pdfmatch import PdfCheck, check_pdf
 from .report import (BOX_PENDING_NOTE, NEEDS_ACTION, actions, figure_body_detail, images_to_prepare, render,
-                     render_ai_only)
+                     render_ai_only, step)
 from .report import pdf_fallback as report_pdf_fallback
 from .structure import classify, float_caption, float_targets
 from .tracking import SPAN
@@ -56,7 +56,11 @@ from .validate import validate
 
 
 class AIRequiredError(Exception):
-    """位置を機械的に決められない図表があるのに、AI による補完を使わない設定で変換しようとした。"""
+    """位置を機械的に決められない図表があるのに、AI による補完を使わない設定で変換しようとした。
+
+    文の中の画面の操作は目印（report.step）で書く。画面に出すときは colab.step_text で（ノートブックは colab.ai_required_box、
+    1 画面版は app.py、コマンドラインは cli.py が screen を指定して）語に置き換える。
+    """
 
     def __init__(self, plan):
         self.floats = [plan.floats[fid] for fid in plan.unplaced_floats]
@@ -65,7 +69,7 @@ class AIRequiredError(Exception):
         super().__init__(
             f"この原稿には、位置を機械的に決められない図表（テキストボックス・グループ図形に入った図表）が {len(self.floats)} 件"
             "あります。これらの位置と組み合わせは AI に判断させる必要があるため、AI による補完を「使わない」設定では変換できません。"
-            "「API で自動実行」か「手動（チャットに貼り付け）」を選んで、もう一度変換してください。\n" + "\n".join(lines))
+            + step("ai_modes") + "、もう一度変換してください。\n" + "\n".join(lines))
 
 
 def _head(plan, src) -> str:
@@ -120,7 +124,7 @@ class Options:
     out_dir: Path
     split_labels: Optional[bool] = None       # None なら雑誌の設定に従う
     ai_mode: str = "none"                     # none / api / manual
-    ai_provider: str = "claude"               # API モードで使う AI: claude（推奨）/ openai（ChatGPT）/ gemini
+    ai_provider: str = "claude"               # API モードで使う AI: claude（推奨）/ openai（ChatGPT）/ gemini / sakana（Sakana AI）
     ai_model: str = DEFAULT_MODEL             # claude 以外では利用者が指定する
     ai_api_key: Optional[str] = None
     ai_response: Optional[str] = None         # 手動モード: AI の回答（JSON）
@@ -299,6 +303,22 @@ def _mechanical(docx_path, journal, overrides=None, placements=None):
     return doc, plan, linker
 
 
+def fixed_docx_path(docx_path, out_dir, article_id: str) -> Path:
+    """ルート2 の、出版版 PDF で補った docx の書き出し先。出力フォルダの「<記事 ID>_PDFで補完した原稿.docx」。
+
+    入力の docx がそのファイル（利用者が前回の補った docx を保存して、同じ出力フォルダでかけ直した）なら、入力を読みながら
+    上書きして壊してしまうので、末尾に番号を付けた別の名前（「…_PDFで補完した原稿_2.docx」…）にする。別の名前は、入力とも、
+    すでにあるファイルとも重ならないものにする。"""
+    out_dir = Path(out_dir)
+    path = out_dir / f"{article_id}_PDFで補完した原稿.docx"
+    n = 1
+    if same_file(docx_path, path):
+        while path.exists():            # 入力とも、すでにあるファイルとも重ならない名前
+            n += 1
+            path = out_dir / f"{article_id}_PDFで補完した原稿_{n}.docx"
+    return path
+
+
 def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options) -> Result:
     docx_path = Path(docx_path)
     out_dir = Path(opts.out_dir)
@@ -312,7 +332,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         # ルート2: 出版版 PDF で補った docx（変更履歴つき）を作り、以降はそれを変換する
         if not opts.pdf_path:
             raise ValueError("docx から作り、出版版 PDF で補う（ルート2）には、記事の PDF が必要です")
-        fixed = out_dir / f"{meta.article_id(journal)}_PDFで補完した原稿.docx"
+        fixed = fixed_docx_path(docx_path, out_dir, meta.article_id(journal))
         docx_fix = make_fixed_docx(docx_path, opts.pdf_path, fixed, journal)
         if docx_fix.check.ok:
             docx_path = fixed
@@ -369,8 +389,8 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
                 if plan.undecided_boxes:
                     output_note += BOX_PENDING_NOTE
         if data is not None:
-            ops = split_ops(data)
-            outcome.notes = [str(n) for n in data.get("notes", []) if str(n).strip()]
+            ops = split_ops(data, outcome)
+            outcome.notes = [n for n in data.get("notes", []) if isinstance(n, str) and n.strip()]
             overrides = role_overrides(ops, plan, outcome)
             placements = float_placements(data, plan, outcome)
             keys = target_keys(plan)
@@ -387,7 +407,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
                     why = (f"テキストボックス {sid} は、AI の役割の指定（set_role）を反映して組み直した後に文字だけのテキストボックスで"
                            "なくなったか、置く位置の段落が本文の段落でなくなったので、kind の指定は使わなかった")
                     outcome.rejected.append((spec["op"], why))
-            apply_ops(ops, plan, doc, outcome)
+            apply_ops(ops, plan, doc, outcome, split)
             cited = cited_refs(plan)
             plan.uncited_refs = [r.rid for r in plan.refs if r.rid not in cited]
             root, info = build(plan, meta, journal, split)

@@ -73,7 +73,7 @@ NSDECL = ('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main
 S = {"title": "af7", "subtitle": "af8", "aff_ja": "af9", "author_ja": "afa", "title_en": "afb",
      "subtitle_en": "afc", "author_en": "afd", "aff_en": "afe", "abs_head": "aff", "abs": "aff0",
      "sec1": "aff1", "sec2": "aff2", "sec3": "aff3", "notes_head": "aff4", "ack_head": "aff5",
-     "fn_head": "aff6", "ref_head": "aff8", "ref": "aff9", "fig_cap": "affa", "tab_cap": "affb",
+     "fn_head": "aff6", "fn_body": "aff7", "ref_head": "aff8", "ref": "aff9", "fig_cap": "affa", "tab_cap": "affb",
      "quote": "affc", "body": "af5", "normal": None}
 
 

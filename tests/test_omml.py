@@ -57,3 +57,18 @@ def test_unknown_element_keeps_text():
     mml, w = omml_to_mathml(om(f"<m:foo><m:e>{r('z')}</m:e></m:foo>"))
     assert math_plain(mml) == "z"
     assert w
+
+
+def test_root_with_deg_hide_keeps_degree_text():
+    """degHide が真でも m:deg に文字があれば mroot で出す（文字を落とさない。h_nary の subHide/supHide と同じ）。
+    canonical_text（検証）と math_plain が同じ「3x」になる。文字がなければ今までどおり msqrt。"""
+    from jasme_jats.ooxml import canonical_text, w
+    pr = '<m:radPr><m:degHide m:val="1"/></m:radPr>'
+    mml, _ = omml_to_mathml(om(f"<m:rad>{pr}<m:deg>{r('3')}</m:deg><m:e>{r('x')}</m:e></m:rad>"))
+    assert "mroot" in tags(mml) and "msqrt" not in tags(mml)
+    assert math_plain(mml) == "3x"
+    p = etree.fromstring(f'<w:p xmlns:w="{w("p")[1:-2]}" xmlns:m="{M}"><m:oMath><m:rad>{pr}<m:deg>{r("3")}</m:deg>'
+                         f"<m:e>{r('x')}</m:e></m:rad></m:oMath></w:p>")
+    assert canonical_text(p) == math_plain(mml)
+    mml, _ = omml_to_mathml(om(f"<m:rad>{pr}<m:deg/><m:e>{r('x')}</m:e></m:rad>"))
+    assert "msqrt" in tags(mml) and math_plain(mml) == "x"

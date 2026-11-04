@@ -951,7 +951,33 @@ def parse_response(text: str) -> dict:
         raise ValueError("JSON に operations の一覧がありません")
     if not isinstance(data.get("placements", []), list):
         raise ValueError("JSON の placements が一覧（[ ]）になっていません")
+    data["notes"] = _notes_list(data.get("notes", []))
     return data
+
+
+def _notes_list(notes) -> list:
+    """回答の notes（人が確認すべきこと）を、文字列の一覧にする。
+
+    一覧ならその要素の文字列（数値は str()、一覧・辞書・None などは捨てる）、文字列なら 1 件、それ以外は捨てる。
+    捨てたものがあれば、その旨の注意を 1 件足す（黙って落とさない。1 文字ずつの「気づき」にもしない）。
+    """
+    if notes is None or notes == []:
+        return []
+    if isinstance(notes, str):
+        return [notes]
+    if not isinstance(notes, list):
+        return [f"AI の回答の notes が一覧でも文字列でもなかった（{type(notes).__name__}）ので、使わなかった"]
+    out, dropped = [], 0
+    for n in notes:
+        if isinstance(n, str):
+            out.append(n)
+        elif isinstance(n, (int, float)) and not isinstance(n, bool):
+            out.append(str(n))
+        else:
+            dropped += 1
+    if dropped:
+        out.append(f"AI の回答の notes に文字列でない要素が {dropped} 件あったので、使わなかった")
+    return out
 
 
 def _before_trailing_text(t: str, e: json.JSONDecodeError):
@@ -1076,16 +1102,44 @@ def parse_cut_response(text: str):
 
 
 # ---------------------------------------------------------------------------- 検証と適用
-def split_ops(data):
+def _op_field(v, key):
+    """操作の項目 v を文字列にする。戻り値: (値, 使えない理由 '')。
+
+    文字列はそのまま、None は空文字、数値（int・float。bool は除く）は str()（"text": 2001 など。照合に使うだけの項目に限る。
+    mathml は XML に書く項目なので数値は認めない）。一覧・辞書・bool などは使えない。
+    """
+    if v is None:
+        return "", ""
+    if isinstance(v, str):
+        return v, ""
+    if isinstance(v, (int, float)) and not isinstance(v, bool) and key != "mathml":
+        return str(v), ""
+    return "", f"項目 {key} が文字列でない（{type(v).__name__}）"
+
+
+def split_ops(data, outcome=None):
+    """回答の operations を、項目をすべて文字列にした操作の一覧にする（occurrence は整数）。
+
+    項目の型が文字列にできない操作（_op_field）は、理由付きで outcome.rejected に記録して除く（outcome が None なら黙って除く）。
+    """
     ops = []
     for raw in data.get("operations", []):
         if not isinstance(raw, dict):
             continue
-        op = {k: raw.get(k, "" if k != "occurrence" else 1) for k in OP_SCHEMA["properties"]}
-        try:
-            op["occurrence"] = int(op.get("occurrence") or 1)
-        except (TypeError, ValueError):
-            op["occurrence"] = 1
+        op, bad = {}, ""
+        for k in OP_SCHEMA["properties"]:
+            if k == "occurrence":
+                try:
+                    op[k] = int(raw.get(k) or 1)
+                except (TypeError, ValueError, OverflowError):
+                    op[k] = 1
+                continue
+            op[k], why = _op_field(raw.get(k, ""), k)
+            bad = bad or why
+        if bad:
+            if outcome is not None:
+                outcome.rejected.append((op, bad + "ので、この操作は使わなかった"))
+            continue
         ops.append(op)
     return ops
 
@@ -1174,8 +1228,10 @@ def placement_op(pl) -> dict:
     """配置の指定を、レポートの「操作」の一覧に載せる形にする。"""
     pl = pl if isinstance(pl, dict) else {}
     items = pl.get("items") if isinstance(pl.get("items"), list) else []
-    what = "；".join(f"{it.get('kind')}: キャプション {','.join(map(str, it.get('caption') or []))} / 本体 "
-                     f"{','.join(map(str, it.get('body') or []))}" for it in items if isinstance(it, dict))
+    def ids(v):                         # 一覧でない値（数値など）はここで落とさない。不採用の理由は _placement_problem が示す
+        return ",".join(map(str, v)) if isinstance(v, list) else ("" if v in (None, 0, "") else str(v))
+    what = "；".join(f"{it.get('kind')}: キャプション {ids(it.get('caption'))} / 本体 {ids(it.get('body'))}"
+                     for it in items if isinstance(it, dict))
     return {"op": "place_float", "src": str(pl.get("float", "")), "text": what, "target": str(pl.get("after", "")),
             "role": "", "image": "", "reason": str(pl.get("reason", "")), "confidence": str(pl.get("confidence", ""))}
 
@@ -1202,7 +1258,7 @@ def float_placements(data, plan: ArticlePlan, outcome: AIOutcome) -> dict:
                 ends[fid] = ({"where": "end", "after": after, "op": op}, len(outcome.rejected))
             outcome.rejected.append((op, why))
             continue
-        spec = {"after": pl["after"], "items": pl["items"], "reason": op["reason"],
+        spec = {"after": pl.get("after"), "items": pl["items"], "reason": op["reason"],     # label は after を使わない（書かなくてよい）
                 "confidence": op["confidence"] if op["confidence"] in ("高", "中", "低") else "低", "op": op}
         if pl["float"] in plan.textboxes:
             spec["kind"] = pl["items"][0]["kind"]       # 文字だけのテキストボックス: box（囲み）か label（図の注記）
@@ -1220,6 +1276,19 @@ def _placement_problem(pl, plan: ArticlePlan, body: set, done: dict) -> str:
     if not isinstance(pl, dict):
         return "指定の形式が正しくない"
     fid, after, items = pl.get("float"), pl.get("after"), pl.get("items")
+    if not isinstance(fid, str) or not (after is None or isinstance(after, str)):
+        return "float と after は文字列で書く"
+    for it in items if isinstance(items, list) else []:
+        if not isinstance(it, dict):
+            continue                    # 形式の不備は、以降の検証が理由を示す
+        for key in ("caption", "body"):
+            v = it.get(key)
+            if not v:
+                continue                # None・""・0・false は、以前どおり空の一覧として扱う（下の it.get(key) or []）
+            if not isinstance(v, list):
+                return f"items の {key} は一覧（[ ]）で書く"
+            if not all(isinstance(x, str) for x in v):
+                return f"items の {key} の要素は文字列（段落・表・画像の ID）で書く"
     box = plan.textboxes.get(fid) if isinstance(fid, str) else None
     if box is not None:
         return _box_placement_problem(fid, box, after, items, body, done)
@@ -1352,9 +1421,31 @@ def retarget_ops(ops, before: dict, plan: ArticlePlan):
             op["target"] = new or f"{op['target']}（組み直した後に見当たらない）"
 
 
-def apply_ops(ops, plan: ArticlePlan, doc, outcome: AIOutcome):
-    """set_role 以外の操作を検証して適用する（構造を組み直した後の plan に対して）。"""
+def label_ranges(plan: ArticlePlan, split: bool) -> dict:
+    """split_labels のとき <label> に分ける図表キャプションの先頭の範囲（段落の ID → 範囲の終わり）。
+
+    分け方は builder の規則（RE_LABEL_SPLIT。先頭の空白と番号）をそのまま使う。<label> の中は emit.LABEL が xref=False なので、
+    この範囲にかかるリンクは XML に出ない。
+    """
+    from .builder import RE_LABEL_SPLIT
+    out = {}
+    if not split:
+        return out
+    caps = [f.caption for f in plan.figures] + [t.caption for t in plan.tables]
+    for c in caps:
+        m = RE_LABEL_SPLIT.match(c.plain()) if c is not None else None
+        if m and m.group(2):
+            out[c.src] = m.end(2)
+    return out
+
+
+def apply_ops(ops, plan: ArticlePlan, doc, outcome: AIOutcome, split: bool = False):
+    """set_role 以外の操作を検証して適用する（構造を組み直した後の plan に対して）。
+
+    split は split_labels（図表キャプションの先頭の番号を <label> に分けるか）。分けるとき、その番号の範囲にかかるリンクは採用しない。
+    """
     from .linker import apply_span, range_linked
+    labels = label_ranges(plan, split)
     ids = {"B": {r.rid for r in plan.refs}, "F": {f.fid for f in plan.figures if f.fid},
            "T": {t.tid for t in plan.tables}, "fn": {f.fid for f in plan.fns}, "FD": {f.fid for f in plan.formulas if f.fid}}
     images = {}
@@ -1362,6 +1453,10 @@ def apply_ops(ops, plan: ArticlePlan, doc, outcome: AIOutcome):
         for ip in f.image_paras:
             for img in ip.images:
                 images[img.image_id] = f
+    # リンクを出せない段落（emit の xref が偽の文脈で書く段落）: 題目・著者名・所属・引用文献（no_link_paras）と別行数式
+    nolink = dict(plan.no_link_paras())
+    for fm in plan.formulas:
+        nolink.setdefault(fm.para.src, "別行数式")
     author_paras = {}
     for a in plan.authors:
         if a.name_ja is not None:
@@ -1388,6 +1483,9 @@ def apply_ops(ops, plan: ArticlePlan, doc, outcome: AIOutcome):
             if p is None:
                 outcome.rejected.append((op, f"段落 {src} が存在しない"))
                 continue
+            if src in nolink:
+                outcome.rejected.append((op, f"{nolink[src]}の段落には、XML でリンクを出せないので付けない"))
+                continue
             prefix = TARGET_PREFIX[kind]
             if target not in ids.get(prefix, set()):
                 outcome.rejected.append((op, f"リンク先 {target} が存在しない（{kind} の対象は {prefix}…）"))
@@ -1409,6 +1507,9 @@ def apply_ops(ops, plan: ArticlePlan, doc, outcome: AIOutcome):
             if range_linked(p, *rng):
                 outcome.rejected.append((op, "すでにリンクが付いている箇所"))
                 continue
+            if src in labels and rng[0] < labels[src]:
+                outcome.rejected.append((op, "図表キャプションの先頭の番号（<label> に分ける部分）にはリンクを出せないので付けない"))
+                continue
             spec = LinkSpec(kind="xref", attrs={"ref-type": REF_TYPE[kind], "rid": target}, origin="ai")
             apply_span(p, rng[0], rng[1], spec)
             what = {"link_citation": "引用", "link_figure": "図の参照", "link_table": "表の参照", "link_note": "注の参照",
@@ -1417,6 +1518,14 @@ def apply_ops(ops, plan: ArticlePlan, doc, outcome: AIOutcome):
                             f"「{text}」を{what}として {target} にリンクした。{op['reason']}", op["confidence"])
             spec.decision_id = d.did
             outcome.accepted.append((op, d))
+            if kind in ("link_figure", "link_table"):
+                # 機械的にはリンクしなかった図・表の参照（plan.float_unlinked）に AI がリンクを付けたら、その分は残りから除く
+                # （要確認の知らせ〈report.float_ref_ai〉は「AI もリンクを付けなかった参照」だけを挙げる）。同じ種類・同じ段落で、
+                # 参照の範囲が AI のリンクの範囲と重なるものだけを除く（リンクの対象でない同じ文字〈「地図1」の「図1」〉に AI がリンクを
+                # 付けても、本当にリンクされていない参照は残る）
+                word = "図" if kind == "link_figure" else "表"
+                plan.float_unlinked[:] = [u for u in plan.float_unlinked
+                                          if not (u.word == word and u.src == src and u.start < rng[1] and rng[0] < u.end)]
             continue
         if kind == "formula_image":
             fig = images.get(op["image"])
@@ -1425,6 +1534,12 @@ def apply_ops(ops, plan: ArticlePlan, doc, outcome: AIOutcome):
                 continue
             if fig.caption is not None:
                 outcome.rejected.append((op, "キャプションのある図は数式画像として扱わない"))
+                continue
+            if fig.tables or fig.extra_images or fig.caption_more:
+                # builder は formula_image にすると画像の段落の画像だけを書き直すので、表の文字・移した画像・キャプションの
+                # 続きの段落が落ちてしまう（不変性チェックの不合格、画像の見落とし）
+                outcome.rejected.append((op, "表・他の段落から移した画像・キャプションの続きの段落のある図は、"
+                                             "数式画像として扱うと中身が落ちるので扱わない"))
                 continue
             mml, err = parse_mathml(op["mathml"])
             if mml is None:
@@ -1470,6 +1585,8 @@ def parse_mathml(s: str):
     if "xmlns" not in t.split(">", 1)[0]:
         t = re.sub(r"^<(?:mml:)?math", f'<math xmlns="{MML_NS}"', t, count=1)
     t = t.replace("<mml:", "<").replace("</mml:", "</")
+    if "<!doctype" in t.lower():
+        return None, "DOCTYPE（実体の定義）は使えない"
     try:
         el = etree.fromstring(t.encode("utf-8"), etree.XMLParser(resolve_entities=False, no_network=True))
     except etree.XMLSyntaxError as e:
@@ -1478,7 +1595,8 @@ def parse_mathml(s: str):
         return None, "根要素が math ではない"
     for x in el.iter():
         if not isinstance(x.tag, str):
-            continue
+            # 実体参照・コメント・処理命令は、そのまま出力に入ると XML として読めない・数式でない文字が入るので使わない
+            return None, "実体参照・コメント・処理命令は使えない"
         q = etree.QName(x)
         if q.namespace != MML_NS or q.localname not in MATHML_ELEMENTS:
             return None, f"使えない要素 {q.localname}"

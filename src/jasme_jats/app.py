@@ -6,7 +6,7 @@
   - build_app(state, io): gr.Blocks を組み立て、ボタンの処理を AppState につなぐ。Colab に依存する操作（シークレットの読み出し・
     LibreOffice の待ち合わせ）は io に切り出す（テストでは偽物を渡す）。
 
-知らせは report.actions() から colab.result_boxes() で出す。この画面に個別の表示は足さない（docs/DEVELOPMENT.md の原則 8）。
+知らせは report.actions() から colab.result_boxes(screen="app") で出す（文の中の画面の操作は、この画面の欄の名前に置き換わる）。この画面に個別の表示は足さない（docs/DEVELOPMENT.md の原則 8）。
 未公開の原稿を Gradio の中継サーバーに通さないため、launch() の share は必ず False。
 Gradio の版は pyproject の gui の extra で固定している（上げるときは人が Colab で確かめてから）。
 """
@@ -18,8 +18,10 @@ import tempfile
 from pathlib import Path
 
 from . import __version__
+from . import report as rp
 from .ai_assist import API_KEY_NAMES, DEFAULT_MODEL
-from .colab import (ai_required_box, error_box, no_ai_box, report_details, result_boxes, summary_box)
+from .colab import (ANSWER_LABEL, APPLY_LABEL, CONVERT_LABEL, ai_required_box, error_box, no_ai_box, report_details, result_boxes,
+                    step_text, summary_box)
 from .config import ArticleMeta, JournalConfig, keyword_language_mismatch, keyword_problem
 from .pipeline import AIRequiredError, Options, add_images, convert
 from .report import NEEDS_ACTION, actions, ai_pending, images_to_prepare
@@ -101,6 +103,11 @@ class ColabIO(IO):
 
 
 # ---------------------------------------------------------------------------- 状態
+def _app_text(text: str) -> str:
+    """目印（report.step）を 1 画面版の語に置き換える（colab.STEP_WORDS の "app"）。"""
+    return step_text(text, "app")
+
+
 class AppState:
     """画面の入力と結果。Gradio に依存しない。"""
 
@@ -185,6 +192,7 @@ class AppState:
             local_pdf = self.work / "input" / pdf.name
             if pdf.resolve() != local_pdf.resolve():
                 shutil.copyfile(pdf, local_pdf)
+        self.res = None                        # 出力フォルダを消すので、前の結果は先に捨てる（途中で止まったとき、消えたファイルを指さないため）
         shutil.rmtree(self.out_dir, ignore_errors=True)
         try:
             res = convert(local, self._meta, self._journal, Options(
@@ -193,7 +201,7 @@ class AppState:
                 ai_api_key=self._api_key, ai_response=ai_response, pdf_path=local_pdf, route=f["route"],
                 split_labels=bool(f["split_labels"])))
         except AIRequiredError as e:
-            raise InputError(str(e), ai_required_box(str(e)))
+            raise InputError(step_text(str(e), "app"), ai_required_box(str(e), "app"))
         step(0.9, "画像を入れ直しています…")
         if self.user_images:
             add_images(res, self.user_images, skip_unneeded=True)     # 変換をやり直したときに、受け取った画像を入れ直す
@@ -226,6 +234,27 @@ class AppState:
     def waiting_for_answer(self) -> bool:
         """手動モードで、AI の回答をまだ反映していない。"""
         return self.res is not None and self.inputs["ai_mode"] == "manual" and ai_pending(self.res)
+
+    # 手動モードで、AI の回答を貼り付け直す案内（report.py の枠。colab.STEP_WORDS の repaste）が出る Action の key。これらが出ている
+    # ときも、手動の欄（依頼文・回答の欄・「反映」）を見せたままにする。float_ref（リンクしなかった図・表の参照。AI の回答を反映した後も
+    # AI がリンクを付けなかったとき、「AI に出し直してもらう」案内が貼り直しを勧める）・textbox_undecided（AI の回答を反映した後も
+    # 囲みか注記か決められなかったテキストボックスがあるとき、同じく貼り直しを勧める）も入れる
+    REPASTE_KEYS = ("ai_error", "partial", "forced", "float_ref", "textbox_undecided")
+
+    @property
+    def answer_box_open(self) -> bool:
+        """手動の欄（依頼文・添付画像・回答の欄〈ANSWER_LABEL〉・「反映」）を見せるか。
+
+        AI の回答をまだ反映していないとき（waiting_for_answer）に加えて、反映した後も、回答を読めない（ai_error）・途中で切れた
+        （partial）・図表の位置が決まらない（forced）・AI もリンクを付けなかった図・表の参照がある（float_ref）・囲みか注記か決められないテキストボックスが残る（textbox_undecided）の枠が出ているあいだは、
+        貼り付け直せるように見せたままにする。
+        回答の反映（apply_answer）ができるときだけ見せる（waiting_for_answer と同じく、「AI による補完の方法」の欄が手動のとき）。
+        さらに、その結果が手動モードで作られたとき（依頼文があるとき）だけ見せる: AI を使っていない・API の結果のまま「AI による
+        補完の方法」の欄だけを手動に切り替えても、空の依頼文と「反映」は出さない（変換し直すと出る）。
+        """
+        if self.res is None or self.inputs["ai_mode"] != "manual" or self.res.ai.mode != "manual" or not self.res.prompt_path:
+            return False
+        return ai_pending(self.res) or any(a.key in self.REPASTE_KEYS for a in actions(self.res))
 
     def prompt_text(self) -> str:
         if self.res is None or not self.res.prompt_path:
@@ -286,6 +315,64 @@ class AppState:
         self.user_images.update(supplied)
         return added
 
+    # ---- 想定外のエラー
+    def report_location(self) -> str:
+        """変換レポート（Markdown）の場所。なければ空文字。"""
+        if self.res is not None and self.res.report_path.exists():
+            return str(self.res.report_path)
+        found = sorted(self.out_dir.glob("*_変換レポート.md")) if self.out_dir.exists() else []
+        return str(found[0]) if found else ""
+
+    # 操作ごとの案内（crash の operation）。入力や、貼り付けた回答・入れた画像を消す操作を勧めない。欄・ボタンの名前は、目印（report.step）で
+    # 書いて colab.STEP_WORDS の 1 画面版の語に置き換える（文の中に欄の名前を直接書かない）
+    CRASH_ADVICE = {
+        "convert": _app_text("入力（" + rp.step("docx") + "・" + rp.step("pdf") + "・" + rp.step("meta") + "）が正しいかを確かめ、直してから、"
+                             + rp.step("convert_again") + "してください。同じ例外で止まるときは、入力を変えずに、開発者に知らせてください。"),
+        "apply": _app_text("反映の途中で止まったため、前の結果は捨てており、手動の欄（" + rp.step("prompt") + "・" + rp.step("answer_field") + "・"
+                           + rp.step("apply_button") + "）は今は隠れています。" + rp.step("convert_again") + "すと、AI の回答を反映する前の結果と"
+                           "手動の欄が戻り、貼り付けた回答も" + rp.step("answer_field") + "に残っています。欄が戻ったら、念のため回答を別の場所にも"
+                           "保存してください。同じ例外で止まるときは、入力は変えずに、開発者に知らせてください。"),
+        "images": _app_text("入れた画像と変換の結果は、この画面に残っています。入力は変えず、" + rp.step("convert_again") + "さずに（押すと、"
+                            "入れた画像が消えます）、開発者に知らせてください。"),
+        "download": "変換の結果は、この画面に残っています。もう一度ダウンロードの操作をしてかまいません。同じ例外で止まるときは、"
+                    "入力は変えずに、開発者に知らせてください。"}
+
+    # 回答の反映の想定外のエラーで、前の結果がまだ残っているとき（変換に入る前に止まった）。手動の欄も、貼り付けた回答もそのまま
+    CRASH_ADVICE_APPLY_KEPT = _app_text(
+        "前の結果と手動の欄（" + rp.step("prompt") + "・" + rp.step("answer_field") + "・" + rp.step("apply_button") + "）は、この画面にそのまま残っています。"
+        "貼り付けた回答も欄に残っています。同じ例外で止まるときは、入力は変えずに、開発者に知らせてください。")
+
+    # ダウンロードの想定外のエラーで、出力フォルダが消えているとき（ZIP を作り直せない）。画面の結果は読めるが、同じ操作は同じ例外で止まる
+    CRASH_ADVICE_FOLDER_GONE = _app_text(
+        "画面の結果は読めますが、サーバー側の出力フォルダがないので、ダウンロードの操作をもう一度しても同じ例外で止まります。"
+        "必要な内容をこの画面から控えてから、入力を確かめて" + rp.step("convert_again") + "してください。")
+
+    def crash(self, error: Exception, operation: str = "convert") -> InputError:
+        """想定外の例外（変換ツールの不具合の可能性）を、画面に出す赤い枠にする。例外の種類と文を載せ、操作（operation。
+        convert・apply・images・download）に合った案内を付ける。案内は、そのときの画面の状態（結果が残っているか・手動の欄が見えるか・
+        出力フォルダがあるか）に合わせる。
+
+        変換レポートの場所は、サーバー側のパスで利用者が取り出せないので書かない。結果が残っているときは、この画面の
+        「変換レポートの全文を見る」を添えるよう案内する。
+        """
+        if operation not in self.CRASH_ADVICE:
+            raise ValueError(f"知らない操作: {operation}")
+        report = self.report_location() if self.res is not None else ""
+        advice = self.CRASH_ADVICE[operation]
+        if operation == "apply" and self.res is not None:       # 前の結果を捨てる前に止まった: 手動の欄は見えたまま
+            advice = self.CRASH_ADVICE_APPLY_KEPT
+        if report:
+            who = "この画面の「変換レポートの全文を見る」の内容と、この例外の文を添えて、開発者に知らせてください。"
+        elif self.res is not None:      # 結果は画面に残っているが、出力フォルダ（変換レポートのファイル）が見つからない
+            who = ("この画面の「変換レポートの全文を見る」の内容と、この例外の文を添えて、開発者に知らせてください"
+                   "（サーバー側の出力フォルダが見つからず、変換レポートのファイルは取り出せません）。")
+            if operation == "download":
+                advice = self.CRASH_ADVICE_FOLDER_GONE
+        else:
+            who = "この例外の文を添えて、開発者に知らせてください（変換レポートは作られていません）。"
+        message = f"{type(error).__name__}: {error}\n\n変換ツールの不具合の可能性があります。{who}\n{advice}"
+        return InputError(message, error_box("想定外のエラーで止まりました", message))
+
     # ---- 結果とダウンロード
     @property
     def needs_action(self) -> bool:
@@ -299,8 +386,8 @@ class AppState:
         if self.res is None:
             return ""
         res = self.res
-        parts = [no_ai_box()] if self.inputs["ai_mode"] == "none" else []
-        parts.append(result_boxes(res, skip=("ai_pending",) if self.waiting_for_answer else ()))
+        parts = [no_ai_box("app")] if self.inputs["ai_mode"] == "none" else []
+        parts.append(result_boxes(res, skip=("ai_pending",) if self.waiting_for_answer else (), screen="app"))
         parts.append(summary_box(res))
         parts.append(report_details(res.report_path.read_text(encoding="utf-8")))
         return "".join(parts)
@@ -395,15 +482,15 @@ def build_app(state: AppState, io: "IO | None" = None):
             subject_other = gr.Textbox(label="原稿種別（日本語）", info="原稿種別で「その他」を選んだときだけ")
             subject_other_en = gr.Textbox(label="原稿種別（英語）", info="同上")
         ready = gr.Markdown("足りない項目: docx")
-        go = gr.Button("変換する", variant="primary", interactive=False)
+        go = gr.Button(CONVERT_LABEL, variant="primary", interactive=False)
         message = gr.HTML()
         result = gr.HTML()
         with gr.Column(visible=False) as manual_col:
             prompt = gr.Textbox(label="依頼文（新しいチャットに貼り付けて送る）", lines=8, max_lines=8, interactive=False,
                                 buttons=["copy"])
             attach = gr.File(label="依頼文と一緒に添付する画像", file_count="multiple", interactive=False)
-            answer = gr.Textbox(label="AI の回答（json のコードブロック）を貼り付ける", lines=6)
-            apply_btn = gr.Button("反映")
+            answer = gr.Textbox(label=ANSWER_LABEL, lines=6)
+            apply_btn = gr.Button(APPLY_LABEL)
         with gr.Column(visible=False) as images_col:
             images_md = gr.Markdown()
             image_files = [gr.File(label=f"足りない図の画像 {k}", file_count="single", visible=False)
@@ -427,7 +514,7 @@ def build_app(state: AppState, io: "IO | None" = None):
 
         def view(error: "InputError | None" = None, download: str = ""):
             """結果に応じた画面の更新（views の順）。"""
-            manual = state.waiting_for_answer
+            manual = state.answer_box_open
             slots = state.image_slots()
             return [message_html(error) if error else "",
                     state.result_html(),
@@ -452,6 +539,8 @@ def build_app(state: AppState, io: "IO | None" = None):
                 state.convert(io, progress)
             except InputError as e:
                 return view(e)
+            except Exception as e:                 # 想定外の例外。Gradio の「Error」だけにせず、枠に出す
+                return view(state.crash(e, "convert"))
             return view()
 
         def on_apply(text, progress=gr.Progress()):
@@ -459,6 +548,8 @@ def build_app(state: AppState, io: "IO | None" = None):
                 state.apply_answer(text, io, progress)
             except InputError as e:
                 return view(e)
+            except Exception as e:
+                return view(state.crash(e, "apply"))
             return view()
 
         def on_images(*paths):
@@ -467,11 +558,17 @@ def build_app(state: AppState, io: "IO | None" = None):
                 state.add_images(dict(zip(names, paths)))
             except InputError as e:
                 return view(e)
+            except Exception as e:
+                return view(state.crash(e, "images"))
             return view()
 
         def on_download(accept_todo):
-            path, note = state.download(accept_todo)
             out = [gr.update()] * len(views)               # 結果などはそのまま（message と download_html だけ変える）
+            try:
+                path, note = state.download(accept_todo)
+            except Exception as e:                         # ZIP を作れなかった（出力フォルダが消えているなど）
+                out[0], out[8] = state.crash(e, "download").html, ""
+                return out
             out[0] = error_box("ダウンロードの前に", note) if note else ""
             out[8] = download_button_html(path) if path else ""
             return out

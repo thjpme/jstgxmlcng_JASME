@@ -74,6 +74,8 @@ class FidelityResult:
     ai_additions: list = field(default_factory=list)  # (decision, 文字) AI が明示的に追加したもの
     final_ok: bool = None
     final_detail: str = ""
+    final_unreadable: bool = False  # 最終出力が XML として読めなかった・実体の宣言があった（final_check。読めないことが不合格の理由）
+    final_differs: bool = False     # 最終出力の文字が、検証済みの木と違った（final_check。読めない・実体の宣言と同時のこともある）
 
     def summary(self) -> str:
         if self.ok and self.final_ok is not False:
@@ -223,10 +225,45 @@ def final_check(tracked_root, final_bytes: bytes, res: FidelityResult):
     etree.strip_elements(t, DROP, with_tail=False)
     expected = "".join(t.itertext())
     parser = etree.XMLParser(load_dtd=False, no_network=True, resolve_entities=False, huge_tree=True)
-    final = etree.fromstring(final_bytes, parser)
+    try:
+        final = etree.fromstring(final_bytes, parser)
+    except etree.XMLSyntaxError as e:
+        res.final_ok, res.final_detail = False, f"最終出力が XML として読めない: {e}"
+        res.final_unreadable = True
+        return False
+    # 実体参照のノードは文字として数えない（未定義の実体参照 &foo; は、itertext に "&foo;" が入って文字の違いに見えるが、
+    # 文字の違いではなく「読めない」側の不備。下の、実体を解決する読み直しで不合格にする）
+    for ent in list(final.iter(etree.Entity)):
+        parent = ent.getparent()
+        if ent.tail:
+            prev = ent.getprevious()
+            if prev is not None:
+                prev.tail = (prev.tail or "") + ent.tail
+            else:
+                parent.text = (parent.text or "") + ent.tail
+        parent.remove(ent)
     got = "".join(final.itertext())
     res.final_ok = expected == got
+    res.final_differs = not res.final_ok
     res.final_detail = "" if res.final_ok else _diff(expected, got)
+    # 実体宣言（<!ENTITY）を含む出力は、それだけで不合格にする。このツールは実体を宣言しない（DOCTYPE は公開 ID だけ）ので、
+    # あれば入り込んだもの。解決すると外部実体（file://）を読んでしまうが、内部実体だけ解決する設定（resolve_entities='internal'）は
+    # lxml 5.0 以降でしか使えず、下限（pyproject.toml の lxml>=4.9）では使えないため、宣言を見つけたら解決せずに止める
+    if b"<!ENTITY" in final_bytes:
+        res.final_ok = False
+        res.final_unreadable = True         # 文字の違いではなく、読めない・実体の宣言がある側の知らせ（report._fidelity_action）にする
+        res.final_detail = ("最終出力に実体の宣言（<!ENTITY）がある。このツールは出力しないので、外部の実体を読まないよう解決せずに不合格とした"
+                            + (f"。{res.final_detail}" if res.final_detail else ""))
+        return False
+    # 実体を宣言していなければ、実体を解決する通常のパーサでも読めること（未定義の実体参照などは、上の resolve_entities=False では
+    # 実体参照のまま通り、文字としては数えられない）。宣言がないので外部実体は読まない（ネットワークも読まない）。読めなければ
+    # 最終出力の不合格として、要対応に乗せる
+    try:
+        etree.fromstring(final_bytes, etree.XMLParser(load_dtd=False, no_network=True, resolve_entities=True, huge_tree=True))
+    except etree.XMLSyntaxError as e:
+        res.final_ok = False
+        res.final_unreadable = True
+        res.final_detail = f"最終出力が XML として読めない（実体参照などの不備）: {e}" + (f"。{res.final_detail}" if res.final_detail else "")
     return res.final_ok
 
 

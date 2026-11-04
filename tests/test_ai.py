@@ -967,6 +967,108 @@ def test_ai_kind_box_and_label_for_undecided_textboxes(journal, meta, tmp_path):
     assert "| 囲み・図の注記（テキストボックス） |" in report.split("## 2.")[1].split("## 3.")[0]
 
 
+def test_textbox_undecided_advice_after_ai_names_operation_of_each_screen(journal, meta, tmp_path):
+    """0.29.0 の 4 回目の点検: AI を使った後も決められなかったテキストボックスの知らせは、「AI に出し直してもらう」操作を画面ごとに言う
+    （float_ref_ai と同じ）。手動なら回答の貼り直し（目印 repaste）、API ならもう一度変換（convert_again）。1 画面版は貼り直す案内を
+    出すあいだ手動の欄（依頼文・回答の欄・「反映」）を見せたままにする（AppState.REPASTE_KEYS）。"""
+    from jasme_jats.ai_assist import AIOutcome
+    from jasme_jats.app import AppState
+    from jasme_jats.colab import step_text
+    plan, ids = _boxes_by_text(journal)
+    hint, note = ids["（ヒント）"], ids["注"]
+    res = _manual_pl(STRUCTURE, [_box_pl(hint, _src(plan, "囲みの後の段落である。")), _box_pl(note, "", kind="label")],
+                     meta, journal, tmp_path / "manual")
+    assert res.ai.mode == "manual" and res.plan.undecided_boxes
+    act = next(a for a in actions(res) if a.key == "textbox_undecided")
+    app_text, nb_text = step_text(act.box_detail, "app"), step_text(act.box_detail, "notebook")
+    assert "「AI の回答（json のコードブロック）を貼り付ける」の欄に貼り付け直して「反映」を押してください" in app_text
+    assert "手順 6 で貼り付け直してください" in nb_text and "もう一度" not in app_text.split("AI に出し直してもらうには")[1].split("。")[0]
+    assert "--ai manual --ai-response 回答のファイル を指定し直して実行する" in act.cli
+    assert "貼り付け直して反映してください" in act.top and "AI に出し直してもらうか、" not in act.top
+    assert "\x00" not in step_text(act.box_detail, "cli") + act.top + act.cli
+    st = AppState(tmp_path / "work")
+    st.set_inputs(ai_mode="manual")
+    st.res = res
+    assert st.answer_box_open and st.prompt_text()                     # 案内のとおり、貼り付け直す欄が見えている
+    # API: もう一度変換する
+    api = _manual_pl(STRUCTURE, [_box_pl(hint, _src(plan, "囲みの後の段落である。")), _box_pl(note, "", kind="label")],
+                     meta, journal, tmp_path / "api")
+    api.ai = AIOutcome(mode="api")
+    api.ai.raw = "{}"
+    act = next(a for a in actions(api) if a.key == "textbox_undecided")
+    assert "「変換する」をもう一度押してください" in step_text(act.box_detail, "app")
+    assert "手順 5 をもう一度実行してください" in step_text(act.box_detail, "notebook")
+    assert "--ai api でもう一度実行する" in act.cli and "もう一度変換すると AI が出し直します" in act.top
+    assert "貼り付け" not in act.top.split("AI に出し直してもらうには")[1].split("。")[0]
+    assert "反映" not in step_text(act.box_detail, "app").split("AI に出し直してもらうには")[1].split("。")[0]
+
+
+def test_textbox_undecided_advice_when_ai_failed_and_checklist_follows_mode(journal, meta, tmp_path):
+    """0.29.0 の 5 回目の点検: (1) AI の呼び出しが失敗した・回答を読めなかった（ai.error がある）ときは、「AI の回答に指定がない」と言わず、
+    float_ref_ai と同じく「AI による補完ができていません（要対応の知らせを参照）」の側の文にする。API は「もう一度変換」、手動は「回答を反映」。
+    (2) 14 章の checklist も AI の状態（使っていない・回答待ち・失敗・使った後）で変わり、AI を使った後に「AI による補完を使って
+    変換し直す」のままにならない。"""
+    from jasme_jats.ai_assist import AIOutcome
+    from jasme_jats.colab import step_text
+    plan, ids = _boxes_by_text(journal)
+    hint, note = ids["（ヒント）"], ids["注"]
+    # 使っていない
+    none = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "none", convert_metafiles=False))
+    act = next(a for a in actions(none) if a.key == "textbox_undecided")
+    assert "AI による補完を使って変換し直すか" in act.checklist
+    # 手動で回答を貼り戻す前
+    pend = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "pend", ai_mode="manual", convert_metafiles=False))
+    act = next(a for a in actions(pend) if a.key == "textbox_undecided")
+    assert "AI の回答を反映するか" in act.checklist and "AI による補完を使って" not in act.checklist
+    # AI を使った後（指定なし）
+    done = _manual_pl(STRUCTURE, [_box_pl(hint, _src(plan, "囲みの後の段落である。")), _box_pl(note, "", kind="label")],
+                      meta, journal, tmp_path / "done")
+    assert not done.ai.error
+    act = next(a for a in actions(done) if a.key == "textbox_undecided")
+    assert "AI に出し直してもらうか" in act.checklist and "AI による補完を使って" not in act.checklist
+    # AI が失敗した（API / 手動）
+    for mode, want_top, want_cli, want_app, want_nb in (
+            ("api", "もう一度変換して AI による補完ができれば", "--ai api でもう一度実行して", "「変換する」をもう一度押して",
+             "手順 5 をもう一度実行して"),
+            ("manual", "AI の回答を反映できたら", "AI の回答を直して --ai manual --ai-response", None, None)):
+        res = _manual_pl(STRUCTURE, [_box_pl(hint, _src(plan, "囲みの後の段落である。")), _box_pl(note, "", kind="label")],
+                         meta, journal, tmp_path / ("err_" + mode))
+        res.ai = AIOutcome(mode=mode)
+        res.ai.raw = "{}"
+        res.ai.error = "AI の呼び出しに失敗しました: 試験"
+        assert res.plan.undecided_boxes
+        act = next(a for a in actions(res) if a.key == "textbox_undecided")
+        for t in (act.top, act.box_detail, act.cli):
+            assert "AI の回答に、これらの種類" not in t and "（要対応の知らせを参照）" in t, (mode, t)
+        assert want_top in act.top and want_cli in act.cli
+        assert "できるようにして変換し直すか" in act.checklist and "AI による補完を使って" not in act.checklist
+        if want_app:
+            assert want_app in step_text(act.box_detail, "app") and want_nb in step_text(act.box_detail, "notebook")
+        assert "\x00" not in step_text(act.box_detail, "cli") + act.top + act.cli
+
+
+@pytest.mark.parametrize("empty", ["", 0, False, None])
+def test_g5_falsy_caption_body_are_empty_lists(empty, journal, meta, tmp_path):
+    """G5: placements の items の caption・body が falsy な値（""・0・false・null）のときは、以前どおり空の一覧として扱う
+    （テキストボックスの box・label の指定は採用される）。真の値で一覧でないもの（"d16"・5）だけが不採用。"""
+    plan, ids = _boxes_by_text(journal)
+    hint, note = ids["（ヒント）"], ids["注"]
+    res = _manual_pl(STRUCTURE, [_box_pl(hint, _src(plan, "囲みの後の段落である。"), caption=empty, body=empty),
+                                 _box_pl(note, "", kind="label", caption=empty, body=empty)], meta, journal, tmp_path)
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    assert {op["src"] for op, _ in res.ai.accepted if op["op"] == "place_float"} == {hint, note}
+    assert res.ai.rejected == []
+    assert (res.plan.textboxes[hint].kind, res.plan.textboxes[note].kind) == ("box", "label")
+
+
+def test_g5_truthy_non_list_caption_is_still_rejected(journal, meta, tmp_path):
+    plan, ids = _boxes_by_text(journal)
+    hint = ids["（ヒント）"]
+    res = _manual_pl(STRUCTURE, [_box_pl(hint, _src(plan, "囲みの後の段落である。"), caption="d16", body=5)], meta, journal, tmp_path)
+    assert res.fidelity.ok and [why for _, why in res.ai.rejected] == ["items の caption は一覧（[ ]）で書く"]
+    assert res.plan.textboxes[hint].kind == "undecided"
+
+
 def test_ai_kind_box_restores_mechanical_label(journal, meta, tmp_path):
     # 図に重ねた注記と機械的に判断したテキストボックスも、本文の文字（問題文など）なら、AI が placements の kind box で本文の
     # 囲みに戻せる（F の確かめで足した暫定の判断。それまでは「扱いを機械的に決めたので変更できない」で採用せず、図の近くの
@@ -1303,3 +1405,206 @@ def test_english_one_word_name_is_listed_and_warned(journal, meta, tmp_path):
                                                 ai_response=json.dumps({"operations": [op]}, ensure_ascii=False)))
     assert [why for _, why in res2.ai.rejected] == ["英文氏名は空白の位置で姓と名を分けるため、分割の指定は和文氏名だけに使える"]
     assert res2.ai.accepted == [] and res2.xml_path.read_bytes() == res.xml_path.read_bytes()
+
+
+# ----------------------------------------------------------------------------- 点検 2026-11（A1・A2・A3・A6・A8）
+def _op(**kw):
+    base = {"op": "", "src": "", "text": "", "occurrence": 1, "target": "", "role": "", "image": "", "mathml": "",
+            "surname": "", "given": "", "reason": "試験", "confidence": "高"}
+    base.update(kw)
+    return base
+
+
+def _manual_raw(ops, meta, journal, out, notes=(), placements=()):
+    resp = json.dumps({"operations": ops, "placements": list(placements), "notes": notes}, ensure_ascii=False)
+    return convert(FULL, meta, journal, Options(out_dir=out, ai_mode="manual", ai_response=resp, convert_metafiles=False))
+
+
+def test_a1_op_field_types(journal, meta, tmp_path):
+    """A1: 操作の項目が一覧・辞書・bool だと理由付きで不採用、数値は文字列にして照合に使う（変換は止まらない）。"""
+    ops = [_op(op="link_citation", src=["d18"], text="2001", target="B2"),
+           _op(op="link_citation", src="d18", text={"a": 1}, target="B2"),
+           _op(op="set_role", src="d46", role=True),
+           _op(op="formula_image", image="img3", mathml=2001),
+           _op(op="link_citation", src="d18", text=2001, target="B2")]
+    res = _manual_raw(ops, meta, journal, tmp_path)
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    whys = [why for _, why in res.ai.rejected]
+    assert sum("文字列でない" in w for w in whys) == 4
+    assert any("項目 mathml" in w for w in whys)
+
+
+def test_a1_placements_types(journal, meta, tmp_path):
+    """A1: placements の各欄の型が違っても変換は止まらず、理由付きで不採用（float・after・items の caption・body の数値など）。"""
+    it = {"kind": "fig", "caption": ["d16"], "body": ["t2"]}
+    pls = [{"float": ["s1"], "after": "d18", "items": [], "reason": "x", "confidence": "高"},
+           {"float": 1.5, "after": "d18", "items": [it], "reason": "x", "confidence": "高"},
+           {"float": "s1", "after": {"x": 1}, "items": [], "reason": 5, "confidence": "高"},
+           {"float": "s1", "after": 7, "items": [it], "reason": "x", "confidence": "高"},
+           {"float": "s1", "after": "d18", "items": [{"kind": "fig", "caption": [["a"]], "body": [{}]}],
+            "reason": "x", "confidence": "高"},
+           {"float": "s1", "after": "d18", "items": [dict(it, caption=5)], "reason": "x", "confidence": "高"},
+           {"float": "s1", "after": "d18", "items": [dict(it, body=5)], "reason": "x", "confidence": "高"},
+           {"float": "s1", "after": "d18", "items": [dict(it, body=2.5)], "reason": "x", "confidence": "高"},
+           {"float": "s1", "after": "d18", "items": [dict(it, caption="d16")], "reason": "x", "confidence": "高"},
+           {"float": "s1", "after": "d18", "items": [dict(it, body={"a": 1})], "reason": "x", "confidence": "高"}]
+    res = _manual_raw([], meta, journal, tmp_path, placements=pls)
+    assert res.fidelity.ok and len(res.ai.rejected) == len(pls)
+    whys = [why for _, why in res.ai.rejected]
+    assert sum("は一覧（[ ]）で書く" in w for w in whys) == 5          # caption=5・body=5・2.5・文字列・辞書
+    assert sum("文字列" in w for w in whys) >= 4
+
+
+def test_a1_a2_parse_paths_do_not_raise():
+    data = parse_response(json.dumps({"operations": [_op(op="link_figure", text=1.5)], "placements": [], "notes": 3}))
+    out = ai_assist.AIOutcome()
+    ops = ai_assist.split_ops(data, out)
+    assert ops[0]["text"] == "1.5" and out.rejected == []
+    cut = ai_assist.parse_cut_response('{"placements": [{"float": ["s1"], "after": 3, "items": 1}, {"fl')
+    out2 = ai_assist.AIOutcome()
+    plan_like = types.SimpleNamespace(body_seq=[], floats={}, textboxes={}, region={})
+    assert ai_assist.float_placements(cut, plan_like, out2) == {} and len(out2.rejected) == 1
+
+
+def test_a2_notes_types():
+    def notes(v):
+        return parse_response(json.dumps({"operations": [], "placements": [], "notes": v}))["notes"]
+    assert notes("気づき") == ["気づき"]
+    assert notes(["a", 2, ["b"]])[:2] == ["a", "2"] and "使わなかった" in notes(["a", 2, ["b"]])[2]
+    [n] = notes(5)
+    assert "使わなかった" in n
+    [n] = notes({"a": 1})
+    assert "使わなかった" in n
+
+
+def test_a2_notes_in_convert(journal, meta, tmp_path):
+    res = _manual_raw([], meta, journal, tmp_path, notes="気づき")
+    assert res.ai.notes == ["気づき"]
+    res = _manual_raw([], meta, journal, tmp_path / "b", notes=7)
+    assert len(res.ai.notes) == 1 and "使わなかった" in res.ai.notes[0]
+
+
+def test_a3_mathml_entities_comments_pi():
+    m = '<math xmlns="http://www.w3.org/1998/Math/MathML">{}</math>'
+    for inner in ("<mi>&foo;</mi>", "<!-- c --><mi>a</mi>", "<?pi x?><mi>a</mi>"):
+        s = '<!DOCTYPE math [<!ENTITY foo "abc">]>' + m.format(inner)
+        assert parse_mathml(s)[0] is None
+    assert parse_mathml(m.format("<mi>&foo;</mi>"))[0] is None
+    assert parse_mathml(m.format("<!-- c --><mi>a</mi>"))[0] is None
+    assert parse_mathml(m.format("<?pi x?><mi>a</mi>"))[0] is None
+    assert parse_mathml(m.format("<mi>a</mi>"))[0] is not None
+
+
+def test_a3_final_check_unreadable_entity():
+    from jasme_jats.fidelity import FidelityResult, final_check
+    root = etree.fromstring(b"<a>x</a>")
+    res = FidelityResult()
+    assert final_check(root, b"<a>x<b>&foo;</b></a>", res) is False        # 未定義の実体参照
+    assert res.final_ok is False and "XML として読めない" in res.final_detail
+    res = FidelityResult()
+    assert final_check(root, b'<!DOCTYPE a [<!ENTITY foo "abc">]><a>x</a>', res) is False      # 実体の宣言は解決せずに不合格（F6）
+    res = FidelityResult()
+    assert final_check(root, b"<a>x</a>", res) is True
+
+
+def test_a6_links_in_nolink_paragraphs_rejected(journal):
+    _, plan, _ = _mechanical(FULL, journal, {}, {})
+    title = plan.title[0]
+    ref = plan.refs[0].para
+    ops = [_op(op="link_figure", src=title.src, text=title.plain()[:1], target=plan.figures[0].fid),
+           _op(op="link_citation", src=ref.src, text="2001", target="B2")]
+    out = ai_assist.AIOutcome()
+    ai_assist.apply_ops(ops, plan, None, out)
+    assert out.accepted == [] and len(out.rejected) == 2
+    assert "題目" in out.rejected[0][1] and "引用文献" in out.rejected[1][1]
+
+
+def test_a8_formula_image_with_extra_content_rejected(journal):
+    _, plan, _ = _mechanical(FULL, journal, {}, {})
+    fig = next(f for f in plan.figures if any(i.image_id == "img3" for ip in f.image_paras for i in ip.images))
+    mml = '<math xmlns="http://www.w3.org/1998/Math/MathML"><mi>a</mi></math>'
+    for attr in ("tables", "extra_images", "caption_more"):
+        setattr(fig, attr, [object()])
+        out = ai_assist.AIOutcome()
+        ai_assist.apply_ops([_op(op="formula_image", image="img3", mathml=mml)], plan, None, out)
+        assert out.accepted == [] and "数式画像" in out.rejected[0][1] and fig.formula is None
+        setattr(fig, attr, [])
+    out = ai_assist.AIOutcome()
+    ai_assist.apply_ops([_op(op="formula_image", image="img3", mathml=mml)], plan, None, out)
+    assert len(out.accepted) == 1
+
+
+def test_f6_final_check_rejects_entity_declaration_without_reading(tmp_path):
+    """F6: 実体の宣言（<!ENTITY）を含む最終出力は、実体を解決せずに（外部実体のファイルを読まずに）不合格にする。"""
+    from jasme_jats.fidelity import FidelityResult, final_check
+    secret = tmp_path / "secret.txt"
+    secret.write_text("SECRET", encoding="utf-8")
+    for decl in (f'<!ENTITY x SYSTEM "{secret.as_uri()}">', '<!ENTITY x "SECRET">'):
+        xml = f'<?xml version="1.0"?><!DOCTYPE a [{decl}]><a>SECRET</a>'.encode()
+        res = FidelityResult()
+        assert final_check(etree.fromstring(b"<a>SECRET</a>"), xml, res) is False
+        assert res.final_ok is False and "<!ENTITY" in res.final_detail
+    # 外部実体を参照する本文でも、読み込んだ文字が合格の根拠にならない
+    xml = f'<?xml version="1.0"?><!DOCTYPE a [<!ENTITY x SYSTEM "{secret.as_uri()}">]><a>&x;</a>'.encode()
+    res = FidelityResult()
+    assert final_check(etree.fromstring(b"<a>SECRET</a>"), xml, res) is False
+
+
+def _caption_docx(path):
+    def parts(b):
+        out = [mf.para(mf.S["sec1"], "１．はじめに"), mf.para(mf.S["body"], "本文である。")]
+        for k, cap in enumerate(["図1　a", "図2　b"], 1):
+            rid = b.add_image(f"f{k}.png", mf.png_bytes(f"F{k}"))
+            out += [mf.para(mf.S["body"], mf.drawing(rid, 2880000, 1800000, 970 + k), jc="center"),
+                    mf.para(mf.S["fig_cap"], cap)]
+        return out
+    mf.make_article(path, "検証用文書", parts)
+
+
+def test_f7_link_on_label_range_rejected_when_split(journal, meta, tmp_path):
+    """F7: split_labels のとき、図キャプションの先頭の番号（<label>）にかかるリンクは不採用。分けないときと、番号以外の範囲は採用。"""
+    p = tmp_path / "in.docx"
+    _caption_docx(p)
+    _, plan, _ = _mechanical(p, journal)
+    cap = plan.figures[0].caption.src
+
+    def run(split, text, sub):
+        resp = json.dumps({"operations": [_op(op="link_figure", src=cap, text=text, target="F2")], "placements": [], "notes": []})
+        return convert(p, meta, journal, Options(out_dir=tmp_path / sub, convert_metafiles=False, ai_mode="manual",
+                                                 ai_response=resp, split_labels=split))
+    res = run(True, "図1", "a")
+    assert res.fidelity.ok and res.ai.accepted == [] and "<label>" in res.ai.rejected[0][1]
+    assert not [x for x in load(res).iter("xref") if x.get("ref-type") == "fig"]
+    res = run(False, "図1", "b")
+    assert len(res.ai.accepted) == 1 and [x for x in load(res).iter("xref") if x.get("ref-type") == "fig"]
+    res = run(True, "a", "c")                       # 番号の後ろ（タイトル）は <label> の外
+    assert len(res.ai.accepted) == 1 and [x for x in load(res).iter("xref") if x.get("ref-type") == "fig"]
+
+
+def test_a8_formula_image_on_real_docx_with_table_and_moved_image(journal, meta, tmp_path):
+    """A8: 表を含む図・他の段落から移した画像のある図を formula_image にしようとしても、不採用で表が残り、不変性チェックも通る。"""
+    cm = 360000
+
+    def parts(b):
+        i1 = b.add_image("a.png", mf.png_bytes("Inner", size=(300, 200)))
+        tbl = mf.table([[mf.cell("表の文字甲"), mf.cell("乙")]])
+        inner = mf.para(mf.S["body"], mf.drawing(i1, 1800000, 1080000, 512)) + tbl + mf.para(mf.S["body"], "")
+        return [mf.para(mf.S["sec1"], "１．はじめに"),
+                mf.para(mf.S["body"], "本文である。", mf.textbox(inner, 511, cx=8 * cm, cy=4 * cm, v=("paragraph", 30 * cm),
+                                                               wrap="wrapTopAndBottom")),
+                mf.para(mf.S["body"], "以上。")]
+    p = tmp_path / "in.docx"
+    mf.make_article(p, "検証用文書", parts)
+    _, plan, _ = _mechanical(p, journal)
+    fid, info = next((k, v) for k, v in plan.floats.items() if v.tables)
+    img = next(i.image_id for q in info.paras for i in q.images)
+    anchor = next(x for x in plan.body_seq if plan.paras[x].plain().startswith("本文である"))
+    tid = info.tables[0].tid
+    mml = '<math xmlns="http://www.w3.org/1998/Math/MathML"><mi>a</mi></math>'
+    pl = {"float": fid, "after": anchor, "items": [{"kind": "fig", "caption": [], "body": [img, tid]}], "reason": "x",
+          "confidence": "中"}
+    resp = json.dumps({"operations": [_op(op="formula_image", image=img, mathml=mml)], "placements": [pl], "notes": []})
+    res = convert(p, meta, journal, Options(out_dir=tmp_path / "o", convert_metafiles=False, ai_mode="manual", ai_response=resp))
+    assert res.fidelity.ok and res.fidelity.final_ok
+    assert any("数式画像" in w for _, w in res.ai.rejected)
+    assert "表の文字甲" in res.xml_path.read_text(encoding="utf-8")

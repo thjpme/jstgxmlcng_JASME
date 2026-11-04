@@ -19,6 +19,7 @@ from .config import ArticleMeta, JournalConfig, keyword_problem
 from .docx_reader import table_head, table_where
 from .model import Exclusion, Newline, Para
 from .ooxml import is_ws
+from .structure import CAP_BRANCH_NUM, CAP_BRANCH_SEP
 from .tracking import AI, GEN, IMPLICIT, JX_NS, ORDER, SPAN
 
 MML_NS = "http://www.w3.org/1998/Math/MathML"
@@ -30,7 +31,8 @@ DOCTYPE = ('<!DOCTYPE article PUBLIC "-//NLM//DTD JATS (Z39.96) Journal Publishi
            '"https://www.jstage.jst.go.jp/dtds/1.1/JATS-journalpublishing1.dtd">')
 
 RE_JA_CHARS = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff々]")
-RE_LABEL_SPLIT = re.compile(r"^([\s\u3000]*)((?:図|表|Figure|Fig\.?|Table)[\s\u3000]*[0-9０-９]+(?:[.．\-－][0-9０-９]+)?)"
+# 図・表のキャプションの「番号 + 枝番」（枝番の区切りは structure.CAP_BRANCH_SEP。枝番とみなすキャプションの番号〈RE_CAP_BRANCH〉と同じ。枝番の数字は CAP_BRANCH_NUM）
+RE_LABEL_SPLIT = re.compile(rf"^([\s\u3000]*)((?:図|表|Figure|Fig\.?|Table)[\s\u3000]*[0-9０-９]+(?:[{CAP_BRANCH_SEP}]{CAP_BRANCH_NUM})?)"
                             r"([\s\u3000:：.．]*)")
 RE_HEAD_SPLIT = re.compile(r"^([\s\u3000]*)([0-9０-９]{1,2}[．.]|[(（][0-9０-９]{1,2}[)）]|[①-⑳])([\s\u3000]*)(?=\S)")
 NEWLINE_SHOWN = 10      # レポートの 10 章の改行の一覧に並べる段落の数（それより多ければ「ほか N 段落」）
@@ -524,11 +526,24 @@ class Builder:
                 sep_e = sep_s   # 空白以外（「：」など）は本体側に残す
         self.em.span(holder, p, ctx, start=sep_e, seq=seq)
 
-    def paragraph_or_formula(self, parent, p: Para, ctx):
+    def paragraph_or_formula(self, parent, p: Para, ctx, autonum_mark: bool = False):
+        """段落 p を <p> に書く。autonum_mark: 自動番号のある段落の番号を、生成した文字として <p> の先頭に補う。
+
+        自動番号のある段落が <p> になるのは、後付け（付記・謝辞・資料）の中の見出しの役割の段落だけ（箇条にしない。
+        structure.add_back_para）。<p> に <label> は置けないので、番号は注と同じく生成した文字（jx:gen。docx の文字ではない）で補う。
+        本文・英文要旨の <p> は変えない。
+        """
         pe = _sub(parent, "p")
+        if autonum_mark and p.autonum:
+            mark = self.autonum(p).strip()
+            if mark:
+                sep = "" if _starts_with_space(p) or unicodedata.east_asian_width(mark[-1]) in ("F", "W") else " "
+                self.em.gen(pe, mark + sep, "autonum")
         self.em.span(pe, p, ctx)
 
-    def list_node(self, parent, node: ListNode):
+    def list_node(self, parent, node: ListNode, ctx=E.BODY):
+        """箇条書き。各項目の段落の文脈 ctx は、置く場所の段落と同じにする（本文は E.BODY。付記・謝辞・資料は、その節の
+        番号のない段落と同じ文脈。URL を <uri> にするか <ext-link> にするかなどが、番号のある段落と同じになる）。"""
         lst = _sub(parent, "list", list_type="order" if node.ordered else "bullet")
         for p in node.items:
             li = _sub(lst, "list-item")
@@ -536,7 +551,7 @@ class Builder:
                 lab = _sub(li, "label")
                 self.em.gen(lab, self.autonum(p), "autonum")
             pe = _sub(li, "p")
-            self.em.span(pe, p, E.BODY)
+            self.em.span(pe, p, ctx)
 
     def fig(self, parent, node: FigNode):
         f = _sub(parent, "fig")
@@ -661,6 +676,8 @@ class Builder:
                 n_head += 1
             else:
                 break
+        if n_head == len(t.rows):
+            n_head = 0      # すべての行が見出し行なら <thead> は作らない（DTD は thead? の後に tbody+ が必要）
         sections = []
         if n_head:
             sections.append(("thead", t.rows[:n_head]))
@@ -764,18 +781,26 @@ class Builder:
         if sec.heading is not None:
             t = _sub(el, "title")
             self.em.span(t, sec.heading, E.SECTITLE)
+        # <ack> の内容は <p> と <sec> だけ（別行数式・表・リストは <p> で包む）。<notes> は本文と同じ要素を直接置ける
+        wrap = el.tag == "ack"
         for node in sec.children:
             if isinstance(node, PNode):
-                self.paragraph_or_formula(el, node.para, ctx)
-            elif isinstance(node, FormulaNode):
-                self.formula(el, node)
-            elif isinstance(node, TableNode):
-                self.table_wrap(el, node)
+                self.paragraph_or_formula(el, node.para, ctx, autonum_mark=True)
+            elif isinstance(node, (FormulaNode, TableNode, ListNode)):
+                holder = _sub(el, "p") if wrap else el
+                if isinstance(node, FormulaNode):
+                    self.formula(holder, node)
+                elif isinstance(node, TableNode):
+                    self.table_wrap(holder, node)
+                else:
+                    self.list_node(holder, node, ctx)
 
     def app_children(self, ap, children):
         for node in children:
             if isinstance(node, PNode):
-                self.paragraph_or_formula(ap, node.para, E.BACKP)
+                self.paragraph_or_formula(ap, node.para, E.BACKP, autonum_mark=True)
+            elif isinstance(node, ListNode):
+                self.list_node(ap, node, E.BACKP)
             elif isinstance(node, FormulaNode):
                 self.formula(ap, node)
             elif isinstance(node, TableNode):

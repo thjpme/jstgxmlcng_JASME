@@ -9,9 +9,23 @@ structure.py から本体を変えずに移した（structure からも、これ
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import NamedTuple, Optional
 
 from .model import Decision, Exclusion, Float, Para, Table
+
+
+class UnlinkedRef(NamedTuple):
+    """番号から図・表を決められず、リンクしなかった図・表の参照 1 か所（ArticlePlan.float_unlinked の要素）。
+
+    word は「図」か「表」、src は段落 ID、text は参照の文字（docx のまま）、start・end は段落の文字（Para.plain()）の中の範囲
+    （text == plain()[start:end]）。AI のリンク（link_figure・link_table）が同じ範囲に付いたかを、範囲の重なりで決めるために持つ
+    （同じ文字が別の所にあっても取り違えない。ai_assist.apply_ops）。
+    """
+    word: str
+    src: str
+    text: str
+    start: int
+    end: int
 
 
 # ----------------------------------------------------------------------------- nodes
@@ -184,12 +198,15 @@ class ArticlePlan:
     apps: list = field(default_factory=list)
     exclusions: list = field(default_factory=list)
     decisions: list = field(default_factory=list)
+    # decide が判断の番号に使う、段階ごとの判断の数と、数えた時点の decisions の長さ（decisions を直接足したときは decide が数え直す）
+    _stage_counts: dict = field(default_factory=dict, repr=False, compare=False)
+    _counted: int = field(default=0, repr=False, compare=False)
     figures: list = field(default_factory=list)
     tables: list = field(default_factory=list)
     formulas: list = field(default_factory=list)
     paras: dict = field(default_factory=dict)        # src -> Para
     locations: dict = field(default_factory=dict)    # src -> 人が読める位置
-    region: dict = field(default_factory=dict)       # src -> front_ja / body / notes / ack / fn / refs / front_en / app
+    region: dict = field(default_factory=dict)       # src -> front_ja / authors / body / back / notes / ack / fn / refs / front_en / app / excluded
     citation_mode: str = ""                          # author-year / numeric（refparse が設定）
     uncited_refs: list = field(default_factory=list) # 本文からリンクされていない文献の ID
     floats: dict = field(default_factory=dict)       # 浮動配置の図形の ID -> FloatInfo
@@ -206,8 +223,24 @@ class ArticlePlan:
     warnings: list = field(default_factory=list)     # 構造の組み立ての警告（pipeline がレポートの 10 章の警告に加える）
     abstract_ja: list = field(default_factory=list)  # 英文要旨の中の、かな・漢字が 3 割以上の段落 ID（自動では移さない。要確認）
     app_after_refs: list = field(default_factory=list)   # 引用文献などの後ろの、資料の見出しと思われる段落 ID（暫定で警告だけ）
+    # 文字から推定した注の見出し（本文スタイルの「注」だけの段落）の扱いの記録: (「注」の段落 ID, "returned"（本文に戻した）か "kept"
+    # （注の番号で始まらない段落が続いたまま注の節として扱った）, 説明)。要確認で知らせる（Classifier.split_regions。report._fn_guess_action）
+    fn_guess_checks: list = field(default_factory=list)
+    # 本文に戻した（"returned"）範囲に、注の番号で始まる段落（本当の注の一覧かもしれない）があったときの、「注」の段落 ID -> その段落 ID の一覧
+    fn_guess_numbered: dict = field(default_factory=dict)
+    # 「注」の段落 ID -> その後ろの、「注」を注の節の見出し（Word の「注見出し」スタイル）にすると注の節に入る段落 ID の一覧
+    # （次の後付けの見出し・英文の部分・文書の終わりの手前まで。本文に戻した後ろの章見出しとその本文も含む。空白だけの段落・
+    # 図形の中の段落は除く）。要確認 fn_guess の助言「注見出しにする」が何を注の節に入れるかを知らせる（report._fn_guess_action）
+    fn_guess_span: dict = field(default_factory=dict)
+    # 文字から注の見出しと推定される「注」だけの段落 ID（本文・後付けの領域にあるもの。図形の中は除く）の一覧。出現順。
+    # 要確認 fn_guess の助言「注見出しにする」が、「注」が 2 つ以上あるときに全部の扱いを決めるよう添えるための記録
+    # （「注見出し」の段落は 1 つしか持てず、ほかの「注」が文字から推定されると先の見出しが出力されない。docs/REVIEW_2026-11.md の K1）
+    fn_guess_notes: list = field(default_factory=list)
     # 手で書いた注と Word の脚注・文末脚注の両方にある注の番号（Word の注の番号は 1 から付けるので重なる。要確認）
     note_overlap: list = field(default_factory=list)
+    # 番号から図・表を決められず、リンクしなかった図・表の参照（UnlinkedRef: 「図」か「表」, 段落 ID, 参照の文字, 段落の中の範囲）。
+    # 同じ種類のキャプションの番号が重なる・キャプションに枝番がある（図1-1・図1-2）ときの参照（linker.Linker.float_refs。要確認）
+    float_unlinked: list = field(default_factory=list)
     # 文字だけのテキストボックスの ID -> BoxInfo（Classifier.place_boxes が扱ったもの。空白だけのものも。出現順）
     textboxes: dict = field(default_factory=dict)
 
@@ -304,11 +337,17 @@ class ArticlePlan:
         return [s for s in refs if s not in nolink], [f"{nolink[s]}の段落 {s}" for s in refs if s in nolink]
 
     def decide(self, stage, category, src, message, confidence="", applied=True) -> Decision:
-        n = sum(1 for x in self.decisions if x.stage == stage) + 1
+        if self._counted != len(self.decisions):        # decisions を直接足した・減らしたときだけ数え直す（通常は O(1)）
+            self._stage_counts = {}
+            for x in self.decisions:
+                self._stage_counts[x.stage] = self._stage_counts.get(x.stage, 0) + 1
+        n = self._stage_counts.get(stage, 0) + 1
+        self._stage_counts[stage] = n
         d = Decision(did=f"{'M' if stage == 'mechanical' else 'A'}-{n:03d}", stage=stage,
                      category=category, src=src, message=message, confidence=confidence,
                      location=self.locations.get(src, ""), applied=applied)
         self.decisions.append(d)
+        self._counted = len(self.decisions)
         return d
 
     def exclude(self, para: Para, reason: str):

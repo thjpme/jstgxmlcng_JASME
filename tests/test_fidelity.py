@@ -1,6 +1,7 @@
 """文字の不変性チェックそのものが、改変を確実に検出できることを確かめる（わざと壊して試す）。"""
 import copy
 
+import pytest
 from lxml import etree
 
 from conftest import FULL
@@ -166,3 +167,112 @@ def test_joined_and_hidden_text_follow_the_same_policy(journal, meta):
     sp.text = sp.text.replace("文字スタイルで", "文字スタイルで〔文字スタイルで隠す〕")
     res = verify(path, bad, excl)
     assert not res.ok and [m.src for m in res.mismatches] == [sp.get("src")]
+
+
+def test_textbox_in_deleted_run_is_not_counted(journal, meta, tmp_path):
+    """削除の変更履歴のランの中のテキストボックスは、中の段落の文字が w:t のままでも、Word で承諾すると図形ごと消える。
+    読み取りは図形を読まないので、検証（source_texts）も、その段落を欠番にする（読み取り・検証・ルート2 の 3 か所が同じ）。
+    欠番にしないと「欠けた段落」の偽の不合格（要対応）になる。"""
+    import zipfile
+
+    import make_fixtures as mf
+    from jasme_jats.ooxml import HiddenRule, in_deleted_run, paragraph_ids, parse_xml, preprocess
+    from jasme_jats.pdfdocx import _chains, paragraph_units, raw_paragraph_ids
+    S = mf.S
+    box = mf.vml_textbox(mf.para(S["body"], "削除された囲みの中の文字"))     # 中は w:t のまま
+    wrapped = ('<w:del w:id="9101" w:author="試験" w:date="2026-01-01T00:00:00Z">' + box + "</w:del>")
+
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "前の文。", wrapped, "後ろの文。")]
+    path = tmp_path / "delbox.docx"
+    mf.make_article(path, "削除された囲みの検証用文書", parts)
+    doc = read_docx(path)
+    read = {p.src: p.plain() for p in doc.all_paragraphs()}
+    assert "削除された囲みの中の文字" not in "".join(read.values())
+    src = source_texts(path)
+    assert "削除された囲みの中の文字" not in "".join(src.values())
+    with zipfile.ZipFile(path) as z:
+        root = parse_xml(z.read("word/document.xml"))
+        rule = HiddenRule(preprocess(parse_xml(z.read("word/styles.xml"))))
+    ids = paragraph_ids(preprocess(parse_xml(zipfile.ZipFile(path).read("word/document.xml"))), "d")
+    inner = [pid for p, pid in ids.items() if in_deleted_run(p)]
+    assert len(inner) == 1 and inner[0] not in src and inner[0] not in read
+    # ルート2 の段落の文字も、外側の段落を読み取りと同じに組み立てる（削除された図形で _Complex にしない）
+    raw, chains = raw_paragraph_ids(root, "d"), _chains(root, "d")
+    outer = next(s for s, t in read.items() if t.startswith("前の文。"))
+    assert "".join(c for c, _, _ in paragraph_units(raw[outer], rule)) == read[outer] == src[outer] == "前の文。後ろの文。"
+    # 変換全体も不合格にならない
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok
+
+
+def test_unreadable_final_output_gets_its_own_notice(journal, meta, tmp_path, monkeypatch):
+    """最終出力が XML として読めないとき（実体参照の不備など）の要対応は、「本文が docx と一致していません」ではなく、
+    読めないこと・この XML は登載に使わないこと・開発者に知らせることを言う（F14）。文字の違いで不合格のときは従来の文。"""
+    from jasme_jats import pipeline
+    from jasme_jats.pipeline import Options, convert
+    from jasme_jats.report import NEEDS_ACTION, actions
+    real = pipeline.serialize
+    monkeypatch.setattr(pipeline, "serialize", lambda root: real(root).replace(b"</p>", b"&foo;</p>", 1))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "bad", convert_metafiles=False))
+    assert res.fidelity.final_ok is False and res.fidelity.final_unreadable and res.needs_action
+    [act] = [a for a in actions(res) if a.key == "fidelity"]
+    assert act.level == NEEDS_ACTION
+    for text in (act.top, act.box_detail, act.cli):
+        assert "読めません" in text and "登載に使わ" in text and "一致していません" not in text and "差分" not in text, text
+    assert "読めなかった理由" in act.box_detail and "開発者" in act.box_detail
+    monkeypatch.setattr(pipeline, "serialize", lambda root: real(root).replace("はじめに".encode(), "おわりに".encode(), 1))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "diff", convert_metafiles=False))
+    [act] = [a for a in actions(res) if a.key == "fidelity"]
+    assert not res.fidelity.final_unreadable and "一致していません" in act.box_detail and "5 章" in act.top
+
+
+def test_entity_declaration_in_final_output_is_unreadable_notice(journal, meta, tmp_path, monkeypatch):
+    """最終出力に実体の宣言（<!ENTITY）があるとき（F6 で不合格）も、「出力された XML の本文が docx と一致していません」ではなく、
+    読めない・登載に使わない・開発者に知らせる側の要対応（F14）を出す。文字は変わっていないので、差分の案内は誤りになる。"""
+    from jasme_jats import pipeline
+    from jasme_jats.pipeline import Options, convert
+    from jasme_jats.report import NEEDS_ACTION, actions
+    real = pipeline.serialize
+    monkeypatch.setattr(pipeline, "serialize", lambda root: real(root).replace(b'.dtd">', b'.dtd" [<!ENTITY foo "abc">]>', 1))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "ent", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok is False and res.fidelity.final_unreadable
+    assert "<!ENTITY" in res.fidelity.final_detail and res.needs_action
+    [act] = [a for a in actions(res) if a.key == "fidelity"]
+    assert act.level == NEEDS_ACTION
+    for text in (act.top, act.box_detail, act.cli):
+        assert "読めません" in text and "登載に使わ" in text and "一致していません" not in text and "差分" not in text, text
+
+
+@pytest.mark.parametrize("unreadable", [b'.dtd">|.dtd" [<!ENTITY foo "abc">]>', b"</p>|&foo;</p>"], ids=["entity-declaration", "undefined-entity"])
+def test_h6_unreadable_and_different_text_both_reported(unreadable, journal, meta, tmp_path, monkeypatch):
+    """H6: 最終出力が読めない（実体の宣言・未定義の実体参照）うえに、本文の文字も違うときは、読めないことと文字の差分の両方を
+    要対応の文に出す（以前は、読めない側の文だけで、差分があることが消えた）。どちらも、この XML は登載に使わない。
+    読めないだけのとき・文字の差分だけのときの文は変えない。"""
+    from jasme_jats import pipeline
+    from jasme_jats.pipeline import Options, convert
+    from jasme_jats.report import NEEDS_ACTION, actions
+    real = pipeline.serialize
+    a, b = unreadable.split(b"|")
+
+    def broken(root):
+        return real(root).replace(a, b, 1).replace("はじめに".encode(), "おわりに".encode(), 1)
+    monkeypatch.setattr(pipeline, "serialize", broken)
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "both", convert_metafiles=False))
+    fid = res.fidelity
+    assert fid.final_ok is False and fid.final_unreadable and fid.final_differs and res.needs_action
+    [act] = [x for x in actions(res) if x.key == "fidelity"]
+    assert act.level == NEEDS_ACTION
+    for text in (act.top, act.checklist, act.box_title, act.box_detail, act.cli):
+        assert "読め" in text, text
+    for text in (act.top, act.box_detail, act.cli):
+        assert "XML として読めません" in text or "XML として読めず" in text
+        assert "docx と一致していません" in text or "docx と一致していないので" in text, text
+        assert "登載に使わ" in text and "5 章" in text, text
+    assert fid.final_detail
+    # 読めないだけのときは、差分の文を出さない
+    monkeypatch.setattr(pipeline, "serialize", lambda root: real(root).replace(a, b, 1))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "only", convert_metafiles=False))
+    assert res.fidelity.final_unreadable and not res.fidelity.final_differs
+    [act] = [x for x in actions(res) if x.key == "fidelity"]
+    assert "一致していません" not in act.top + act.box_detail and "一致していないので" not in act.cli
