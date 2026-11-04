@@ -103,11 +103,15 @@ RE_FIGCAP = re.compile(r"^(?:図|Figure|Fig\.?)\s*([0-9０-９]+)")
 RE_TABCAP = re.compile(r"^(?:表|Table)\s*([0-9０-９]+)")
 # キャプションの番号のすぐ後ろの枝番（「図1-2」「図2.1」）の区切りの文字（正規表現の文字クラスの中身。枝番の区切りの定義はここ
 # 1 か所で、builder の RE_LABEL_SPLIT〈split_labels のときに <label> に分ける番号の形〉と linker の RE_BRANCH_REF〈参照の枝番〉が
-# これを使う）。「-」「‐」「‑」「‒」「–」「—」「―」「−」「.」と、NFKC 前の全角の「．」「－」。後ろに数字が続くときだけ区切りとする
+# これを使う）。「-」「‐」「‑」「‒」「–」「—」「―」「−」「.」と、NFKC 前の全角の「．」「－」。後ろに枝番の数字（CAP_BRANCH_NUM）が
+# 続くときだけ区切りとする
 CAP_BRANCH_SEP = "\\-\u2010-\u2015\u2212.\uff0e\uff0d"
+# 枝番の数字: 1〜2 桁で、直後に数字が続かないもの（「図1―2019年度の推移」の「2019」は年なので枝番にしない。区切りと同じく 3 か所
+# で使う定義）。NFKC 前の全角の数字も含める
+CAP_BRANCH_NUM = "[0-9０-９]{1,2}(?![0-9０-９])"
 # キャプションの番号のすぐ後ろの枝番（NFKC 後の文字に使う）。枝番はキャプションの番号の一部で、整数だけを読む RE_FIGCAP・RE_TABCAP
 # では「図1-1」「図1-2」がどちらも「図1」になる（linker が参照のリンクを決めるときに使う）
-RE_CAP_BRANCH = re.compile(rf"[{CAP_BRANCH_SEP}](?=[0-9])")
+RE_CAP_BRANCH = re.compile(rf"[{CAP_BRANCH_SEP}](?={CAP_BRANCH_NUM})")
 
 
 def caption_label(para: Para, regex) -> tuple:
@@ -203,6 +207,11 @@ def appendix_sentence(text: str) -> str:
     if RE_APPENDIX_SENTENCE.match(rest) and RE_EN_SENTENCE_END.search(rest):
         return "番号などの後ろが英小文字の語で、「.」などで終わる英文の文"
     return ""
+
+
+def block_id(b) -> str:
+    """本文のブロック b（段落・表）の識別子（段落は src、表は tid）。文言に使う。"""
+    return b.src if isinstance(b, Para) else b.tid
 
 
 def appendix_heading(text: str) -> bool:
@@ -473,36 +482,41 @@ class Classifier:
         回す（docx の順。領域は変えない。修正計画の N7）。
         本文スタイルの「注」だけの段落（表の注の見出しなど）は、文字から注の見出しと推定して後付けに切り替える（back_heading_by_text）が、
         引用文献・付記・謝辞などの見出しが続く前に、見出しのスタイルの段落（スタイルから決まった sec1・sec2・sec3）が現れ、かつ
-        「注」の直後の段落が注の番号で始まらない（注の一覧に見えない。note_list_follows）なら、注の節ではなく本文の続きとして、その
-        「注」の段落から見出しの前までを本文に戻し、判断の一覧に記録して要確認で知らせる（点検の K5・F10。fn_guess）。注の番号で
-        始まる段落が続く本当の注の節は戻さない。文字から推定した注の節の中に注の番号で始まらない段落が続いたまま後付けの見出し
-        （または文書の終わり）に着いたときは、注の節として扱ったまま、要確認で知らせる（plan.fn_guess_checks。check_fn_guess）。
+        その段落が資料の見出し（appendix_heading）でなければ、注の節ではなく本文の続きとして、その「注」の段落から見出しの前までを
+        本文に戻し、判断の一覧に記録して要確認で知らせる（点検の K5・F10・G2。fn_guess）。「注」の直後が注の番号で始まるか
+        （note_list_follows）は戻すかどうかの条件にせず、知らせの文に使うだけにする（注の番号で始まる表の注〈「1) 数値は平均である。」〉
+        の後ろに章見出しが続く原稿も戻す）。資料の見出しが続いたときは、今までどおり注の節として扱う。文字から推定した注の節の中に
+        注の一覧に見えない段落が続いたまま後付けの見出し（または文書の終わり）に着いたときは、注の節として扱ったまま、要確認で
+        知らせる（plan.fn_guess_checks。check_fn_guess）。ブロックは段落でも表でもよい（表の識別子は tid。block_id）。
         """
         regions = {"front_ja": [], "body": [], "back": [], "front_en": []}
         state = "front_ja"
         seen_title = False
         # 本文から後付けへの切り替えが、文字から推定した注の見出し（本文スタイルの「注」だけの段落。表の注の見出しなど）によるとき、
         # その段落の regions["back"] の中の位置。後付けの見出しが続けば本当の注の節（None に戻す。注の番号で始まらない段落が続いた
-        # ままなら要確認で知らせる）、見出しのスタイルの段落が先に現れ、かつ「注」の直後が注の一覧に見えなければ、注の節ではなく
-        # 本文の続きだったとして本文に戻す（K5・F10）
+        # ままなら要確認で知らせる）、見出しのスタイルの段落が先に現れ、それが資料の見出しでなければ、注の節ではなく本文の続き
+        # だったとして本文に戻す（K5・F10・G2）
         fn_guess = None
         for b, role in flat:
             if fn_guess is not None and state == "back" and not in_shape(b):
                 if role in BACK_HEADINGS or (isinstance(b, Para) and self.back_heading_by_text(b, role) not in (None, "fn_heading")):
-                    self.check_fn_guess(regions["back"][fn_guess:], f"後ろの後付けの見出し {b.src}")    # 引用文献・付記・謝辞などの見出しが続く: 本当の注の節
+                    self.check_fn_guess(regions["back"][fn_guess:], f"後ろの後付けの見出し {block_id(b)}")    # 引用文献・付記・謝辞などの見出しが続く: 本当の注の節
                     fn_guess = None
-                elif role in HEADING_LEVEL and isinstance(b, Para) and not self.note_list_follows(regions["back"][fn_guess + 1:]):
+                elif role in HEADING_LEVEL and isinstance(b, Para) and not appendix_heading(_para_text(b)):
+                    listed = self.note_list_follows(regions["back"][fn_guess + 1:])      # 知らせの文の材料（戻すかどうかには使わない）
                     moved = regions["back"][fn_guess:]
                     del regions["back"][fn_guess:]
                     regions["body"].extend(moved)
                     state, fn_guess = "body", None
                     head = moved[0][0]
                     kind = {"sec1": "章", "sec2": "節", "sec3": "項"}[role]
+                    after = ("「注」の直後は注の番号で始まるが、注の番号で始まる表の注の可能性もあるため" if listed
+                             else "「注」の直後が注の番号で始まらないため")
                     self.plan.decide(
                         "mechanical", "style", head.src,
                         f"本文スタイルの段落「{_para_text(head).strip()[:20]}」を、文字から注の見出しと推定して後付けに切り替えたが、"
-                        f"後ろに{kind}見出しのスタイルの段落 {b.src}「{_para_text(b).strip()[:20]}」が続き、「注」の直後が注の番号で始まらない"
-                        f"ため、注の節ではなく本文の続き（表の注の見出しなど）とみなし、この段落から{kind}見出しの前までの {len(moved)} "
+                        f"後ろに{kind}見出しのスタイルの段落 {b.src}「{_para_text(b).strip()[:20]}」が続き、資料の見出しではなく、{after}、"
+                        f"注の節ではなく本文の続き（表の注の見出しなど）とみなし、この段落から{kind}見出しの前までの {len(moved)} "
                         "ブロックを本文に戻した")
                     self.plan.fn_guess_checks.append(
                         (head.src, "returned", f"{len(moved)} ブロックを本文に戻した（後ろの{kind}見出し {b.src}）"))
@@ -536,7 +550,7 @@ class Classifier:
                         fn_guess = len(regions["back"])
             if state != "back":
                 if fn_guess is not None:
-                    self.check_fn_guess(regions["back"][fn_guess:], f"後ろの英文の部分 {b.src}")      # 英文の部分に切り替わった
+                    self.check_fn_guess(regions["back"][fn_guess:], f"後ろの英文の部分 {block_id(b)}")      # 英文の部分に切り替わった
                 fn_guess = None
             regions[state].append((b, role))
             if state == "front_ja" and isinstance(b, Para) and b.section_break and seen_title:
@@ -591,8 +605,12 @@ class Classifier:
             (first.src, "kept", f"{where}まで {len(items)} ブロックを注の節として扱った（{why}）"))
 
     def back_heading_by_text(self, para: Para, role: str) -> Optional[str]:
-        """スタイル違反の後付け見出し（「引用文献」を章見出しスタイルで書いた等）をテキストから推定。"""
-        if role not in ("sec1", "normal", "p"):
+        """スタイル違反の後付け見出し（「引用文献」を章見出しスタイルで書いた等）をテキストから推定。
+
+        AI の補完が役割を指定した段落（overrides。後付けの見出しの役割 BACK_HEADINGS なら呼ぶ前に決まっている）は推定しない:
+        「注」だけの段落に set_role の p を指定すれば、後付けの見出しと推定されない本文の段落にできる（表の注の見出しなど）。
+        """
+        if role not in ("sec1", "normal", "p") or para.src in self.overrides:
             return None
         t = nfkc(_para_text(para)).strip()
         if RE_REF_HEADING_TEXT.match(t):

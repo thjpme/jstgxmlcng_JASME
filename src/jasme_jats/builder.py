@@ -19,7 +19,7 @@ from .config import ArticleMeta, JournalConfig, keyword_problem
 from .docx_reader import table_head, table_where
 from .model import Exclusion, Newline, Para
 from .ooxml import is_ws
-from .structure import CAP_BRANCH_SEP
+from .structure import CAP_BRANCH_NUM, CAP_BRANCH_SEP
 from .tracking import AI, GEN, IMPLICIT, JX_NS, ORDER, SPAN
 
 MML_NS = "http://www.w3.org/1998/Math/MathML"
@@ -31,8 +31,8 @@ DOCTYPE = ('<!DOCTYPE article PUBLIC "-//NLM//DTD JATS (Z39.96) Journal Publishi
            '"https://www.jstage.jst.go.jp/dtds/1.1/JATS-journalpublishing1.dtd">')
 
 RE_JA_CHARS = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff々]")
-# 図・表のキャプションの「番号 + 枝番」（枝番の区切りは structure.CAP_BRANCH_SEP。枝番とみなすキャプションの番号〈RE_CAP_BRANCH〉と同じ）
-RE_LABEL_SPLIT = re.compile(rf"^([\s\u3000]*)((?:図|表|Figure|Fig\.?|Table)[\s\u3000]*[0-9０-９]+(?:[{CAP_BRANCH_SEP}][0-9０-９]+)?)"
+# 図・表のキャプションの「番号 + 枝番」（枝番の区切りは structure.CAP_BRANCH_SEP。枝番とみなすキャプションの番号〈RE_CAP_BRANCH〉と同じ。枝番の数字は CAP_BRANCH_NUM）
+RE_LABEL_SPLIT = re.compile(rf"^([\s\u3000]*)((?:図|表|Figure|Fig\.?|Table)[\s\u3000]*[0-9０-９]+(?:[{CAP_BRANCH_SEP}]{CAP_BRANCH_NUM})?)"
                             r"([\s\u3000:：.．]*)")
 RE_HEAD_SPLIT = re.compile(r"^([\s\u3000]*)([0-9０-９]{1,2}[．.]|[(（][0-9０-９]{1,2}[)）]|[①-⑳])([\s\u3000]*)(?=\S)")
 NEWLINE_SHOWN = 10      # レポートの 10 章の改行の一覧に並べる段落の数（それより多ければ「ほか N 段落」）

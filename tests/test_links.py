@@ -849,3 +849,36 @@ def test_en_dash_branch_caption_label_and_links(split, journal, meta, tmp_path):
     assert float_links(root, "図1–2を見る") == [("図3", "fig", "F3")]
     assert sorted(t for _, _, t in res.plan.float_unlinked) == ["図1", "図1–2"]
     assert "float_ref" in [a.key for a in actions(res)]
+
+
+# ---- G4: 枝番とみなす数字は 1〜2 桁（直後に数字が続かない）。「図1―2019年度の推移」の年は枝番にしない
+@pytest.mark.parametrize("sep", BRANCH_SEPS)
+def test_branch_number_is_short_in_all_three_definitions(sep):
+    """枝番の数字は 1〜2 桁で、直後に数字が続かないもの（CAP_BRANCH_NUM）。年のような長い数字は、キャプションの枝番・<label> に
+    切り分ける番号・参照の枝番のどれでも枝番にしない（今までは <label> が「図1―2019」になった）。短い数字は今までどおり枝番。"""
+    from jasme_jats.builder import RE_LABEL_SPLIT
+    from jasme_jats.linker import RE_BRANCH_REF
+    from jasme_jats.structure import RE_FIGCAP, caption_label
+    for digits, branch in (("2019", False), ("123", False), ("2", True), ("12", True), ("１２", True)):
+        cap = f"図1{sep}{digits}年度の推移"
+        assert caption_label(Para(src="d1", atoms=[Atom(kind="text", text=cap)]), RE_FIGCAP) == (1, branch), cap
+        assert RE_LABEL_SPLIT.match(cap).group(2) == (f"図1{sep}{digits}" if branch else "図1"), cap
+        assert (RE_BRANCH_REF.match(f"{sep}{digits}") is not None) == branch, cap
+
+
+@pytest.mark.parametrize("split", [True, False])
+def test_year_after_dash_is_not_a_branch(split, journal, meta, tmp_path):
+    """G4: キャプション「図1―2019年度の推移」の <label> は「図1」になり（split_labels のとき）、枝番のない図として本文の「図1」を
+    リンクする。split_labels=False ではキャプションの文字は変わらない。"""
+    body = [mf.para(S["body"], "図1を見る。")]
+    path = floats_article(tmp_path, body, ["図1―2019年度の推移", "図2　別の図"], name="g4")
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False, split_labels=split))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    root = load(res)
+    if split:
+        assert [text(x) for x in root.iter("label") if text(x).startswith("図")] == ["図1", "図2"]
+        assert [text(c) for c in root.iter("caption")] == ["―2019年度の推移", "別の図"]
+    else:
+        assert [text(c) for c in root.iter("caption")] == ["図1―2019年度の推移", "図2　別の図"]
+    assert float_links(root, "図1を見る") == [("図1", "fig", "F1")]
+    assert not res.plan.float_unlinked
