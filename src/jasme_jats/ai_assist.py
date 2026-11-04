@@ -1228,8 +1228,10 @@ def placement_op(pl) -> dict:
     """配置の指定を、レポートの「操作」の一覧に載せる形にする。"""
     pl = pl if isinstance(pl, dict) else {}
     items = pl.get("items") if isinstance(pl.get("items"), list) else []
-    what = "；".join(f"{it.get('kind')}: キャプション {','.join(map(str, it.get('caption') or []))} / 本体 "
-                     f"{','.join(map(str, it.get('body') or []))}" for it in items if isinstance(it, dict))
+    def ids(v):                         # 一覧でない値（数値など）はここで落とさない。不採用の理由は _placement_problem が示す
+        return ",".join(map(str, v)) if isinstance(v, list) else ("" if v in (None, 0, "") else str(v))
+    what = "；".join(f"{it.get('kind')}: キャプション {ids(it.get('caption'))} / 本体 {ids(it.get('body'))}"
+                     for it in items if isinstance(it, dict))
     return {"op": "place_float", "src": str(pl.get("float", "")), "text": what, "target": str(pl.get("after", "")),
             "role": "", "image": "", "reason": str(pl.get("reason", "")), "confidence": str(pl.get("confidence", ""))}
 
@@ -1281,7 +1283,11 @@ def _placement_problem(pl, plan: ArticlePlan, body: set, done: dict) -> str:
             continue                    # 形式の不備は、以降の検証が理由を示す
         for key in ("caption", "body"):
             v = it.get(key)
-            if isinstance(v, list) and not all(isinstance(x, str) for x in v):
+            if v is None:
+                continue
+            if not isinstance(v, list):
+                return f"items の {key} は一覧（[ ]）で書く"
+            if not all(isinstance(x, str) for x in v):
                 return f"items の {key} の要素は文字列（段落・表・画像の ID）で書く"
     box = plan.textboxes.get(fid) if isinstance(fid, str) else None
     if box is not None:
@@ -1415,9 +1421,31 @@ def retarget_ops(ops, before: dict, plan: ArticlePlan):
             op["target"] = new or f"{op['target']}（組み直した後に見当たらない）"
 
 
-def apply_ops(ops, plan: ArticlePlan, doc, outcome: AIOutcome):
-    """set_role 以外の操作を検証して適用する（構造を組み直した後の plan に対して）。"""
+def label_ranges(plan: ArticlePlan, split: bool) -> dict:
+    """split_labels のとき <label> に分ける図表キャプションの先頭の範囲（段落の ID → 範囲の終わり）。
+
+    分け方は builder の規則（RE_LABEL_SPLIT。先頭の空白と番号）をそのまま使う。<label> の中は emit.LABEL が xref=False なので、
+    この範囲にかかるリンクは XML に出ない。
+    """
+    from .builder import RE_LABEL_SPLIT
+    out = {}
+    if not split:
+        return out
+    caps = [f.caption for f in plan.figures] + [t.caption for t in plan.tables]
+    for c in caps:
+        m = RE_LABEL_SPLIT.match(c.plain()) if c is not None else None
+        if m and m.group(2):
+            out[c.src] = m.end(2)
+    return out
+
+
+def apply_ops(ops, plan: ArticlePlan, doc, outcome: AIOutcome, split: bool = False):
+    """set_role 以外の操作を検証して適用する（構造を組み直した後の plan に対して）。
+
+    split は split_labels（図表キャプションの先頭の番号を <label> に分けるか）。分けるとき、その番号の範囲にかかるリンクは採用しない。
+    """
     from .linker import apply_span, range_linked
+    labels = label_ranges(plan, split)
     ids = {"B": {r.rid for r in plan.refs}, "F": {f.fid for f in plan.figures if f.fid},
            "T": {t.tid for t in plan.tables}, "fn": {f.fid for f in plan.fns}, "FD": {f.fid for f in plan.formulas if f.fid}}
     images = {}
@@ -1478,6 +1506,9 @@ def apply_ops(ops, plan: ArticlePlan, doc, outcome: AIOutcome):
                 continue
             if range_linked(p, *rng):
                 outcome.rejected.append((op, "すでにリンクが付いている箇所"))
+                continue
+            if src in labels and rng[0] < labels[src]:
+                outcome.rejected.append((op, "図表キャプションの先頭の番号（<label> に分ける部分）にはリンクを出せないので付けない"))
                 continue
             spec = LinkSpec(kind="xref", attrs={"ref-type": REF_TYPE[kind], "rid": target}, origin="ai")
             apply_span(p, rng[0], rng[1], spec)

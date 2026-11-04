@@ -231,9 +231,17 @@ def final_check(tracked_root, final_bytes: bytes, res: FidelityResult):
     got = "".join(final.itertext())
     res.final_ok = expected == got
     res.final_detail = "" if res.final_ok else _diff(expected, got)
-    # 実体を解決する通常のパーサでも読めること（DOCTYPE の内部サブセットで定義した実体は、上の resolve_entities=False では
-    # 実体参照のまま通り、文字としては数えられない。外部実体とネットワークは読まない）。読めなければ最終出力の不合格として、
-    # 要対応に乗せる
+    # 実体宣言（<!ENTITY）を含む出力は、それだけで不合格にする。このツールは実体を宣言しない（DOCTYPE は公開 ID だけ）ので、
+    # あれば入り込んだもの。解決すると外部実体（file://）を読んでしまうが、内部実体だけ解決する設定（resolve_entities='internal'）は
+    # lxml 5.0 以降でしか使えず、下限（pyproject.toml の lxml>=4.9）では使えないため、宣言を見つけたら解決せずに止める
+    if b"<!ENTITY" in final_bytes:
+        res.final_ok = False
+        res.final_detail = ("最終出力に実体の宣言（<!ENTITY）がある。このツールは出力しないので、外部の実体を読まないよう解決せずに不合格とした"
+                            + (f"。{res.final_detail}" if res.final_detail else ""))
+        return False
+    # 実体を宣言していなければ、実体を解決する通常のパーサでも読めること（未定義の実体参照などは、上の resolve_entities=False では
+    # 実体参照のまま通り、文字としては数えられない）。宣言がないので外部実体は読まない（ネットワークも読まない）。読めなければ
+    # 最終出力の不合格として、要対応に乗せる
     try:
         etree.fromstring(final_bytes, etree.XMLParser(load_dtd=False, no_network=True, resolve_entities=True, huge_tree=True))
     except etree.XMLSyntaxError as e:

@@ -6,8 +6,8 @@ J-STAGE が公開している DTD 一式（https://www.jstage.jst.go.jp/dtds/1.1
 
 注意: validate() は実体を解決しない（resolve_entities=False。外部実体を読まないための安全な設定）ので、未定義の実体参照
 （`&foo;` など）や DOCTYPE の内部サブセットで定義した実体は、DTD 検証では見つからず「妥当」になる。補いとして、AI の MathML は
-parse_mathml が実体参照・コメント・処理命令・DOCTYPE を不採用にし、最終出力は fidelity.final_check が実体を解決する設定
-（外部実体・ネットワークは読まない）でも読めることを確かめる。
+parse_mathml が実体参照・コメント・処理命令・DOCTYPE を不採用にし、最終出力は fidelity.final_check が、実体の宣言（<!ENTITY）が
+あれば解決せずに不合格にし、なければ実体を解決する設定でも読めること（未定義の実体参照がないこと）を確かめる。
 """
 from __future__ import annotations
 

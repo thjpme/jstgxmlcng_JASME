@@ -1333,12 +1333,24 @@ def test_a1_op_field_types(journal, meta, tmp_path):
 
 
 def test_a1_placements_types(journal, meta, tmp_path):
+    """A1: placements の各欄の型が違っても変換は止まらず、理由付きで不採用（float・after・items の caption・body の数値など）。"""
+    it = {"kind": "fig", "caption": ["d16"], "body": ["t2"]}
     pls = [{"float": ["s1"], "after": "d18", "items": [], "reason": "x", "confidence": "高"},
+           {"float": 1.5, "after": "d18", "items": [it], "reason": "x", "confidence": "高"},
            {"float": "s1", "after": {"x": 1}, "items": [], "reason": 5, "confidence": "高"},
+           {"float": "s1", "after": 7, "items": [it], "reason": "x", "confidence": "高"},
            {"float": "s1", "after": "d18", "items": [{"kind": "fig", "caption": [["a"]], "body": [{}]}],
-            "reason": "x", "confidence": "高"}]
+            "reason": "x", "confidence": "高"},
+           {"float": "s1", "after": "d18", "items": [dict(it, caption=5)], "reason": "x", "confidence": "高"},
+           {"float": "s1", "after": "d18", "items": [dict(it, body=5)], "reason": "x", "confidence": "高"},
+           {"float": "s1", "after": "d18", "items": [dict(it, body=2.5)], "reason": "x", "confidence": "高"},
+           {"float": "s1", "after": "d18", "items": [dict(it, caption="d16")], "reason": "x", "confidence": "高"},
+           {"float": "s1", "after": "d18", "items": [dict(it, body={"a": 1})], "reason": "x", "confidence": "高"}]
     res = _manual_raw([], meta, journal, tmp_path, placements=pls)
-    assert res.fidelity.ok and len(res.ai.rejected) == 3
+    assert res.fidelity.ok and len(res.ai.rejected) == len(pls)
+    whys = [why for _, why in res.ai.rejected]
+    assert sum("は一覧（[ ]）で書く" in w for w in whys) == 5          # caption=5・body=5・2.5・文字列・辞書
+    assert sum("文字列" in w for w in whys) >= 4
 
 
 def test_a1_a2_parse_paths_do_not_raise():
@@ -1388,7 +1400,7 @@ def test_a3_final_check_unreadable_entity():
     assert final_check(root, b"<a>x<b>&foo;</b></a>", res) is False        # 未定義の実体参照
     assert res.final_ok is False and "XML として読めない" in res.final_detail
     res = FidelityResult()
-    assert final_check(root, b'<!DOCTYPE a [<!ENTITY foo "abc">]><a>x</a>', res) is True       # 実体を使っていなければ読める
+    assert final_check(root, b'<!DOCTYPE a [<!ENTITY foo "abc">]><a>x</a>', res) is False      # 実体の宣言は解決せずに不合格（F6）
     res = FidelityResult()
     assert final_check(root, b"<a>x</a>", res) is True
 
@@ -1418,3 +1430,79 @@ def test_a8_formula_image_with_extra_content_rejected(journal):
     out = ai_assist.AIOutcome()
     ai_assist.apply_ops([_op(op="formula_image", image="img3", mathml=mml)], plan, None, out)
     assert len(out.accepted) == 1
+
+
+def test_f6_final_check_rejects_entity_declaration_without_reading(tmp_path):
+    """F6: 実体の宣言（<!ENTITY）を含む最終出力は、実体を解決せずに（外部実体のファイルを読まずに）不合格にする。"""
+    from jasme_jats.fidelity import FidelityResult, final_check
+    secret = tmp_path / "secret.txt"
+    secret.write_text("SECRET", encoding="utf-8")
+    for decl in (f'<!ENTITY x SYSTEM "{secret.as_uri()}">', '<!ENTITY x "SECRET">'):
+        xml = f'<?xml version="1.0"?><!DOCTYPE a [{decl}]><a>SECRET</a>'.encode()
+        res = FidelityResult()
+        assert final_check(etree.fromstring(b"<a>SECRET</a>"), xml, res) is False
+        assert res.final_ok is False and "<!ENTITY" in res.final_detail
+    # 外部実体を参照する本文でも、読み込んだ文字が合格の根拠にならない
+    xml = f'<?xml version="1.0"?><!DOCTYPE a [<!ENTITY x SYSTEM "{secret.as_uri()}">]><a>&x;</a>'.encode()
+    res = FidelityResult()
+    assert final_check(etree.fromstring(b"<a>SECRET</a>"), xml, res) is False
+
+
+def _caption_docx(path):
+    def parts(b):
+        out = [mf.para(mf.S["sec1"], "１．はじめに"), mf.para(mf.S["body"], "本文である。")]
+        for k, cap in enumerate(["図1　a", "図2　b"], 1):
+            rid = b.add_image(f"f{k}.png", mf.png_bytes(f"F{k}"))
+            out += [mf.para(mf.S["body"], mf.drawing(rid, 2880000, 1800000, 970 + k), jc="center"),
+                    mf.para(mf.S["fig_cap"], cap)]
+        return out
+    mf.make_article(path, "検証用文書", parts)
+
+
+def test_f7_link_on_label_range_rejected_when_split(journal, meta, tmp_path):
+    """F7: split_labels のとき、図キャプションの先頭の番号（<label>）にかかるリンクは不採用。分けないときと、番号以外の範囲は採用。"""
+    p = tmp_path / "in.docx"
+    _caption_docx(p)
+    _, plan, _ = _mechanical(p, journal)
+    cap = plan.figures[0].caption.src
+
+    def run(split, text, sub):
+        resp = json.dumps({"operations": [_op(op="link_figure", src=cap, text=text, target="F2")], "placements": [], "notes": []})
+        return convert(p, meta, journal, Options(out_dir=tmp_path / sub, convert_metafiles=False, ai_mode="manual",
+                                                 ai_response=resp, split_labels=split))
+    res = run(True, "図1", "a")
+    assert res.fidelity.ok and res.ai.accepted == [] and "<label>" in res.ai.rejected[0][1]
+    assert not [x for x in load(res).iter("xref") if x.get("ref-type") == "fig"]
+    res = run(False, "図1", "b")
+    assert len(res.ai.accepted) == 1 and [x for x in load(res).iter("xref") if x.get("ref-type") == "fig"]
+    res = run(True, "a", "c")                       # 番号の後ろ（タイトル）は <label> の外
+    assert len(res.ai.accepted) == 1 and [x for x in load(res).iter("xref") if x.get("ref-type") == "fig"]
+
+
+def test_a8_formula_image_on_real_docx_with_table_and_moved_image(journal, meta, tmp_path):
+    """A8: 表を含む図・他の段落から移した画像のある図を formula_image にしようとしても、不採用で表が残り、不変性チェックも通る。"""
+    cm = 360000
+
+    def parts(b):
+        i1 = b.add_image("a.png", mf.png_bytes("Inner", size=(300, 200)))
+        tbl = mf.table([[mf.cell("表の文字甲"), mf.cell("乙")]])
+        inner = mf.para(mf.S["body"], mf.drawing(i1, 1800000, 1080000, 512)) + tbl + mf.para(mf.S["body"], "")
+        return [mf.para(mf.S["sec1"], "１．はじめに"),
+                mf.para(mf.S["body"], "本文である。", mf.textbox(inner, 511, cx=8 * cm, cy=4 * cm, v=("paragraph", 30 * cm),
+                                                               wrap="wrapTopAndBottom")),
+                mf.para(mf.S["body"], "以上。")]
+    p = tmp_path / "in.docx"
+    mf.make_article(p, "検証用文書", parts)
+    _, plan, _ = _mechanical(p, journal)
+    fid, info = next((k, v) for k, v in plan.floats.items() if v.tables)
+    img = next(i.image_id for q in info.paras for i in q.images)
+    anchor = next(x for x in plan.body_seq if plan.paras[x].plain().startswith("本文である"))
+    tid = info.tables[0].tid
+    mml = '<math xmlns="http://www.w3.org/1998/Math/MathML"><mi>a</mi></math>'
+    pl = {"float": fid, "after": anchor, "items": [{"kind": "fig", "caption": [], "body": [img, tid]}], "reason": "x",
+          "confidence": "中"}
+    resp = json.dumps({"operations": [_op(op="formula_image", image=img, mathml=mml)], "placements": [pl], "notes": []})
+    res = convert(p, meta, journal, Options(out_dir=tmp_path / "o", convert_metafiles=False, ai_mode="manual", ai_response=resp))
+    assert res.fidelity.ok and res.fidelity.final_ok
+    assert any("数式画像" in w for _, w in res.ai.rejected)
+    assert "表の文字甲" in res.xml_path.read_text(encoding="utf-8")
