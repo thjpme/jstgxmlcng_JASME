@@ -15,10 +15,12 @@ Word の文字が正で、出版版 PDF（印刷所の校正を経たもの）�
     docx の文字も消さない）、照合で直し方を決められなかった違い（(C)。pdfmatch.TextDiff.why。段落の最初・最後の、どこまでが
     段落の文字か決められない文字、文字として取り出せない数式の位置にかかるものなど）。1 つの違いを分けた直す箇所の一部が
     ほかの直す箇所と重なるときは、その違いの直す箇所をすべて直さない（(A) と (B) に分けたものも、まとめて直さない）。
-    PDF にない空白の削除（kind space）は、根拠の全角・半角の直し（kind width。PdfCheck.drop_basis）と同じ組（FixGroup）にし、
-    どちらかを直さないことになったら（重なる・構造の確かめ・注の番号を守る・直せない文字にかかるなど、どの段階でも。
-    spread_reasons）、両方を直さない（空白だけを消すと、docx にも PDF にもない文字になる）。根拠が Word が付ける番号だけの
-    空白の削除は、番号の直し（変換のときに必ず PDF に合わせる）が止められることがないので、組にしない
+    PDF にない空白の削除（kind space）は、根拠の全角・半角の直し（kind width。PdfCheck.drop_basis）に従わせる（Fix.needs）:
+    根拠の直しを直さないことになったら（重なる・構造の確かめ・注の番号を守る・直せない文字にかかるなど、どの段階でも。
+    spread_reasons）、空白の削除も直さない（空白だけを消すと、docx にも PDF にもない文字になる）。向きは片方向で、空白の
+    削除が直せなくても、根拠の全角・半角の直しは直す（空白が残るだけで、docx のままの文字なので）。根拠が複数の全角・半角の
+    直しなら、どれか 1 つでも直さないときは直さない。根拠に Word が付ける番号がある空白の削除は、番号の直し（変換のときに必ず
+    PDF に合わせる）が止められることがなく、番号だけで消してよい根拠になるので、全角・半角の直しに従わせない
   ・Word が付ける番号（自動段落番号・脚注番号）は docx の文字ではないので、ここでは直さず、変換のときに全角・半角と字形を
     PDF に合わせる（pipeline の plan.pdf_numbers）
 
@@ -72,9 +74,12 @@ class Fix:
     old: str = ""         # docx の文字
     applied: bool = False
     reason: str = ""      # 直さなかった理由
-    # いっしょに直す直す箇所の組（FixGroup）。None なら単独。組の 1 つでも直さないことになったら、後の段階でも（_spread）、
-    # 組の全部を直さない
+    # 1 つの違い（TextDiff）を分けた直す箇所の組（FixGroup）。None なら単独。組の 1 つでも直さないことになったら、後の段階でも
+    # （spread_reasons）、組の全部を直さない（双方向）
     group: object = field(default=None, repr=False, compare=False)
+    # kind space の空白の削除が従う、根拠の全角・半角の直し（Fix）。どれか 1 つでも直さないことになったら、この空白の削除も
+    # 直さない（片方向。根拠の直しは、空白の削除に関係なく直す）
+    needs: list = field(default_factory=list, repr=False, compare=False)
 
     @property
     def typeset(self) -> bool:
@@ -84,16 +89,14 @@ class Fix:
 
 @dataclass(eq=False)
 class FixGroup:
-    """いっしょに直す直す箇所の組。一部だけを当てはめると、docx にも PDF にもない文字になるもの。
+    """いっしょに直す箇所の組（双方向）。一部だけを当てはめると、docx にも PDF にもない文字になるもの。
 
-    paired が偽: 1 つの違い（pdfmatch.TextDiff）を分けた直す箇所（「pp.45－58」を「pp.46-5-58」にしないため）。
-    paired が真: 全角・半角の直し（kind width）と、そのすぐ隣の PDF にない空白の削除（kind space。check.drops）。
-    空白だけを消すと「本文 (挿入の文字) の後ろ」が「本文(挿入の文字)の後ろ」になる。"""
-    paired: bool = False
+    1 つの違い（pdfmatch.TextDiff）を分けた直す箇所（「pp.45－58」を「pp.46-5-58」にしないため）。全角・半角の直しと、その
+    すぐ隣の PDF にない空白の削除は、組にせず片方向（Fix.needs）にする。"""
     members: list = field(default_factory=list)
 
 
-def link_fixes(a: Fix, b: Fix, paired: bool = False) -> None:
+def link_fixes(a: Fix, b: Fix) -> None:
     """a と b をいっしょに直す組にする（どちらかがすでに組なら、組を 1 つにまとめる）。"""
     ga = a.group or FixGroup(members=[a])
     a.group = ga
@@ -101,7 +104,6 @@ def link_fixes(a: Fix, b: Fix, paired: bool = False) -> None:
         for m in (b.group.members if b.group is not None else [b]):
             m.group = ga
             ga.members.append(m)
-    ga.paired = ga.paired or paired
 
 
 def _fix_desc(f: Fix) -> str:
@@ -109,19 +111,33 @@ def _fix_desc(f: Fix) -> str:
 
 
 def spread_reasons(fixes) -> bool:
-    """直さないことにした直す箇所（reason がある）と同じ組（Fix.group）の、まだ直すことにしている直す箇所も直さないことにする
-    （組の一部が直らなければ、組の全部を直さない）。理由は、1 つの違いを分けた組なら直さない理由のまま、全角・半角と空白の削除の
-    組なら、どの直しに連動して直さないかが分かる文。fixes の組のどれかが変わったか。"""
+    """直さないことにした直す箇所（reason がある）に連動して、まだ直すことにしている直す箇所も直さないことにする。
+
+    ・同じ組（Fix.group。1 つの違いを分けた直す箇所）の直す箇所: 組の一部が直らなければ、組の全部を直さない（双方向）。
+      理由は、直さない理由のまま。
+    ・空白の削除（Fix.needs の全角・半角の直しがある）: 根拠の直しのどれかが直らなければ、空白の削除も直さない（片方向。
+      根拠の直しは、空白の削除が直らなくても直す）。理由は、どの直しに連動して直さないかが分かる文。
+    fixes に入っている直す箇所の組・根拠が対象で、組・根拠のほかの直す箇所は fixes になくてもよい。直す箇所が変わったか。"""
     changed = False
-    for g in {id(f.group): f.group for f in fixes if f.group is not None}.values():
-        bad = next((m for m in g.members if m.reason), None)
-        if bad is None:
-            continue
-        for m in g.members:
-            if not m.reason:
-                m.reason = f"{_fix_desc(bad)}を直さないので、連動して直さない（その理由: {bad.reason}）" if g.paired else bad.reason
-                changed = True
-    return changed
+    while True:
+        step = False
+        for g in {id(f.group): f.group for f in fixes if f.group is not None}.values():
+            bad = next((m for m in g.members if m.reason), None)
+            if bad is None:
+                continue
+            for m in g.members:
+                if not m.reason:
+                    m.reason = bad.reason
+                    step = True
+        for f in fixes:
+            if not f.reason:
+                bad = next((n for n in f.needs if n.reason), None)
+                if bad is not None:
+                    f.reason = f"{_fix_desc(bad)}を直さないので、連動して直さない（その理由: {bad.reason}）"
+                    step = True
+        if not step:
+            return changed
+        changed = True
 
 
 @dataclass
@@ -184,13 +200,16 @@ def plan_fixes(plan, check) -> list:
         for q in sorted(ds):
             space = Fix(src, q, q + 1, "", "space", text[q])
             fixes.append(space)
-            # 空白の削除は、根拠の全角・半角の直しといっしょに直す（根拠の直しを直さないのに空白だけ消すと、docx にも PDF にも
-            # ない文字になる）。根拠が Word が付ける番号だけのときは、番号は docx の文字ではなく、変換のときに必ず PDF に合わせる
-            # （pdfdocx は止めない）ので、連動させる直し箇所がない
+            # 空白の削除は、根拠の全角・半角の直しに従わせる（根拠の直しを直さないのに空白だけ消すと、docx にも PDF にもない
+            # 文字になる）。根拠の直しは空白の削除に従わせない（空白が残るだけ）。根拠に Word が付ける番号があるときは、番号は
+            # docx の文字ではなく、変換のときに必ず PDF に合わせる（pdfdocx は止めない）ので、番号だけで消してよい根拠になり、
+            # 全角・半角の直しに従わせない
             basis = check.drop_basis.get(src, {}).get(q, ())
+            if any(b[0] == "number" for b in basis):
+                continue
             for kind, *at in sorted(b for b in basis if b[0] == "width"):
                 if (src, at[0]) in widths:
-                    link_fixes(space, widths[src, at[0]], paired=True)
+                    space.needs.append(widths[src, at[0]])
                 else:
                     space.reason = space.reason or "根拠の全角・半角の直しがない"
     case_srcs = check.case_srcs
@@ -467,8 +486,10 @@ class _Writer:
 def _apply_paragraph(units, fixes, writer: _Writer):
     """段落に直す箇所を書き込む。直せないものは Fix.reason に理由を書く。
 
-    先に、直せない直す箇所をすべて決め、いっしょに直す組（Fix.group）の一部が直せなければ組の全部を直さないことにしてから、
-    直せるものを書き込む（一部だけ書き込んだ後では取り消せない）。"""
+    先に、直せない直す箇所をすべて決め、組（Fix.group）の一部が直せなければ組の全部を、根拠の全角・半角の直し（Fix.needs）が
+    直せなければ空白の削除を、直さないことにしてから、直せるものを書き込む（一部だけ書き込んだ後では取り消せない）。
+    組と根拠は 1 つの段落の中だけなので、make_fixed_docx が回ごとに広げ直す必要はない（write_fixed_docx が先に広げ、ここでも
+    直せない理由を足してから広げる）。"""
     plans = {}           # w:t -> (削除する位置, {この位置の後に足す: [文字列]})
 
     def plan_of(t):
@@ -539,7 +560,10 @@ def write_fixed_docx(src_path, dst_path, plan, fixes, skip=frozenset(), date=Non
         raise ValueError(f"入力の docx と、補った docx の書き出し先が同じファイルです: {dst_path}")
     date = date or _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     writer = _Writer(date)
-    spread_reasons(fixes)       # 直さないことにした直す箇所と組の直す箇所も直さない
+    # 呼び出し側が先に直さないことにした直す箇所に連動するものも、先に直さないことにする。_apply_paragraph も広げるが、skip の段落と
+    # 段落の文字列を組み立てられない段落は、_apply_paragraph の前に「書き込んだ後に読み直した…」などの理由を付けて飛ばすので、
+    # その前に広げないと、連動の理由（どの直しに連動して直さないか）が出ない
+    spread_reasons(fixes)
     by_src = {}
     for f in fixes:
         by_src.setdefault(f.src, []).append(f)
@@ -637,7 +661,6 @@ def make_fixed_docx(docx_path, pdf_path, out_path, journal) -> DocxFix:
             f.applied, f.reason = False, reasons[id(f)]
             if not f.reason:
                 f.reason = _kept(f, keep) or (STRUCTURE_REASON if final else "")   # 確かめきれなかった: 何も直さない
-        spread_reasons(fix.fixes)       # 守る範囲に入った直す箇所と組の直す箇所も直さない（空白の削除だけが残らないように）
         write_fixed_docx(docx_path, out_path, plan, fix.fixes, skip)
         if final:
             break

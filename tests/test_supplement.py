@@ -344,14 +344,15 @@ def p1_summary(res):
 
 def test_supplement_space_goes_with_width_when_fixed(journal, meta, tmp_path, monkeypatch):
     """対照: 全角・半角の直しが通るときは、隣の空白の削除も今までどおり通る（「値 (３) の後ろ」→「値（３）の後ろ」）。
-    空白の削除は根拠の全角・半角の直しと同じ組（Fix.group）で、PdfCheck.drop_basis が根拠を示す。"""
+    空白の削除は根拠の全角・半角の直しに従う（Fix.needs。片方向）。PdfCheck.drop_basis が根拠を示す。"""
     pytest.importorskip("pypdfium2")
     res = p1_convert(tmp_path, monkeypatch, journal, meta, P1_DOCX)
     assert p1_summary(res) == [("space", " ", "", True), ("width", "(", "（", True), ("width", ")", "）", True),
                                ("space", " ", "", True)]
     assert res.docx_fix.check.drop_basis == {"d12": {11: {("width", 12)}, 15: {("width", 14)}}}
     f = [f for f in res.docx_fix.fixes if f.src == "d12"]
-    assert f[0].group is f[1].group is not None and f[3].group is f[2].group is not None and f[0].group is not f[3].group
+    assert f[0].needs == [f[1]] and f[3].needs == [f[2]] and not f[1].needs and not f[2].needs
+    assert all(x.group is None for x in f)
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.supplement.ok and res.ok
     assert P1_PUB in xml_texts(load(res))
 
@@ -445,14 +446,178 @@ def test_write_fixed_docx_spreads_reasons_in_group(journal, tmp_path):
     s = next(k for k, p in plan.paras.items() if p.plain().startswith("値 "))
     space, width = pdfdocx.Fix(s, 1, 2, "", "space", " "), pdfdocx.Fix(s, 2, 3, "（", "width", "(")
     other = pdfdocx.Fix(s, 4, 5, "）", "width", ")")
-    pdfdocx.link_fixes(space, width, paired=True)
+    space.needs.append(width)
     pdfdocx.write_fixed_docx(src, tmp_path / "out.docx", plan, [space, width, other])
+    # 片方向: 根拠の直し（width）が直せないので空白の削除も直さない。別の直し（other）は直す
     assert [(f.applied, bool(f.reason)) for f in (space, width, other)] == [(False, True), (False, True), (True, False)]
-    assert "連動して直さない" in space.reason
+    assert "連動して直さない" in space.reason and "連動" not in width.reason
     before = src.read_bytes()
     with pytest.raises(ValueError):
         pdfdocx.write_fixed_docx(src, src, plan, [])
     assert src.read_bytes() == before
+
+
+P1_INS_SPACE = ["授業の最初に確認した値", '<w:ins w:id="2" w:author="x"><w:r><w:t xml:space="preserve"> </w:t></w:r></w:ins>',
+                "(３) の後ろで，生徒は話し合いを続け，その様子を記録した。"]
+
+
+def test_supplement_width_is_fixed_when_space_cannot_be_deleted(journal, meta, tmp_path, monkeypatch):
+    """連動は片方向。空白（ほかの作成者の挿入 w:ins の中）が消せなくても、根拠の全角・半角の直しは直す（空白が残るだけで、
+    補完の確かめに合格する）。もう一方の括弧の後ろの空白は、根拠の「）」を直すので消す。"""
+    pytest.importorskip("pypdfium2")
+    res = p1_convert(tmp_path, monkeypatch, journal, meta, P1_INS_SPACE)
+    assert p1_summary(res) == [("space", " ", "", False), ("width", "(", "（", True), ("width", ")", "）", True),
+                               ("space", " ", "", True)]
+    space = [f for f in res.docx_fix.fixes if f.src == "d12"][0]
+    assert space.reason.startswith("直せない文字") and "連動" not in space.reason
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.supplement.ok and res.supplement.problems == []
+    assert res.ok and "授業の最初に確認した値 （３）の後ろで，生徒は話し合いを続け，その様子を記録した。" in xml_texts(load(res))
+
+
+def test_supplement_width_is_fixed_when_structure_check_stops_space(journal, meta, tmp_path, monkeypatch):
+    """構造の確かめ（_lost → _protect → _kept）が空白の削除だけを止める（空白の範囲にかかるリンクが崩れるものとして）ときも、
+    隣の「(」の全角・半角の直しは直す。止めた空白は次の回でも復活しない。"""
+    pytest.importorskip("pypdfium2")
+    calls = []
+    orig = pdfdocx._lost
+
+    def lost(original, fixed):
+        calls.append(1)
+        found = orig(original, fixed)
+        if len(calls) == 1:
+            q = P1_DOCX.index("(")
+            found.append(("d12", (q - 1, q), pdfdocx.STRUCTURE_REASON, ""))
+        return found
+    monkeypatch.setattr(pdfdocx, "_lost", lost)
+    res = p1_convert(tmp_path, monkeypatch, journal, meta, P1_DOCX)
+    assert len(calls) >= 2
+    assert p1_summary(res) == [("space", " ", "", False), ("width", "(", "（", True), ("width", ")", "）", True),
+                               ("space", " ", "", True)]
+    assert [f.reason for f in res.docx_fix.fixes if f.src == "d12"][0] == pdfdocx.STRUCTURE_REASON
+    assert res.fidelity.ok and res.supplement.ok and res.supplement.problems == []
+    assert "授業の最初に確認した値 （３）の後ろで，生徒は話し合いを続け，その様子を記録した。" in xml_texts(load(res))
+
+
+@pytest.mark.parametrize("ins", [False, True], ids=["fixable", "in-other-authors-insertion"])
+def test_supplement_space_after_note_number_does_not_follow_width(ins, journal, meta, tmp_path, monkeypatch):
+    """根拠に Word が付ける番号（箇条の自動番号）と全角・半角の文字の両方がある空白（「● (一つ目)」の番号と「(」の間）は、番号だけで
+    消してよい根拠があるので、「(」の全角・半角の直しに従わせない。「(」がほかの作成者の挿入の中で直せなくても、空白は消す
+    （drop_basis に両方の根拠が出る）。"""
+    pytest.importorskip("pypdfium2")
+    item = " (一つ目) の項目として，架空の授業の記録を集めた。"
+    txt = ([" ", '<w:ins w:id="2" w:author="x"><w:r><w:t>(</w:t></w:r></w:ins>', "一つ目) の項目として，架空の授業の記録を集めた。"]
+           if ins else [item])
+
+    def parts(b):
+        return [mf.para(mf.S["sec1"], "１．はじめに"), mf.para(mf.S["body"], TALK), mf.list_item(mf.S["body"], *txt)]
+    mf.make_article(tmp_path / "b.docx", "ページ番号の判定の検証用文書", parts, bullet="●")
+    pages = n10_pages([*SMALL_FRONT, *body_lines(TALK), "・（一つ目）の項目として，架空の授業の記録を集めた。", *N10_TAIL])
+    res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "pdf", docx=tmp_path / "b.docx")
+    src = next(s for s, p in res.docx_fix.check.drop_basis.items() if 0 in p)
+    assert res.docx_fix.check.drop_basis[src][0] == {("number", "auto", src), ("width", 1)}
+    fixes = [f for f in res.docx_fix.fixes if f.src == src]
+    assert [(f.kind, f.old, f.applied) for f in fixes] == [("space", " ", True), ("width", "(", not ins), ("width", ")", True),
+                                                          ("space", " ", True)]
+    assert fixes[0].needs == [] and fixes[3].needs == [fixes[2]]
+    assert res.fidelity.ok and res.supplement.ok and res.supplement.problems == []
+    assert ("(一つ目）の項目として，架空の授業の記録を集めた。" if ins else "（一つ目）の項目として，架空の授業の記録を集めた。") in xml_texts(load(res))
+
+
+def test_supplement_rounds_keep_stopped_fixes_stopped(journal, meta, tmp_path, monkeypatch):
+    """make_fixed_docx の繰り返しで、毎回の reasons の戻しと広げ直しが正しい: 1 回目に「(」、2 回目に「)」の範囲が止められると、
+    止めたものは次の回で復活せず（「(」と前の空白は止まったまま）、2 回目の止めに連動する後ろの空白も止まる。理由は、前の回の
+    連動の理由が重ならず、それぞれの根拠の直しと理由が 1 回だけ出る。"""
+    pytest.importorskip("pypdfium2")
+    calls = []
+    orig = pdfdocx._lost
+
+    def lost(original, fixed):
+        calls.append(1)
+        found = orig(original, fixed)
+        if len(calls) == 1:
+            q = P1_DOCX.index("(")
+            found.append(("d12", (q, q + 1), pdfdocx.STRUCTURE_REASON, ""))
+        elif len(calls) == 2:
+            q = P1_DOCX.index(")")
+            found.append(("d12", (q, q + 1), pdfdocx.NOTE_REASON, ""))
+        return found
+    monkeypatch.setattr(pdfdocx, "_lost", lost)
+    res = p1_convert(tmp_path, monkeypatch, journal, meta, P1_DOCX)
+    assert len(calls) == 3
+    assert p1_summary(res) == [("space", " ", "", False), ("width", "(", "（", False), ("width", ")", "）", False),
+                               ("space", " ", "", False)]
+    space1, width1, width2, space2 = [f for f in res.docx_fix.fixes if f.src == "d12"]
+    assert width1.reason == pdfdocx.STRUCTURE_REASON and width2.reason == pdfdocx.NOTE_REASON
+    assert space1.reason == f"全角・半角の直し「(」→「（」を直さないので、連動して直さない（その理由: {pdfdocx.STRUCTURE_REASON}）"
+    assert space2.reason == f"全角・半角の直し「)」→「）」を直さないので、連動して直さない（その理由: {pdfdocx.NOTE_REASON}）"
+    assert res.fidelity.ok and res.supplement.ok and res.supplement.problems == []
+    assert P1_DOCX in xml_texts(load(res))
+
+
+def test_supplement_skipped_paragraph_keeps_linked_reason(journal, meta, tmp_path, monkeypatch):
+    """読み直した文字列が合わず段落ごと直さない回（skip）でも、前の回に構造の確かめで止めた「(」に従う空白の削除の理由は、連動の理由の
+    まま（write_fixed_docx が skip の段落に飛ばす前に広げる）。ほかの直しの理由は「書き込んだ後に読み直した…」。次の回で何も復活しない。"""
+    pytest.importorskip("pypdfium2")
+    lost_calls, verify_calls = [], []
+    orig_lost, orig_verify = pdfdocx._lost, pdfdocx._verify
+
+    def lost(original, fixed):
+        lost_calls.append(1)
+        found = orig_lost(original, fixed)
+        if len(lost_calls) == 1:
+            q = P1_DOCX.index("(")
+            found.append(("d12", (q, q + 1), pdfdocx.STRUCTURE_REASON, ""))
+        return found
+
+    def verify(texts, plan, fixes):
+        verify_calls.append(1)
+        bad = orig_verify(texts, plan, fixes)
+        return bad | {"d12"} if len(verify_calls) == 2 else bad
+    monkeypatch.setattr(pdfdocx, "_lost", lost)
+    monkeypatch.setattr(pdfdocx, "_verify", verify)
+    res = p1_convert(tmp_path, monkeypatch, journal, meta, P1_DOCX)
+    assert len(verify_calls) >= 3
+    assert p1_summary(res) == [("space", " ", "", False), ("width", "(", "（", False), ("width", ")", "）", False),
+                               ("space", " ", "", False)]
+    space1, width1, width2, space2 = [f for f in res.docx_fix.fixes if f.src == "d12"]
+    assert width1.reason == pdfdocx.STRUCTURE_REASON
+    assert space1.reason == f"全角・半角の直し「(」→「（」を直さないので、連動して直さない（その理由: {pdfdocx.STRUCTURE_REASON}）"
+    assert width2.reason == space2.reason == "書き込んだ後に読み直した文字列が合わなかった"
+    assert res.fidelity.ok and res.supplement.ok and P1_DOCX in xml_texts(load(res))
+
+
+def test_write_fixed_docx_group_is_both_ways(journal, tmp_path):
+    """1 つの違いを分けた直す箇所の組（Fix.group）は双方向。片方が直せない（既存の変更履歴の中）と、もう片方も直さない（理由は
+    直さない理由のまま）。組にも根拠にもない直し（third）は直す。"""
+    src = tmp_path / "in.docx"
+    mf.make_article(src, "ページ番号の判定の検証用文書", lambda b: [
+        mf.para(mf.S["sec1"], "１．はじめに"),
+        mf.para(mf.S["body"], "値 ", '<w:ins w:id="2" w:author="x"><w:r><w:t>(</w:t></w:r></w:ins>', "３) の後ろ。")])
+    _, plan = pdfdocx._mechanical(src, journal)
+    s = next(k for k, p in plan.paras.items() if p.plain().startswith("値 "))
+    a, b = pdfdocx.Fix(s, 2, 3, "（", "width", "("), pdfdocx.Fix(s, 3, 4, "３", "width", "３")
+    third = pdfdocx.Fix(s, 4, 5, "）", "width", ")")
+    pdfdocx.link_fixes(a, b)
+    pdfdocx.write_fixed_docx(src, tmp_path / "out.docx", plan, [a, b, third])
+    assert [f.applied for f in (a, b, third)] == [False, False, True]
+    assert a.reason == b.reason and a.reason.startswith("直せない文字")
+
+
+def test_write_fixed_docx_spreads_before_skipped_paragraph(journal, tmp_path):
+    """write_fixed_docx の冒頭の spread_reasons: skip の段落は _apply_paragraph の前に飛ばすので、呼び出し側が先に直さないことにした
+    根拠の直しに従う空白の削除は、ここで連動の理由になる（なければ「書き込んだ後に読み直した…」になる）。"""
+    src = tmp_path / "in.docx"
+    mf.make_article(src, "ページ番号の判定の検証用文書", lambda b: [
+        mf.para(mf.S["sec1"], "１．はじめに"), mf.para(mf.S["body"], "値 (３) の後ろ。")])
+    _, plan = pdfdocx._mechanical(src, journal)
+    s = next(k for k, p in plan.paras.items() if p.plain().startswith("値 "))
+    space, width = pdfdocx.Fix(s, 1, 2, "", "space", " "), pdfdocx.Fix(s, 2, 3, "（", "width", "(")
+    space.needs.append(width)
+    width.reason = "止めた"
+    pdfdocx.write_fixed_docx(src, tmp_path / "out.docx", plan, [space, width], skip={s})
+    assert not space.applied and not width.applied
+    assert space.reason == "全角・半角の直し「(」→「（」を直さないので、連動して直さない（その理由: 止めた）"
+    assert width.reason == "止めた"
 
 
 def test_report_shows_blank_only_cells_as_words(journal, meta, tmp_path, monkeypatch):
