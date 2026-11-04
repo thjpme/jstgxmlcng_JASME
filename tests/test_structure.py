@@ -1275,6 +1275,106 @@ def test_fn_guess_advice_says_which_paragraphs_join_the_notes(journal, meta, tmp
         assert [s for s, r in res2.plan.region.items() if r == "fn" and s != head] == span, name
 
 
+FN_SPAN_PIECES = {
+    "注": lambda: mf.para(S["body"], "注"),
+    "body": lambda: mf.para(S["body"], "表の下の説明である。"),
+    "blank": lambda: mf.para(S["body"], ""),
+    "sec1": lambda: mf.para(S["sec1"], "補足"),
+    "sec2": lambda: mf.para(S["sec2"], "（１）小節"),
+    "sec3": lambda: mf.para(S["sec3"], "① 小項"),
+    "app": lambda: mf.para(S["sec1"], "資料1　調査票"),
+    "table": lambda: mf.table([[mf.cell("観点"), mf.cell("内容")]]),
+    "num": lambda: mf.para(S["body"], "1) 数値は平均である。"),
+}
+FN_SPAN_CASES = {
+    "one_returned": ["注", "body", "sec1", "body"],
+    "one_kept": ["注", "body"],
+    "one_numbered": ["注", "num", "sec2", "body"],
+    "two_returned": ["body", "注", "body", "sec1", "body", "注", "body", "sec1", "body"],
+    "two_kept_last": ["注", "body", "sec1", "body", "注", "body"],
+    "three_mixed": ["注", "body", "table", "blank", "sec2", "body", "注", "blank", "body", "app", "body", "注", "table", "body", "sec3", "body"],
+    "two_adjacent": ["注", "注", "body", "sec1", "body"],
+    "with_app_between": ["注", "body", "app", "body", "注", "body", "sec2", "body"],
+}
+
+
+def fn_span_article(tmp_path, tokens, name, style_index=None):
+    """tokens の並び（FN_SPAN_PIECES の名前）が章見出しと本文の後ろに続く小さな論文。style_index 番目の「注」だけ「注見出し」スタイルにする。"""
+    def parts(b):
+        out = [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "架空の主張である（注1）。")]
+        k = 0
+        for t in tokens:
+            if t == "注" and k == style_index:
+                out.append(mf.para(S["fn_head"], "注"))
+            else:
+                out.append(FN_SPAN_PIECES[t]())
+            k += t == "注"
+        return out
+    path = tmp_path / f"{name}.docx"
+    mf.make_article(path, "注の扱いの検証用文書", parts)
+    return path
+
+
+@pytest.mark.parametrize("case", list(FN_SPAN_CASES))
+def test_fn_guess_span_matches_notes_when_each_note_is_made_heading(case, journal, meta, tmp_path):
+    """0.29.0 の 4 回目の点検: 要確認 fn_guess が言う「注見出しにすると注の節に入る段落」（plan.fn_guess_span）は、「注」が 1 つ・2 つ・3 つ、
+    間に表・空白段落・節/項の見出し・資料の見出しがあっても、「注」ごとに、その「注」を実際に「注見出し」スタイルにして変換し直したときの
+    注の一覧の段落（plan.fns）と一致する。別の「注」の段落は見出しとして注の節に戻るだけで、注の一覧の段落には入らない。"""
+    tokens = FN_SPAN_CASES[case]
+    res = convert(fn_span_article(tmp_path, tokens, case), meta, journal,
+                  Options(out_dir=tmp_path / "o", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok
+    plan = res.plan
+    notes = [s for s, p in plan.paras.items() if p.plain() == "注"]
+    assert notes
+    checked = 0
+    for k, head in enumerate(notes):
+        if head not in plan.fn_guess_span:          # 先の「注」が注の節として扱われ、その中の「注」は推定の対象ではない
+            continue
+        res2 = convert(fn_span_article(tmp_path, tokens, f"{case}_{k}", k), meta, journal,
+                       Options(out_dir=tmp_path / f"s_{case}_{k}", convert_metafiles=False))
+        # 注見出しが後ろにもう 1 つあると、見出しは 1 つしか持てず、先の見出しの段落が出力されない（この点検の対象外。別に直す）。
+        # それ以外の不合格は許さない
+        assert res2.fidelity.final_ok and res2.dtd_valid, (case, k)
+        assert all(t == "注" for _, t in res2.fidelity.missing) and (res2.fidelity.ok or res2.fidelity.missing), (case, k)
+        actual = [p.src for fn in res2.plan.fns for p in fn.paras]
+        assert plan.fn_guess_span[head] == actual, (case, head)
+        assert not set(plan.fn_guess_span[head]) & set(notes), (case, head)       # 別の「注」の段落は数えない
+        checked += 1
+    assert checked >= 1
+
+
+def test_fn_guess_advice_counts_each_note_range(journal, meta, tmp_path):
+    """0.29.0 の 4 回目の点検: 「注」の段落が 2 つ以上ある原稿（表ごとに「注」の行がある論文）でも、要確認 fn_guess の助言は「注」ごとの範囲
+    （最初と最後の段落と件数）を言い、先の「注」の範囲が次の「注」で打ち切られない。範囲の書き方は「d14「…」から d17「…」までの 4 段落」
+    （「から」の後ろに空白を置き、1 段落のときは「…」の 1 段落）。"""
+    tokens = FN_SPAN_CASES["two_returned"]
+    res = convert(fn_span_article(tmp_path, tokens, "adv"), meta, journal, Options(out_dir=tmp_path / "o", convert_metafiles=False))
+    [act] = fn_guess_action(res)
+    plan = res.plan
+    heads = [h for h, _, _ in plan.fn_guess_checks]
+    assert len(heads) == 2
+    second = plan.paras[heads[1]]
+    lead = plan.fn_guess_span[heads[0]]
+    assert heads[1] not in lead
+    for t in fn_guess_texts(act):
+        if t == act.box_title:
+            continue
+        # 先の「注」の範囲は 2 つ目の「注」を越えて、最後の本文まで（2 つ目の「注」の段落は数えない）
+        first, last = lead[0], lead[-1]
+        assert f"{heads[0]} の後ろの {first}「" in t and f"から {last}「" in t and f"までの {len(lead)} 段落" in t, t
+        assert "」から" not in t.replace("」から ", "") and "」 の" not in t
+    assert second.plain() == "注" and len(lead) == 6
+    # 1 段落のときは「」の 1 段落」（余分な空白を置かない）
+    res1 = convert(fn_span_article(tmp_path, FN_SPAN_CASES["one_kept"], "adv1"), meta, journal,
+                   Options(out_dir=tmp_path / "o1", convert_metafiles=False))
+    [act1] = fn_guess_action(res1)
+    [(h, _, _)] = res1.plan.fn_guess_checks
+    [only] = res1.plan.fn_guess_span[h]
+    assert f"{h} の後ろの {only}「表の下の説明である。」の 1 段落" in act1.top
+    assert "」 の 1 段落" not in act1.top + act1.box_detail + act1.cli
+
+
 def middle_text(p):
     """mf.para の XML の一覧（文字列）から、段落の文字を取り出す。"""
     from lxml import etree

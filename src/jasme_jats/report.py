@@ -926,12 +926,27 @@ def _textbox_undecided_action(r):
         box_how = step("answer_apply") + "と、AI が囲みか注記かを判断します"
         cli_how = "AI の回答をファイルに保存し、--ai manual --ai-response 回答のファイル を指定して変換し直すこと"
     else:
-        how = ("AI の回答に、これらの種類（kind）の指定がないか、指定が検証で採用されませんでした（2 章）。AI に出し直してもらうか、"
-               "Word でそのテキストボックスを確かめ、本文に必要な囲みなら、文字をテキストボックスの外（本文の段落）に出してから"
-               "変換し直してください。")
-        box_how = ("AI の回答に、これらの種類（kind）の指定がないか、採用されませんでした（2 章）。AI に出し直してもらうか、"
-                   "Word で確かめ、本文に必要な囲みなら文字をテキストボックスの外に出してから変換し直してください")
-        cli_how = "AI に出し直してもらうか、docx でその文字をテキストボックスの外に出して変換し直すこと"
+        # AI を使った後。AI に出し直してもらう操作は、手動なら回答の貼り直し（1 画面版では app.AppState.REPASTE_KEYS の
+        # textbox_undecided で手動の欄が見えたまま）、API ならもう一度変換する（float_ref_ai と同じ）
+        ask = "囲みか注記かの種類（kind）を指定するよう頼んで"
+        fix = "Word でそのテキストボックスを確かめ、本文に必要な囲みなら、文字をテキストボックスの外（本文の段落）に出してから変換し直してください。"
+        if r.ai.mode == "manual":
+            how = (f"AI の回答に、これらの種類（kind）の指定がないか、指定が検証で採用されませんでした（2 章）。AI に出し直してもらうには、"
+                   f"チャットで AI に、{ask}出し直してもらい、回答を貼り付け直して反映してください。AI を使わないときは、{fix}")
+            box_how = (f"AI の回答に、これらの種類（kind）の指定がないか、採用されませんでした（2 章）。AI に出し直してもらうには、"
+                       f"チャットで AI に、{ask}出し直してもらい、" + step("repaste") + "てください。AI を使わないときは、Word で確かめ、"
+                       "本文に必要な囲みなら文字をテキストボックスの外に出してから変換し直してください")
+            cli_how = (f"チャットで AI に、{ask}出し直してもらい、新しい回答をファイルに保存して --ai manual --ai-response 回答のファイル を"
+                       "指定し直して実行するか、docx でその文字をテキストボックスの外に出して変換し直すこと")
+        else:
+            again = "もう一度変換すると AI が出し直します（毎回同じ結果になるとは限りません）"
+            how = (f"AI の回答に、これらの種類（kind）の指定がないか、指定が検証で採用されませんでした（2 章）。AI に出し直してもらうには、"
+                   f"{again}。AI を使わないときは、{fix}")
+            box_how = ("AI の回答に、これらの種類（kind）の指定がないか、採用されませんでした（2 章）。AI に出し直してもらうには、"
+                       + step("convert_again") + "してください（AI が出し直します。毎回同じ結果になるとは限りません）。AI を使わないときは、"
+                       "Word で確かめ、本文に必要な囲みなら文字をテキストボックスの外に出してから変換し直してください")
+            cli_how = ("--ai api でもう一度実行する（AI が出し直します。毎回同じ結果になるとは限りません）か、"
+                       "docx でその文字をテキストボックスの外に出して変換し直すこと")
     return Action(
         TO_CHECK, "textbox_undecided",
         top=(f"> **要確認: 囲み（問題文・ヒントなど）か図の注記か決められなかったテキストボックスが {n} 件あり、その文字を XML に"
@@ -1311,8 +1326,8 @@ def _fn_guess_span_text(r, checks) -> str:
         if not srcs:
             continue
         first, last = (_para_samples([(s, plan.paras[s].text_only())]) for s in (srcs[0], srcs[-1]))
-        rows.append(f"{head} の後ろの {first} の 1 段落" if len(srcs) == 1
-                    else f"{head} の後ろの {first}から{last}までの {len(srcs)} 段落")
+        rows.append(f"{head} の後ろの {first}の 1 段落" if len(srcs) == 1
+                    else f"{head} の後ろの {first}から {last}までの {len(srcs)} 段落")
     return "、".join(rows) + ("ほか" if len(checks) > FN_GUESS_SHOWN and rows else "")
 
 

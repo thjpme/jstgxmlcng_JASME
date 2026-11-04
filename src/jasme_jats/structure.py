@@ -488,6 +488,8 @@ class Classifier:
         の後ろに章見出しが続く原稿も戻す）。資料の見出しが続いたときは、今までどおり注の節として扱う。文字から推定した注の節の中に
         注の一覧に見えない段落が続いたまま後付けの見出し（または文書の終わり）に着いたときは、注の節として扱ったまま、要確認で
         知らせる（plan.fn_guess_checks。check_fn_guess）。ブロックは段落でも表でもよい（表の識別子は tid。block_id）。
+        文字から注の見出しと推定した「注」ごとに、その段落を「注見出し」スタイルにしたときに注の一覧に入る段落を plan.fn_guess_span に
+        記録する（feed_fn_span。助言が言う範囲）。
         """
         regions = {"front_ja": [], "body": [], "back": [], "front_en": []}
         state = "front_ja"
@@ -497,8 +499,12 @@ class Classifier:
         # ままなら要確認で知らせる）、見出しのスタイルの段落が先に現れ、それが資料の見出しでなければ、注の節ではなく本文の続き
         # だったとして本文に戻す（K5・F10・G2）
         fn_guess = None
-        span_open = None        # 本文に戻した「注」の段落 ID（その後ろの段落を plan.fn_guess_span に足している間）
+        # 文字から注の見出しと推定した「注」の段落 ID → その後ろが今、注の節の中か（その段落を「注見出し」スタイルにしたとき、
+        # 後ろの段落が注の節に入るかを数えている間。plan.fn_guess_span。feed_fn_span）。英文の部分に切り替わると数えるのをやめる
+        fn_open = {}
         for b, role in flat:
+            if fn_open and not in_shape(b):
+                self.feed_fn_span(fn_open, b, role)
             if fn_guess is not None and state == "back" and not in_shape(b):
                 if role in BACK_HEADINGS or (isinstance(b, Para) and self.back_heading_by_text(b, role) not in (None, "fn_heading")):
                     self.check_fn_guess(regions["back"][fn_guess:], f"後ろの後付けの見出し {block_id(b)}")    # 引用文献・付記・謝辞などの見出しが続く: 本当の注の節
@@ -510,8 +516,6 @@ class Classifier:
                     regions["body"].extend(moved)
                     state, fn_guess = "body", None
                     head = moved[0][0]
-                    span_open = head.src
-                    self.plan.fn_guess_span[head.src] = [x.src for x, _ in moved[1:] if self.span_para(x)]
                     kind = {"sec1": "章", "sec2": "節", "sec3": "項"}[role]
                     after = ("「注」の直後は注の番号で始まるが、注の番号で始まる表の注の可能性もあるため" if listed
                              else "「注」の直後が注の番号で始まらないため")
@@ -528,13 +532,6 @@ class Classifier:
                     self.plan.fn_guess_checks.append(
                         (head.src, "returned", f"{len(moved)} ブロックを本文に戻した（後ろの{kind}見出し {b.src}）"
                          + (f"。戻した範囲に注の番号で始まる段落が {len(numbered)} 件ある" if numbered else "")))
-            if span_open is not None and self.span_para(b):
-                # 戻した後ろの段落: 「注」を注見出しにすると、次の後付けの見出し・英文の部分までは注の節に入る
-                if (role in BACK_HEADINGS and role != "fn_heading" or role in FRONT_EN_ROLES
-                        or self.back_heading_by_text(b, role) not in (None, "fn_heading")):
-                    span_open = None
-                else:
-                    self.plan.fn_guess_span[span_open].append(b.src)
             if in_shape(b) and self.outside and ((b.float_id and b.float_id in self.outside)
                                                  or (b.textbox_id and b.textbox_id in self.outside)):
                 regions["body"].append((b, role))
@@ -563,6 +560,8 @@ class Classifier:
                     state = "back"
                     if guess == "fn_heading":
                         fn_guess = len(regions["back"])
+                        fn_open[b.src] = True
+                        self.plan.fn_guess_span[b.src] = []
             if state != "back":
                 if fn_guess is not None:
                     self.check_fn_guess(regions["back"][fn_guess:], f"後ろの英文の部分 {block_id(b)}")      # 英文の部分に切り替わった
@@ -574,10 +573,27 @@ class Classifier:
             self.check_fn_guess(regions["back"][fn_guess:], "文書の終わり")       # 後付けの見出しが続かないまま文書が終わった
         return regions
 
-    @staticmethod
-    def span_para(b) -> bool:
-        """b が plan.fn_guess_span に数える段落（図形の中でも空白だけでもない段落）か。"""
-        return isinstance(b, Para) and not in_shape(b) and not b.is_blank
+    def feed_fn_span(self, fn_open, b, role):
+        """ブロック b（図形の外）を、文字から推定した「注」の段落（fn_open のキー）ごとの plan.fn_guess_span に足す。
+
+        その「注」を「注見出し」スタイルにすると、後付けの領域は「注」から英文の部分まで続き、build_back が段落を分ける:
+        後付けの見出し（役割かテキストから決まるもの）に着くと、その節に切り替わる。注の見出し（別の「注」の段落）は見出しとして注の節に
+        戻るだけで、注の一覧の段落には入らない。注の節の中の段落（空白だけの段落と表を除く）が、助言が言う「注の節に入る段落」。
+        英文の部分に切り替わる段落・表からは数えない（fn_open を空にする）。
+        """
+        if role in FRONT_EN_ROLES or (isinstance(b, Table) and self.table_roles(b) & {"author_en", "aff_en"}):
+            fn_open.clear()
+            return
+        if not isinstance(b, Para):
+            return
+        heading = role if role in BACK_HEADINGS else self.back_heading_by_text(b, role)
+        if heading:
+            for head in fn_open:
+                fn_open[head] = heading == "fn_heading"
+        elif not b.is_blank:
+            for head, in_fn in fn_open.items():
+                if in_fn:
+                    self.plan.fn_guess_span[head].append(b.src)
 
     def note_lead(self, b: Para) -> tuple:
         """注の一覧の中の段落 b の、新しい注の始まりを示す番号: (Word の自動番号の注の番号、手で打った番号、上付きの数字)。どれもなければ
@@ -616,7 +632,6 @@ class Classifier:
             return
         why = "「注」の直後が注の番号で始まらない" if no_list else f"見出しのスタイルの段落 {heads[0].src} が含まれる"
         plain = sum(1 for x in rest if not self.note_starts(x))
-        self.plan.fn_guess_span[first.src] = [x.src for x in rest]
         self.plan.decide(
             "mechanical", "style", first.src,
             f"本文スタイルの段落「{_para_text(first).strip()[:20]}」を、文字から注の見出しと推定して後付けに切り替え、{where}までを注の節と"

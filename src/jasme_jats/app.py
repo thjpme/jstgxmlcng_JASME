@@ -237,8 +237,9 @@ class AppState:
 
     # 手動モードで、AI の回答を貼り付け直す案内（report.py の枠。colab.STEP_WORDS の repaste）が出る Action の key。これらが出ている
     # ときも、手動の欄（依頼文・回答の欄・「反映」）を見せたままにする。float_ref（リンクしなかった図・表の参照。AI の回答を反映した後も
-    # AI がリンクを付けなかったとき、「AI に出し直してもらう」案内が貼り直しを勧める）も入れる
-    REPASTE_KEYS = ("ai_error", "partial", "forced", "float_ref")
+    # AI がリンクを付けなかったとき、「AI に出し直してもらう」案内が貼り直しを勧める）・textbox_undecided（AI の回答を反映した後も
+    # 囲みか注記か決められなかったテキストボックスがあるとき、同じく貼り直しを勧める）も入れる
+    REPASTE_KEYS = ("ai_error", "partial", "forced", "float_ref", "textbox_undecided")
 
     @property
     def answer_box_open(self) -> bool:
@@ -248,8 +249,10 @@ class AppState:
         （partial）・図表の位置が決まらない（forced）・AI もリンクを付けなかった図・表の参照がある（float_ref）の枠が出ているあいだは、
         貼り付け直せるように見せたままにする。
         回答の反映（apply_answer）ができるときだけ見せる（waiting_for_answer と同じく、「AI による補完の方法」の欄が手動のとき）。
+        さらに、その結果が手動モードで作られたとき（依頼文があるとき）だけ見せる: AI を使っていない・API の結果のまま「AI による
+        補完の方法」の欄だけを手動に切り替えても、空の依頼文と「反映」は出さない（変換し直すと出る）。
         """
-        if self.res is None or self.inputs["ai_mode"] != "manual":
+        if self.res is None or self.inputs["ai_mode"] != "manual" or self.res.ai.mode != "manual" or not self.res.prompt_path:
             return False
         return ai_pending(self.res) or any(a.key in self.REPASTE_KEYS for a in actions(self.res))
 

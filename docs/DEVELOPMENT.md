@@ -87,7 +87,7 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
    案内もこの表の語で組み立てる（`app.py` から `report.step` を使う）。目印の名前を足すときは、すべての画面に語を足す。`top`・`checklist`（レポートの文）は目印を使わず、
    「ノートブックは手順 N、1 画面版は…」と両方の言い方を書く。目印は U+0000 で挟む（docx 由来の文字に同じ並びがあっても目印と読まれない）。
    1 画面版の想定外の例外の枠（`app.AppState.crash()`）は、`report.actions()` の知らせではなく、例外の表示（変換ツールの不具合の可能性として
-   赤い枠で出す）。ただし `app.AppState.REPASTE_KEYS`（`ai_error`・`partial`・`forced`・`float_ref`）は `Action` の key を直書きして手動の欄の表示を
+   赤い枠で出す）。ただし `app.AppState.REPASTE_KEYS`（`ai_error`・`partial`・`forced`・`float_ref`・`textbox_undecided`）は `Action` の key を直書きして手動の欄の表示を
    決めるので、`report.py` でこれらの key を変えるときは `app.py` も合わせる。
 9. f 文字列の式の中にバックスラッシュ・外側と同じ種類の引用符を書かない（Python 3.12 で許される書き方で、3.10・3.11 では `SyntaxError`
    になり、モジュールが読めない。`pyproject.toml` の下限は 3.10）。式は変数に出してから f 文字列に入れる。`tests/test_syntax.py` が、3.12 以降でも見つけられるよう

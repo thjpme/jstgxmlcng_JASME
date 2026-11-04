@@ -950,6 +950,31 @@ def test_h3_float_ref_advice_follows_the_ai_state(journal, meta, tmp_path):
     assert "設定（API か手動）" not in act.top and "--ai manual か --ai api" not in act.cli
 
 
+def test_manual_fields_hidden_when_result_was_not_made_in_manual_mode(journal, meta, tmp_path):
+    """0.29.0 の 4 回目の点検: AI を使っていない（または API の）結果のまま、変換し直さずに「AI による補完の方法」の欄だけを手動に切り替えても、
+    手動の欄（依頼文・「反映」）は出さない（図・表の参照の知らせ float_ref が出ていても。空の依頼文と回答を反映できない「反映」になるため）。
+    手動モードで作った結果（依頼文がある）では出る。"""
+    from jasme_jats.app import AppState
+    path, src = _float_ref_states(tmp_path, journal, meta)
+    none = convert(path, meta, journal, Options(out_dir=tmp_path / "none", convert_metafiles=False))
+    assert none.ai.mode == "none" and [a for a in actions(none) if a.key == "float_ref"]
+    st = AppState(tmp_path / "w")
+    st.set_inputs(ai_mode="none")
+    st.res = none
+    assert not st.answer_box_open
+    st.set_inputs(ai_mode="manual")
+    assert not st.answer_box_open and st.prompt_text() == ""
+    # API の結果も同じ
+    done = _manual(path, [_link_op(src, "F1", 1)], meta, journal, tmp_path / "api_like")
+    done.ai.mode, done.prompt_path = "api", None
+    st.res = done
+    assert not st.answer_box_open
+    # 手動モードで作った結果（AI を使った後）は、貼り直せるように見える
+    done = _manual(path, [_link_op(src, "F1", 1)], meta, journal, tmp_path / "manual_done")
+    st.res = done
+    assert st.answer_box_open and st.prompt_text()
+
+
 def test_ai_link_on_lookalike_text_keeps_the_unlinked_reference(journal, meta, tmp_path):
     """0.29.0 の最後の点検: AI がリンクを付けた参照を plan.float_unlinked から除く一致は、段落の中の位置（範囲）を見る。
     リンクの対象でない同じ文字（「地図1」の「図1」）に AI がリンクを付けても、本当にリンクされていない「図1」の要確認 float_ref は消えない。

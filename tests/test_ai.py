@@ -967,6 +967,42 @@ def test_ai_kind_box_and_label_for_undecided_textboxes(journal, meta, tmp_path):
     assert "| 囲み・図の注記（テキストボックス） |" in report.split("## 2.")[1].split("## 3.")[0]
 
 
+def test_textbox_undecided_advice_after_ai_names_operation_of_each_screen(journal, meta, tmp_path):
+    """0.29.0 の 4 回目の点検: AI を使った後も決められなかったテキストボックスの知らせは、「AI に出し直してもらう」操作を画面ごとに言う
+    （float_ref_ai と同じ）。手動なら回答の貼り直し（目印 repaste）、API ならもう一度変換（convert_again）。1 画面版は貼り直す案内を
+    出すあいだ手動の欄（依頼文・回答の欄・「反映」）を見せたままにする（AppState.REPASTE_KEYS）。"""
+    from jasme_jats.ai_assist import AIOutcome
+    from jasme_jats.app import AppState
+    from jasme_jats.colab import step_text
+    plan, ids = _boxes_by_text(journal)
+    hint, note = ids["（ヒント）"], ids["注"]
+    res = _manual_pl(STRUCTURE, [_box_pl(hint, _src(plan, "囲みの後の段落である。")), _box_pl(note, "", kind="label")],
+                     meta, journal, tmp_path / "manual")
+    assert res.ai.mode == "manual" and res.plan.undecided_boxes
+    act = next(a for a in actions(res) if a.key == "textbox_undecided")
+    app_text, nb_text = step_text(act.box_detail, "app"), step_text(act.box_detail, "notebook")
+    assert "「AI の回答（json のコードブロック）を貼り付ける」の欄に貼り付け直して「反映」を押してください" in app_text
+    assert "手順 6 で貼り付け直してください" in nb_text and "もう一度" not in app_text.split("AI に出し直してもらうには")[1].split("。")[0]
+    assert "--ai manual --ai-response 回答のファイル を指定し直して実行する" in act.cli
+    assert "貼り付け直して反映してください" in act.top and "AI に出し直してもらうか、" not in act.top
+    assert "\x00" not in step_text(act.box_detail, "cli") + act.top + act.cli
+    st = AppState(tmp_path / "work")
+    st.set_inputs(ai_mode="manual")
+    st.res = res
+    assert st.answer_box_open and st.prompt_text()                     # 案内のとおり、貼り付け直す欄が見えている
+    # API: もう一度変換する
+    api = _manual_pl(STRUCTURE, [_box_pl(hint, _src(plan, "囲みの後の段落である。")), _box_pl(note, "", kind="label")],
+                     meta, journal, tmp_path / "api")
+    api.ai = AIOutcome(mode="api")
+    api.ai.raw = "{}"
+    act = next(a for a in actions(api) if a.key == "textbox_undecided")
+    assert "「変換する」をもう一度押してください" in step_text(act.box_detail, "app")
+    assert "手順 5 をもう一度実行してください" in step_text(act.box_detail, "notebook")
+    assert "--ai api でもう一度実行する" in act.cli and "もう一度変換すると AI が出し直します" in act.top
+    assert "貼り付け" not in act.top.split("AI に出し直してもらうには")[1].split("。")[0]
+    assert "反映" not in step_text(act.box_detail, "app").split("AI に出し直してもらうには")[1].split("。")[0]
+
+
 @pytest.mark.parametrize("empty", ["", 0, False, None])
 def test_g5_falsy_caption_body_are_empty_lists(empty, journal, meta, tmp_path):
     """G5: placements の items の caption・body が falsy な値（""・0・false・null）のときは、以前どおり空の一覧として扱う
