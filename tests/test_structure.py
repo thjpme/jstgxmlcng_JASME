@@ -912,6 +912,9 @@ def test_table_note_heading_returns_to_body(journal, meta, tmp_path):
     [d] = [d for d in res.plan.decisions if "本文に戻した" in d.message]
     assert d.category == "style" and d.applied and res.plan.paras[d.src].plain() == "注" and "3 ブロック" in d.message
     assert {res.plan.region[s] for s, q in res.plan.paras.items() if q.plain() in ("注", "表の下の説明である。")} == {"body"}
+    # 本文に戻したことを要確認で知らせる（F10）
+    [act] = [x for x in actions(res) if x.key == "fn_guess"]
+    assert act.level == TO_CHECK and "本文に戻" in act.top and d.src in act.top
 
 
 @pytest.mark.parametrize("note_style", [None, S["sec1"]], ids=["body-style", "sec1-style"])
@@ -930,6 +933,7 @@ def test_real_notes_section_stays(note_style, journal, meta, tmp_path):
     assert [text(q) for q in root.find(".//fn-group").findall("fn/p")] == ["1) 一つ目の注である。", "2) 二つ目の注である。"]
     assert not [d for d in res.plan.decisions if "本文に戻した" in d.message]
     assert [text(s.find("title")) for s in root.find("body")] == ["１．はじめに"]
+    assert "fn_guess" not in [x.key for x in actions(res)]      # 注の番号で始まる段落が続く注の節は、知らせも出ない
 
 
 def test_real_notes_section_followed_by_text_ref_heading(journal, meta, tmp_path):
@@ -945,3 +949,89 @@ def test_real_notes_section_followed_by_text_ref_heading(journal, meta, tmp_path
     assert [fn.number for fn in plan.fns] == [1] and plan.fn_heading is not None
     assert not [d for d in plan.decisions if "本文に戻した" in d.message]
     assert [s.heading.plain() for s in plan.body if getattr(s, "heading", None) is not None] == ["１．はじめに"]
+
+
+# ---- F10: K5 の戻しの条件（見出しのスタイルの段落 + 「注」の直後が注の番号で始まらない）と、文字から推定した注の節の知らせ
+def fn_guess_article(tmp_path, middle, name):
+    """章見出しの後ろに、本文スタイルの「注」だけの段落と middle（XML の一覧）が続く小さな論文（引用文献は make_article が足す）。"""
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "架空の主張である（注1）。"),
+                mf.para(S["body"], "注"), *middle]
+    path = tmp_path / f"{name}.docx"
+    mf.make_article(path, "注の扱いの検証用文書", parts)
+    return path
+
+
+def fn_guess_action(res):
+    return [a for a in actions(res) if a.key == "fn_guess"]
+
+
+@pytest.mark.parametrize("style, kind", [("sec2", "節"), ("sec3", "項")])
+def test_table_note_heading_before_sub_heading_returns_to_body(style, kind, journal, meta, tmp_path):
+    """F10 (1): 「注」の後ろが節・項の見出し（sec2・sec3）でも、「注」の直後が注の番号で始まらなければ本文に戻す
+    （今までは章見出し〈sec1〉だけが戻し、節・項の見出し以降の本文がすべて 1 件の注になった）。要確認で知らせる。"""
+    middle = [mf.para(S["body"], "表の下の説明である。"), mf.para(S[style], "（１）小節" if style == "sec2" else "① 小項"),
+              mf.para(S["body"], "小節の本文である。")]
+    path = fn_guess_article(tmp_path, middle, "f10_sub")
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    root = load(res)
+    assert root.find(".//fn-group") is None and res.plan.fns == []
+    body_text = text(root.find("body"))
+    for s in ("注", "表の下の説明である。", "小節の本文である。"):
+        assert s in body_text
+    [d] = [d for d in res.plan.decisions if "本文に戻した" in d.message]
+    assert d.applied and kind + "見出し" in d.message and res.plan.paras[d.src].plain() == "注"
+    [act] = fn_guess_action(res)
+    assert act.level == TO_CHECK and d.src in act.top and "本文に戻" in act.top
+    assert "Word" in act.top and act.cli.startswith("要確認")
+    assert not res.needs_action
+
+
+def test_real_notes_section_followed_by_chapter_style_paragraph_stays(journal, meta, tmp_path):
+    """F10 (2): 注の番号で始まる段落が続く本当の注の節の後ろに、引用文献の見出しなしで章見出しのスタイルの段落（資料など）が
+    続いても、注の節を本文に戻さない（今までは注が 0 件になり、知らせもなかった）。注の一覧に見えない段落が続いたことを
+    要確認で知らせ、判断の一覧に記録する。"""
+    middle = [mf.para(S["body"], "（注1）一つ目の注である。"), mf.para(S["sec1"], "資料"), mf.para(S["body"], "資料の本文である。")]
+    path = fn_guess_article(tmp_path, middle, "f10_real")
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    assert len(res.plan.fns) == 1 and res.plan.fn_heading is not None
+    assert not [d for d in res.plan.decisions if "本文に戻した" in d.message]
+    root = load(res)
+    assert len(list(root.iter("fn"))) == 1
+    [act] = fn_guess_action(res)
+    assert act.level == TO_CHECK and "注の節として扱" in act.top and "見出しのスタイルの段落" in act.top
+    [d] = [d for d in res.plan.decisions if "注の節として扱った" in d.message]
+    assert d.applied and "見出しのスタイルの段落" in d.message
+    assert not res.needs_action
+
+
+def test_table_note_without_chapter_heading_reaches_refs_is_reported(journal, meta, tmp_path):
+    """F10 (3): 表の注の「注」の後ろに章見出しが出ないまま引用文献の見出しに着くと、章の残りの本文が注の節に入る（扱いは今までと
+    同じ）。そのとき、注の番号で始まらない段落が続いたまま注の節として扱ったことを要確認で知らせ、判断の一覧に記録する。"""
+    middle = [mf.para(S["body"], "表の注の文である。"), mf.para(S["body"], "最後の章のつづきの本文である。以上である。")]
+    path = fn_guess_article(tmp_path, middle, "f10_refs")
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    assert len(res.plan.fns) == 1
+    [act] = fn_guess_action(res)
+    assert act.level == TO_CHECK and "注の節として扱" in act.top and "注の番号で始まらない" in act.top
+    [d] = [d for d in res.plan.decisions if "注の節として扱った" in d.message]
+    assert d.applied and "注の番号で始まらない" in d.message and res.plan.paras[d.src].plain() == "注"
+    assert res.plan.fn_guess_checks and res.plan.fn_guess_checks[0][1] == "kept"
+    report = res.report_path.read_text(encoding="utf-8")
+    assert "注」だけの段落" in report.split("## 2.")[0]
+    assert not res.needs_action
+
+
+def test_real_notes_with_continuation_paragraphs_are_not_reported(journal, meta, tmp_path):
+    """対照: 「注」の直後が注の番号で始まる注の一覧は、番号のない続きの段落が混じっていても、知らせない（今までどおり）。"""
+    middle = [mf.para(S["body"], "（注1）一つ目の注である。"), mf.para(S["body"], "一つ目の注の続きである。"),
+              mf.para(S["body"], "（注2）二つ目の注である。")]
+    path = fn_guess_article(tmp_path, middle, "f10_cont")
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    assert [len(fn) for fn in [list(x.findall("p")) for x in load(res).iter("fn")]] == [2, 1]
+    assert fn_guess_action(res) == [] and res.plan.fn_guess_checks == []
+    assert not [d for d in res.plan.decisions if "注の節として扱った" in d.message or "本文に戻した" in d.message]

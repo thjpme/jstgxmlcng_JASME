@@ -1200,6 +1200,42 @@ def _float_ref_action(r):
              "XML に <xref ref-type=\"fig\" rid=\"図の id\">（表は ref-type=\"table\"）を手で足すこと"))
 
 
+FN_GUESS_SHOWN = 5      # 注の扱いの要確認に並べる件数（全件は 4 章の判断の一覧）
+
+
+def _fn_guess_action(r):
+    """文字から推定した注の見出し（本文スタイルの「注」だけの段落。表の注の見出しなど）の扱い（plan.fn_guess_checks。
+    structure.Classifier.split_regions）。なければ None。
+
+    注の節として扱ったか、本文に戻したかを、段落ごとに知らせる。どちらも文字から推定したもので、Word の段落のスタイルが
+    「注」の見出しにふさわしいかを利用者が確かめる。
+    """
+    checks = r.plan.fn_guess_checks
+    if not checks:
+        return None
+    paras = r.plan.paras
+    n = len(checks)
+    samples = _para_samples([(src, paras[src].text_only()) for src, _, _ in checks if src in paras])
+    detail = "\n".join(f"・{src}: {how}" for src, kind, how in checks[:FN_GUESS_SHOWN]) + ("\n・ほか" if n > FN_GUESS_SHOWN else "")
+    kept = any(kind == "kept" for _, kind, _ in checks)
+    returned = any(kind == "returned" for _, kind, _ in checks)
+    what = ("「注」だけの段落を、文字から注の見出しと推定しました。"
+            + ("注の一覧に見えない段落（注の番号で始まらない段落、または見出しのスタイルの段落）が続いたまま後付けの見出し"
+               "（または文書の終わり）に着いたため、その範囲を注の節として扱いました。" if kept else "")
+            + ("後ろに見出しのスタイルの段落が続き、「注」の直後が注の番号で始まらないため、注の節ではなく本文の続きとみなして"
+               "本文に戻しました。" if returned else ""))
+    how = ("Word で「注」の段落のスタイルを確かめ（注の節なら注の見出しのスタイル、表の注の見出しなど本文の続きなら本文のスタイル）、"
+           "直したら変換し直してください。")
+    return Action(
+        TO_CHECK, "fn_guess",
+        top=f"> **要確認: 「注」だけの段落の扱いを、文字から推定しました（{n} 件。4 章）。** {what}{how}対象の段落: {samples}",
+        checklist=f"- [ ] **文字から推定した「注」の扱い**（{n} 件。4 章）: 注の節か本文の続きかを確かめ、違えば Word で「注」の段落のスタイルを直して変換し直す",
+        box_title="「注」の段落の扱いを推定しました（要確認）",
+        box_detail=f"{what}{how}（レポートの冒頭と 4 章）\n{detail}",
+        cli=(f"要確認: 「注」だけの段落を文字から注の見出しと推定して扱いました（{n} 件。レポートの冒頭と 4 章）。注の節か本文の続きかを"
+             "確かめ、違えば docx で「注」の段落のスタイルを直して変換し直すこと"))
+
+
 NEWLINE_SAMPLES = 5     # 改行の要確認に並べる段落の数（全件はレポートの 10 章）
 JOINED_SHOWN = 10       # 6 章の、つないだ段落・読み飛ばした表の行の一覧に並べる数（それより多ければ「ほか」）
 
@@ -1431,7 +1467,7 @@ def actions(r) -> list:
                            _partial_action, _forced_action, figure_body_action, _textbox_undecided_action,
                            _textbox_place_action, _textbox_figure_text_action, images_action, lost_action,
                            _style_hidden_action, _abstract_ja_action, _app_after_refs_action, _note_overlap_action, _float_ref_action,
-                           _newline_action)]
+                           _fn_guess_action, _newline_action)]
     return [a for a in head if a is not None] + pdf_actions(r)
 
 
