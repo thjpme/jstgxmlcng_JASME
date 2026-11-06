@@ -1,0 +1,2 @@
+import proto
+proto.install()
