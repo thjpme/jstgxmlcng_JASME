@@ -248,7 +248,7 @@ def test_step_words_cover_every_mark_in_report():
     for module in (report, pipeline, app):    # 目印は report.py・pipeline.py（AIRequiredError の文）・app.py（CRASH_ADVICE）で使う
         used |= set(re.findall(r"step\((?:'|\")(\w+)(?:'|\")\)", Path(module.__file__).read_text(encoding="utf-8")))
     assert used == set(report.STEP_NAMES)                 # 使っていない目印・表にない目印がない
-    assert step_text(report.step("docx") + "から", "notebook") == "手順 2 から"     # 4e8c38a までの文と同じ（助詞の前の空白）
+    assert step_text(report.step("docx") + "から", "notebook") == "手順 2 から"     # 1ffed92 までの文と同じ（助詞の前の空白）
     assert step_text(report.step("pdf") + "で選んだ", "notebook") == "手順 2 で選んだ"
     assert step_text(report.step("images") + "で、", "notebook") == "手順 7「足りない画像をアップロード」で、"
     assert step_text(report.step("docx") + "、", "notebook") == "手順 2、"
@@ -352,7 +352,7 @@ def test_mark_lookalike_in_docx_text_is_shown_as_is(tmp_path, journal, meta, mon
 
 def test_ai_required_message_names_the_modes_of_each_screen(journal, meta, tmp_path, capsys):
     """AI を使わない設定で図表の位置を決められないときの例外の文は、画面ごとの選択肢の名前で出る（F5）。
-    ノートブックは 4e8c38a までと同じ文、1 画面版は app.AI_MODES の名前、コマンドラインは --ai の指定。目印が残らない。"""
+    ノートブックは 1ffed92 までと同じ文、1 画面版は app.AI_MODES の名前、コマンドラインは --ai の指定。目印が残らない。"""
     import pytest
     from conftest import FLOAT, META_EXAMPLE
 
@@ -385,8 +385,8 @@ def test_ai_required_message_names_the_modes_of_each_screen(journal, meta, tmp_p
 
 
 def test_notebook_sentences_equal_those_before_marks(journal, meta, tmp_path):
-    """ノートブックの枠の文は、目印にする前（4e8c38a）の文と一字一句同じ（助詞の前の空白、「アップロードし直し」など）。
-    4e8c38a と今の両方で fixtures の変換結果の全 Action の box_detail を作って比べた確かめの代表（F3）。"""
+    """ノートブックの枠の文は、目印にする前（1ffed92）の文と一字一句同じ（助詞の前の空白、「アップロードし直し」など）。
+    1ffed92 と今の両方で fixtures の変換結果の全 Action の box_detail を作って比べた確かめの代表（F3）。"""
     from conftest import OUTSIDE, PDFCHECK, PDFCHECK_PDF, STRUCTURE
 
     from jasme_jats.colab import result_boxes

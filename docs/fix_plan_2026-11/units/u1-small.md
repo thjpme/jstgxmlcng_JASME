@@ -10,7 +10,7 @@
   (1b) 最上位の一覧を断り、`operations` を必須にし、`RecursionError` を読めない回答として扱う。`split_ops` の `{ }` でない操作は `outcome.rejected` に理由付きで記録する。
   (1c) 最大の当てはまりの候補の数で曖昧さを決める。(1d) 上書きの `w:lvl` に書かれた子要素だけを `abstractNum` の段の値に重ねる。
 - 実際の原稿での影響: 出力（XML）の違いは 0 件。tests/private の docx 10 件（テストデータ1〜5 の 9 件とテンプレート）すべてに sanitize で取り除く個人情報があった。
-  引用の照合 750 件で K10 の直しによる違いは 0 件、`w:lvlOverride` は 0 件。公開リポジトリのテンプレートと fixture 14 件に、ユーザー名を含むローカルのパスが残っている（直す。git の履歴は利用者の返事待ち）。
+  引用の照合 750 件で K10 の直しによる違いは 0 件、`w:lvlOverride` は 0 件。公開リポジトリのテンプレートと fixture 14 件にあったユーザー名を含むローカルのパスは、2026-11-06 に履歴ごと取り除いた（計画の「履歴の書き換え」）。
 - 順: 0.30.0 の最初の commit は (1a)（sanitize と fixture の作り直し）だけにし、その直後に 0.29.0 のコードで回帰の基準を取る。(1b)(1c)(1d) は u2 と並行してよい。版は 0.30.0 の最後に 1 回だけ上げる。
 - 担当: 作るのは (1a)(1b)(1d) が Sonnet（エフォート medium）、(1c)（4 行の直しとテスト）が Haiku（エフォート low）。点検は Opus（エフォート medium）。Opus が自分で書く部分はない。
   点検で見るのは (1a) ヘッダー/フッターのフィールドの判定と作り直した fixture の `git diff --stat`、(1b) `parse_cut_response` の一覧の判定と深い入れ子の期待（`None`）、(1d) `_levels` が `self.abstract` の共有の dict を書き換えていないこと。
@@ -108,7 +108,7 @@ LOCAL_PATH = re.compile(r"^(?:file:|[A-Za-z]:\\|\\\\|/Users/|/home/)|Users\\")
 2. `python tests/make_fixtures.py` を実行する（soffice があると `sample_pdfcheck.pdf` も作り直される）。
 3. `git diff --stat tests/fixtures` を見る。docx 15 件のバイト列が変わる（make_fixtures は ZIP の日時を固定しない）。`git checkout tests/fixtures/sample_pdfcheck.pdf` で PDF を戻す。
 4. 全テストを通す。新しいテンプレートの `word/_rels/settings.xml.rels` に外部パスがないこと、fixture 14 件にもないことを `unzip -p` か小さいスクリプトで確かめる。
-5. git の履歴を書き換えるかは利用者の返事待ち。書き換えはこの作業に含めない。
+5. git の履歴にあったテンプレートのローカルのパスは、2026-11-06 に履歴ごと取り除いた（`attachedTemplate` の関係と `w:attachedTemplate` だけ。計画の「履歴の書き換え」）。この作業では、ほかの作成者情報を新しい sanitize で取り除いて fixture を作り直す。
 
 ### (1b) src/jasme_jats/ai_assist.py
 
@@ -397,7 +397,7 @@ def _level_present(lvl) -> dict:
 
 利用者の返事待ち:
 
-- git の履歴に残ったテンプレートのローカルのパスを、履歴を書き換えて消すか（main の書き換えは Colab の取得先とほかの人のクローンに影響する）。それとも今後の版からなくなればよいか。書き換えを選んだ場合も、その作業は版の反映と別にする。
+- （済み）git の履歴に残ったテンプレートのローカルのパスは、利用者の回答により 2026-11-06 に履歴を書き換えて取り除いた。
 - 前回の点検の再現スクリプト（tests/private/review-repros/reproduce.py）の項目のうち、この単位で正式なテストに移したもの（ai-array・sanitize-same-path・reference）を、利用者が reproduce.py から消す形でよいか。tests/private は利用者のフォルダなので、実装者は直さない。移した項目は最後の報告で一覧にする。
 
 実装のときに確かめること:
