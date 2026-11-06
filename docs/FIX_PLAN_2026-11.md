@@ -105,19 +105,107 @@
 
 各単位の要点（詳しくは単位の設計書）:
 
-<!-- 要点:u1-small -->
+### [単位 u1-small（0.30.0）: 小さい独立の修正（sanitize・AI の回答の形・引用文献の曖昧さ・自動番号の上書き）](fix_plan_2026-11/units/u1-small.md)
 
-<!-- 要点:u2-app -->
+- 目的: 互いに独立した 4 つの小さい不具合を直す。(1a) `tools/sanitize_docx.py` が入力と出力に同じファイルを指定すると原稿を壊す・個人情報を取り残す（O5）。
+  (1b) `ai_assist.parse_response` が最上位が一覧（`[ ]`）の回答や `operations` のない回答を「操作 0 件」で黙って通し（A9）、深い入れ子の回答で変換が `RecursionError` で止まる（A10）。
+  (1c) `refparse.match_citation` が同じ第一著者・同じ年の文献 3 件以上で曖昧さを取り違える（K10）。(1d) `numbering.py` が `w:lvlOverride/w:lvl` を無視する（R6）。
+- 直し方: (1a) sanitize を lxml で作り直し、同じファイルを断り、一時ファイルに書いて本文の文字が同じことを確かめてから置き換える。変更履歴の作成者・ヘッダー/フッターの文字（ページ番号のフィールドは残す）・customXml・
+  テンプレートのパス・文書のプロパティ（題目を含む）を取り除く。テンプレートの fixture を sanitize し直して fixture を作り直す（`sample_pdfcheck.pdf` は git で戻す）。
+  (1b) 最上位の一覧を断り、`operations` を必須にし、`RecursionError` を読めない回答として扱う。`split_ops` の `{ }` でない操作は `outcome.rejected` に理由付きで記録する。
+  (1c) 最大の当てはまりの候補の数で曖昧さを決める。(1d) 上書きの `w:lvl` に書かれた子要素だけを `abstractNum` の段の値に重ねる。
+- 実際の原稿での影響: 出力（XML）の違いは 0 件。tests/private の docx 10 件（テストデータ1〜5 の 9 件とテンプレート）すべてに sanitize で取り除く個人情報があった。
+  引用の照合 750 件で K10 の直しによる違いは 0 件、`w:lvlOverride` は 0 件。公開リポジトリのテンプレートと fixture 14 件に、ユーザー名を含むローカルのパスが残っている（直す。git の履歴は利用者の返事待ち）。
+- 順: 0.30.0 の最初の commit は (1a)（sanitize と fixture の作り直し）だけにし、その直後に 0.29.0 のコードで回帰の基準を取る。(1b)(1c)(1d) は u2 と並行してよい。版は 0.30.0 の最後に 1 回だけ上げる。
+- 担当: 作るのは (1a)(1b)(1d) が Sonnet（エフォート medium）、(1c)（4 行の直しとテスト）が Haiku（エフォート low）。点検は Opus（エフォート medium）。Opus が自分で書く部分はない。
+  点検で見るのは (1a) ヘッダー/フッターのフィールドの判定と作り直した fixture の `git diff --stat`、(1b) `parse_cut_response` の一覧の判定と深い入れ子の期待（`None`）、(1d) `_levels` が `self.abstract` の共有の dict を書き換えていないこと。
 
-<!-- 要点:u3-tables -->
+### [単位 u2-app（0.30.0）: 1 画面版で入力を変えた後の結果の混ざり（と従来のノートブックの手順の印）](fix_plan_2026-11/units/u2-app.md)
 
-<!-- 要点:u3-autonum -->
+- 目的: 1 画面版（`app.AppState`）で変換した後に入力（docx・PDF・ページ・日付・作り方など）を変えて「反映」「画像を入れる」「結果をダウンロード」を押すと、前回の変換の meta・回答・画像と今の docx・設定が 1 回の変換に混ざる。別の論文の段落が AI の除外として XML から消えても、不変性チェック・DTD は合格し、知らせも出ない。REVIEW の O3（変換の後に AI の方法のラジオを変えると画面が矛盾する）も同じ根で、あわせて直す。従来のノートブックで、途中で止まった手順の後も後ろの手順の「済み」（`DONE`）が残る穴も直す。
+- 直し方: 変換したときの入力の写し `RunInputs`（ファイルは中身の sha256 で比べる）を `AppState.run` に持ち、`_run`・`apply_answer`・`add_images`・`download` はこの写しだけを使う。入力が写しと違えば、結果を残したまま理由の文で断る（「このままダウンロード」でも断る）。手動かどうかは写しで決める（O3）。`convert()` は確かめが済むまで前の結果を変えない。別の論文に変えて変換したら回答の欄を空にし、前に別の依頼文へ反映したのと同じ文字の回答は断る（依頼文の digest で結び付ける）。ノートブックは各手順の先頭で自分より後ろの `DONE` を消す（`unmark`）。
+- 出力の形は変わらない（XML・レポート・ZIP の中身は同じ）。`report.actions()` に Action は足さない（画面の状態の表示）。
+- 実際の原稿での影響: テストデータ1 → テストデータ2 の切り替えでは、本文の段落 ID が 135 件中 132 件重なり、前の論文用の set_role exclude 3 件がすべて採用されてテストデータ2 の段落が 3 つ消えた（fpage も前の値のまま）。テストデータ2 → テストデータ1 では 3 件とも不採用。どちらも混ざったことの知らせはなかった。修正後は、どちらの経路も「入力が前回の変換から変わっています」で断る。
+- 担当: 作るのは Sonnet（エフォート medium）、点検は Opus（エフォート medium）。Opus が自分で書く部分はない。点検では `convert()` の手順の順、`on_convert` の 3 つの経路の戻り、crash の後の `view()` が例外を出さないこと、`CRASH_ADVICE` の各案内が新しい状態と合うことを見る。
+- 触るファイル: `src/jasme_jats/app.py`、`tools/make_notebook.py`、`tests/test_app.py`、`tests/test_notebook.py`。文書（USAGE・ARCHITECTURE・DEVELOPMENT・REVIEW・GUI_PLAN）は版の最後にまとめて直す。
 
-<!-- 要点:u4-crop -->
+### [単位 u3-tables（0.30.0）: 表の縦結合・飛ばしたグリッドと、表の形の確かめ](fix_plan_2026-11/units/u3-tables.md)
 
-<!-- 要点:u5-exclusions -->
+- 目的: 表の組み立て（`builder.Builder.table`）が、縦結合（`w:vMerge`）と行の前後で飛ばしたグリッド（`w:gridBefore`・`w:gridAfter`）で表の形を崩す不具合を直す（指摘 5・N6）。
+  すべてのセルが結合の継続の行を消しても `rowspan` が元の行数のまま残る、見出し行（thead）から本文の行（tbody）へ `rowspan` がはみ出す、幅の違う継続を結合する、横に広いセルが結合元の列を覆っても結合が続く、`gridBefore`・`gridAfter` を読まずに行が左に詰まる、の 5 つ。
+  どれも不変性チェック（文字だけを見る）と DTD 検証（要素の並びだけを見る）を通り、利用者に知らされない。あわせて、出力した表の形を変換の後に確かめる守り `pipeline.table_problems` を足し、崩れていれば要対応 `table_shape`（変換ツールの不具合の可能性）で知らせる。
+- 直し方: 読み取りで `Row.grid_before`・`grid_after`・`number` を読み、`gridSpan` の不正な値（0・負・数でない）を 1 にそろえる。`Builder.table` は、結合元を「開始列 → (セル, 幅)」で覚えて行ごとに作り直し、幅が同じ継続だけを結合し、本文の 1 行目で結合を止め、`rowspan` は出力する行だけで数え、飛ばしたグリッドは空のセルで埋める。
+  `table_problems(root, info)` は builder の結合の判断に頼らず、docx の行ごとの列の数と HTML の表の割り当て（行ごとの列の数・セルの重なり・節の外へのはみ出し・セルのない行）だけで判定する。
+  見出し行をまたぐ結合を止めたとき・幅の違う継続を結合しなかったときは 10 章の警告（Action にしない）。文字を書き換える箇所はない（足すのは空のセルだけ）。
+- 実際の原稿での影響: 0 件。tests/private の docx 10 件（出力の表 59 個）と fixtures 15 件（計 101 個）に、崩れる形（gridBefore・gridAfter・幅の違う継続・見出し行をまたぐ結合・すべて継続の行など）は 1 つもない。
+  試作では 25 件の出力 XML が 0.29.0 とバイト単位で同じで、表の形の確かめは 0 件も鳴らなかった（全テストの 653 回の変換の表 468 個でも 0 件）。基準との比較で想定する違いは 0。
+- 順: 0.30.0 の中で u1 の (1a) と基準取りの後、**u3-tables → u3-autonum → u4** の最初に実装する（builder.py・model.py・pipeline.py・report.py・docx_reader.py・structure.py・make_fixtures.py をこの単位が最初に触る）。
+- 担当: 作るのは Sonnet（エフォート high）。点検は Opus（エフォート medium）。Opus が自分で書く部分はない。
+  点検で Opus が確かめるのは、(1) `Builder.table` の結合の規則が試作（`docs/fix_plan_2026-11/protos/u3-tables/proto.py`）に点検の直しを加えた答えと同じになるか（テストの場合と点検の edge・edge2 の場合）、(2) `table_problems` が builder の判断に頼らず docx の行の列数と HTML の割り当てだけで判定しているか、(3) fixtures と tests/private の出力が基準とバイト単位で同じか。
 
-<!-- 要点:u6-k1k2 -->
+### [単位 u3-autonum（0.30.0）: Word の自動番号の出力漏れ（表のセルほか）と、自動番号の出力の確かめ](fix_plan_2026-11/units/u3-autonum.md)
+
+- 目的: Word の自動番号（`Para.autonum`）が、表のセル・キャプション・引用・別行数式・英文要旨・注の 2 段落目以降・後付けの見出しなどで
+  XML に出ず、知らせもない不具合を直す。番号は docx の文字ではなく生成文字（`jx:gen`）なので、不変性チェックも 8 章も気づけない。
+- 直し方: 番号を書く処理を `Builder.autonum_mark`（段落の先頭に生成文字で補う）・`Builder.caption`（キャプションの番号は `<label>`）・
+  `Builder.heading_title`（後付け・英文要旨の見出しは `<title>` の先頭）にまとめ、`Emitter.gen` に段落 ID（`src`）を持たせる。
+  題目・副題・著者名・所属の番号は出さず（J-STAGE の書誌に番号が入らないように）、`BuildInfo.unshown_numbers` に記録して 10 章の警告にする。
+  組み立ての後に、文字を出したのに番号の `jx:gen` がない段落を `pipeline.lost_autonums()` が数え、要対応 `autonum_lost` で知らせる（終了コード 1）。
+- 実際の原稿での影響: 今のコードで番号が落ちているのは表のセルだけで、テストデータ1 が 5 段落、テストデータ2 の 2 つの docx が各 11 段落
+  （ルート1・ルート2 とも同じ）。直すと自動番号の生成文字はテストデータ1 で 4→9、テストデータ2 で 6→17 になる。fixture 15 件の XML は変わらない。
+  試作では、実際の原稿 16 回・fixture・監査の docx のすべてで不変性チェック・最終出力の再チェック・DTD・補完の確かめが合格し、守りの誤報は 0。
+- ルート2: セルの段落は PDF と照合しない（`pdfmatch.target_paragraphs` の外）ので、セルの番号は Word の形のまま。照合・直しのコードは変えない。
+- 順: builder.py・model.py・pipeline.py・report.py を u3-tables の後、u4 の前に直す（同じ作業の枝で単位ごとに commit。版は 0.30.0 の最後に 1 回）。
+- 担当: 作るのは Sonnet（エフォート medium）。点検は Opus（エフォート medium）。Opus が自分で書く部分はない。
+  点検で見るのは、`fn` の 1 段落目の番号（二重に出さないことと区切りの空白）、`caption` の分岐と u3-tables の `table_wrap` との合わせ方、
+  `unshown_number` を呼ぶ 4 か所、`lost_autonums` が最後の組み立ての `root`・`info`・`plan` を使っていること。
+
+### [単位 u4-crop（0.30.0）: Word でトリミングした画像の切り取り](fix_plan_2026-11/units/u4-crop.md)
+
+- 目的: Word でトリミングした画像が、切り取る前のまま `Graphics/` と ZIP に入り（Word で隠した部分が J-STAGE で公開される）、知らせもない不具合を直す。
+  Word のトリミングは画像ファイルを変えず、表示のときに `a:srcRect`（VML は `v:imagedata` の `crop*`）の割合で切り取るだけなので、docx の画像は常に切り取る前のもの。
+- 直し方: 読み取り（`docx_reader._graphic`）で切り取りの割合と「反映しない Word の加工」（回転・反転・色の変更など）を `ImageRef.crop`・`ImageRef.edits` に記録し、
+  書き出し（`images.export_images`）で Pillow で切り取る（`images.crop_image`）。出力ファイル名・拡張子・XML の `xlink:href` は変えない。
+  切り取って出力した画像は要確認 `image_crop`、加工を反映していない画像は要確認 `image_edits`。切り取れない画像（EMF/WMF、Exif の向きのある写真、
+  動く GIF、保存できない形式など）は ZIP に入れず、切り取る前の画像を `要変換/` に置いて「用意が必要な画像」（既存の要対応 `images`）にする。
+  AI にも Word の表示どおりに切り取った画像を渡し、切り取れない画像は渡さない（AI には依頼文の文字だけ）。文字には触れないので、不変性チェック・ルート2 に影響しない。
+- 一緒に直す: 1 つの `w:drawing` に `pic` が複数あるとき、`a:blip` の `a:extLst/a:ext` を拾って画像の大きさが 0 になる不具合（グループの縮尺も掛ける）。
+  `images_action` の文の「画像（PNG）」と「docx に画像ファイルがない」を、切り取れなかった JPEG にも合う文に直す。
+- 実際の原稿での影響: 切り取りのある画像はテストデータ3 の 3 つの docx（各 1 枚）とテストデータ5（1 枚）。今は 590×438・1636×556 のまま出力しているものが、
+  Word の表示どおり 534×401・1308×556 になり、状態が ok → converted、要確認 `image_crop` が 1 件ずつ増える（終了コードは変わらない）。ほかの 30 枚（4 辺とも 0 の空の指定 21 枚を含む）は今と同じバイト列。
+  回転・反転・色の効果・負の値・VML の切り取り・Exif の向きは実際の原稿に 0 件。fixture 15 件の XML と画像は変わらない。
+- 順: model.py・docx_reader.py・report.py は u3-tables・u3-autonum の後に、ai_assist.py は u1 の後に直す（同じ作業の枝で単位ごとに commit。版は 0.30.0 の最後に 1 回）。
+- 担当: 作るのは Sonnet（エフォート medium）。点検は Opus（エフォート medium）。Opus が自分で書く部分はない（文はこの設計書のものをそのまま使う）。
+  点検で Opus が見るのは、`image_crop`・`image_edits`・`images_action` の文（top・checklist・box_detail・cli の書き分けと目印 `step()`）、
+  切り取れないときに failed へ進む経路（`crop_image` の例外の扱い、`要変換/` の置き方、ZIP に入らないこと）、AI に切り取れない画像を渡さないこと。
+
+### [単位 u5-exclusions（0.31.0）: 「位置づけが不明」の除外の知らせ・英文要旨が見つからないとき・注の節の表](fix_plan_2026-11/units/u5-exclusions.md)
+
+- 目的: 構造の組み立てで役割を決められずに除いた段落（後付けの表・英文の部分の段落など）が、6 章に載るだけで知らせがない不具合を直す（K7・K12）。
+  不変性チェックは除外に記録した段落を正しいものとして数えるので、今は合格し、要対応にも要確認にもならない。
+- 直し方: 除外の理由を structure.py の定数にし、「位置を決められない」理由の集合 `UNPLACED_EXCLUSIONS` で要確認 `excluded_unsure` を出す。
+  英文要旨が 1 段落もなく英文の部分に除外があるときは要対応 `abstract_missing`（終了コード 1）。冒頭部の装飾（誌名行・記号だけの行）は
+  `front_decoration` と jasme.toml の `front_lines` で見分け、知らせない。注の節の中の表は `FnNode.tables` に入れて `<fn><p><table-wrap>` で出し、
+  判断の一覧（4 章）に記録する（最初の注より前の表は最初の注の 1 段落目の後ろ）。jasme.toml の styles に「英文要約見出し」「英文要約」を別名で足す。
+- docx の文字は 1 文字も変えない。段落の役割と入れ先を変えるだけで、表のセルは今までどおり `builder.table_wrap` → `Emitter.span` で書く。
+- 実際の原稿での影響: テストデータ1〜5 の 9 件と fixture 15 件は、XML・除外・知らせとも変わらない（「位置づけが不明」の除外は 0 件。冒頭部の 3 件はすべて装飾と判定）。
+  tests/private のテンプレートだけが変わり、別名で英文要旨（見出し d87・段落 d88）と資料 2 つ（d90 と表 T2、d186 と表 T3）ができ、英文の部分の除外（段落 4・セル 121）は 0 になる。
+  注の節の中の表・本文と後付けの間の段落は、実際の原稿にはない。
+- 順: u3-tables → u3-autonum（0.30.0）の後、u6 の前に実装する（同じ作業の枝で単位ごとに commit。版は 0.31.0 の最後に 1 回）。
+- 担当: 作るのは Sonnet（エフォート high）、点検は Opus（エフォート high）。Opus が自分で書くのは `structure.Classifier.build_back` の注の表の枝
+  （`pending`・`fn_role`・`flush`・キャプションだけの注を作らない条件・各表の `plan.decide`）。点検では、不変性チェック（出力した段落を除外に記録しない）・
+  DTD・注の数・注の番号が `<fn>` の先頭に来ることを、直し方 4.8 の 6 つの形で確かめる。
+
+### [単位 u6-k1k2（0.31.0）: 後付けの見出しの重複・連続する所属を検出して変換を中止する](fix_plan_2026-11/units/u6-k1k2.md)
+
+- 目的: 後付けの見出し（付記・謝辞・注・引用文献）が同じ種類で 2 つあるとき（K1）や、著者名の付かない所属の段落・行があるとき（K2）は、構造の組み立てが前の値を上書きして捨て、その段落の文字が XML にも除外の記録にも入らない。今は最後の不変性チェック（`fidelity.missing`）でしか見つからず、利用者には「変換ツールの不具合の可能性」としか伝わらない。英文要旨の見出しが 2 つある形も同じ仕組みで落ちるので、一緒に扱う。
+- 直し方: 上書きが起きる 5 か所（`build_back` の 4 か所と `build_front_en` の英文要旨の見出し）と所属の 2 経路（段落・著者表）で、「その段落が出力も除外もされなくなる」ときだけ `ArticlePlan.structure_conflicts` に記録する。`pipeline.convert` は `_mechanical` の直後に新しい例外 `StructureConflictError` で中止する（終了コード 2、XML・ZIP・レポートを作らない）。文には箇所ごとの段落 ID・抜粋・Word での直し方を書く。前か後ろの見出しが空白だけなら中止せず、空白の除外にする。
+- ルート2 は補った docx を作る前に元の docx で確かめる。同じ場所で O7（`AIRequiredError` で中止しても補った docx が残る）も直す。
+- AI の `set_role` で衝突ができたら、衝突の範囲（前付けの中にとどめる）の `set_role` を不採用（2 章）にして組み直し、なお残れば `set_role` をすべて不採用にして組み直す。その先は守りの raise だけ。
+- `report.actions()` には何も足さない（中止は `AIRequiredError` と同じ例外の表示）。
+- 実際の原稿での影響: tests/private の docx 9 件とテンプレート（ルート1 10 回、ルート2 6 回）で検出 0 件・missing 0 件。止まる原稿はない。試作で 92 回の変換を走らせ、検出した 31 件はすべて今の不変性チェックが不合格の形で、落ちる段落 ID の集合が一致した（不一致 0）。止まるのは今も要対応 fidelity で止まっている原稿だけ。
+- 担当: 作るのは Sonnet（エフォート high）、点検は Opus（エフォート high）。Opus が自分で書く（または最終の文を決める）部分は、`pipeline.convert` の AI の後の 2 段の組み直し、`report.structure_conflict_text` の種類ごとの直し方の文、案内どおりに直した docx が合格することを確かめるテスト。
+- 順: 0.31.0 の中で u5 の後に実装する（`build_back` の同じ枝・`app.py`・`article.py`・`report.py` を u5 の後に触る）。
 
 ## 反映の順序
 
