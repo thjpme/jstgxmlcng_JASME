@@ -3,7 +3,7 @@
 - 作成: 2026-11-06。対象: `main` の 0.29.0（コミット 5c55945）。この計画の時点では、コードは変えていない。
 - 付属:
   - 単位ごとの設計書: [fix_plan_2026-11/units/](fix_plan_2026-11/units/)（実装者はこれを読んで実装する。設計に点検の直しを入れたもの）
-  - 計画づくりに使った試作・再現のスクリプト: [fix_plan_2026-11/protos/](fix_plan_2026-11/protos/)（手本として読むもの。scratchpad のパスを前提に書かれていて、出力・生成物は残していない）
+  - 計画づくりに使った試作・再現のスクリプト: [fix_plan_2026-11/protos/](fix_plan_2026-11/protos/)（手本として読むもの。scratchpad のパスを前提に書かれていて、出力・生成物は残していない。スクリプトは scratchpad が /tmp/scratchpad にある前提で書かれている）
 - 文中の行番号は 0.29.0 のもの。
 
 ## この計画の作り方
@@ -79,7 +79,7 @@
 | N10 | 英文要旨の見出しが 2 つあると、先の見出しが落ちる（K1 と同じ仕組み） | — | u6 | 0.31.0 | 0 |
 | N11 | AI の `set_role` で K1・K2 の形ができ、今は原因の分からない不合格になる | — | u6 | 0.31.0 | — |
 | N12 | ルート2 で中止しても、補った docx が出力フォルダに残る | O7 | u6 | 0.31.0 | — |
-| N13 | 全角空白だけの後付けの見出しの段落の後ろに本物の見出しがあると、不変性チェックが不合格になる | — | u6 | 0.31.0 | 0 |
+| N13 | 全角空白だけ・空の後付けの見出しが、本物の見出しの前か後ろにあると、不変性チェックが不合格になる（前の空白は missing、後ろの空白は前の本物の見出しが落ちる） | — | u6 | 0.31.0 | 0 |
 
 直さずに REVIEW に記録するもの（単位の設計書の「新しく見つけた問題」）: AI の回答と依頼文の結び付け（コマンドラインの `--ai-response` を含む）、
 英文の部分にスタイルがない原稿で英文の題目・著者・要旨が引用文献に入る、`numbering.py` が番号の段の隠し文字（`w:vanish`）を見ない、
@@ -97,10 +97,10 @@
 | [u3-autonum](fix_plan_2026-11/units/u3-autonum.md) | 0.30.0 | 自動番号の出力漏れと、自動番号の出力の確かめ | Sonnet・medium | なし | Opus・medium |
 | [u4-crop](fix_plan_2026-11/units/u4-crop.md) | 0.30.0 | トリミングした画像の切り取り | Sonnet・medium | なし（知らせの文は点検で Opus が確かめる） | Opus・medium |
 | [u5-exclusions](fix_plan_2026-11/units/u5-exclusions.md) | 0.31.0 | 「位置づけが不明」の除外の知らせ・英文要旨・注の節の表 | Sonnet・high | `structure.Classifier.build_back` の注の表の枝と `builder.fn` の書き出し順 | Opus・high |
-| [u6-k1k2](fix_plan_2026-11/units/u6-k1k2.md) | 0.31.0 | K1・K2 を検出して中止 | Sonnet・high | `pipeline.convert` の AI の後の衝突の組み直しと、`report.structure_conflict_text` の Word での直し方の文 | Opus・high |
+| [u6-k1k2](fix_plan_2026-11/units/u6-k1k2.md) | 0.31.0 | K1・K2 を検出して中止 | Sonnet・high | `pipeline.convert` の AI の後の衝突の組み直しと、`report.structure_conflict_text` の Word での直し方の文、案内どおりに直した docx が合格するテスト（`test_advice_fixed_docx_passes`） | Opus・high |
 | 共通 | 各版 | 回帰の基準を取るスクリプトと比較 | Sonnet・low | 想定外の違いの判断 | — |
 | 共通 | 各版 | 版上げ・ノートブックの作り直し | Haiku・low | — | — |
-| 共通 | 各版 | 文書（DEVELOPMENT・ARCHITECTURE・DESIGN・USAGE・REVIEW）をまとめて直す | Opus・medium | すべて | — |
+| 共通 | 各版 | 文書（DEVELOPMENT・ARCHITECTURE・DESIGN・STYLE_MAPPING・USAGE・USAGE_AI・JSTAGE_NOTES・GUI_PLAN・REVIEW）をまとめて直す | Opus・medium | すべて | — |
 | 共通 | 各版 | 版全体の最後の点検（3 つの観点） | — | — | Opus・high |
 
 各単位の要点（詳しくは単位の設計書）:
@@ -193,7 +193,7 @@
   注の節の中の表・本文と後付けの間の段落は、実際の原稿にはない。
 - 順: u3-tables → u3-autonum（0.30.0）の後、u6 の前に実装する（同じ作業の枝で単位ごとに commit。版は 0.31.0 の最後に 1 回）。
 - 担当: 作るのは Sonnet（エフォート high）、点検は Opus（エフォート high）。Opus が自分で書くのは `structure.Classifier.build_back` の注の表の枝
-  （`pending`・`fn_role`・`flush`・キャプションだけの注を作らない条件・各表の `plan.decide`）。点検では、不変性チェック（出力した段落を除外に記録しない）・
+  （`pending`・`fn_role`・`flush`・キャプションだけの注を作らない条件・各表の `plan.decide`）と、`builder.fn` の表の書き出し順（直し方 4.6）。点検では、不変性チェック（出力した段落を除外に記録しない）・
   DTD・注の数・注の番号が `<fn>` の先頭に来ることを、直し方 4.8 の 6 つの形で確かめる。
 
 ### [単位 u6-k1k2（0.31.0）: 後付けの見出しの重複・連続する所属を検出して変換を中止する](fix_plan_2026-11/units/u6-k1k2.md)
@@ -214,7 +214,7 @@
 ### 0.30.0
 
 1. **u1 の (1a) だけを最初の commit にする**（`tools/sanitize_docx.py`、テンプレートの整え直し、`python tests/make_fixtures.py` での fixture の作り直し。LibreOffice が作り直す `sample_pdfcheck.pdf` は `git checkout` で戻す）。
-2. **回帰の基準を取る**: 0.29.0 のコードのまま、作り直した fixture 15 件と `tests/private` の docx 10 件（ルート1。PDF のあるテストデータ1・2・3 の 6 件はルート2 も）を変換し、
+2. **回帰の基準を取る**: 0.29.0 のコードのまま、変換の設定は AI は manual・回答なし、`convert_metafiles=False` にして、作り直した fixture 15 件と `tests/private` の docx 10 件（ルート1。PDF のあるテストデータ1・2・3 の 6 件はルート2 も）を変換し、
    XML のハッシュ・`actions()` の key と level・除外の理由ごとの件数・警告の件数・ZIP の一覧と画像のハッシュ・終了コードを scratchpad に保存する（原稿の本文は保存しない）。
 3. 並行してよい（触るファイルが重ならない）: u1 の (1b)(1c)(1d)、u2。
 4. 続けて実装する（`builder.py`・`model.py`・`pipeline.py`・`report.py` を順に直すため）: **u3-tables → u3-autonum → u4**。
@@ -223,9 +223,10 @@
 
 ### 0.31.0（0.30.0 を反映した後の `main` から）
 
-7. **u5 → u6** の順（どちらも `structure.build_back` の見出しの枝を直す。`build_back` の見出しの枝の中は、u6 の `replace_back` を代入の前に、u5 の `flush()` を `current_fn = None` の前に置く）。
-8. 両方を入れた状態で、u6 の検出の sweep（fixtures と `tests/private`、ルート1・ルート2。検出 0・不合格 0）と u5 の除外の件数をもう一度取る。
-9. 版を 0.31.0 に上げる → ノートブックの作り直し → 全テスト・基準との比較 → 文書 → 版全体の点検 → 利用者の確認 → `main` に反映。
+7. 0.31.0 の基準は、0.30.0 を反映した `main` で取り直す。
+8. **u5 → u6** の順（どちらも `structure.Classifier.build_back` の見出しの枝を直す。見出しの枝の並び: 分岐の前は今のまま（文字から推定したときの decide → `state = BACK_HEADINGS[heading]` → `plan.region[b.src] = state`）→ 種類ごとの分岐で `if self.replace_back(kind, old, b, role): plan.X = b`（u6）と `plan.locations[b.src] = …`・注の節が引用文献の後ろのときの decide（今のまま）→ `self._heading_by_text[b.src] = role not in BACK_HEADINGS`（u6）→ `flush()`（u5）→ `current_fn = None` → `continue`。）
+9. 両方を入れた状態で、u6 の検出の sweep（fixtures と `tests/private`、ルート1・ルート2。検出 0・不合格 0）と u5 の除外の件数をもう一度取る。
+10. 版を 0.31.0 に上げる → ノートブックの作り直し → 全テスト・基準との比較 → 文書 → 版全体の点検 → 利用者の確認 → `main` に反映。
 
 ### 同じファイルを触る順
 
@@ -241,7 +242,7 @@
 | `article.py` | u5 → u6 |
 | `app.py` | u2 → u5 → u6 |
 | `tools/make_notebook.py` | u2 → u6 |
-| `tests/make_fixtures.py` | u1（作り直しだけ）→ u3-tables → u4（どちらも既定の出力を変えない。新しい docx は `tmp_path` に作る） |
+| `tests/make_fixtures.py` | u1（作り直しだけ）→ u3-tables（`table_row`）→ u4（`drawing` の引数・`vml_image`・`pic_group`・`two_tone`）→ u6（`front_ja_rows`・`front_en_rows`）（どれも既定の出力を変えない。新しい docx は `tmp_path` に作る） |
 
 ### 想定した違い（基準との比較）
 
@@ -252,7 +253,7 @@
 | u3-tables | なし（25 件の出力 XML がバイト単位で同じことを試作で確かめた） |
 | u3-autonum | テストデータ1・2 の表のセルの自動番号（生成した文字）だけ |
 | u4 | テストデータ3（3 件）・テストデータ5 の切り取った画像と、要確認 `image_crop` だけ |
-| u5 | テンプレートの英文要旨（別名で英文要旨になる）だけ |
+| u5 | tests/private のテンプレート（完成版）だけ: 別名で英文要旨（見出しと段落）と資料 2 つ（表 2 個）ができ、英文の部分の除外が 0 になる。知らせは増えない（fixture のテンプレートは変わらない） |
 | u6 | なし |
 
 ## 決めた並び・順序
@@ -288,22 +289,22 @@ app_after_refs, note_overlap, float_ref, fn_guess, newline、その後ろに pdf
 
 Action にしないもの: 10 章の警告（見出し行をまたぐ結合を止めた・幅の違う継続を結合しなかった〈u3-tables〉、題目・著者名・所属の自動番号を出さなかった〈u3-autonum〉）、
 4 章の判断の一覧（注の表〈u5〉）、2 章の不採用（`{ }` でない操作〈u1〉、衝突の範囲の `set_role`〈u6〉）、中止（`StructureConflictError`・`AIRequiredError`。例外の表示）。
-`app.REPASTE_KEYS` に足すのは `abstract_missing` だけ。新しい目印（`report.step`）は足さない。
+`app.AppState.REPASTE_KEYS` に足すのは `abstract_missing` だけ。新しい目印（`report.step`）は足さない。
 
 ## 共通の作業
 
 - **`tests/private` の用意**（クラウドのセッションは毎回新しい環境なので、実装を始めるときに取り込み直す）: Google ドライブの「J-Stage変換開発用資料/テスト用ファイル」の 5 つのフォルダ
   （テストデータ1〜5）を `tests/private/テストデータN/` に、親フォルダのテンプレート 2 件を `tests/private/テンプレート/` に、
-  「J-Stage変換開発用資料/レビュー再現_2026-11/jasme-review-repros/reproduce.py」を `tests/private/review-repros/reproduce.py` に置く（`ROOT` を `Path(__file__).resolve().parents[3]` にする）。
+  「J-Stage変換開発用資料/レビュー再現_2026-11/jasme-review-repros/reproduce.py」を `tests/private/review-repros/reproduce.py` に置く（取り込んだ写しの `ROOT` だけを `Path(__file__).resolve().parents[3]` に直す。ドライブの元のファイルは変えない。項目を消すかは利用者に聞くことの 4）。
   ドライブのコネクタの `download_file_content` は、大きいファイルを JSON（`content` が base64）でファイルに保存するので、Python で読んで書き出す。
 - **テスト**: 単位ごとに `python -m pytest -q` をすべて通す（今は 1298 件）。新しい Action が fixture で鳴らないこと（並びを確かめる既存のテストで分かる）と、`tests/test_syntax.py`（Python 3.10 で読める書き方）も確かめる。
 - **回帰の比較**: 上の「回帰の基準」と、1 つ前の commit の出力を比べ、想定した違いだけであることを報告する。
-- **知らせの文の決まり**: 画面の操作は目印 `report.step()` で書く（使うのは既存の `docx`・`ai_choose`・`answer_apply`・`convert_again`・`prompt`・`apply_button`）。レポートの本文（冒頭・14 章）は目印を使わず両方の画面の言い方で書く。生のタグは `report.md_tag()`。f 文字列の式の中にバックスラッシュと外側と同じ引用符を書かない。
+- **知らせの文の決まり**: 画面の操作は目印 `report.step()` で書く（使うのは既存の `docx`・`ai_choose`・`answer_apply`・`convert_again`・`prompt`・`apply_button`・`pdf`）。レポートの本文（冒頭・14 章）は目印を使わず両方の画面の言い方で書く。生のタグは `report.md_tag()`。f 文字列の式の中にバックスラッシュと外側と同じ引用符を書かない。
 - **AI の回答のテスト**: 0.30.0 から `operations` が必須になるので、テストの回答は必ず `{"placements": […], "operations": […], "notes": []}` の形にする。
 - **版上げ**: 版の最後に 1 回だけ、`src/jasme_jats/__init__.py` と `pyproject.toml` の両方。
 - **ノートブック**: 版の最後に `python tools/make_notebook.py`（ipynb を直接直さない）。
-- **文書**: 版の最後に 1 人（Opus）がまとめて直す。`ARCHITECTURE.md`（行数の表・`Result` の欄・`actions()` の並び・`convert` の段階）、`DEVELOPMENT.md`（守るべき原則 3 に表の形・自動番号の守りと除外の理由、原則 8 の注に中止）、`DESIGN.md`、`STYLE_MAPPING.md`、
-  `USAGE.md`（0.30.0 で `table_shape`・`autonum_lost`・`image_crop`・`image_edits`、0.31.0 で `excluded_unsure`・`abstract_missing` と K1・K2 の中止）、`USAGE_AI.md`（u1）。
+- **文書**: 版の最後に 1 人（Opus）がまとめて直す。`ARCHITECTURE.md`（行数の表・`Result` の欄・`actions()` の並び・`convert` の段階）、`DEVELOPMENT.md`（守るべき原則 3 に表の形・自動番号の守りと除外の理由、原則 8 の注に中止、原則 8 の `app.AppState.REPASTE_KEYS` の一覧に `abstract_missing`〈0.31.0〉）、`DESIGN.md`、`STYLE_MAPPING.md`、
+  `USAGE.md`（0.30.0 で `table_shape`・`autonum_lost`・`image_crop`・`image_edits`、0.31.0 で `excluded_unsure`・`abstract_missing` と K1・K2 の中止）、`USAGE_AI.md`（u1）、`JSTAGE_NOTES.md`（u5）、`GUI_PLAN.md`（u2）。
 - **REVIEW の記録**: 直したもの（0.30.0: O5・A9・A10・K10・R6・O3・指摘 1・3・4・5・6、0.31.0: K7・K12・K1・K2・O7）と、新しく見つけて直さないもの（上の「直さずに REVIEW に記録するもの」）を `docs/REVIEW_2026-11.md` に書く。
 - **再現スクリプト**: 架空の docx で作れる項目（ai-array・sanitize-same-path・reference・app-input-change・merge・cell-number・crop・note-table・abstract-plain・number-override・repeated-headings・consecutive-affiliations）は、単位ごとに `tests/` の正式なテストにする。`tests/private/review-repros/reproduce.py` はそのまま残す（0.31.0 からは repeated-headings・consecutive-affiliations で `StructureConflictError` になる）。
 - **最後の報告**: 見つけた文書とコードの食い違いを、直したものも直さなかったものもすべて挙げる（単位の設計書の「文書とコードの食い違い」を集める）。
@@ -320,6 +321,10 @@ Action にしないもの: 10 章の警告（見出し行をまたぐ結合を�
 1. **公開リポジトリの fixture に残っているローカルのパスを、`git` の履歴からも消すか。** 0.30.0 で今後のファイルからは消える。履歴から消すには `main` の履歴を書き換える必要があり、Colab がツールを取ってくる先と、ほかのクローン・フォークに影響する。推奨: 今後のファイルから消すだけにする（含まれているのはユーザー名と Dropbox のフォルダ名で、作業の中身ではない）。
 2. **`CLAUDE.md` を次のように直してよいか**（実装者は直さず、承認を得てから版の最後に直す）。
    (1)「不変性チェックは文字しか見ない」の行に、表の形の崩れ（`pipeline.table_problems`）と Word の自動番号の出力漏れ（`pipeline.lost_autonums`）も要対応として知らせることを足す。
-   (2) ルート2 で「Word が付ける番号を PDF に合わせる」のは、PDF と照合する段落だけ（表のセル・囲み・別行数式の段落と、後付けの見出しの番号は Word の形のまま）と書く（今のコードの動きに合わせる）。
+   (2) ルート2 で「Word が付ける番号を PDF に合わせる」のは、PDF と照合する段落だけ（表のセル・囲み・別行数式の段落と、後付けと英文要旨の見出しの番号は Word の形のまま）と書く（今のコードの動きに合わせる）。
    (3) 終了コード 2（中止）に、原稿の構造（同じ種類の後付けの見出しが 2 つ・著者の付かない所属。K1・K2）による中止を加える。
+   (4)（0.30.0。u4）「アップロード用 ZIP に入れるものは…」の項の後ろに、「Word でトリミングした画像は、Word で表示される範囲に切り取って入れ（要確認）、切り取れないもの（EMF/WMF など）は入れずに「用意が必要な画像」（要対応）にする（`images.crop_image`）。Word で隠した部分は ZIP にも AI にも渡さない。」を足す。
+   (5)（0.31.0。u5）最優先の原則の 2 つ目の箇条の後ろに、「論文の中の位置を決められずに除く段落は、`structure.UNPLACED_EXCLUSIONS` の理由で記録し、要確認（`excluded_unsure`）で知らせる。英文要旨が 1 段落もなく英文の部分を除いたときは要対応（`abstract_missing`）。」を足す。
+   (1)(2)(4) は 0.30.0、(3)(5) は 0.31.0 の最後に聞く。
 3. **試験登載で確かめてもらえるか**: 注の中の表（`<fn><p><table-wrap>`）と、付記・謝辞・注・引用文献の見出しの自動番号（見出しの先頭の文字）が、J-STAGE の画面に表示されるか。確かめられるまでは、判断の一覧（4 章）に記録するだけにする。
+4. **再現スクリプト（tests/private/review-repros/reproduce.py）のうち、tests/ の正式なテストに移した項目を、利用者が reproduce.py から消す形でよいか。** tests/private は利用者のフォルダなので実装者は変えない。移した項目は各版の最後の報告で一覧にする。

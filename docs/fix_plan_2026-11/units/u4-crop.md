@@ -257,7 +257,7 @@ def image_blocks(doc, images):
 #### 5-6. 9 章・1 章
 
 9 章（1951〜1962 行目）の表の列は変えない（備考の欄に `export_images` の message が出る）。1 章の画像の要約も変えない。
-新しい目印（`STEP_NAMES`）は足さず、box_detail だけ `step("docx")` を使う。top・checklist・cli には目印を書かない。`app.REPASTE_KEYS` には足さない。
+新しい目印（`STEP_NAMES`）は足さず、box_detail だけ `step("docx")` を使う。top・checklist・cli には目印を書かない。`app.AppState.REPASTE_KEYS` には足さない。
 
 ## テスト
 
@@ -343,6 +343,7 @@ u3-autonum を入れた 1 つ前の commit とを比べる。
 - make_fixtures.py: u1 の (1a) で fixture を作り直した後に部品を足すが、既定の出力を変えず、fixture は作り直さない。
 - 画面: colab・app・cli は `Action` を表示するだけなので変えない。切り取れない画像は既存の要対応 `images` の経路に乗り、1 画面版の「画像を入れる」の欄（`app.missing_images` が `images_to_prepare` を使う。点検で確かめた）・ノートブックの手順 7・`--images` で受け付ける。
 - 利用者が後から入れた画像（`add_images`、status user）は切り取らず、知らせない。
+- `tests/private/review-repros/reproduce.py` の crop は、この単位のテストとして tests/ の正式なテストに移した項目として最後の報告で挙げる。
 
 ## 利用者向けの文
 
@@ -385,7 +386,7 @@ u3-autonum を入れた 1 つ前の commit とを比べる。
 
 ## 文書の更新（CLAUDE.md は案だけ）
 
-この単位の実装者が直すもの:
+この単位の実装者が直すのは `src/jasme_jats/images.py` の docstring（3-5）だけ。docs/ の文書は 0.30.0 の最後に Opus がまとめて直す（単位どうしの点検の決定）。そのときに入れる内容:
 
 - docs/ARCHITECTURE.md:
   - images.py の行: 「png/jpg/gif はそのまま」→「png/jpg/gif はそのまま。Word のトリミング（`ImageRef.crop`）があれば Pillow で切り取る（`crop_image`）。切り取れなければ切り取る前の画像を `要変換/` に置き、用意が必要な画像（failed）にする」。主な名前に `crop_image`・`CropError` を足す。行数。
@@ -397,9 +398,6 @@ u3-autonum を入れた 1 つ前の commit とを比べる。
   - 「アップロード用 ZIP の中身」の行（807 行目）に「Word のトリミングは切り取って出力する（要確認）。切り取れないもの（EMF/WMF、Exif の向きのある画像、複数のコマの画像など）は ZIP に入れず、切り取る前の画像を `要変換/` に置いて要対応」を足す。
   - 「画像ファイル名」の行（806 行目）をコードに合わせる（下の食い違い 1）。
   - 7 章（既知の限界）に「回転・反転・色の変更・図の効果は反映しない（要確認）」「EMF/WMF のトリミングは、LibreOffice が A4 の紙面に置くので位置を当てはめられない（要対応）」「JPEG を切り取ると、元と同じ量子化表で再圧縮する。Exif・PNG の gAMA などの chunk は落とす。16 bit の RGB の PNG は 8 bit になる」を足す。
-- src/jasme_jats/images.py の docstring（3-5）。
-
-版の最後に Opus がまとめて直すもの（単位どうしの点検の決定。文の案を渡す）:
 
 - docs/REVIEW_2026-11.md: 直したものとして「Word でトリミングした画像（計画の u4。0.30.0）」と「1 つの drawing に pic が複数あるときの大きさ 0（u4。0.30.0）」。新しい未修正の項目は下の「直さず REVIEW に記録するもの」。
 - docs/USAGE.md の「たとえば次のものです」の一覧に 2 行:
@@ -414,7 +412,7 @@ CLAUDE.md（実装者は直さない。利用者の承認を待つ案）: 「ア
 ## 文書とコードの食い違い
 
 1. docs/DESIGN.md の「画像ファイル名」の行（806 行目）は `{巻}_{開始ページ}_{連番2桁}.png` と書くが、コードは `image_name_pattern`（jasme.toml の `"{article_id}_{n:02d}"`）に、
-   元の画像の拡張子から png/jpg/gif を付ける（`builder.name_image` 102〜106 行目。JPEG は `.jpg`）。**この単位で文書の側を直す**（「`{記事識別子}_{連番2桁}` に、元の画像の形式の拡張子〈.png・.jpg・.gif。ほかの形式は変換して .png〉」）。
+   元の画像の拡張子から png/jpg/gif を付ける（`builder.name_image` 102〜106 行目。JPEG は `.jpg`）。**文書の側を直す**（版の最後のまとめで）（「`{記事識別子}_{連番2桁}` に、元の画像の形式の拡張子〈.png・.jpg・.gif。ほかの形式は変換して .png〉」）。
 2. `images.export_images` の `shape_only` の message（153〜155 行目）は「ノートブックは手順 7、1 画面版は「画像を入れる」の欄」と画面の操作を直接書き、`images_action` の box_detail の行にそのまま出る。
    CLAUDE.md の「手順番号や欄の名前を直接書かず、目印 `report.step()` で書く」と食い違う（REVIEW の O2 の記録では、images.py の理由の文は両方の言い方にしたとしている）。**直さない**（REVIEW に新しい項目として記録）。この単位で足す文には手順番号・欄の名前を書かない。
 3. `images.convert_metafile` の LibreOffice がないときの文（54 行目）が、ない欄名「EMF/WMF 画像を変換する」を指す（REVIEW の O11。既知）。**直さない**。

@@ -2,7 +2,7 @@ import sys
 sys.argv = ["x"]
 exec(open("proto_base.py").read())
 from jasme_jats.report import actions
-W = Path("/tmp/claude-0/-home-user-jstgxmlcng-JASME/72d6c468-bb77-50d1-8396-803f4558807a/scratchpad/review-u5-exclusions/work")
+W = Path("/tmp/scratchpad/review-u5-exclusions/work")
 W.mkdir(exist_ok=True)
 def simple(b):
     return [mf.para(mf.S["sec1"], "１．検証"), mf.para(mf.S["body"], "本文の表1と表2を見よ。注1)。"),

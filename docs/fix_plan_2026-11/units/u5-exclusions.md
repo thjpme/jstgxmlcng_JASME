@@ -14,7 +14,7 @@
   注の節の中の表・本文と後付けの間の段落は、実際の原稿にはない。
 - 順: u3-tables → u3-autonum（0.30.0）の後、u6 の前に実装する（同じ作業の枝で単位ごとに commit。版は 0.31.0 の最後に 1 回）。
 - 担当: 作るのは Sonnet（エフォート high）、点検は Opus（エフォート high）。Opus が自分で書くのは `structure.Classifier.build_back` の注の表の枝
-  （`pending`・`fn_role`・`flush`・キャプションだけの注を作らない条件・各表の `plan.decide`）。点検では、不変性チェック（出力した段落を除外に記録しない）・
+  （`pending`・`fn_role`・`flush`・キャプションだけの注を作らない条件・各表の `plan.decide`）と、`builder.fn` の表の書き出し順（直し方 4.6）。点検では、不変性チェック（出力した段落を除外に記録しない）・
   DTD・注の数・注の番号が `<fn>` の先頭に来ることを、直し方 4.8 の 6 つの形で確かめる。
 
 ## 再現（確かめたこと）
@@ -212,8 +212,7 @@ if state == "fn":
 #### 4.4 build_back: 見出しの枝・注の始まり・ループの後ろ
 
 - 見出しの枝（1939〜1962 行）: `current_fn = None`（1961 行）の直前で `flush()` を呼ぶ（次の見出しまでに注が始まらなかった表は除外のまま、要確認の対象）。
-  u6 が後で同じ枝に `replace_back` を足す。並びは `if self.replace_back(…): plan.X = b` → `_heading_by_text` → state・region・locations・decide（今のまま）
-  → `flush()` → `current_fn = None`。`flush()` と `current_fn = None` は `replace_back` の戻り値に関係なく呼ぶ（u6 の設計書にも書く）。
+  u6 が後で同じ枝に `replace_back` を足す。見出しの枝の並び: 分岐の前は今のまま（文字から推定したときの decide → `state = BACK_HEADINGS[heading]` → `plan.region[b.src] = state`）→ 種類ごとの分岐で `if self.replace_back(kind, old, b, role): plan.X = b`（u6）と `plan.locations[b.src] = …`・注の節が引用文献の後ろのときの decide（今のまま）→ `self._heading_by_text[b.src] = role not in BACK_HEADINGS`（u6）→ `flush()`（u5）→ `current_fn = None` → `continue`。`flush()` と `current_fn = None` は `replace_back` の戻り値に関係なく呼ぶ（u6 の設計書にも書く）。
 - 注の段落の枝（1978〜1999 行）: 注を始めた段落にも続きの段落にも `fn_role[b.src] = role` を記録する。
   注の始まり（1998 行 `plan.fns.append(current_fn)` の後ろ）に足す:
 
@@ -242,7 +241,7 @@ for fn in plan.fns:
 
 #### 4.6 builder.Builder.fn（826 行〜。u3-autonum の形の上に 3 か所）
 
-u3-autonum が書いた `fn` のコメントの 3 か所（`# u5 が足す`）を本物にする:
+u3-autonum の形の `fn` に、u3-autonum の設計書で `# u5 が足す` と示した 3 か所の位置へ次を足す（コードにコメントは残っていない）:
 
 ```python
 tables = list(fn.tables)
@@ -454,7 +453,7 @@ docx は `tests/make_fixtures.py` の部品で `tmp_path` に作る（fixture �
 - `test_no_unplaced_notices_for_fixtures`: `sorted((Path(__file__).parent / "fixtures").glob("*.docx"))` の全件（`ALL_DOCS` には 4 件がないので glob で回す）を
   `Options(ai_mode="manual", convert_metafiles=False)`（回答なし。AI が必要な fixture で `AIRequiredError` にしないため）で変換し、`excluded_unsure`・`abstract_missing` が出ない（回帰の守り）。
 - `test_two_abstract_heading_styles`（単位どうしの点検の決定）: 「英文要旨見出し」の見出しと、スタイル名「英文要約見出し」の見出しが両方ある docx（スタイルは document.xml と styles.xml を書き換えて足す）。
-  期待は u6 の中止（`StructureConflictError`。英文要旨の見出しが 2 つ）。u5 の時点では `pytest.mark.xfail(strict=True, reason="u6 で中止にする")` を付け、u6 の実装者が印を外す。
+  期待は u6 の中止（`StructureConflictError`。英文要旨の見出しが 2 つ）。u5 の時点では `pytest.mark.xfail(strict=True, reason="u6 で中止にする")` を付け、u6 の実装者が印を外す。`StructureConflictError` はテスト関数の中で import する（u5 の時点ではないので、モジュールの先頭に書かない）。
 
 ### tests/test_ai.py
 
@@ -483,17 +482,18 @@ docx は `tests/make_fixtures.py` の部品で `tmp_path` に作る（fixture �
 
 ## ほかの単位・ルート2・AI 補完・画面との関係
 
-- u3-tables・u3-autonum（0.30.0）: 注の表は `table_wrap` を通すので、u3-tables の `table_problems`（`TableProblem.label` は祖先の table-wrap の id）と、u3-autonum のキャプション・セルの番号がそのまま効く。
+- u3-tables・u3-autonum（0.30.0）: 注の表は `table_wrap` を通すので、u3-tables の `table_problems`（`TableProblem.name`〈祖先の table-wrap の id から「表 T2」〉）と、u3-autonum のキャプション・セルの番号がそのまま効く。
   `builder.fn` は u3-autonum の形の上に 3 か所足すだけ。builder.py の順は u3-tables → u3-autonum → u5。
 - u4（0.30.0）: 触る関数は重ならない。注の表のセルの画像も `export_images` を通るので、トリミングの切り取りが効く。
 - u6（0.31.0、この単位の後）: `build_back` の見出しの枝を u6 も直す（並びは 4.4）。後付けの同じ種類の見出しが 2 つあると u6 が中止するので、「注」が 2 つある原稿で注の表の入れ先は考えなくてよい。
   見出しが 2 つで pending の表がある形は、flush で表が除外され、そのあと u6 が中止する。英文要旨の別名で「英文要約見出し」と「英文要旨見出し」の両方がある原稿は、u6 で中止になる（テストは xfail で用意する）。
   `article.py`・`structure.py`・`app.py`・`report.py` は u5 → u6 の順。
+- `tests/private/review-repros/reproduce.py` の note-table と abstract-plain は、この単位のテストとして tests/ の正式なテストに移した項目として最後の報告で挙げる。
 - ルート2: 補った docx はルート1 と同じ処理で変換するので、知らせは同じように出る。注の表のセル（cell）は照合も直しもしない。キャプションは今まで fn の段落として照合の対象で、これからも caption として対象。
   `_flow_paragraphs` だけが注の表のある原稿で変わる。`pdfdocx._structure` の fns に表の形を足す（4.7）。
 - AI 補完: 英文の部分の段落は `set_role` の abstract で英文要旨にできる。冒頭部・本文と後付けの間の段落は `set_role_hint` が依頼文に指定できる役割を書く。表のセルは `set_role` では変えられない（今のまま）。
   注の表は `plan.tables` に入るので、依頼文の「図・表・注・数式」に `[T2] 表 …` として載る。
-- 画面: どちらも `report.actions()` に `Action` を足すだけで、冒頭・14 章・Colab の枠・コマンドラインに出る。`abstract_missing` は終了コード 1。`app.REPASTE_KEYS` に `abstract_missing` だけを足す。
+- 画面: どちらも `report.actions()` に `Action` を足すだけで、冒頭・14 章・Colab の枠・コマンドラインに出る。`abstract_missing` は終了コード 1。`app.AppState.REPASTE_KEYS` に `abstract_missing` だけを足す。
   中止（終了コード 2）はこの単位にはない。
 
 ## 利用者向けの文
@@ -516,8 +516,8 @@ docx は `tests/make_fixtures.py` の部品で `tmp_path` に作る（fixture �
 - `docs/JSTAGE_NOTES.md`: `fn` の中の `p/table-wrap` は DTD では妥当だが、J-STAGE での表示は確かめていない。
 - `docs/USAGE.md` の知らせの一覧（「たとえば次のものです」）: 要対応「英文要旨が見つかりません」（abstract_missing）と要確認「論文の中の位置を決められない段落」（excluded_unsure）。
 - `docs/ARCHITECTURE.md`: `article.FnNode.tables`・`ArticlePlan.fn_table_paras`、structure の除外の理由の定数・`UNPLACED_EXCLUSIONS`・`EN_PART_EXCLUSIONS`・`abstract_missing_srcs`・`front_decoration`、
-  report の 2 つの Action と actions の並び（6.3）、`config.JournalConfig.front_lines`、`app.REPASTE_KEYS`。行数の表は `wc -l` に合わせる。
-- `docs/DEVELOPMENT.md`: structure.py の行、守るべき原則 3 に「除外の理由は structure の定数で書き、位置を決められずに除くときは `UNPLACED_EXCLUSIONS` の理由を使う（要確認で知らせる）」。
+  report の 2 つの Action と actions の並び（6.3）、`config.JournalConfig.front_lines`、`app.AppState.REPASTE_KEYS`。行数の表は `wc -l` に合わせる。
+- `docs/DEVELOPMENT.md`: structure.py の行、守るべき原則 8 の `app.AppState.REPASTE_KEYS` の一覧に `abstract_missing`、守るべき原則 3 に「除外の理由は structure の定数で書き、位置を決められずに除くときは `UNPLACED_EXCLUSIONS` の理由を使う（要確認で知らせる）」。
 - `docs/REVIEW_2026-11.md`: K7・K12 を 0.31.0 で直したと記録する（表の行番号も今のコードに合わせる）。新しい未修正の項目を足す（下の「直さず REVIEW に記録するもの」）。
 - structure.py の冒頭の docstring（⑤ build_back に注の表、⑥ build_front_en に英文の部分の除外の理由）、`model.Exclusion` の docstring（「位置を決められない理由の除外は要確認・要対応で知らせる〈report._unplaced_action・_abstract_missing_action〉」）。
 - CLAUDE.md の案（実装者は直さない。利用者の承認を待つ）: 「最優先の原則」の 2 つ目の箇条の後ろに、次の 1 文を足す案。

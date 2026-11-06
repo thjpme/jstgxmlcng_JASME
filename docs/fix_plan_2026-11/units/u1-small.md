@@ -311,7 +311,7 @@ def _level_present(lvl) -> dict:
 
 ### tests/test_pdfmatch.py
 
-- `test_autonum_level_override_follows_pdf`: `bullet_article` と同じ形で、`list_item(num_id=92)` の 2 項目の docx を `_with_lvl_override` で作る（共通の部品は `tests/make_fixtures.py` に関数として置くか、test の中に同じ書き換えを書く。make_fixtures の既定の出力は変えない）。
+- `test_autonum_level_override_follows_pdf`: `bullet_article` と同じ形で、`list_item(num_id=92)` の 2 項目の docx を `_with_lvl_override` で作る（test の中に書く。`test_reader._with_lvl_override` を使ってよい。u1 では make_fixtures.py は作り直しだけ）。
   PDF の行が `(A)`・`(B)` のとき `compare` の `diffs == []`、`number_edits == {}`。`（Ａ）`・`（Ｂ）` のとき `number_edits == {("auto", src): "（Ａ）", …}` で `diffs == []`、
   `convert_with_pages` のルート2 で `actions(res) == []`、`res.supplement.ok`、XML に `（Ａ）` がある。
 
@@ -326,7 +326,8 @@ def _level_present(lvl) -> dict:
 ## ほかの単位・ルート2・AI 補完・画面との関係
 
 - 順（単位どうしの点検の決定）: 0.30.0 の最初の commit は (1a) だけ。(1b)(1c)(1d) は u2 と並行してよい（触るファイルが重ならない）。ai_assist.py は u1 → u4（`image_blocks`）→ u5（`build_request`）の順に直す。関数は重ならない。
-- `tests/make_fixtures.py` は u1 では作り直すだけ（部品は変えない）。u3-tables と u4 は make_fixtures の部品を直すが、既定の出力を変えず、fixture を作り直さない。
+- `tests/make_fixtures.py` は u1 では作り直すだけ（部品は変えない）。u3-tables・u4・u6 は make_fixtures の部品を直すが、既定の出力を変えず、fixture を作り直さない。
+- `tests/private/review-repros/reproduce.py` の number-override は、この単位のテストとして tests/ の正式なテストに移した項目として最後の報告で挙げる。
 - 0.31.0 の単位（u5・u6）のテストの AI の回答は、必ず `{"placements": […], "operations": […], "notes": []}` の形で書く（操作がなくても `"operations": []`）。u1 の後は `operations` のない回答が `ai_error` になるため。
 - u3-autonum との関係: u3-autonum の守り（`lost_autonums`）は「autonum が空でないのに XML に番号がない段落」を探すので、numbering.py が `''` を返す誤りは見つけられない。そのため (1d) は値を重ねる案で実装し、番号を空にしない。u3-autonum が DESIGN.md 7 章にその限界を書く。
 - ルート2: R6 の直しで、上書きされた番号が PDF と同じ文字になり、偽の違いと要確認 pdf_unfixed がなくなる。全角・半角の違いは今までどおり `plan.pdf_numbers`（number_edits）で PDF に合わせ、補完の確かめも合格する。

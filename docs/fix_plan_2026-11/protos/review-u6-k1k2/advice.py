@@ -1,5 +1,5 @@
 import sys
-sys.path.insert(0, "/tmp/claude-0/-home-user-jstgxmlcng-JASME/72d6c468-bb77-50d1-8396-803f4558807a/scratchpad/u6-k1k2")
+sys.path.insert(0, "/tmp/scratchpad/u6-k1k2")
 import proto
 from common import S, article, para, run, summary
 from pathlib import Path

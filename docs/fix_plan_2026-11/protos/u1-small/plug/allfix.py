@@ -1,6 +1,6 @@
 """u1-small の直し方の試作を当てて既存テストを走らせる（pytest -p allfix）。"""
 import sys, json
-sys.path.insert(0, "/tmp/claude-0/-home-user-jstgxmlcng-JASME/72d6c468-bb77-50d1-8396-803f4558807a/scratchpad/u1-small")
+sys.path.insert(0, "/tmp/scratchpad/u1-small")
 import numfix
 numfix.install()
 from jasme_jats import ai_assist, refparse, pipeline

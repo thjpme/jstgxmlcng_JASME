@@ -1,5 +1,5 @@
 import sys
-sys.path.insert(0, "/tmp/claude-0/-home-user-jstgxmlcng-JASME/72d6c468-bb77-50d1-8396-803f4558807a/scratchpad/u5-exclusions")
+sys.path.insert(0, "/tmp/scratchpad/u5-exclusions")
 import proto_patch  # noqa
 from pathlib import Path
 from jasme_jats.config import ArticleMeta, JournalConfig

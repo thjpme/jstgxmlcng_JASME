@@ -255,7 +255,7 @@ unshown_numbers: list = field(default_factory=list)   # 番号を出さなかっ
   `Action(NEEDS_ACTION, "autonum_lost", top=…, checklist=…, box_title=…, box_detail=…, cli=…)`。文は「利用者向けの文」の節。目印 `report.step()` は使わない（画面の操作を指さないため）。
   行は `esc` を通す。
 - `actions()`（1649〜1661）の head の並びは、単位どうしの点検で決めたとおり `…, images_action, lost_action, lost_autonum_action, _style_hidden_action, …`。
-  0.31.0 の u5 で `lost_autonum_action` の後ろに `_abstract_missing_action` が入り、u4 の `_image_crop_action`・`_image_edits_action` はその後ろに入る。
+  u4 が `lost_autonum_action` の後ろに 2 つ（`_image_crop_action`・`_image_edits_action`）を入れ、0.31.0 の u5 が `_abstract_missing_action` をその間に入れる。
   u3-tables の `_table_shape_action`（`_dtd_action` の直後）は先に入っている。
 - 8 章（1911〜1931）:
   - 説明文（1919〜1922）を次にする（ルート2 の文は「利用者向けの文」の節）。題目の括弧書きは `r.unshown_numbers` があるときだけ足す。
@@ -279,15 +279,14 @@ unshown_numbers: list = field(default_factory=list)   # 番号を出さなかっ
 - `test_autonum_in_other_contexts_is_written`（parametrize で 1 つずつ）: 引用のスタイル（`list_item(S["quote"], …)`）→ `disp-quote/p` の先頭／
   表キャプション（`list_item(S["tab_cap"], "表1　…")`）→ `table-wrap/label` が番号で `caption/p` は「表1　…」のまま／図キャプションの続き → caption の 2 つ目の p の先頭／
   別行数式（list_item に omathpara と tab と「(1)」）→ `disp-formula` の最初の文字／付記・謝辞・注・引用文献の見出し（`list_item(S["notes_head"], …)` など）→ 各 `<title>` の先頭／
-  注の 2 段落目（`fn_body` の 2 段落目に num_id=6 の箇条）→ fn の 2 つ目の p の先頭が「• 」／英文要旨の段落（`make_article` の abstract に段落の XML を渡せるようにするか、
-  英文要旨の後ろに `list_item(S["abs"], …)` を足す）→ `trans-abstract/p` の先頭／
+  注の 2 段落目（`fn_body` の 2 段落目に num_id=6 の箇条）→ fn の 2 つ目の p の先頭が「• 」／英文要旨の段落（既存の引数 `make_article(..., appendix=[mf.list_item(S["abs"], …)])` で英文要旨の後ろに置く。make_fixtures.py は直さない）→ `trans-abstract/p` の先頭／
   Word の脚注の 2 段落目（`mf.footnote(5, "…", mf.list_item("a8", "…", num_id=7))`）→ fn の 2 つ目の p の先頭。
 - `test_caption_autonum_label`（parametrize: `split_labels` が真と偽）: 表キャプション「表1　授業の流れ」に自動番号。どちらでも `table-wrap/label` が自動番号で、
   `caption/p` は「表1　授業の流れ」のまま（真でも「表1」を label に分けない）。
 - `test_title_author_aff_autonum_is_not_written_and_warned`: document.xml の題目・副題・著者名（姓と名に分けられるものと、空白がなく分けられないもの）・
   所属（和文だけのものと、和英両方がある aff-alternatives のもの）の w:p に numPr を足す小さな補助関数をテストに置く（`u3-autonum/audit.py` の後処理と同じやり方）。
   期待: `article-title`・`surname`・`institution` などの文字に番号がない、`res.warnings` に題目・著者名・所属の番号の警告が 1 行（各段落 ID を含む）、
-  `res.unshown_numbers` が記録した段落の数だけある、`lost_autonums` が空、`needs_action` は偽、8 章に「題目・著者名・所属の段落の番号は出していません（10 章）」。
+  `res.unshown_numbers` が記録した段落の数だけある、`lost_autonums` が空、`needs_action` は偽、8 章に「（題目・著者名・所属の段落の番号は出していません。10 章）」。
 - `test_word_footnote_first_paragraph_autonum`（parametrize: 本文が空白で始まる形・始まらない形）: Word の脚注の 1 段落目に numPr（footnotes.xml の 1 段落目を後から書き換える。
   `review-u3-autonum/fn_first.py` と同じ）。fn の文字が「1) 1. …」で、gen が footnote-mark（src なし）と autonum（src は f の段落）の 1 つずつ。
 - `test_hand_note_first_paragraph_autonum_once`: 手で書いた注の 1 段落目の自動番号が 1 回だけ出る（kind autonum の gen が 1 つ）。
@@ -306,6 +305,8 @@ unshown_numbers: list = field(default_factory=list)   # 番号を出さなかっ
 - `test_all_fixtures_have_no_lost_autonums`: conftest の `ALL_DOCS` をすべて変換し、`lost_autonums` が空で、`assert_autonum_gens` が通る。
 - `test_guard_uses_final_tree`: `pipeline.lost_autonums` を包んで渡された root を記録し、`pipeline.build`（または `builder.build`）を包んで最後に作った root と同じ物であることを確かめる。
   原稿は、ルート2 で `pdf_numbers` が付くもの（tests/test_supplement.py の既存の作り方を使う）と、DTD 不合格の数式の取り消しで組み立てをやり直すもの（既存のテストにある作り方があれば使う。なければ省き、その旨を報告する）。
+- `test_guard_uses_final_tree` では、あわせて `pipeline.table_problems` を包んで渡された root も最後に作った root と同じ物で、`res.tables_checked` が最後の info の行のある表の数と同じことを確かめる（u3-tables のテスト 10 の残りの経路）。
+- `tests/private/review-repros/reproduce.py` の cell-number は、この単位のテストとして tests/ の正式なテストに移した項目として最後の報告で挙げる。
 
 ### tests/test_pdfmatch.py（または tests/test_supplement.py）
 
@@ -327,7 +328,7 @@ unshown_numbers: list = field(default_factory=list)   # 番号を出さなかっ
 ## ほかの単位・ルート2・AI 補完・画面との関係
 
 - **u3-tables（先に入れる）**: `table_wrap` の `self.table(tw, node.table, node.caption)` と `BuildInfo.tables` を前提にする。`table_wrap` は caption → caption_more → table の順。
-  守りは `lost_images` → `table_problems` → `lost_autonums` の順に並べる。model.py・pipeline.py・builder.py・report.py は u3-tables → u3-autonum → u4 の順に 1 つずつ commit する。
+  守りは `lost_images` → `table_problems` → `lost_autonums` の順に並べる。model.py・report.py は u3-tables → u3-autonum → u4、builder.py・pipeline.py は u3-tables → u3-autonum の順に 1 つずつ commit する。
 - **u4（後に入れる）**: report.actions の head で `lost_autonum_action` の後ろに u4 の 2 つ（間に 0.31.0 の `_abstract_missing_action`）。u4 のテストは lost の直後に並ぶことを前提にしない。
 - **u5（0.31.0）**: 注の節の表は必ず `table_wrap` を通すので、キャプションの自動番号・セルの番号の直しがそのまま効き、守りも調べる。`fn` は 3.(g) の形に表の 3 行を足すだけにする。
   最初の注より前の表は最初の注の 1 段落目の後ろ（k=1）に入れ、注の番号が `<fn>` の先頭に来るようにする（u5 の設計書）。u5 のテストで、注の表のセルに自動番号があるものの `lost_autonums == []` を確かめる。
@@ -381,7 +382,7 @@ DEVELOPMENT.md の原則・ARCHITECTURE.md・USAGE.md・REVIEW_2026-11.md は、
     `disp-formula`・後付けと英文要旨の見出しの `<title>` は先頭、注は各 `<p>` の先頭（Word の注の 1 段落目は「1) 1. …」）、題目・副題・著者名・所属は出さず 10 章の警告。
     185 行目の `lost_images` の段落の後に、守り `lost_autonums` の 1 段落（調べないもの・要対応・Result の欄）。
   - 7 章（1136 行目の自動番号の項）に限界を足す: 画像だけの段落・文字のない番号だけの段落の番号は XML に出ず守りにも見えない／`numbering.py` が番号を作れなかった（空の）段落は守りでも見つからない／
-    `numbering.py` は段の書式の `w:vanish` を見ないので、Word で隠した番号も XML に出る／ルート2 で照合しない段落と後付けの見出しの番号は Word の形のまま／
+    `numbering.py` は段の書式の `w:vanish` を見ないので、Word で隠した番号も XML に出る／ルート2 で照合しない段落と後付けと英文要旨の見出しの番号は Word の形のまま／
     自動番号で「図1」を付けたキャプションは、文字に番号がないので本文の「図1」の参照をリンクできない。
 - **docs/DEVELOPMENT.md**: 守るべき原則 3 に「Word の自動番号が XML に出なかった段落は `pipeline.lost_autonums()` が検出し、要対応 `autonum_lost` で知らせる（`jx:gen` の kind autonum には段落 ID の src を付ける）」。
   43 行目の「ルート2 で Word の番号（自動番号・脚注番号）の全角・半角を PDF に合わせるときは」を「PDF と照合する段落の Word の番号…」に絞る。テストの節に test_lost_autonums.py。
@@ -393,7 +394,7 @@ DEVELOPMENT.md の原則・ARCHITECTURE.md・USAGE.md・REVIEW_2026-11.md は、
   - 「不変性チェックは文字しか見ない。XML に入らなかった画像は `pipeline.lost_images()` が検出し、要対応として知らせる。」の後に
     「Word の自動番号が XML に出なかった段落は `pipeline.lost_autonums()` が検出し、要対応として知らせる。」を足す（u3-tables の `table_problems` の文と合わせて 1 つの案にする）。
   - 「Word が付ける番号（自動番号・脚注番号）は docx の文字ではないので、変換のときに全角・半角と字形を PDF に合わせる。」を
-    「…PDF と照合する段落では、変換のときに全角・半角と字形を PDF に合わせる（表のセル・囲み・別行数式の段落と後付けの見出しの番号は Word の形のまま）。」にする。
+    「…PDF と照合する段落では、変換のときに全角・半角と字形を PDF に合わせる（表のセル・囲み・別行数式の段落と、後付けと英文要旨の見出しの番号は Word の形のまま）。」にする。
 
 ## 文書とコードの食い違い
 
@@ -434,7 +435,6 @@ DEVELOPMENT.md の原則・ARCHITECTURE.md・USAGE.md・REVIEW_2026-11.md は、
 
 実装のときに確かめること:
 
-- `make_article` の英文要旨に段落の XML を渡せるか（渡せなければ引数を足す。既定の出力は変えない）。
 - `test_guard_uses_final_tree` に使える、DTD 不合格の数式の取り消しで組み立てをやり直す原稿の作り方が既存のテストにあるか。
 - u3-tables の後の `table_wrap` の形（`self.table` の引数）が、この設計書の 3.(e) と合っているか。
 - test_colab などで 8 章の文を固定しているテストがあるか（あれば期待を直す）。

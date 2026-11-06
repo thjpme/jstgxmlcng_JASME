@@ -1,5 +1,5 @@
 import sys, glob, shutil, subprocess, zipfile
-sys.path.insert(0, "/tmp/claude-0/-home-user-jstgxmlcng-JASME/72d6c468-bb77-50d1-8396-803f4558807a/scratchpad/u1-small")
+sys.path.insert(0, "/tmp/scratchpad/u1-small")
 from pathlib import Path
 from sanitize_proto import sanitize
 out = Path(__file__).parent / "lo"; out.mkdir(exist_ok=True)

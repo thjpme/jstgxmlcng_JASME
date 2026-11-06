@@ -295,7 +295,7 @@
 利用者の返事待ち:
 
 - なし（入力が変わったときのダウンロードは「このままダウンロード」でも断る、前の論文の回答は依頼文の digest で結び付ける、依頼文に印を入れる案は今回入れない、を計画者が決めた）。
-- 再現スクリプトの移し替え（tests/private/review-repros/reproduce.py の 'app-input-change' を利用者が消すか）は、全体の質問（user_questions の 4 つ目）で聞く。
+- 再現スクリプトの移し替え（tests/private/review-repros/reproduce.py の 'app-input-change' を利用者が消すか）は、計画の「利用者に聞くこと」の 4 で聞く。
 
 実装のときに確かめること:
 
