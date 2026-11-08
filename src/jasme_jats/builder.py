@@ -923,6 +923,8 @@ class Builder:
         - Word の自動番号・脚注番号: 生成した番号と空白を p の先頭に（jx:gen。docx の文字ではない）
         - 手で打たれた番号「1)」: docx の文字なので、そのまま p の中に残す（label に分けない）
         - 2 段落目以降の自動番号も、生成した文字として各 p の先頭に補う
+        - 注の節の中の表（FnNode.tables）は <p> で包む（fn の内容は label?, p+。付記・謝辞の <p> の表と同じ）。表は k 段落目の後ろに
+          置き、必ず table_wrap を通す（表の形の確かめ・キャプションとセルの自動番号が本文の表と同じに効く）
         """
         el = _sub(fg, "fn", id=fn.fid)
         mark = ""
@@ -930,7 +932,10 @@ class Builder:
             mark = self.plan.pdf_numbers.get(("fnlist", fn.word_id), self.marks[fn.word_id][1])
         elif fn.paras and fn.paras[0].autonum:
             mark = self.autonum(fn.paras[0]).strip()
+        tables = list(fn.tables)
         for i, p in enumerate(fn.paras):
+            while tables and tables[0][0] <= i:
+                self.table_wrap(_sub(el, "p"), tables.pop(0)[1])
             pe = _sub(el, "p")
             if i == 0 and mark:
                 wide = unicodedata.east_asian_width(mark[-1]) in ("F", "W")
@@ -948,6 +953,8 @@ class Builder:
             else:
                 self.autonum_mark(pe, p)
             self.em.span(pe, p, E.BACKP)
+        for _, node in tables:
+            self.table_wrap(_sub(el, "p"), node)
 
 
 def word_note_marks(plan, journal) -> dict:

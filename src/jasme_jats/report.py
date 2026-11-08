@@ -22,7 +22,9 @@ from .model import note_key, note_label
 from .package import article_dir
 from .pdfmatch import (DISPLACED_WHY, EDGE_WHY, FORMULA_MARK, HEAD_WHY, LINE_MARK, LONG_WHY, MATH_WHY, RE_PAGE_NO, TYPESET_KINDS,
                        UNSURE_WHY, WHOLE_WHY, diff_parts, typeset_pair)
-from .structure import NO_LINK_KINDS, TEXTBOX_TEXT_EXCLUDED
+from .structure import (AUTHOR_TABLE_OTHER_EXCLUDED, BACK_OTHER_EXCLUDED, BACK_TABLE_EXCLUDED, EN_AUTHOR_TABLE_OTHER_EXCLUDED,
+                        EN_OTHER_EXCLUDED, EN_TABLE_EXCLUDED, FRONT_OTHER_EXCLUDED, FRONT_TABLE_EXCLUDED, NO_LINK_KINDS,
+                        TEXTBOX_TEXT_EXCLUDED, UNPLACED_EXCLUSIONS, abstract_missing_srcs, appendix_heading)
 
 
 def esc(s, n=None) -> str:
@@ -1102,6 +1104,123 @@ def _textbox_figure_text_action(r):
              f"その文字をテキストボックスの外（本文の段落）に出して変換し直すこと。対象の段落: {samples}"))
 
 
+def unplaced_exclusions(r) -> list:
+    """論文の中の位置を決められずに XML に出力しなかった段落（理由が structure.UNPLACED_EXCLUSIONS。文字のないものと、
+    abstract_missing で知らせるものを除く）: [(段落 ID, 理由, 文字)]（docx の順）。"""
+    miss = set(abstract_missing_srcs(r.plan))
+    return [(s, why, t) for s, why, t in r.fidelity.excluded if why in UNPLACED_EXCLUSIONS and t.strip() and s not in miss]
+
+
+# 位置を決められない除外の理由ごとの名前と、Word での直し方（_unplaced_action）
+UNPLACED_GUIDE = {
+    FRONT_OTHER_EXCLUDED: ("冒頭部の段落", "題目・副題・著者名・所属なら、Word でその段落に「題目（日）」「著者名（日）」「所属（日）」などのスタイルを付ける。本文なら、最初の章見出しの後ろに移す"),
+    FRONT_TABLE_EXCLUDED: ("冒頭部の表", "本文の表なら、Word で最初の章見出しの後ろに移す"),
+    AUTHOR_TABLE_OTHER_EXCLUDED: ("著者表の中の段落", "著者名・所属なら、Word でその段落に「著者名（日）」「所属（日）」スタイルを付ける"),
+    BACK_TABLE_EXCLUDED: ("後付けの表", "注・付記・謝辞の表なら、Word で表をその節の中（注なら注の本文の後ろ）に移す。本文の表なら、引用文献・注などの見出しより前に移す"),
+    BACK_OTHER_EXCLUDED: ("本文と後付けの間の段落", "前にある見出しのスタイル（「注見出し」「付記見出し」「謝辞見出し」「参考文献見出し」）を確かめる"),
+    EN_AUTHOR_TABLE_OTHER_EXCLUDED: ("英文著者表の中の段落", "英文の著者名・所属なら、Word でその段落に「著者名（英）」「所属（英）」スタイルを付ける"),
+    EN_TABLE_EXCLUDED: ("英文の部分の表", "資料の表なら、Word で表の前に資料の見出し（「資料1」など）を付ける"),
+    EN_OTHER_EXCLUDED: ("英文の部分の段落", "英文要旨の見出し（Abstract）なら「英文要旨見出し」、英文要旨の段落なら「英文要旨」スタイルを付ける。資料なら、前に資料の見出し（「資料1」など）を付ける"),
+}
+
+
+def _unplaced_action(r):
+    """論文の中の位置を決められず、XML に出力しなかった段落（unplaced_exclusions）。なければ None。
+
+    要確認にとどめる（文字は 6 章に全文がある。装飾・重複する所属など、意図して除いた段落は数えない。
+    英文要旨が 1 段落もないときの英文の部分の段落は、要対応 abstract_missing で知らせる）。
+    """
+    rows = unplaced_exclusions(r)
+    if not rows:
+        return None
+    n = len(rows)
+    lines = []
+    for why in UNPLACED_EXCLUSIONS:
+        sub = [(s, t) for s, w, t in rows if w == why]
+        if sub:
+            name, how = UNPLACED_GUIDE[why]
+            lines.append(f"{name} {len(sub)} 件（{_para_samples(sub, 3)}）: {how}")
+    bullet = "\n>\n> - "
+    dot = "\n・"
+    samples = _para_samples([(s, t) for s, _, t in rows])
+    lead = f"論文の中の位置を決められず、XML に出力していない段落が {n} 件あります"
+    return Action(
+        TO_CHECK, "excluded_unsure",
+        top=(f"> **要確認: {lead}（6 章）。** 本文などに必要な文字なら、下の直し方で Word を直して変換し直してください"
+             "（XML に入れない文字なら、そのままでかまいません）。" + "".join(bullet + x for x in lines)),
+        checklist=(f"- [ ] **位置を決められず XML に出力していない段落**（{n} 件。6 章）: 本文などに必要なら、Word でスタイル・位置を"
+                   "直して変換し直す"),
+        box_title=f"論文の中の位置を決められない段落 {n} 件を、XML に出力していません（要確認）",
+        box_detail="本文などに必要な文字なら、Word で直してから変換し直してください（レポートの冒頭と 6 章）。" + dot + dot.join(lines),
+        cli=(f"要確認: {lead}（レポートの冒頭と 6 章）。本文などに必要な文字なら、docx でスタイル・位置を直して変換し直すこと。"
+             f"対象: {samples}"))
+
+
+# 英文要旨がないため資料も落ちていることの説明（_abstract_missing_action）
+ABSTRACT_MISSING_APP = ("英文要旨がないため、英文の部分の資料（「資料1」などの見出しの段落と表）も位置を決められず、出力していません。"
+                        "英文要旨を直すと、資料も出力されます。")
+
+
+def _first_style(journal, role, default):
+    return next((name for name, v in journal.styles.items() if v == role), default)
+
+
+def _abstract_missing_action(r):
+    """英文要旨が 1 段落もなく、英文の部分の段落・表の文字を XML に出力しなかったとき（structure.abstract_missing_srcs）。なければ None。
+
+    要対応（英文要旨は XML の必須の内容。段落のスタイルがないために落ちている可能性が高い）。AI の set_role の abstract で直せる。
+    """
+    plan = r.plan
+    srcs = abstract_missing_srcs(plan)
+    if not srcs:
+        return None
+    reason = {e.src: e.reason for e in plan.exclusions}
+    k = sum(1 for s in srcs if reason[s] == EN_OTHER_EXCLUDED)
+    c = sum(1 for s in srcs if reason[s] == EN_TABLE_EXCLUDED)
+    count = f"段落 {k} 件" + (f"と表のセルの段落 {c} 件" if c else "")
+    rows = [(s, plan.paras[s].text_only()) for s in srcs]
+    samples = _para_samples(rows)
+    names = list(dict.fromkeys(plan.paras[s].style_name or "（スタイルなし）" for s in srcs))[:3]
+    styles = "・".join(f"「{x}」" for x in names)
+    abs_style = _first_style(r.journal, "abstract", "英文要旨")
+    head_style = _first_style(r.journal, "abstract_heading", "英文要旨見出し")
+    app = (ABSTRACT_MISSING_APP
+           if c or any(appendix_heading(plan.paras[s].text_only()) for s in srcs if reason[s] == EN_OTHER_EXCLUDED) else "")
+    if plan.abstract_heading is None:
+        why = f"英文要旨の段落に「{abs_style}」スタイルがなく、見出し（Abstract）にも「{head_style}」スタイルがないため、"
+    else:
+        why = f"「{head_style}」スタイルの見出しはありますが、その後ろに英文要旨の段落がないため、"
+    body = (why +
+            f"英文の題目・著者名・所属以外の段落の位置を決められませんでした（段落のスタイル: {styles}）。{app}"
+            f"英文要旨なら、Word で要旨の段落に「{abs_style}」スタイルを（見出しがあれば見出しに「{head_style}」スタイルを）付けて、"
+            "変換し直してください。")
+    if r.ai.mode == "none":
+        ai_line = "AI による補完を使うときは、" + step("ai_choose") + "変換し直すと、AI が英文要旨の段落を指定できます（set_role の abstract）。"
+    elif ai_pending(r):
+        ai_line = step("answer_apply") + "と、AI の指定が反映されます。"
+    elif r.ai.error:
+        ai_line = "AI の回答で直すときは、英文要旨の最初の段落に set_role の abstract を指定してもらいます。"
+    elif r.ai.mode == "manual":      # 回答を反映した後。AI に出し直してもらう操作は回答の貼り直し（app.AppState.REPASTE_KEYS の abstract_missing）
+        ai_line = ("チャットで AI に、英文要旨の最初の段落に set_role の abstract を指定して出し直してもらい、"
+                   + step("repaste") + "てください。")
+    else:                            # API モードで AI を使った後は、もう一度変換すると AI が出し直す
+        ai_line = ("AI に出し直してもらうときは、" + step("convert_again")
+                   + "してください（AI が出し直します。毎回同じ結果になるとは限りません）。英文要旨の最初の段落に set_role の abstract を"
+                   "指定してもらいます。")
+    return Action(
+        NEEDS_ACTION, "abstract_missing",
+        top=(f"> **要対応: 英文要旨が見つかりません。英文の部分の{count}を XML に出力していません（6 章）。** {body}"
+             "AI による補完では、英文要旨の最初の段落に set_role の abstract を指定すると、後ろの段落も英文要旨になります。"
+             f"対象の段落: {samples}"),
+        checklist=(f"- [ ] **英文要旨が見つからない**（英文の部分の{count}を出力していない。6 章）: Word で英文要旨の段落に"
+                   f"「{abs_style}」スタイルを付けて変換し直す"),
+        box_title="英文要旨が見つかりません（要対応）",
+        box_detail=body + ai_line + "\n対象の段落: " + samples,
+        cli=(f"要対応: 英文要旨が見つかりません。英文の部分の{count}を XML に出力していません（レポートの冒頭と 6 章）。{app}"
+             f"docx で要旨の段落に「{abs_style}」スタイルを付けて変換し直すこと（AI による補完では set_role の abstract）。"
+             f"対象: {samples}"))
+
+
 def images_action(r):
     """画像ファイルを用意できなかった図（Word の図形で描かれた図など。images_to_prepare）。なければ None。"""
     need = images_to_prepare(r)
@@ -1800,8 +1919,8 @@ def actions(r) -> list:
     head = [f(r) for f in (_fidelity_action, _supplement_action, _dtd_action, _table_shape_action,
                            _upload_action, _ai_error_action, _ai_pending_action,
                            _partial_action, _forced_action, figure_body_action, _textbox_undecided_action,
-                           _textbox_place_action, _textbox_figure_text_action, images_action, lost_action,
-                           lost_autonum_action, _image_crop_action, _image_edits_action, _style_hidden_action, _abstract_ja_action, _app_after_refs_action, _note_overlap_action, _float_ref_action,
+                           _textbox_place_action, _textbox_figure_text_action, _unplaced_action, images_action,
+                           lost_action, lost_autonum_action, _abstract_missing_action, _image_crop_action, _image_edits_action, _style_hidden_action, _abstract_ja_action, _app_after_refs_action, _note_overlap_action, _float_ref_action,
                            _fn_guess_action, _newline_action)]
     return [a for a in head if a is not None] + pdf_actions(r)
 
@@ -2001,7 +2120,11 @@ def render(r) -> str:
     L.append("## 6. XML に出力しなかった docx の文字（全件）")
     L.append("")
     if fid.excluded:
-        L.append(table(["段落", "理由", "文字"], [(s, reason, esc(t, 100)) for s, reason, t in fid.excluded]))
+        miss = set(abstract_missing_srcs(plan))
+        sure = {s for s, _, _ in unplaced_exclusions(r)}
+        # 理由の列の印: 英文要旨が見つからない（要対応）、位置を決められない（要確認）。docx の文字の列は変えない
+        mark = lambda s, reason: reason + ("（要対応）" if s in miss else "（要確認）" if s in sure else "")
+        L.append(table(["段落", "理由", "文字"], [(s, mark(s, reason), esc(t, 100)) for s, reason, t in fid.excluded]))
     else:
         L.append("ありません。")
     other = []

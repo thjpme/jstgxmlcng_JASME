@@ -390,8 +390,9 @@ def test_blank_paragraphs_in_textbox_and_endnote_are_excluded(journal, meta, tmp
 
 
 def test_blank_paragraphs_in_front_and_back_tables_are_excluded(journal, meta, tmp_path):
-    # 著者名スタイルの段落・冒頭のテキストボックスの表・引用文献の節の表・注の節の表・英文の部分の表（著者表以外）の、
-    # 全角空白だけの段落も、空白だけの除外として記録する（記録しないと、不変性チェックが「出力漏れ」で不合格になる）
+    # 著者名スタイルの段落・冒頭のテキストボックスの表・引用文献の節の表・英文の部分の表（著者表以外）の、
+    # 全角空白だけの段落も、空白だけの除外として記録する（記録しないと、不変性チェックが「出力漏れ」で不合格になる）。
+    # 注の節の表は注の中に出力するので（FnNode.tables。修正計画 2026-11 の単位 u5-exclusions）、そのセルの全角空白も出力される
     S = mf.S
 
     def tbl(text):
@@ -414,10 +415,12 @@ def test_blank_paragraphs_in_front_and_back_tables_are_excluded(journal, meta, t
     assert fid.ok and fid.final_ok and res.dtd_valid, (fid.missing, fid.bad_excluded)
     assert fid.bad_excluded == [] and fid.conflicts == []
     blank = [e for e in res.plan.exclusions if e.reason == "空白のみの段落"]
-    assert [e.text for e in blank] == ["\u3000"] * 5 and all(e.blank for e in blank)
+    assert [e.text for e in blank] == ["\u3000"] * 4 and all(e.blank for e in blank)
     reasons = {t: reason for _, reason, t in fid.excluded}
     assert reasons["冒頭の囲みの表"] == "冒頭部の表（著者表以外）の文字"
-    assert reasons["注の表"] == "後付けの位置づけが不明な表の文字"
+    assert "注の表" not in reasons
+    root = etree.fromstring(res.xml_path.read_bytes().split(b"\n", 2)[2])
+    assert ["".join(tw.itertext()) for tw in root.iterfind(".//fn//table-wrap")] == ["注の表\u3000"]
     assert reasons["English table"] == "英文部分の表（著者表以外）の文字"
     assert "文献の表" in [r.para.plain() for r in res.plan.refs]                    # 引用文献の表の文字は引用文献のまま
 

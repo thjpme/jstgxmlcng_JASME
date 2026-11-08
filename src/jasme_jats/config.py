@@ -41,6 +41,7 @@ class JournalConfig:
     fn_mark: str = "{n})"
     fn_title: str = "注"
     fn_title_en: str = "Notes"
+    front_lines: list = field(default_factory=list)   # 冒頭の誌名行（冒頭部の装飾。structure.front_decoration）
     styles: dict = field(default_factory=dict)
     manuscript_types: dict = field(default_factory=dict)   # 原稿種別の選択肢（日本語 → 英語）
 

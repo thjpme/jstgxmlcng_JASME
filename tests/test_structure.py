@@ -1439,3 +1439,228 @@ def middle_text(p):
     from lxml import etree
     root = etree.fromstring(f'<root xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">{p}</root>')
     return "".join(root.itertext())
+
+
+# ----------------------------------------------------------------------------- 位置を決められない除外の知らせ（u5-exclusions）
+def _no_abstract_style_docx(tmp_path, name="noabs.docx", extra=(), plain_heading=False, front_extra=(), heading_last=False):
+    """英文要旨のスタイルがない論文。英文の部分（題目・著者表）はあるが、Abstract の見出しがなく（plain_heading なら見出しは残す）、
+    要旨の 2 段落は標準スタイル（heading_last なら見出しを要旨の 2 段落の後ろに置く。見出しの後ろに段落がない形）。extra は要旨の後ろに足す XML の一覧、front_extra は和文の冒頭（題目の前）に足す XML の一覧。"""
+    b = mf.Builder()
+    body = list(mf.front_ja(b, "英文要旨のない検証用の論文", "―検証―", [("架空大学", "試験　六郎")]))
+    body[2:2] = list(front_extra)
+    body += [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "試験（2024）にならう。"),
+             mf.para(S["ref_head"], "引用および参考文献"),
+             mf.para(S["ref"], "試験六郎（2024）．「小さな論文」．『架空誌』，第5巻，pp.9-10．")]
+    english = mf.front_en(b, "A Small Article", "For Checking", [("Rokuro SHIKEN", "Fictional University")],
+                          ["First abstract.", "Second abstract."])
+    heading = english[5]
+    del english[5:]
+    if plain_heading:
+        english.append(heading)
+    english += [mf.para(None, "First abstract."), mf.para(None, "Second abstract.")]
+    if heading_last:
+        english.append(heading)
+    body += english + list(extra) + mf.tail(b)
+    path = tmp_path / name
+    b.save(path, body)
+    return path
+
+
+def _convert_no_abstract(journal, meta, tmp_path, **kw):
+    out = kw.pop("out", "out")
+    opts = kw.pop("opts", {})
+    path = kw.pop("path", None) or _no_abstract_style_docx(tmp_path, **kw)
+    return convert(path, meta, journal, Options(out_dir=tmp_path / out, convert_metafiles=False, **opts))
+
+
+def test_abstract_without_style_or_heading_needs_action(journal, meta, tmp_path):
+    from jasme_jats.structure import EN_OTHER_EXCLUDED
+    res = _convert_no_abstract(journal, meta, tmp_path)
+    assert res.plan.abstract == [] and res.fidelity.ok and res.dtd_valid
+    keys = [(a.level, a.key) for a in actions(res)]
+    assert (NEEDS_ACTION, "abstract_missing") in keys and "excluded_unsure" not in [k for _, k in keys]
+    assert res.needs_action
+    srcs = [s for s, why, _ in res.fidelity.excluded if why == EN_OTHER_EXCLUDED]
+    assert len(srcs) == 2
+    act = next(a for a in actions(res) if a.key == "abstract_missing")
+    for s in srcs:
+        assert s in act.top and s in act.cli and s in act.box_detail
+    assert "「英文要旨」スタイル" in act.top and "「英文要旨見出し」" in act.top and "段落 2 件" in act.top
+    assert "（スタイルなし）" in act.top or "Normal" in act.top
+    report = res.report_path.read_text(encoding="utf-8")
+    ch6 = report.split("## 6.")[1].split("## 7.")[0]
+    assert ch6.count(EN_OTHER_EXCLUDED + "（要対応）") == 2 and "（要確認）" not in ch6
+    assert "AI による補完を使うときは" in act.box_detail      # AI を使わないとき（目印 ai_choose の文）
+
+
+def test_abstract_missing_reason_follows_heading(journal, meta, tmp_path):
+    """見出しがないときは「見出しにもスタイルがない」、英文要旨見出しのスタイルの見出しがあるときは「その後ろに段落がない」と書く。"""
+    no_head = next(a for a in actions(_convert_no_abstract(journal, meta, tmp_path, out="nh")) if a.key == "abstract_missing")
+    assert "見出し（Abstract）にも" in no_head.top and "その後ろに英文要旨の段落がない" not in no_head.top
+    res = _convert_no_abstract(journal, meta, tmp_path, out="wh", heading_last=True)
+    assert res.plan.abstract == [] and res.plan.abstract_heading is not None
+    act = next(a for a in actions(res) if a.key == "abstract_missing")
+    assert "その後ろに英文要旨の段落がないため" in act.top and "見出し（Abstract）にも" not in act.top
+    assert "その後ろに英文要旨の段落がないため" in act.box_detail
+
+
+def test_abstract_missing_with_english_article(journal, meta, tmp_path):
+    path = _no_abstract_style_docx(tmp_path)
+    en = dataclasses.replace(journal, lang="en")
+    res_en = convert(path, meta, en, Options(out_dir=tmp_path / "en", convert_metafiles=False))
+    assert "abstract_missing" in [a.key for a in actions(res_en)]
+
+
+def test_abstract_missing_mentions_appendix(journal, meta, tmp_path):
+    from jasme_jats.report import ABSTRACT_MISSING_APP
+    extra = [mf.para(None, "Appendix 1　Questionnaire"), mf.table([[mf.cell("Item A"), mf.cell("Item B")]])]
+    res = _convert_no_abstract(journal, meta, tmp_path, extra=extra)
+    act = next(a for a in actions(res) if a.key == "abstract_missing")
+    assert ABSTRACT_MISSING_APP in act.top and ABSTRACT_MISSING_APP in act.box_detail and ABSTRACT_MISSING_APP in act.cli
+    assert "段落 3 件と表のセルの段落 2 件" in act.top
+    plain = next(a for a in actions(_convert_no_abstract(journal, meta, tmp_path, out="plain")) if a.key == "abstract_missing")
+    assert ABSTRACT_MISSING_APP not in plain.top and "段落 2 件を" in plain.top
+
+
+def test_no_english_part_does_not_report_missing_abstract(journal, meta, tmp_path):
+    b = mf.Builder()
+    body = list(mf.front_ja(b, "英文の部分のない検証用の論文", "―検証―", [("架空大学", "試験　六郎")]))
+    body += [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "試験（2024）にならう。"),
+             mf.para(S["ref_head"], "引用および参考文献"),
+             mf.para(S["ref"], "試験六郎（2024）．「小さな論文」．『架空誌』，第5巻，pp.9-10．")]
+    body += mf.tail(b)
+    path = tmp_path / "noen.docx"
+    b.save(path, body)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    keys = [a.key for a in actions(res)]
+    assert "abstract_missing" not in keys and "excluded_unsure" not in keys
+
+
+def test_abstract_heading_with_plain_paragraphs_is_ok(journal, meta, tmp_path):
+    res = _convert_no_abstract(journal, meta, tmp_path, plain_heading=True)
+    assert len(res.plan.abstract) == 2 and res.fidelity.ok and res.dtd_valid
+    assert actions(res) == []
+
+
+def test_extra_english_paragraph_is_unplaced(journal, meta, tmp_path):
+    from jasme_jats.structure import EN_OTHER_EXCLUDED
+    b = mf.Builder()
+    body = list(mf.front_ja(b, "英文の余分な段落の検証用の論文", "―検証―", [("架空大学", "試験　六郎")]))
+    body += [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "試験（2024）にならう。"),
+             mf.para(S["ref_head"], "引用および参考文献"),
+             mf.para(S["ref"], "試験六郎（2024）．「小さな論文」．『架空誌』，第5巻，pp.9-10．")]
+    english = mf.front_en(b, "A Small Article", "For Checking", [("Rokuro SHIKEN", "Fictional University")], ["Abstract text."])
+    english.insert(5, mf.para(None, "Received June 2025."))
+    body += english + mf.tail(b)
+    path = tmp_path / "extra.docx"
+    b.save(path, body)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert [t for _, why, t in res.fidelity.excluded if why == EN_OTHER_EXCLUDED] == ["Received June 2025."]
+    assert [(a.level, a.key) for a in actions(res)] == [(TO_CHECK, "excluded_unsure")] and not res.needs_action
+    assert len(res.plan.abstract) == 1
+
+
+def _atoms(*items):
+    return Para(src="d1", style_id="x", style_name="標準", atoms=list(items))
+
+
+def test_front_decoration():
+    from jasme_jats.structure import front_decoration
+    lines = ["全国数学教育学会誌　数学教育学研究"]
+    t = lambda s: _atoms(Atom(kind="text", text=s))
+    assert front_decoration(t("❚" * 40), lines)
+    for s in ("全国数学教育学会誌　数学教育学研究", "全国数学教育学会誌 数学教育学研究", "全国数学教育学会誌数学教育学研究"):
+        assert front_decoration(t(s), lines), s
+    assert front_decoration(t(""), lines) and front_decoration(_atoms(), lines)
+    assert not front_decoration(t("受付日　2025年"), lines)
+    assert not front_decoration(t("全国数学教育学会誌　数学教育学研究"), ())
+    assert not front_decoration(_atoms(Atom(kind="math")), lines)
+    assert front_decoration(_atoms(Atom(kind="image")), lines)
+    assert not front_decoration(_atoms(Atom(kind="text", text="❚❚"), Atom(kind="math")), lines)
+
+
+def test_front_paragraph_other_than_decoration_is_unplaced(journal, meta, tmp_path):
+    from jasme_jats.structure import FRONT_DECORATION_EXCLUDED, FRONT_OTHER_EXCLUDED
+    res = _convert_no_abstract(journal, meta, tmp_path, plain_heading=True,
+                               front_extra=[mf.para(None, "受付日　2025年6月1日")])
+    by = {}
+    for s, why, t in res.fidelity.excluded:
+        by.setdefault(why, []).append(t)
+    assert by[FRONT_OTHER_EXCLUDED] == ["受付日　2025年6月1日"]
+    assert len(by[FRONT_DECORATION_EXCLUDED]) == 3        # テンプレートの誌名行と装飾行
+    assert [(a.level, a.key) for a in actions(res)] == [(TO_CHECK, "excluded_unsure")]
+    plain = _convert_no_abstract(journal, meta, tmp_path, plain_heading=True, out="plain")
+    assert FRONT_OTHER_EXCLUDED not in [why for _, why, _ in plain.fidelity.excluded] and actions(plain) == []
+
+
+def test_abstract_style_aliases(journal):
+    from jasme_jats.config import JournalConfig
+    j = JournalConfig.load()
+    assert j.styles["英文要約"] == "abstract" and j.styles["英文要約見出し"] == "abstract_heading"
+    assert next(n for n, v in j.styles.items() if v == "abstract") == "英文要旨"
+    assert next(n for n, v in j.styles.items() if v == "abstract_heading") == "英文要旨見出し"
+    assert j.front_lines == ["全国数学教育学会誌　数学教育学研究"]
+
+
+def test_unplaced_action_texts(journal, meta, tmp_path):
+    from jasme_jats.colab import step_text
+    from jasme_jats.structure import EN_OTHER_EXCLUDED, FRONT_OTHER_EXCLUDED
+    b = mf.Builder()
+    front = ["受付日　2025年6月1日", "査読中の原稿", "掲載予定", "特集号"]
+    body = list(mf.front_ja(b, "位置を決められない段落の検証用の論文", "―検証―", [("架空大学", "試験　六郎")]))
+    body[2:2] = [mf.para(None, x) for x in front]
+    body += [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "試験（2024）にならう。"),
+             mf.para(S["ref_head"], "引用および参考文献"),
+             mf.para(S["ref"], "試験六郎（2024）．「小さな論文」．『架空誌』，第5巻，pp.9-10．")]
+    english = mf.front_en(b, "A Small Article", "For Checking", [("Rokuro SHIKEN", "Fictional University")], ["Abstract text."])
+    english[5:5] = [mf.para(None, f"Note number {i}.") for i in (1, 2, 3)]
+    body += english + mf.tail(b)
+    path = tmp_path / "unplaced.docx"
+    b.save(path, body)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    act = next(a for a in actions(res) if a.key == "excluded_unsure")
+    assert (act.level, act.key) == (TO_CHECK, "excluded_unsure") and not res.needs_action
+    assert "7 件" in act.top and "冒頭部の段落 4 件（" in act.top and "英文の部分の段落 3 件（" in act.top
+    assert "ほか" in act.top.split("冒頭部の段落 4 件")[1].split("\n")[0]        # 抜粋は 3 件まで
+    assert "ほか" not in act.top.split("英文の部分の段落 3 件")[1].split("\n")[0]
+    assert "7 件" in act.checklist and "7 件" in act.box_title
+    for screen in ("notebook", "app", "cli"):
+        shown = step_text(act.box_detail, screen)
+        assert "\x00" not in shown and "step:" not in shown
+    srcs = [s for s, why, _ in res.fidelity.excluded if why in (FRONT_OTHER_EXCLUDED, EN_OTHER_EXCLUDED)]
+    assert len(srcs) == 7 and srcs[0] in act.cli
+    ch6 = res.report_path.read_text(encoding="utf-8").split("## 6.")[1].split("## 7.")[0]
+    assert ch6.count("（要確認）") == 7
+
+
+def test_no_unplaced_notices_for_fixtures(journal, meta, tmp_path):
+    """どの fixture でも、位置を決められない除外の知らせ・英文要旨が見つからない知らせは鳴らない（回帰の守り）。"""
+    docs = sorted((Path(__file__).parent / "fixtures").glob("*.docx"))
+    assert len(docs) >= 15
+    for i, doc in enumerate(docs):
+        res = convert(doc, meta, journal, Options(out_dir=tmp_path / str(i), ai_mode="manual", convert_metafiles=False))
+        keys = [a.key for a in actions(res)]
+        assert "excluded_unsure" not in keys and "abstract_missing" not in keys, doc.name
+
+
+@pytest.mark.xfail(strict=True, reason="u6 で中止にする")
+def test_two_abstract_heading_styles(journal, meta, tmp_path):
+    """「英文要旨見出し」の見出しと、別名のスタイル名「英文要約見出し」の見出しが両方ある原稿は、u6 で中止になる。"""
+    import re
+    import zipfile
+    sid, new_id = S["abs_head"], "AliasAbsHead"
+    src = _no_abstract_style_docx(tmp_path, plain_heading=True, extra=[mf.para(new_id, "Abstract"), mf.para(None, "Third.")])
+    alias = tmp_path / "alias.docx"
+    with zipfile.ZipFile(src) as zi, zipfile.ZipFile(alias, "w") as zo:
+        for e in zi.infolist():
+            data = zi.read(e.filename)
+            if e.filename == "word/styles.xml":
+                styles = data.decode("utf-8")
+                m = re.search(rf'<w:style [^>]*w:styleId="{sid}".*?</w:style>', styles, re.S)
+                copy = m.group(0).replace(f'w:styleId="{sid}"', f'w:styleId="{new_id}"')
+                copy = re.sub(r'(<w:name w:val=")[^"]*(")', r"\g<1>英文要約見出し\g<2>", copy, count=1)
+                data = styles.replace(m.group(0), m.group(0) + copy).encode("utf-8")
+            zo.writestr(e, data)
+    from jasme_jats.pipeline import StructureConflictError      # u5 の時点ではない（u6 で足す）
+    with pytest.raises(StructureConflictError):
+        convert(alias, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))

@@ -138,6 +138,7 @@ def body_paragraphs(plan: ArticlePlan):
     リンクにし、出版版 PDF との照合にも入れる）。
     囲み（文字だけのテキストボックス。BoxNode）の段落も cell とする（別行数式は formula。リンクは本文と同じく付ける。出版版 PDF
     との照合では、テキストボックスの段落として照合しない・ルート2 で直さない。0.24.1 と同じ扱い）。
+    注の節の中の表（FnNode.tables）のキャプションは caption、セルは cell（本文の表と同じ。注番号はリンクしない。Linker.run）。
     """
     cells = plan.cell_paras
 
@@ -184,6 +185,7 @@ def body_paragraphs(plan: ArticlePlan):
     for fn in plan.fns:
         for p in fn.paras:
             yield p, "fn"
+        yield from walk([node for _, node in fn.tables], "fn")
     for app in plan.apps:
         yield from walk(app.children, "back")
     for r in plan.refs:
@@ -200,6 +202,7 @@ class Linker:
         # 番号だけの上付きの数字（「主張である¹」の ¹）を注番号とみなすか。論文ごとに run の note_style で決める
         # （run を通らずに fn_marks を呼んだときは、0.26.0 までと同じく注番号とみなす）
         self.bare_notes = True
+        self.fn_table = set()   # 注の節の中の表の段落 ID（run が ArticlePlan.fn_table_paras で作る）
 
     def note(self, category, src, msg, applied=True):
         """判断の一覧（レポートの 4 章）に記録する。リンクにしなかった判断は applied=False。"""
@@ -221,6 +224,8 @@ class Linker:
         for f in plan.formulas:
             if f.fid and f.label:
                 eq_ids[re.sub(r"[\s\u3000()（）]", "", unicodedata.normalize("NFKC", f.label))] = f.fid
+        # 注の節の中の表のキャプション・セル（注の段落と同じく、注番号をリンクしない。note_style も数えない）
+        self.fn_table = plan.fn_table_paras()
         fn_ids = {fn.number: fn.fid for fn in plan.fns if fn.number is not None and not fn.word_note}
         captions = {id(f.caption) for f in plan.figures if f.caption is not None} | \
                    {id(t.caption) for t in plan.tables if t.caption is not None} | \
@@ -235,7 +240,7 @@ class Linker:
                 self.float_refs(p, RE_TABREF, tab_ids, "table", "表", tab_skip, tab_branch)
             if where != "formula":
                 self.eq_refs(p, eq_ids)
-            if where not in ("fn",):
+            if where not in ("fn",) and p.src not in self.fn_table:
                 self.fn_marks(p, fn_ids)
                 self.fn_marks_plain(p, fn_ids)
         link_citations(plan, self, paras)
@@ -455,7 +460,7 @@ class Linker:
         論文の「（…である³）」のように、本文の閉じ括弧は文の括弧のこともあるため。暫定）。直前が「注」の上付きの数字（after_note）と、
         指数・単位の形のもの（exponent）も数えない。"""
         for p, where in paras:
-            if where in ("ref", "fn"):
+            if where in ("ref", "fn") or p.src in self.fn_table:
                 continue
             plain = p.plain()
             for s, e, text in _sup_runs(p):

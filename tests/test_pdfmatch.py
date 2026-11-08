@@ -3967,3 +3967,23 @@ def test_cell_autonum_is_not_compared_and_uses_word_form(journal, meta, tmp_path
     assert cell_text() == f"1. {CELL_ITEM}"
     plan.pdf_numbers[("auto", src)] = "１．"
     assert cell_text() == f"１．{CELL_ITEM}"
+
+
+def test_note_table_cells_are_not_targets(journal, tmp_path):
+    """注の節の中の表（FnNode.tables。修正計画 2026-11 の単位 u5-exclusions）のキャプションは照合する段落（linker.body_paragraphs の
+    caption）で、セルは照合しない（cell。本文の表と同じ）。0.30.0 までは注の表は除外で、キャプションは注の段落として照合していた。"""
+    from jasme_jats.linker import body_paragraphs
+    from jasme_jats.pdfmatch import target_paragraphs
+
+    def parts(b):
+        return [mf.para(mf.S["sec1"], "１．はじめに"), mf.para(mf.S["body"], TALK + "表1を見よ。注1)。"),
+                mf.para(mf.S["fn_head"], "注"), mf.para(mf.S["fn_body"], "1) 注の本文である。"),
+                mf.para(mf.S["tab_cap"], "表1　注の中の表"), mf.table([[mf.cell("注の表のセル"), mf.cell("2)")]])]
+    mf.make_article(tmp_path / "fn_table.docx", "注の表の照合の検証用文書", parts)
+    _, plan, _ = _mechanical(tmp_path / "fn_table.docx", journal)
+    (_, node), = plan.fns[0].tables
+    cells = {p.src for p in node.table.paragraphs()}
+    targets = {p.src for p in target_paragraphs(plan)}
+    assert node.caption.src in targets and not (cells & targets)
+    where = {p.src: w for p, w in body_paragraphs(plan)}
+    assert where[node.caption.src] == "caption" and {where[s] for s in cells} == {"cell"}

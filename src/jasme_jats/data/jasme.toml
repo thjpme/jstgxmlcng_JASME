@@ -19,6 +19,8 @@ doi_pattern = "10.24529/jasme.{volume}.{issue}_{fpage}"
 article_id_pattern = "{volume}_{fpage}"
 # 画像ファイル名（Graphics/ に入れる。記事識別子. で始まる名前は J-STAGE で使えない）
 image_name_pattern = "{article_id}_{n:02d}"
+# テンプレートの冒頭の誌名行（題目の前の段落。冒頭部の装飾として、知らせずに除く。structure.front_decoration）
+front_lines = ["全国数学教育学会誌　数学教育学研究"]
 
 [defaults]
 article_type = "other"              # 記事種別 <article article-type>（"other" = その他）
@@ -68,6 +70,9 @@ fn_title_en = "Notes"
 "所属（英）" = "aff_en"
 "英文要旨見出し" = "abstract_heading"
 "英文要旨" = "abstract"
+# テンプレートの別の版の英文要旨のスタイル名（別名。同じ役割）
+"英文要約見出し" = "abstract_heading"
+"英文要約" = "abstract"
 "章見出し" = "sec1"
 "節見出し" = "sec2"
 "項見出し" = "sec3"

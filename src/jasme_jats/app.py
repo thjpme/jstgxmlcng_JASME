@@ -376,15 +376,16 @@ class AppState:
     # 手動モードで、AI の回答を貼り付け直す案内（report.py の枠。colab.STEP_WORDS の repaste）が出る Action の key。これらが出ている
     # ときも、手動の欄（依頼文・回答の欄・「反映」）を見せたままにする。float_ref（リンクしなかった図・表の参照。AI の回答を反映した後も
     # AI がリンクを付けなかったとき、「AI に出し直してもらう」案内が貼り直しを勧める）・textbox_undecided（AI の回答を反映した後も
-    # 囲みか注記か決められなかったテキストボックスがあるとき、同じく貼り直しを勧める）も入れる
-    REPASTE_KEYS = ("ai_error", "partial", "forced", "float_ref", "textbox_undecided")
+    # 囲みか注記か決められなかったテキストボックスがあるとき、同じく貼り直しを勧める）・abstract_missing（英文要旨が見つからない
+    # とき、AI の set_role の abstract を勧めるので、回答を反映した後も貼り直せるようにする）も入れる
+    REPASTE_KEYS = ("ai_error", "partial", "forced", "float_ref", "textbox_undecided", "abstract_missing")
 
     @property
     def answer_box_open(self) -> bool:
         """手動の欄（依頼文・添付画像・回答の欄〈ANSWER_LABEL〉・「反映」）を見せるか。
 
         AI の回答をまだ反映していないとき（waiting_for_answer）に加えて、反映した後も、回答を読めない（ai_error）・途中で切れた
-        （partial）・図表の位置が決まらない（forced）・AI もリンクを付けなかった図・表の参照がある（float_ref）・囲みか注記か決められないテキストボックスが残る（textbox_undecided）の枠が出ているあいだは、
+        （partial）・図表の位置が決まらない（forced）・AI もリンクを付けなかった図・表の参照がある（float_ref）・囲みか注記か決められないテキストボックスが残る（textbox_undecided）・英文要旨が見つからない（abstract_missing）の枠が出ているあいだは、
         貼り付け直せるように見せたままにする。
         手動モードで変換した結果のときだけ見せる（変換したときの入力の写し run.ai_mode で決める。変換の後に「AI による補完の方法」の
         欄を変えても変わらない。O3）。

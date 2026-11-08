@@ -710,8 +710,8 @@ def _kept(f, keep) -> str:
 
 
 def _structure(plan) -> tuple:
-    """段落ごとの（役割, 領域）とリンクの並び {src: ((役割, 領域), [(リンク, 開始, 終了)])}、注 {fid: (番号, 段落)}、注の番号の範囲、
-    著者と所属（_people）。
+    """段落ごとの（役割, 領域）とリンクの並び {src: ((役割, 領域), [(リンク, 開始, 終了)])}、注 {fid: (番号, 段落, 注の節の表の
+    形〈(k, キャプションの段落 ID)。FnNode.tables〉)}、注の番号の範囲、著者と所属（_people）。
 
     領域（plan.region）も比べるのは、英文要旨・資料の段落は役割が空のままなので、役割だけでは、直すと英文要旨と資料の境が
     動くこと（英文要旨の「資料-1 …」を PDF の「資料－1 …」に直すと、資料の見出しになるなど）を見つけられないため。
@@ -728,7 +728,8 @@ def _structure(plan) -> tuple:
                 links.append(((a.link.kind, tuple(sorted(a.link.attrs.items()))), pos, pos + n))
             pos += n
         paras[src] = ((p.role, plan.region.get(src, "")), links)
-    fns = {fn.fid: (fn.number, tuple(q.src for q in fn.paras)) for fn in plan.fns}
+    fns = {fn.fid: (fn.number, tuple(q.src for q in fn.paras),
+                    tuple((k, t.caption.src if t.caption is not None else "") for k, t in fn.tables)) for fn in plan.fns}
     marks = [(fn.paras[0].src, tuple(fn.mark_range), fn.fid) for fn in plan.fns if fn.paras and fn.mark_range]
     return paras, fns, marks, _people(plan)
 

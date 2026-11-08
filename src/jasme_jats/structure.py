@@ -84,6 +84,21 @@ TEXTBOX_TEXT_EXCLUDED = "テキストボックス内の文字（図の一部と�
 TEXTBOX_LABEL_EXCLUDED = "テキストボックス内の文字（図に重ねた注記とみなして本文から除外）"
 TEXTBOX_UNDECIDED_EXCLUDED = "テキストボックス内の文字（囲みか図の注記か決められないため本文から除外。要確認）"
 TEXTBOX_AI_LABEL_EXCLUDED = "テキストボックス内の文字（AI による補完で図に重ねた注記と判断し、本文から除外）"
+# 冒頭部の、テンプレートの装飾・誌名行の段落（意図した除外。知らせない。front_decoration で決める）
+FRONT_DECORATION_EXCLUDED = "冒頭部のテンプレート装飾・誌名行など（題目・著者以外の段落）"
+# 論文の中の位置（役割）を決められずに除いたときの理由。要確認 excluded_unsure（report._unplaced_action）で知らせる
+FRONT_OTHER_EXCLUDED = "冒頭部の、題目・著者以外の段落（テンプレートの装飾・誌名行ではない）"
+FRONT_TABLE_EXCLUDED = "冒頭部の表（著者表以外）の文字"
+AUTHOR_TABLE_OTHER_EXCLUDED = "著者表の中の、所属・著者名以外の文字"
+BACK_TABLE_EXCLUDED = "後付けの位置づけが不明な表の文字"
+BACK_OTHER_EXCLUDED = "位置づけが不明な段落（本文と後付けの間）"
+EN_AUTHOR_TABLE_OTHER_EXCLUDED = "英文著者表の中の、所属・著者名以外の文字"
+EN_TABLE_EXCLUDED = "英文部分の表（著者表以外）の文字"
+EN_OTHER_EXCLUDED = "英文部分の、題目・著者・要旨以外の段落"
+UNPLACED_EXCLUSIONS = (FRONT_OTHER_EXCLUDED, FRONT_TABLE_EXCLUDED, AUTHOR_TABLE_OTHER_EXCLUDED, BACK_TABLE_EXCLUDED,
+                       BACK_OTHER_EXCLUDED, EN_AUTHOR_TABLE_OTHER_EXCLUDED, EN_TABLE_EXCLUDED, EN_OTHER_EXCLUDED)
+# 英文要旨がないときに要対応 abstract_missing の対象にする理由（abstract_missing_srcs）
+EN_PART_EXCLUSIONS = (EN_TABLE_EXCLUDED, EN_OTHER_EXCLUDED)
 # 本文の外の領域（図形のアンカー段落がある領域。Classifier.outside の値）の日本語（修正計画の N7）
 OUTSIDE_JA = {"refs": "引用文献", "fn": "注", "notes": "付記", "ack": "謝辞", "back": "後付け", "front_en": "英文の部分"}
 # 位置を決められない図表を仮に置く位置のうち「本文の最後」（本文の領域の最後の要素の後ろ）。place_floats の差し込み位置
@@ -172,6 +187,26 @@ NO_LINK_KINDS = "題目・副題・著者名・所属・引用文献"
 
 def nfkc(s: str) -> str:
     return unicodedata.normalize("NFKC", s)
+
+
+def front_decoration(para: Para, lines=()) -> bool:
+    """和文の冒頭の、題目・著者以外の段落が、テンプレートの装飾か。文字（text）と画像以外のアトム（数式・注の参照など）があれば偽。
+    そうでなければ、空白を除き NFKC にした文字が、空か、文字・数字を含まない（記号だけの装飾行）か、雑誌の設定の誌名行
+    （JournalConfig.front_lines）のどれかと同じなら真。画像だけの段落は装飾とする（画像は lost_images の要対応で知らせる）。"""
+    if any(a.kind not in ("text", "image") for a in para.atoms):
+        return False
+    t = re.sub(r"\s", "", nfkc(_para_text(para)))
+    if not t or t in {re.sub(r"\s", "", nfkc(x)) for x in lines}:
+        return True
+    return not any(unicodedata.category(c)[0] in "LN" for c in t)
+
+
+def abstract_missing_srcs(plan) -> list:
+    """英文要旨が 1 段落もない（plan.abstract が空）のに、英文の部分の段落・表の文字を位置を決められずに除いたとき、その段落 ID
+    （docx の順。空白だけ・文字のない段落を除く）。英文の部分がない原稿、英文要旨がある原稿では []。"""
+    if plan.abstract:
+        return []
+    return [e.src for e in plan.exclusions if e.reason in EN_PART_EXCLUSIONS and not e.blank and e.text.strip()]
 
 
 def num_of(s: str) -> Optional[int]:
@@ -675,7 +710,7 @@ class Classifier:
                         if p.is_blank:
                             plan.exclude_blank(p)
                         else:
-                            plan.exclude(p, "冒頭部の表（著者表以外）の文字")
+                            plan.exclude(p, FRONT_TABLE_EXCLUDED)
                 continue
             plan.region[b.src] = "front_ja"
             if role == "title":
@@ -690,7 +725,9 @@ class Classifier:
                 plan.exclude_blank(b)
             else:
                 plan.locations[b.src] = "冒頭部"
-                plan.exclude(b, "冒頭部のテンプレート装飾・誌名行など（題目・著者以外の段落）")
+                why = (FRONT_DECORATION_EXCLUDED if front_decoration(b, self.journal.front_lines)
+                       else FRONT_OTHER_EXCLUDED)
+                plan.exclude(b, why)
 
     def read_author_table_ja(self, t: Table):
         current_affs = []
@@ -712,7 +749,7 @@ class Classifier:
                         elif r == "author_ja":
                             row_names.append(p)
                         else:
-                            self.plan.exclude(p, "著者表の中の、所属・著者名以外の文字")
+                            self.plan.exclude(p, AUTHOR_TABLE_OTHER_EXCLUDED)
             if row_affs:
                 current_affs = row_affs
             for n in row_names:
@@ -1912,6 +1949,50 @@ class Classifier:
         plan = self.plan
         state = None
         current_fn = None
+        # 注の節の中の表（FnNode.tables）。注にまだ入れていない表 [(キャプションの段落か None, Table)]（docx の順）: 注の見出しの後ろで
+        # 注がまだ始まっていないときの表と、キャプションだけの注の候補（caption_only）の前の表
+        pending = []
+        fn_role = {}        # 注に入れた段落の役割（src -> role）。キャプションの判定に使う（role_of は role_origin を書き換えるので呼び直さない）
+
+        def caption_only(fn) -> bool:
+            """注 fn が、注がまだない所（注の見出しの直後）の「表キャプション」の段落 1 つだけでできた番号のない注か。次が表なら、注を
+            作らず、その段落を表のキャプションにする（表が続かなければ注のまま）。"""
+            if fn is None or not plan.fns or fn is not plan.fns[-1] or len(fn.paras) != 1 or fn.number is not None or fn.tables:
+                return False
+            c = fn.paras[0]
+            return fn_role.get(c.src) == "table_caption" and self.overrides.get(c.src) != "fn_start"
+
+        def note_table(fn, k, node, first):
+            """注 fn に表 node を入れ（paras の k 段落の後ろ）、判断の一覧（4 章）に記録する。first: 最初の注より前にあった表。"""
+            fn.tables.append((k, node))
+            n = next(i for i, f in enumerate(plan.fns, 1) if f is fn)
+            if node.caption is not None:
+                src = node.caption.src
+                plan.locations[src] = f"注 {n}件目の表キャプション"
+            else:
+                src = next((q.src for q in node.table.paragraphs() if not q.is_blank), block_id(node.table))
+            where = ("注の見出しの後ろ、最初の注の前にあった表を、その注の 1 段落目の後ろに入れた" if first
+                     else "注の段落の間、docx の順")
+            plan.decide("mechanical", "note", src,
+                        f"注の節の中の表を、注 {n}件目の中に出力した（{where}）。J-STAGE の画面で注の中の表が"
+                        "表示されるかは確かめていないので、プレビューで確かめる")
+
+        def settle(fn):
+            """注に入れていない表（pending）を、注 fn の 1 段落目の後ろ（k=1。注の番号が <fn> の先頭に来るように）に入れる。"""
+            for cap, t in pending:
+                note_table(fn, 1, TableNode(table=t, caption=cap), first=True)
+            pending.clear()
+
+        def flush():
+            """注に入れられなかった表（とそのキャプション）を、位置を決められない除外に記録する（要確認 excluded_unsure）。"""
+            for cap, t in pending:
+                for p in ([cap] if cap is not None else []) + list(t.paragraphs()):
+                    if p.is_blank:
+                        plan.exclude_blank(p)
+                    else:
+                        plan.exclude(p, BACK_TABLE_EXCLUDED)
+            pending.clear()
+
         for b, role in items:
             key = self.outside_key(b) if in_shape(b) else ""
             if key:
@@ -1927,6 +2008,24 @@ class Classifier:
                         else:
                             plan.refs.append(RefNode(para=p))
                     continue
+                if state == "fn":
+                    if caption_only(current_fn):
+                        # (a) 注の見出しの直後の「表キャプション」の段落から番号のない注ができていた: 注を作らず、(キャプション, 表) を
+                        # 次の注に回す
+                        c = current_fn.paras[0]
+                        plan.fns.pop()
+                        current_fn = None
+                        plan.locations[c.src] = "注の表キャプション"
+                        pending.append((c, b))
+                    elif current_fn is None:
+                        pending.append((None, b))       # (b) 注がまだ始まっていない
+                    else:
+                        # (c) 注の段落の後ろの表。直前の「表キャプション」の段落（注の 2 段落目以降）をキャプションにする
+                        cap = None
+                        if len(current_fn.paras) >= 2 and fn_role.get(current_fn.paras[-1].src) == "table_caption":
+                            cap = current_fn.paras.pop()
+                        note_table(current_fn, len(current_fn.paras), TableNode(table=b, caption=cap), first=False)
+                    continue
                 target = {"notes": plan.notes, "ack": plan.ack}.get(state)
                 if target is not None:
                     target.children.append(TableNode(table=b))
@@ -1935,7 +2034,7 @@ class Classifier:
                         if p.is_blank:
                             plan.exclude_blank(p)
                         else:
-                            plan.exclude(p, "後付けの位置づけが不明な表の文字")
+                            plan.exclude(p, BACK_TABLE_EXCLUDED)
                 continue
             heading = role if role in BACK_HEADINGS else self.back_heading_by_text(b, role)
             if heading:
@@ -1959,6 +2058,9 @@ class Classifier:
                 elif state == "refs":
                     plan.ref_heading = b
                     plan.locations[b.src] = "引用文献（見出し）"
+                if pending and current_fn is not None:
+                    settle(current_fn)      # キャプションだけの注の候補（表が続かなかった）の前の表は、その注に入れる
+                flush()                     # 次の見出しまでに注が始まらなかった表は除外（要確認）
                 current_fn = None
                 continue
             plan.region[b.src] = state or "back"
@@ -1987,6 +2089,8 @@ class Classifier:
                 elif ai_role == "p" and current_fn is not None:
                     starts = False
                 if starts or current_fn is None:
+                    if pending and current_fn is not None:
+                        settle(current_fn)  # キャプションだけの注の候補（表が続かなかった）の前の表は、その注に入れる
                     current_fn = FnNode(paras=[b])
                     if auto:
                         current_fn.number = auto[2]
@@ -1997,15 +2101,24 @@ class Classifier:
                         current_fn.number = num_of(sup_lead.group(1))
                         current_fn.mark_range = (sup_lead.start(1), sup_lead.end(1))
                     plan.fns.append(current_fn)
+                    fn_role[b.src] = role
+                    if pending and not caption_only(current_fn):
+                        settle(current_fn)  # 最初の注より前の表は、その注の 1 段落目の後ろ
                 else:
+                    if pending:
+                        settle(current_fn)  # キャプションだけの注の候補に続きの段落があった: 候補の前の表は、その 1 段落目の後ろ
                     current_fn.paras.append(b)
+                    fn_role[b.src] = role
                 plan.locations[b.src] = f"注 {len(plan.fns)}件目"
             elif state in ("notes", "ack"):
                 target = plan.notes if state == "notes" else plan.ack
                 self.add_back_para(target.children, b, heading=role in HEADING_LEVEL)
                 plan.locations[b.src] = ("付記" if state == "notes" else "謝辞") + f" 第{len(target.children)}段落"
             else:
-                plan.exclude(b, "位置づけが不明な段落（本文と後付けの間）")
+                plan.exclude(b, BACK_OTHER_EXCLUDED)
+        if pending and current_fn is not None:
+            settle(current_fn)
+        flush()
 
     # ----------------------------------------------------------------- front (en) + appendix
     def build_front_en(self, items):
@@ -2036,7 +2149,7 @@ class Classifier:
                         elif r == "aff_en":
                             self.add_aff_en(p, pending_name)
                         else:
-                            plan.exclude(p, "英文著者表の中の、所属・著者名以外の文字")
+                            plan.exclude(p, EN_AUTHOR_TABLE_OTHER_EXCLUDED)
                     continue
                 if in_abstract or app is not None:
                     if app is None:
@@ -2048,7 +2161,7 @@ class Classifier:
                         if p.is_blank:
                             plan.exclude_blank(p)
                         else:
-                            plan.exclude(p, "英文部分の表（著者表以外）の文字")
+                            plan.exclude(p, EN_TABLE_EXCLUDED)
                 continue
             plan.region[b.src] = "front_en"
             if b.is_blank:
@@ -2141,7 +2254,7 @@ class Classifier:
                     self.check_abstract_ja(b, text, sentence)
             else:
                 plan.locations[b.src] = "英文部分"
-                plan.exclude(b, "英文部分の、題目・著者・要旨以外の段落")
+                plan.exclude(b, EN_OTHER_EXCLUDED)
 
     def note_appendix_sentence(self, b, text, sentence, first):
         """「資料」などで始まり資料の見出しの形（RE_APPENDIX）に合うが、文の形（appendix_sentence）なので資料の見出しにしなかった
@@ -2347,6 +2460,8 @@ class Classifier:
         for extra in (plan.notes, plan.ack):
             if extra:
                 walk(extra.children)
+        for fn in plan.fns:
+            tabs.extend(node for _, node in fn.tables)      # 注の節の中の表（docx の順。付記・謝辞の表の後ろ、資料の表の前）
         for app in plan.apps:
             walk(app.children)
         seen = set()

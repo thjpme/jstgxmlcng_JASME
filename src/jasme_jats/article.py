@@ -104,6 +104,9 @@ class FnNode:
     # しない段落〈ArticlePlan.no_link_paras〉の中だけ。本文からのリンクのない注）
     linked: bool = True
     custom_mark: bool = False     # 参照のどれかが、記号を自分で付けたもの（customMarkFollows。本文の記号は docx の文字のまま）
+    # 注の節の中の表 [(k, TableNode)]（docx の順）。k は表の前にある paras の数で、builder.fn が paras[k] の <p> の前に
+    # <p><table-wrap> を書く（k == len(paras) なら最後）。最初の注より前にあった表は k=1（注の番号が <fn> の先頭に来るように）
+    tables: list = field(default_factory=list)
 
 
 @dataclass(eq=False)
@@ -309,6 +312,17 @@ class ArticlePlan:
             return "本文の最後"
         src = self.float_text_src(fid)
         return f"段落「{_para_text(self.paras[src]).strip()[:20]}」の後ろ" if src else "本文の最初"
+
+    def fn_table_paras(self) -> set:
+        """注の節の中の表（FnNode.tables）のキャプション・キャプションの続き・セルの段落の ID。linker が注番号をリンクしないために使う
+        （注の段落と同じ扱い）。"""
+        out = set()
+        for fn in self.fns:
+            for _, t in fn.tables:
+                out.update(q.src for q in ([t.caption] if t.caption is not None else []) + list(t.caption_more))
+                if t.table is not None:
+                    out.update(q.src for q in t.table.paragraphs())
+        return out
 
     def no_link_paras(self) -> dict:
         """XML に出力するが、Word の脚注・文末脚注の参照（注の番号）をリンクにしない段落: 段落 ID -> 段落の種類（「題目」など）。

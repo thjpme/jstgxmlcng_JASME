@@ -699,3 +699,27 @@ def test_stale_texts_use_real_labels(tmp_path):
         for q in re.findall(r"「([^」]+)」", t):
             assert q in labels, q
     assert "のファイルを読めませんでした" in texts[-1]
+
+
+def test_manual_fields_stay_open_for_missing_abstract(tmp_path):
+    """手動モードで回答を反映した後も、英文要旨が見つからない（abstract_missing）枠が出ているあいだは、AI の set_role の abstract を
+    貼り直せるように、手動の欄を見せたままにする。"""
+    import json
+    from test_structure import _no_abstract_style_docx
+    from jasme_jats.report import actions
+    st = AppState(tmp_path / "work")
+    st.set_inputs(route="docx", docx=str(_no_abstract_style_docx(tmp_path)), volume="31", issue="1", fpage="1", lpage="12",
+                  peer_review="査読あり", manuscript_type=type_choices()[0], ai_mode="manual")
+    demo = app.build_app(st, app.IO())
+    fns = {f.fn.__name__: f.fn for f in demo.fns.values()}
+    fns["on_convert"](*[st.inputs[n] for n in app.INPUT_NAMES])
+    assert st.waiting_for_answer
+    out = fns["on_apply"](json.dumps({"placements": [], "operations": [], "notes": []}))
+    assert "abstract_missing" in [a.key for a in actions(st.res)] and not st.waiting_for_answer
+    assert "abstract_missing" in AppState.REPASTE_KEYS and st.answer_box_open
+    assert out[2]["visible"] is True and out[3] == st.prompt_text() and out[3]
+    # 回答を反映した後の枠は、貼り直しの案内（目印 repaste）で書く
+    from jasme_jats.report import step
+    box = next(a for a in actions(st.res) if a.key == "abstract_missing").box_detail
+    assert step("repaste") in box and "出し直してもらい" in box
+

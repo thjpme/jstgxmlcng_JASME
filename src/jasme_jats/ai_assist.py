@@ -27,7 +27,7 @@ from .article import ArticlePlan, _para_text
 from .floats import column_cm, describe, estimate_top_left
 from .model import OBJ, LinkSpec, Para, note_label
 from .omml import MML_NS, OmmlConverter, math_display_text
-from .structure import AFTER_BODY_REGIONS, float_caption
+from .structure import AFTER_BODY_REGIONS, abstract_missing_srcs, float_caption
 
 # 既定の AI モデル（Claude。動作を確かめたもの）。ここ 1 か所で決める（pipeline.Options・cli の既定、ノートブックの手順 4 と説明。
 # tools/make_notebook.py はこのファイルを読んで、DEFAULT_MODEL と DEFAULT_MODEL_INFO の値を使う）。
@@ -332,6 +332,11 @@ def build_request(plan: ArticlePlan, linker, build_exclusions=(), unsplit_names=
             p = plan.paras.get(e.src)
             hint = set_role_hint(p, plan) if p is not None else ""
             lines.append(f"- [{e.src}] 出力から除外: {e.reason}: 「{e.text[:60]}」{hint}")
+    miss = abstract_missing_srcs(plan)
+    if miss:
+        shown = ", ".join(miss[:8]) + (" ほか" if len(miss) > 8 else "")
+        lines.append(f"- 英文要旨の段落が見つからない（英文の部分の {shown} を出力から除外した）。"
+                     "英文要旨なら、その最初の段落に set_role の abstract を提案（後ろの段落も英文要旨になる）")
     for src, text, lang in unsplit_names:
         note = "（英文の氏名。split_name は和文の氏名にだけ使えるので、提案しない）" if lang == "en" else ""
         # 氏名の中の改行（Word の Shift+Enter。10 章と要確認で別に知らせる）は、行が分かれないよう「⏎」で示す（レポートの表と同じ）

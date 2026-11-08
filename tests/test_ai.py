@@ -1688,3 +1688,23 @@ def test_split_ops_records_non_dict_ops(journal, meta, tmp_path):
     assert "link_citation d18" in sec2
     assert sum("操作が { } のまとまりでない（str）" in ln for ln in sec2.splitlines()) == 1
     assert sum("操作が { } のまとまりでない（list）" in ln for ln in sec2.splitlines()) == 1
+
+
+# ----------------------------------------------------------------------------- 英文要旨が見つからないとき（u5-exclusions）
+def test_set_role_abstract_fixes_missing_abstract(journal, meta, tmp_path):
+    """英文要旨のスタイルも見出しもない原稿では、依頼文が「英文要旨の段落が見つからない」と書き、AI の set_role の abstract で
+    最初の要旨の段落を指定すると、後ろの段落も英文要旨になって、abstract_missing が消える。"""
+    from test_structure import _no_abstract_style_docx
+    from jasme_jats.structure import EN_OTHER_EXCLUDED
+    path = _no_abstract_style_docx(tmp_path)
+    before = convert(path, meta, journal, Options(out_dir=tmp_path / "before", ai_mode="manual", convert_metafiles=False))
+    assert "abstract_missing" in [a.key for a in actions(before)] and before.plan.abstract == []
+    prompt = before.prompt_path.read_text(encoding="utf-8")
+    assert "英文要旨の段落が見つからない" in prompt and "set_role の abstract" in prompt
+    first = next(s for s, why, _ in before.fidelity.excluded if why == EN_OTHER_EXCLUDED)
+    assert first in prompt
+    res = _manual(path, [_set_role(first, "abstract")], meta, journal, tmp_path / "after")
+    assert len(res.plan.abstract) == 2 and res.fidelity.ok and res.dtd_valid
+    assert "abstract_missing" not in [a.key for a in actions(res)] and "excluded_unsure" not in [a.key for a in actions(res)]
+    root = etree.fromstring(res.xml_path.read_bytes().split(b"\n", 2)[2])
+    assert [_text(p) for p in root.findall(".//trans-abstract/p")] == ["First abstract.", "Second abstract."]

@@ -21,7 +21,7 @@ from jasme_jats.docx_reader import read_docx
 from jasme_jats.model import note_key, note_label
 from jasme_jats.pipeline import Options, _mechanical, convert
 from jasme_jats.report import TO_CHECK, actions, note_notes, word_note_refs
-from jasme_jats.structure import NO_LINK_KINDS, note_mark
+from jasme_jats.structure import BACK_TABLE_EXCLUDED, FRONT_OTHER_EXCLUDED, NO_LINK_KINDS, note_mark
 from jasme_jats.validate import validate
 
 S = mf.S
@@ -300,7 +300,8 @@ def test_note_referenced_only_from_excluded_paragraph(journal, meta, tmp_path):
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     root = load(res)
     assert fn_list(root) == {"fn1": ["1) 誌名の行から参照される架空の文末脚注。"]} and fn_refs(root) == []
-    src = next(s for s, why, _ in res.fidelity.excluded if why.startswith("冒頭部のテンプレート装飾"))
+    # 注の参照のある段落は、装飾とは判定されない（front_decoration）ので、位置を決められない除外（要確認）として記録される
+    src = next(s for s, why, _ in res.fidelity.excluded if why == FRONT_OTHER_EXCLUDED)
     fn = next(fn for fn in res.plan.fns if fn.word_note)
     assert not fn.linked and fn.word_refs == [src]
     msgs = [d.message for d in res.plan.decisions if d.category == "note"]
@@ -580,3 +581,225 @@ def test_report_lists_word_notes_with_endnotes(structure):
     assert ("| fn3 | Word の文末脚注 7 | 3) | * 記号を自分で付けた文末脚注… | あり（中身のない参照。本文の記号はリンクの外で docx の"
             "文字のまま。J-STAGE のプレビューで確かめる） |") in ch8
     assert "Word の脚注・文末脚注機能で書かれた注 5 件（脚注 2 件・文末脚注 3 件）を、本文で最初に参照される順の通し番号で" in report
+
+
+# ---------------------------------------------------------------------------- 注の節の中の表（修正計画 2026-11 の単位 u5-exclusions。K7）
+NOTE_TABLE_MSG = "注の節の中の表を、注 1件目の中に出力した"
+
+
+def _note_table_article(tmp_path, journal, meta, notes, name="fn_table", body_text="本文の表1を見よ。注の表2も見よ。注1)。",
+                        after_refs=(), **opts):
+    """本文に「表1」の表と、注の節（notes。注の見出しから）のある小さな論文を作って変換する。after_refs は引用文献 1 件の後ろ
+    （英文の部分の前）に足す段落・表の XML。"""
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], body_text),
+                mf.para(S["tab_cap"], "表1　本文の表"), mf.table([[mf.cell("本文の表"), mf.cell("1")]])] + list(notes)
+    path = tmp_path / f"{name}.docx"
+    mf.make_article(path, "注の表の検証用文書", parts, refs=(lambda b: list(after_refs)) if after_refs else None)
+    return convert(path, meta, journal, Options(out_dir=tmp_path / name, convert_metafiles=False, **opts))
+
+
+def fn_children(root):
+    """注の子の並び: {注の ID: ["p:文字" か "table:表の ID（キャプションがあれば +caption）"]}（XML の順）。"""
+    out = {}
+    for fn in root.iter("fn"):
+        kids = []
+        for p in fn:
+            assert p.tag == "p"
+            tw = p.find("table-wrap")
+            if tw is not None:
+                assert len(p) == 1 and not (p.text or "").strip()
+                kids.append(f"table:{tw.get('id')}" + ("+caption" if tw.find("caption") is not None else ""))
+            else:
+                kids.append("p:" + text(p))
+        out[fn.get("id")] = kids
+    return out
+
+
+def _passes(res):
+    f = res.fidelity
+    assert f.ok and f.final_ok and res.dtd_valid, (f.missing, f.conflicts, res.dtd_errors[:3])
+    assert f.conflicts == [] and f.missing == [] and f.bad_excluded == []
+    assert res.table_problems == [] and res.lost_autonums == []
+
+
+def _note_decisions(res):
+    return [d.message for d in res.plan.decisions if d.category == "note" and d.message.startswith("注の節の中の表を")]
+
+
+def test_table_in_notes_section_is_output(journal, meta, tmp_path):
+    """注の項目の後ろの表は、その注の中に <p><table-wrap> で出す（docx の順。0.30.0 までは除外されて知らせもなかった）。
+    表の ID は本文の表の後ろ。セルの「2)」は注へのリンクにしない。判断の一覧（4 章）に記録する。"""
+    res = _note_table_article(tmp_path, journal, meta, [
+        mf.para(S["fn_head"], "注"), mf.para(S["fn_body"], "1) 注の本文。"),
+        mf.table([[mf.cell("注の表A"), mf.cell("2)")]]),
+        mf.para(S["fn_body"], "続きの段落。"), mf.para(S["fn_body"], "2) 次の注。")], ai_mode="manual")
+    _passes(res)
+    root = load(res)
+    assert fn_children(root) == {"fn1": ["p:1) 注の本文。", "table:T2", "p:続きの段落。"], "fn2": ["p:2) 次の注。"]}
+    assert [t.tid for t in res.plan.tables] == ["T1", "T2"] and res.plan.tables[1] is res.plan.fns[0].tables[0][1]
+    assert BACK_TABLE_EXCLUDED not in {e.reason for e in res.plan.exclusions}
+    cells = root.find(".//fn//table-wrap")
+    assert "注の表A" in text(cells) and cells.find(".//xref") is None
+    assert fn_refs(root) == [("fn1", "注1)", False)]
+    msgs = _note_decisions(res)
+    assert len(msgs) == 1 and msgs[0].startswith(NOTE_TABLE_MSG + "（注の段落の間、docx の順）")
+    assert "プレビューで確かめる" in msgs[0]
+    assert ("要確認", "excluded_unsure") not in [(a.level, a.key) for a in actions(res)]
+    # AI の依頼文: 注の表は「図・表・注・数式」に表として載り、「出力から除外」には載らない
+    req = (tmp_path / "fn_table" / "AI依頼文.txt").read_text(encoding="utf-8")
+    assert "[T2] 表 （キャプションなし）" in req and "出力から除外: " + BACK_TABLE_EXCLUDED not in req
+
+
+def test_table_before_first_note_goes_after_first_paragraph(journal, meta, tmp_path):
+    """注の見出しの直後（最初の注より前）の表は、最初の注の 1 段落目の後ろに入れる（注の番号が <fn> の先頭に来る）。"""
+    res = _note_table_article(tmp_path, journal, meta, [
+        mf.para(S["fn_head"], "注"), mf.table([[mf.cell("注の表B"), mf.cell("4")]]),
+        mf.para(S["fn_body"], "1) 注の本文。"), mf.para(S["fn_body"], "続き。")])
+    _passes(res)
+    root = load(res)
+    assert fn_children(root) == {"fn1": ["p:1) 注の本文。", "table:T2", "p:続き。"]}
+    first = root.find(".//fn")[0]
+    assert first.find("table-wrap") is None and text(first).startswith("1)")
+    msgs = _note_decisions(res)
+    assert msgs == [NOTE_TABLE_MSG + "（注の見出しの後ろ、最初の注の前にあった表を、その注の 1 段落目の後ろに入れた）。"
+                    "J-STAGE の画面で注の中の表が表示されるかは確かめていないので、プレビューで確かめる"]
+
+
+def test_table_caption_in_notes_section(journal, meta, tmp_path):
+    """注の節の表の直前の「表キャプション」の段落は、表のキャプションにする（注の段落にしない）。"""
+    # (1) 注の 2 段落目のキャプション
+    res = _note_table_article(tmp_path, journal, meta, [
+        mf.para(S["fn_head"], "注"), mf.para(S["fn_body"], "1) 注の本文。"),
+        mf.para(S["tab_cap"], "表2　注の表"), mf.table([[mf.cell("注の表C"), mf.cell("　")]])], name="cap")
+    _passes(res)
+    root = load(res)
+    assert fn_children(root) == {"fn1": ["p:1) 注の本文。", "table:T2+caption"]}
+    tw = root.find(".//fn//table-wrap")
+    assert text(tw.find("caption")) == "表2　注の表"
+    assert not any("注の表" in text(p) for p in root.find(".//fn") if p.find("table-wrap") is None)
+    tabs = {(x.get("rid"), text(x)) for x in root.iter("xref") if x.get("ref-type") == "table"}
+    assert tabs == {("T1", "表1"), ("T2", "表2")}
+    cap = res.plan.fns[0].tables[0][1].caption
+    assert res.plan.locations[cap.src] == "注 1件目の表キャプション"
+    assert _note_decisions(res)[0].startswith(NOTE_TABLE_MSG + "（注の段落の間、docx の順）")
+
+    # (2) 注の見出しの直後のキャプション（cap_first）: 番号のない注を作らず、表と一緒に最初の注に入れる
+    res = _note_table_article(tmp_path, journal, meta, [
+        mf.para(S["fn_head"], "注"), mf.para(S["tab_cap"], "表2　注の表"),
+        mf.table([[mf.cell("注の表C"), mf.cell("x")]]), mf.para(S["fn_body"], "1) 注の本文。")], name="cap_first")
+    _passes(res)
+    root = load(res)
+    assert [fn.number for fn in res.plan.fns] == [1]
+    assert fn_children(root) == {"fn1": ["p:1) 注の本文。", "table:T2+caption"]}
+    tabs = {(x.get("rid"), text(x)) for x in root.iter("xref") if x.get("ref-type") == "table"}
+    assert tabs == {("T1", "表1"), ("T2", "表2")}
+    assert not any(m.startswith("先頭に番号") for m in note_notes(res.plan))
+
+    # (3) キャプションの番号が本文の表と重なる（cap_dup）: 本文の「表1」はリンクせず、要確認 float_ref（0.30.0 までは本文の表1 に
+    # リンクしていた。動きとしては正しい回帰）
+    res = _note_table_article(tmp_path, journal, meta, [
+        mf.para(S["fn_head"], "注"), mf.para(S["fn_body"], "1) 注の本文。"),
+        mf.para(S["tab_cap"], "表1　注の表"), mf.table([[mf.cell("注の表C"), mf.cell("x")]])],
+        name="cap_dup", body_text="本文の表1を見よ。注1)。")
+    _passes(res)
+    root = load(res)
+    assert [x for x in root.iter("xref") if x.get("ref-type") == "table"] == []
+    assert ("要確認", "float_ref") in [(a.level, a.key) for a in actions(res)]
+
+
+def test_tables_with_captions_before_first_note(journal, meta, tmp_path):
+    """注の見出しの直後に、キャプション付きの表が 2 つ続いてから最初の注（設計書の 4.3 の (a) を、2 つ目の表にも効かせる）。
+    どちらのキャプションも番号のない注にならず、2 つの表がキャプション付きで最初の注の 1 段落目の後ろに docx の順で入る。"""
+    res = _note_table_article(tmp_path, journal, meta, [
+        mf.para(S["fn_head"], "注"), mf.para(S["tab_cap"], "表2　注の表"), mf.table([[mf.cell("注の表F"), mf.cell("x")]]),
+        mf.para(S["tab_cap"], "表3　注の表"), mf.table([[mf.cell("注の表G"), mf.cell("y")]]),
+        mf.para(S["fn_body"], "1) 注の本文。")], body_text="本文の表1を見よ。表2を見よ。表3を見よ。注1)。")
+    _passes(res)
+    root = load(res)
+    assert [fn.number for fn in res.plan.fns] == [1]
+    assert fn_children(root) == {"fn1": ["p:1) 注の本文。", "table:T2+caption", "table:T3+caption"]}
+    tabs = {(x.get("rid"), text(x)) for x in root.iter("xref") if x.get("ref-type") == "table"}
+    assert tabs == {("T1", "表1"), ("T2", "表2"), ("T3", "表3")}
+    assert len(_note_decisions(res)) == 2
+
+
+def test_table_only_notes_section_is_unplaced(journal, meta, tmp_path):
+    """注の始まらない注の節の表（とそのキャプション）は、位置を決められない除外（要確認 excluded_unsure。要対応ではない）。"""
+    # (1) 注の見出しと表だけ（後ろは引用文献の見出し）
+    res = _note_table_article(tmp_path, journal, meta, [
+        mf.para(S["fn_head"], "注"), mf.table([[mf.cell("注の表D"), mf.cell("5")]])], name="alone")
+    _passes(res)
+    reasons = {t: why for _, why, t in res.fidelity.excluded}
+    assert reasons["注の表D"] == BACK_TABLE_EXCLUDED and reasons["5"] == BACK_TABLE_EXCLUDED
+    assert reasons["注"] == "注の見出しはあるが注の本文がない（JATS では見出しだけ置けない）"
+    assert ("要確認", "excluded_unsure") in [(a.level, a.key) for a in actions(res)] and not res.needs_action
+    assert res.plan.fns == [] and load(res).find(".//fn-group") is None
+
+    # (2) 注の見出し・表キャプション・表で注の節が終わる（引用文献の見出しの前と、引用文献の後ろ〈英文の部分の前〉）
+    notes = [mf.para(S["fn_head"], "注"), mf.para(S["tab_cap"], "表2　注の表"), mf.table([[mf.cell("注の表E"), mf.cell("6")]])]
+    for name, kw in (("cap_before_refs", {"notes": notes}), ("cap_after_refs", {"notes": [], "after_refs": notes})):
+        res = _note_table_article(tmp_path, journal, meta, name=name, **kw)
+        _passes(res)
+        reasons = {t: why for _, why, t in res.fidelity.excluded}
+        assert reasons["表2　注の表"] == BACK_TABLE_EXCLUDED and reasons["注の表E"] == BACK_TABLE_EXCLUDED, name
+        assert res.fidelity.conflicts == [] and res.plan.fns == []
+        assert ("要確認", "excluded_unsure") in [(a.level, a.key) for a in actions(res)] and not res.needs_action
+
+
+def test_image_in_note_table_is_output(journal, meta, tmp_path):
+    """注の節の表のセルの画像は、表と一緒に出力される（0.30.0 までは表の文字が除外され、画像は要対応 lost だった）。"""
+    path = tmp_path / "fn_image.docx"
+
+    def parts(b):
+        rid = b.add_image("fncell.png", mf.png_bytes("fn cell"))
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "本文である。注1)。"),
+                mf.para(S["fn_head"], "注"), mf.para(S["fn_body"], "1) 注の本文。"),
+                mf.table([[mf.cell(mf.para(S["body"], mf.drawing(rid, 900000, 500000, 802))), mf.cell("画像の説明")]])]
+    mf.make_article(path, "注の表の画像の検証用文書", parts)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    _passes(res)
+    assert res.lost_images == [] and [i.image_id for i in res.images] == ["img1"]
+    assert load(res).find(".//fn//table-wrap//inline-graphic") is not None
+    assert "lost" not in [a.key for a in actions(res)]
+
+
+def test_merged_and_numbered_cells_in_note_table(journal, meta, tmp_path, monkeypatch):
+    """注の節の表は builder.table_wrap を通るので、縦結合・gridSpan と、セルの Word の自動番号も本文の表と同じに出る
+    （表の形の確かめ table_problems・自動番号の確かめ lost_autonums が効く）。ルート2 でも補完の確かめが合格。"""
+    from jasme_jats import pdfmatch
+    c = mf.cell
+    rows = [[c("項目", vmerge="restart"), c("説明", span=2)],
+            [c("", vmerge="continue"), c(mf.list_item(S["body"], "番号の一つ目。", num_id=7)), c("甲")],
+            [c("合計"), c(mf.list_item(S["body"], "番号の二つ目。", num_id=7)), c("乙")]]
+    notes = [mf.para(S["fn_head"], "注"), mf.para(S["fn_body"], "1) 注の本文。"), mf.para(S["tab_cap"], "表2　注の表"),
+             mf.table(rows), mf.para(S["fn_body"], "2) 次の注。")]
+
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "本文の表2を見よ。注1)と注2)。")] + notes
+    path = tmp_path / "fn_merge.docx"
+    mf.make_article(path, "注の表の結合の検証用文書", parts)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "r1", convert_metafiles=False))
+    _passes(res)
+    assert res.tables_checked >= 1 and res.needs_action is False
+    root = load(res)
+    assert fn_children(root) == {"fn1": ["p:1) 注の本文。", "table:T1+caption"], "fn2": ["p:2) 次の注。"]}
+    tbl = root.find(".//fn//table-wrap/table")
+    assert tbl.find(".//td[@rowspan='2']") is not None and tbl.find(".//td[@colspan='2']") is not None
+    assert "1. 番号の一つ目。" in text(tbl) and "2. 番号の二つ目。" in text(tbl)       # セルの自動番号（生成した文字）
+
+    # ルート2: PDF の文字は docx と同じで、注の表のキャプションの数字だけが全角、セルの「合計」の間に空白がある。キャプションは照合して
+    # PDF に合わせ（組版の違い）、セルは照合しない（直さない）。補完の確かめは合格し、XML の注の形も同じ
+    cap = res.plan.fns[0].tables[0][1].caption.src
+    lines = [(p.autonum + " " if p.autonum else "") + p.plain() for p in res.plan.paras.values() if p.plain().strip()]
+    pages = ["\n".join(lines).replace("表2\u3000注の表", "表２\u3000注の表").replace("合計", "合 計")]
+    monkeypatch.setattr(pdfmatch, "extract_pages", lambda path: pages)
+    (tmp_path / "dummy.pdf").write_bytes(b"%PDF-1.4\n")
+    res2 = convert(path, meta, journal, Options(out_dir=tmp_path / "r2", pdf_path=tmp_path / "dummy.pdf", route="pdf",
+                                                convert_metafiles=False))
+    _passes(res2)
+    assert res2.supplement is not None and res2.supplement.ok, res2.supplement.problems
+    assert [(f.src, f.old, f.new) for f in res2.docx_fix.applied] == [(cap, "2", "２")]
+    root2 = load(res2)
+    assert fn_children(root2) == fn_children(root)
+    assert text(root2.find(".//fn//table-wrap/caption")) == "表２\u3000注の表" and "合計" in text(root2.find(".//fn//table"))
