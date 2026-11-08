@@ -79,6 +79,31 @@ def format_number(n: int, fmt: str) -> str:
     return str(n)
 
 
+DEFAULT_LEVEL = {"start": 1, "fmt": "decimal", "text": ""}
+
+
+def _level(lvl) -> dict:
+    """abstractNum の段の定義（w:lvl）。子要素がなければ既定値（DEFAULT_LEVEL と同じ）。"""
+    return {"start": int(wval(lvl.find(w("start")), "1") or 1),
+            "fmt": wval(lvl.find(w("numFmt")), "decimal"),
+            "text": wval(lvl.find(w("lvlText")), "")}
+
+
+def _level_present(lvl) -> dict:
+    """num の w:lvlOverride/w:lvl の、書かれている子要素（start・numFmt・lvlText）だけの dict。"""
+    out = {}
+    el = lvl.find(w("start"))
+    if el is not None:
+        out["start"] = int(wval(el, "1") or 1)
+    el = lvl.find(w("numFmt"))
+    if el is not None:
+        out["fmt"] = wval(el, "decimal")
+    el = lvl.find(w("lvlText"))
+    if el is not None:
+        out["text"] = wval(el, "")
+    return out
+
+
 _BULLET_MAP = {"\uf0b7": "•", "\uf0a7": "▪", "\uf076": "❖", "\uf0d8": "➢", "\uf0fc": "✓", "\uf06c": "●", "o": "o"}
 
 
@@ -88,6 +113,7 @@ class Numbering:
         self.abstract = {}   # abstractNumId -> {ilvl: dict}
         self.nums = {}       # numId -> (abstractNumId, {ilvl: startOverride})
         self.counters = {}   # numId -> {ilvl: n}
+        self.lvl_overrides = {}  # numId -> {ilvl: 書かれた子要素だけの段の定義}
         if root is None:
             return
         for an in root.findall(w("abstractNum")):
@@ -95,11 +121,7 @@ class Numbering:
             levels = {}
             for lvl in an.findall(w("lvl")):
                 il = int(lvl.get(w("ilvl"), "0"))
-                levels[il] = {
-                    "start": int(wval(lvl.find(w("start")), "1") or 1),
-                    "fmt": wval(lvl.find(w("numFmt")), "decimal"),
-                    "text": wval(lvl.find(w("lvlText")), ""),
-                }
+                levels[il] = _level(lvl)
             self.abstract[aid] = levels
         for num in root.findall(w("num")):
             nid = num.get(w("numId"))
@@ -110,6 +132,9 @@ class Numbering:
                 so = ov.find(w("startOverride"))
                 if so is not None:
                     overrides[il] = int(wval(so, "1"))
+                lv = ov.find(w("lvl"))
+                if lv is not None:
+                    self.lvl_overrides.setdefault(nid, {})[il] = _level_present(lv)
             self.nums[nid] = (aid, overrides)
         self._follow_style_links(root, styles_root)
 
@@ -146,16 +171,27 @@ class Numbering:
             if levels:
                 self.abstract[aid] = levels
 
+    def _levels(self, num_id) -> dict:
+        """num の段の定義: abstractNum の段に、w:lvlOverride/w:lvl に書かれた子要素を重ね、w:startOverride で開始番号を置き換える。"""
+        aid, starts = self.nums[num_id]
+        base = self.abstract.get(aid, {})
+        levels = dict(base)   # self.abstract の dict は共有されているので書き換えない
+        for il, ov in self.lvl_overrides.get(num_id, {}).items():
+            levels[il] = {**base.get(il, DEFAULT_LEVEL), **ov}
+        for il, st in starts.items():
+            if il in levels:
+                levels[il] = dict(levels[il], start=st)
+        return levels
+
     def label(self, num_id: str, ilvl: int) -> str:
         """番号付き段落が1つ現れるたびに呼ぶ。表示される番号文字列を返す。"""
         if num_id in (None, "0") or num_id not in self.nums:
             return ""
-        aid, overrides = self.nums[num_id]
-        levels = self.abstract.get(aid, {})
+        levels = self._levels(num_id)
         if ilvl not in levels:
             return ""
         cnt = self.counters.setdefault(num_id, {})
-        start = overrides.get(ilvl, levels[ilvl]["start"])
+        start = levels[ilvl]["start"]
         cnt[ilvl] = cnt.get(ilvl, start - 1) + 1
         for deeper in [k for k in cnt if k > ilvl]:
             del cnt[deeper]
@@ -168,8 +204,7 @@ class Numbering:
             token = f"%{k + 1}"
             if token in text:
                 if k in levels:
-                    st = overrides.get(k, levels[k]["start"])
-                    n = cnt.get(k, st)
+                    n = cnt.get(k, levels[k]["start"])
                     text = text.replace(token, format_number(n, levels[k]["fmt"]))
                 else:
                     text = text.replace(token, "")
@@ -178,6 +213,5 @@ class Numbering:
     def is_bullet(self, num_id: str, ilvl: int) -> bool:
         if num_id not in self.nums:
             return False
-        aid, _ = self.nums[num_id]
-        lv = self.abstract.get(aid, {}).get(ilvl)
+        lv = self._levels(num_id).get(ilvl)
         return bool(lv and lv["fmt"] == "bullet")

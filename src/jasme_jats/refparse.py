@@ -319,10 +319,11 @@ def match_citation(c, refs):
             co = len(c["names"]) > 1 and len(rn) > 1 and all(name_match(a, b, r.parsed["latin"]) for a, b in zip(c["names"][1:], rn[1:]))
             n_ok = r.parsed["n_authors"] == len(c["names"]) or (c["etal"] and r.parsed["n_authors"] >= 2)
             return (co, n_ok)
-        r = max(exact, key=fit)
-        if len(exact) > 1 and fit(exact[0]) == fit(exact[-1]):
-            return None, "ambiguous", "同じ著者・同じ年の文献が複数あり、どれか特定できない: " + "、".join(x.rid for x in exact)
-        return r, "exact", ""
+        best = max(fit(x) for x in exact)
+        top = [x for x in exact if fit(x) == best]
+        if len(top) > 1:
+            return None, "ambiguous", "同じ著者・同じ年の文献が複数あり、どれか特定できない: " + "、".join(x.rid for x in top)
+        return top[0], "exact", ""
     same_year = [r for r in refs if r.parsed.get("names") and (r.parsed.get("year") or "").lower() == c["year"].lower()]
     variant = [r for r in same_year if not r.parsed["latin"] and itaiji(r.parsed["names"][0]).startswith(itaiji(first))]
     if len(variant) == 1:

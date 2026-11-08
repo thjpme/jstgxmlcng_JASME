@@ -3790,6 +3790,33 @@ def test_autonum_bullet_follows_pdf(journal, meta, tmp_path, monkeypatch):
     assert "●" in chapters(res1)[1]
 
 
+def test_autonum_level_override_follows_pdf(journal, meta, tmp_path, monkeypatch):
+    """w:lvlOverride/w:lvl で上書きした番号（(A)(B)）は、PDF が (A)(B) なら違いにならない。PDF が全角の（Ａ）（Ｂ）なら
+    Word が付ける番号の字形の違いとして number_edits になり（diffs は空）、ルート2 は要対応も補完の不合格もなく番号を
+    PDF に合わせて出力する（修正計画の R6）。"""
+    from test_reader import _with_lvl_override
+    from jasme_jats.report import actions
+    base = tmp_path / "base.docx"
+    mf.make_article(base, "段の上書きの検証用文書", lambda b: [
+        mf.para(mf.S["sec1"], "１．はじめに"), mf.para(mf.S["body"], TALK),
+        *[mf.list_item(mf.S["body"], t, num_id=92) for t in BULLETS]])
+    path = tmp_path / "override.docx"
+    _with_lvl_override(base, path)
+    _, plan, _ = _mechanical(path, journal)
+    src = {p.plain(): p.src for p in plan.paras.values()}
+    assert [plan.paras[src[t]].autonum.strip() for t in BULLETS] == ["(A)", "(B)"]
+    pages = n10_pages([*SMALL_FRONT, *body_lines(TALK), *[f"{n} {t}" for n, t in zip(["(A)", "(B)"], BULLETS)], *N10_TAIL])
+    pc = compare(plan, pages)
+    assert pc.diffs == [] and pc.number_edits == {}
+    pages = n10_pages([*SMALL_FRONT, *body_lines(TALK), *[f"{n} {t}" for n, t in zip(["（Ａ）", "（Ｂ）"], BULLETS)], *N10_TAIL])
+    pc = compare(plan, pages)
+    assert pc.diffs == []
+    assert {k: v.strip() for k, v in pc.number_edits.items()} == {("auto", src[BULLETS[0]]): "（Ａ）", ("auto", src[BULLETS[1]]): "（Ｂ）"}
+    res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "pdf", docx=path)
+    assert [a.key for a in actions(res)] == [] and res.supplement.ok
+    assert "（Ａ）" in res.xml_path.read_text(encoding="utf-8")
+
+
 def test_typeset_skipped_is_not_to_check(journal, meta, tmp_path):
     """組版の違いの直す箇所だけが直せなかったとき（ほかの直す箇所と重なるなど）は要確認（pdf_unfixed）にしない。校正の直しが
     直せなかったときは、今までどおり要確認。"""

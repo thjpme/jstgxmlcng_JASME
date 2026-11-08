@@ -917,6 +917,25 @@ def manual_prompt(request_text, images) -> str:
 
 SMART_QUOTES = "“”„‟‘’‚‛＂"
 
+ASK_AGAIN = ("チャットで使っているときは、AI に「回答の書き方の見本の形で、```json のコードブロック 1 つで"
+             "出し直してください」と頼んでください")
+TOP_ARRAY_MSG = ("回答の JSON が一覧（[ ] で囲んだもの）になっています。回答は見本のとおり、{ で始まり placements・"
+                 "operations・notes を持つ 1 つのまとまりにします。" + ASK_AGAIN)
+SINGLE_OP_MSG = ("回答の JSON が操作 1 件だけ（op を持つ { }）になっています。操作は operations の一覧の中に書きます。"
+                 + ASK_AGAIN)
+NO_OPS_MSG = ("JSON に operations の一覧がありません（提案する操作がないときも \"operations\": [] と書く決まりです）。"
+              + ASK_AGAIN)
+OPS_NOT_LIST_MSG = "JSON の operations が一覧（[ ]）になっていません"
+DEEP_MSG = "JSON の入れ子（[ ] や { } の中の [ ] や { }）が深すぎて読めません。" + ASK_AGAIN
+
+
+def _top_level_array(t: str) -> bool:
+    """回答の JSON の最上位が一覧（[ ]）か。最初の { の直前（空白を除く）が [ なら、一覧の最初の要素とみなす。"""
+    if t.startswith("{"):
+        return False
+    i = t.find("{")
+    return i > 0 and t[:i].rstrip().endswith("[")
+
 
 def parse_response(text: str) -> dict:
     """AI の回答（JSON）を読む。```json のコードブロックがあればその中身を使う。
@@ -924,8 +943,12 @@ def parse_response(text: str) -> dict:
     書式の崩れた回答を推測で直すことはしない。読めないときは、どこが・なぜ読めないかを示す。JSON の前後の文字（前置きの説明や、
     閉じの ``` のないコードブロックの後ろの説明など）は使わず、最初の { から最後の } までを読む（_before_trailing_text）。
     途中で切れた回答は読めない（ValueError）。最後まで書かれた図表の位置の指定だけは parse_cut_response で読める。
+    最上位が一覧（[ ]）の回答は読まない（回答全体を一覧で囲んだ [{placements, operations, notes}] も読まない）。
+    operations は必須（操作がなくても []）。入れ子が深すぎて読めない回答は、読めない回答（ValueError）とする。
     """
     t, _ = _json_text(text)
+    if _top_level_array(t):
+        raise ValueError(TOP_ARRAY_MSG)
     if not t.startswith("{"):
         i, j = t.find("{"), t.rfind("}")
         if i < 0 or j <= i:
@@ -934,6 +957,8 @@ def parse_response(text: str) -> dict:
         t = t[i:j + 1]
     try:
         data = json.loads(t)
+    except RecursionError:
+        raise ValueError(DEEP_MSG) from None
     except json.JSONDecodeError as e:
         data = _before_trailing_text(t, e)
         if data is None:
@@ -947,8 +972,12 @@ def parse_response(text: str) -> dict:
                         "コードブロック右上のコピーボタンでコピーしてください。")
             raise ValueError(f"{e.lineno} 行目 {e.colno} 文字目で JSON として読めません（{e.msg}）。"
                              f"該当行: {line[:80]!r}。{hint}") from None
-    if not isinstance(data, dict) or not isinstance(data.get("operations", []), list):
-        raise ValueError("JSON に operations の一覧がありません")
+    if not isinstance(data, dict):
+        raise ValueError(NO_OPS_MSG)
+    if "operations" not in data:
+        raise ValueError(SINGLE_OP_MSG if "op" in data else NO_OPS_MSG)
+    if not isinstance(data["operations"], list):
+        raise ValueError(OPS_NOT_LIST_MSG)
     if not isinstance(data.get("placements", []), list):
         raise ValueError("JSON の placements が一覧（[ ]）になっていません")
     data["notes"] = _notes_list(data.get("notes", []))
@@ -992,7 +1021,7 @@ def _before_trailing_text(t: str, e: json.JSONDecodeError):
         return None
     try:
         return json.loads(t[:j + 1])
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, RecursionError):
         return None
 
 
@@ -1048,16 +1077,19 @@ def parse_cut_response(text: str):
     読み、placements の値は要素を 1 つずつ読む。途中で切れている要素と、それより後ろは読まない（推測で補わない。閉じ括弧も
     補わない）。operations と notes は、最後まで書かれた要素があっても使わない（リンクは件数が多く、途中までのリンクだけが
     付くと確かめにくい）。読めた要素も、ふつうの回答と同じく float_placements で検証する。
+    入れ子が深すぎる回答と、最上位が一覧の回答は、読まない（None）。
     戻り値: {"placements": [...], "operations": [], "notes": []}
     """
     t, closed = _json_text(text)
     i = t.find("{")
-    if i < 0 or closed:
+    if i < 0 or closed or _top_level_array(t):
         return None
     t = t[i:]
     try:
         json.loads(t)
         return None                    # 切れていない（読める回答は parse_response で読む）
+    except RecursionError:
+        return None                    # 入れ子が深すぎる（切れたかどうかを決められない）
     except json.JSONDecodeError as e:
         if not cut_at_end(e, t):
             return None
@@ -1094,7 +1126,7 @@ def parse_cut_response(text: str):
                 found.append(el)
                 k = ws(k)
             k = ws(k + 1)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, RecursionError):
         pass
     if not found:
         return None
@@ -1121,10 +1153,18 @@ def split_ops(data, outcome=None):
     """回答の operations を、項目をすべて文字列にした操作の一覧にする（occurrence は整数）。
 
     項目の型が文字列にできない操作（_op_field）は、理由付きで outcome.rejected に記録して除く（outcome が None なら黙って除く）。
+    操作が { } のまとまりでないもの（文字列・一覧など）も同じく記録して除く。
     """
     ops = []
     for raw in data.get("operations", []):
         if not isinstance(raw, dict):
+            if outcome is not None:
+                op = {k: "" for k in OP_SCHEMA["properties"]}
+                op["occurrence"] = 1
+                if isinstance(raw, str):
+                    op["text"] = raw[:80]
+                outcome.rejected.append((op, "操作が { } のまとまりでない（" + type(raw).__name__
+                                         + "）ので、この操作は使わなかった"))
             continue
         op, bad = {}, ""
         for k in OP_SCHEMA["properties"]:

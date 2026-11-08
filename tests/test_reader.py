@@ -667,3 +667,74 @@ def test_num_style_link_numbering_is_followed(tmp_path, journal, meta):
     bad = tmp_path / "circular.docx"
     _with_style_linked_numbering(base, bad, circular=True)
     assert [p.autonum for p in read_docx(bad).all_paragraphs() if p.numbering] == ["", ""]
+
+
+def _with_lvl_override(src, dst):
+    """numbering.xml に、abstractNum 0（段 0 は decimal・「%1.」）を指す、w:lvlOverride/w:lvl つきの num を足した docx を作る。
+    92: lvl（upperLetter・「(%1)」）、93: startOverride 5 と lvl（lowerRoman・「%1)」）、94: startOverride 3 だけ、
+    95: ilvl 0 が upperLetter・「%1.」、ilvl 1 が decimal・「%1-%2」。"""
+    import zipfile
+    n = ('<w:num w:numId="92"><w:abstractNumId w:val="0"/><w:lvlOverride w:ilvl="0"><w:lvl w:ilvl="0">'
+         '<w:start w:val="1"/><w:numFmt w:val="upperLetter"/><w:lvlText w:val="(%1)"/></w:lvl></w:lvlOverride></w:num>'
+         '<w:num w:numId="93"><w:abstractNumId w:val="0"/><w:lvlOverride w:ilvl="0"><w:startOverride w:val="5"/><w:lvl w:ilvl="0">'
+         '<w:numFmt w:val="lowerRoman"/><w:lvlText w:val="%1)"/></w:lvl></w:lvlOverride></w:num>'
+         '<w:num w:numId="94"><w:abstractNumId w:val="0"/><w:lvlOverride w:ilvl="0"><w:startOverride w:val="3"/></w:lvlOverride></w:num>'
+         '<w:num w:numId="95"><w:abstractNumId w:val="0"/>'
+         '<w:lvlOverride w:ilvl="0"><w:lvl w:ilvl="0"><w:numFmt w:val="upperLetter"/><w:lvlText w:val="%1."/></w:lvl></w:lvlOverride>'
+         '<w:lvlOverride w:ilvl="1"><w:lvl w:ilvl="1"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1-%2"/></w:lvl></w:lvlOverride></w:num>')
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "word/numbering.xml":
+                data = data.decode("utf-8").replace("</w:numbering>", n + "</w:numbering>").encode("utf-8")
+            zout.writestr(item, data)
+
+
+def test_lvl_override_numbering_is_used(tmp_path, journal, meta):
+    """w:lvlOverride/w:lvl は、その num だけ段の定義を置き換える（修正計画の R6）。"""
+    from jasme_jats.pipeline import Options, convert
+    S = mf.S
+
+    def parts(b):
+        sub = mf.list_item(S["body"], "下の項目", num_id=95).replace('<w:ilvl w:val="0"/>', '<w:ilvl w:val="1"/>')
+        return [mf.para(S["sec1"], "１．はじめに"),
+                mf.list_item(S["body"], "項目一", num_id=92), mf.list_item(S["body"], "項目二", num_id=92),
+                mf.list_item(S["body"], "項目三", num_id=93), mf.list_item(S["body"], "項目四", num_id=94),
+                mf.list_item(S["body"], "項目五", num_id=95), sub,
+                mf.para(S["body"], "最後の文。")]
+    base = tmp_path / "base.docx"
+    mf.make_article(base, "段の上書きの検証用文書", parts)
+    path = tmp_path / "override.docx"
+    _with_lvl_override(base, path)
+    doc = read_docx(path)
+    assert [p.autonum for p in doc.all_paragraphs() if p.numbering] == ["(A)", "(B)", "v)", "3.", "A.", "A-1"]
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok
+    xml = (tmp_path / "out" / next(p.name for p in (tmp_path / "out").iterdir() if p.suffix == ".xml")).read_text("utf-8")
+    assert "<list" in xml and "(A)" in xml
+
+
+def _numbering_from(abstract_lvl, num_body):
+    from jasme_jats.numbering import Numbering
+    x = (f'<w:numbering xmlns:w="{W_NS}"><w:abstractNum w:abstractNumId="0">{abstract_lvl}</w:abstractNum>'
+         f'<w:num w:numId="1"><w:abstractNumId w:val="0"/>{num_body}</w:num></w:numbering>')
+    return Numbering(etree.fromstring(x))
+
+
+def test_lvl_override_partial_children_inherit_abstract():
+    """上書きの lvl に書かれていない子要素は abstractNum の段の値を使う（番号が黙って消えない）。共有の dict は書き換えない。"""
+    lvl = '<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="(%1)"/></w:lvl>'
+    n = _numbering_from(lvl, '<w:lvlOverride w:ilvl="0"><w:lvl w:ilvl="0"><w:start w:val="4"/></w:lvl></w:lvlOverride>')
+    assert [n.label("1", 0), n.label("1", 0)] == ["(4)", "(5)"]
+    n = _numbering_from(lvl, '<w:lvlOverride w:ilvl="0"><w:lvl w:ilvl="0"><w:numFmt w:val="upperLetter"/></w:lvl></w:lvlOverride>')
+    assert n.label("1", 0) == "(A)"
+    assert n.abstract["0"][0] == {"start": 1, "fmt": "decimal", "text": "(%1)"}
+
+
+def test_lvl_override_bullet_and_start_priority():
+    lvl = '<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl>'
+    n = _numbering_from(lvl, '<w:lvlOverride w:ilvl="0"><w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/></w:lvl></w:lvlOverride>')
+    assert n.is_bullet("1", 0)
+    n = _numbering_from(lvl, '<w:lvlOverride w:ilvl="0"><w:startOverride w:val="7"/>'
+                             '<w:lvl w:ilvl="0"><w:start w:val="2"/></w:lvl></w:lvlOverride>')
+    assert [n.label("1", 0), n.label("1", 0)] == ["7.", "8."]

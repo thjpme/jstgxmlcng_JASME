@@ -1608,3 +1608,83 @@ def test_a8_formula_image_on_real_docx_with_table_and_moved_image(journal, meta,
     assert res.fidelity.ok and res.fidelity.final_ok
     assert any("数式画像" in w for _, w in res.ai.rejected)
     assert "表の文字甲" in res.xml_path.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------- 回答の形（A9・A10・{ } でない操作）
+_OP1 = {"op": "set_role", "src": "d5", "text": "", "occurrence": 1, "target": "", "role": "sec1", "image": "",
+        "mathml": "", "surname": "", "given": "", "reason": "試験", "confidence": "高"}
+_EMPTY_ANS = {"placements": [], "operations": [], "notes": []}
+
+
+@pytest.mark.parametrize("text", [
+    json.dumps([_OP1]),
+    "```json\n" + json.dumps([_OP1]) + "\n```",
+    "```json\n" + json.dumps([_OP1, dict(_OP1, src="d6")], indent=2) + "\n```",
+    json.dumps([_OP1]) + "\n以上です。",
+    json.dumps([_EMPTY_ANS]),
+])
+def test_parse_response_rejects_top_level_array(text):
+    with pytest.raises(ValueError, match="一覧（\\[ \\] で囲んだもの）"):
+        parse_response(text)
+
+
+def test_parse_response_empty_array_is_not_found():
+    with pytest.raises(ValueError, match="JSON（{ で始まり } で終わる部分）が見つかりません"):
+        parse_response("[]")
+
+
+def test_parse_response_requires_operations():
+    with pytest.raises(ValueError, match="操作 1 件だけ"):
+        parse_response(json.dumps(_OP1))
+    for d in ({"placements": []}, {"notes": []}):
+        with pytest.raises(ValueError, match="operations の一覧がありません"):
+            parse_response(json.dumps(d))
+    with pytest.raises(ValueError, match="operations が一覧"):
+        parse_response(json.dumps({"operations": {}}))
+    assert parse_response(RESPONSE)["operations"]
+    assert parse_response(json.dumps(_EMPTY_ANS))["operations"] == []
+    assert parse_response(ai_assist.MANUAL_EXAMPLE)["operations"]
+
+
+def test_manual_array_answer_is_ai_error(journal, meta, tmp_path):
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=json.dumps([_OP1]),
+                                               convert_metafiles=False))
+    assert "一覧" in res.ai.error
+    assert "ai_error" in {a.key for a in actions(res)} and res.needs_action
+    assert res.fidelity.ok
+
+
+def test_deeply_nested_answer_does_not_abort(journal, meta, tmp_path):
+    n = 100000
+    resp = '{"placements": [], "operations": [' + "[" * n + "]" * n + "]}"
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=resp,
+                                               convert_metafiles=False))
+    assert "入れ子" in res.ai.error and "ai_error" in {a.key for a in actions(res)}
+    with pytest.raises(ValueError, match="入れ子"):
+        parse_response(resp)
+    assert ai_assist.parse_cut_response('{"placements": [{"float": "s1"}, ' + "[" * n) is None
+    assert ai_assist.parse_cut_response('{"placements": [' + "[" * n) is None
+
+
+def test_cut_top_level_array_is_not_partial(journal, meta, tmp_path):
+    cut = '[{"placements": [{"float": "s1", "kind": "box"}], "operations": [{"op": "link_'
+    for text in ("```json\n" + cut, cut):
+        assert ai_assist.parse_cut_response(text) is None
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response="```json\n" + cut,
+                                               convert_metafiles=False))
+    assert "一覧" in res.ai.error and not res.ai.partial
+
+
+def test_split_ops_records_non_dict_ops(journal, meta, tmp_path):
+    outcome = types.SimpleNamespace(rejected=[])
+    assert ai_assist.split_ops({"operations": ["link_citation d18", [1]]}, outcome) == []
+    assert len(outcome.rejected) == 2
+    assert "str" in outcome.rejected[0][1] and "list" in outcome.rejected[1][1]
+    assert outcome.rejected[0][0]["text"] == "link_citation d18"
+    res = _manual_raw(["link_citation d18", [1]], meta, journal, tmp_path)
+    assert len(res.ai.rejected) == 2 and res.fidelity.ok
+    report = res.report_path.read_text(encoding="utf-8")
+    sec2 = report.split("\n## 2.")[1].split("\n## 3.")[0]                              # 2 章の不採用の表
+    assert "link_citation d18" in sec2
+    assert sum("操作が { } のまとまりでない（str）" in ln for ln in sec2.splitlines()) == 1
+    assert sum("操作が { } のまとまりでない（list）" in ln for ln in sec2.splitlines()) == 1
