@@ -17,6 +17,7 @@ from pathlib import Path
 from .ai_assist import PROVIDERS
 from .docx_reader import table_where
 from .linker import body_paragraphs, linked_ids
+from .images import crop_text
 from .model import note_key, note_label
 from .package import article_dir
 from .pdfmatch import (DISPLACED_WHY, EDGE_WHY, FORMULA_MARK, HEAD_WHY, LINE_MARK, LONG_WHY, MATH_WHY, RE_PAGE_NO, TYPESET_KINDS,
@@ -143,16 +144,22 @@ def figure_issue_labels(plan) -> list:
     return out
 
 
-def images_to_prepare(r) -> list:
-    """利用者が用意する必要のある画像（画像ファイルがない Word の図形、変換できなかった EMF など）。
-
-    戻り値: [(出力ファイル名, 図のキャプション, 理由)]。レポートの冒頭・14 章、Colab の枠、コマンドラインの表示で使う。
-    """
+def _image_captions(r) -> dict:
+    """画像の ID → 図のキャプション（図に入っている画像だけ。なければ含まれない）。"""
     caps = {}
     for f in r.plan.figures:
         cap = f.caption.plain().strip() if f.caption is not None else ""
         for img in [i for ip in f.image_paras for i in ip.images] + list(f.extra_images):
             caps.setdefault(img.image_id, cap)
+    return caps
+
+
+def images_to_prepare(r) -> list:
+    """利用者が用意する必要のある画像（画像ファイルがない Word の図形、変換できなかった EMF など）。
+
+    戻り値: [(出力ファイル名, 図のキャプション, 理由)]。レポートの冒頭・14 章、Colab の枠、コマンドラインの表示で使う。
+    """
+    caps = _image_captions(r)
     out = []
     for i in r.images:
         if i.status not in ("missing", "failed"):
@@ -1098,14 +1105,14 @@ def images_action(r):
     items = "\n".join(f"・{name}: {cap or '（キャプションなし）'}（{why}）" for name, cap, why in need)
     return Action(
         NEEDS_ACTION, "images",
-        top="\n".join([(f"> **要対応: 画像ファイルを用意できなかった図が {len(need)} 件あります（9 章）。** 次の名前の画像（PNG）を"
+        top="\n".join([(f"> **要対応: 画像ファイルを用意できなかった図が {len(need)} 件あります（9 章）。** 次の名前の画像（名前の拡張子の形式。.png は PNG、.jpg は JPEG）を"
                         f"作り、{esc(zname)} の中の `{graphics_dir(r)}` に入れてください。画像がないままでは、その図が J-STAGE の"
                         "画面に表示されません。"), ">"]
                       + [f"> - `{name}`: {esc(cap, 40) or '（キャプションなし）'}（{esc(why)}）" for name, cap, why in need]),
         checklist=(f"- [ ] **画像ファイルを用意できなかった図 {len(need)} 件**の画像を作り、ZIP の中の `{graphics_dir(r)}` に入れる: "
                    + "、".join(f"`{name}`（{esc(cap, 20) or 'キャプションなし'}）" for name, cap, _ in need)),
         box_title=f"画像ファイルを用意できなかった図が {len(need)} 件あります",
-        box_detail=("Word の図形で描かれた図などは、docx に画像ファイルがないので、変換で画像を作れません。画像がないままでは、"
+        box_detail=("Word の図形で描かれた図や、変換・切り取りができなかった画像は、そのままでは Graphics/ に入れられません。画像がないままでは、"
                     f"その図が J-STAGE の画面に表示されません。{step('images')}で、図ごとにその図の画像を"
                     f"選んでください（ファイル名は何でもかまいません）。手元で入れるときは、次の名前の画像を {zname} の中の "
                     f"{graphics_dir(r)} に入れます（レポートの冒頭と 9 章）。\n{items}"),
@@ -1159,6 +1166,70 @@ def lost_autonum_action(r):
         cli=(f"要対応: Word の自動番号が XML に出ていない段落 {n} 件（変換ツールの不具合の可能性がある。レポートの冒頭と 8 章）。"
              "変換レポートを添えて開発者に知らせること。\n"
              + "\n".join(f"  {ln.src}: 「{ln.number}」…" for ln in lost)))
+
+
+def _image_crop_action(r):
+    """Word でトリミングした画像を、表示される範囲に切り取って出力したもの（ImageResult.crop）。なければ None。"""
+    imgs = [i for i in r.images if i.crop and i.status == "converted"]
+    if not imgs:
+        return None
+    n = len(imgs)
+    zname = r.zip_path.name if r.zip_path else "アップロード用の ZIP"
+    gdir = graphics_dir(r)
+    caps = _image_captions(r)
+    rows = []
+    for i in imgs:
+        cap = caps.get(i.image_id, "")
+        rows.append((i.name, i.image_id, cap, crop_text(i.crop)))
+    top_rows = [f"> - `{name}`（{iid}。{esc(cap, 20) or 'キャプションなし'}）: {ct}" for name, iid, cap, ct in rows]
+    detail_rows = [f"・{name}（{esc(cap, 20) or 'キャプションなし'}）: {ct}" for name, iid, cap, ct in rows]
+    check_rows = "、".join(f"`{name}`（{esc(cap, 20) or 'キャプションなし'}）" for name, iid, cap, ct in rows)
+    cli_rows = ", ".join(f"{name}（{ct}）" for name, iid, cap, ct in rows)
+    return Action(
+        TO_CHECK, "image_crop",
+        top="\n".join([(f"> **要確認: Word で切り取った（トリミングした）画像 {n} 件を、Word で表示される範囲に切り取って出力しました（9 章）。** "
+                        f"切り取った画像は {esc(zname)} の中の `{gdir}` にあります。出版版 PDF や Word の表示と比べて、切り取りの位置が"
+                        "合っているか確かめてください。違っていれば、Word で切り取りを直して変換し直してください。"), ">"] + top_rows),
+        checklist=f"- [ ] **Word で切り取った画像 {n} 件**（9 章）の切り取りの位置が Word の表示と合っているか確かめる: {check_rows}",
+        box_title=f"Word で切り取った画像 {n} 件を切り取って出力しました（要確認）",
+        box_detail=("Word で切り取った（トリミングした）画像は、docx の中では切り取る前のまま入っているので、Word で表示される範囲に切り取って "
+                    f"{zname} の中の {gdir} に入れました。出版版 PDF や Word の表示と比べて、位置が合っているか確かめてください。"
+                    f"違っていれば、Word で切り取りを直した docx を{step('docx')}でアップロードし直し、そこから順にやり直してください"
+                    "（レポートの冒頭と 9 章）。\n" + "\n".join(detail_rows)),
+        cli=(f"要確認: Word で切り取った画像 {n} 件を、表示される範囲に切り取って出力した（ZIP の中の {gdir}。レポートの冒頭と 9 章）。"
+             f"位置を確かめること: {cli_rows}"))
+
+
+ART_NOTE = "（docx の画像は効果を付けた後のものの場合がある）"
+
+
+def _image_edits_action(r):
+    """Word の回転・反転・色の変更などを反映せずに出力した画像（ImageResult.edits）。なければ None。"""
+    imgs = [i for i in r.images if i.edits and i.status in ("ok", "converted")]
+    if not imgs:
+        return None
+    n = len(imgs)
+    zname = r.zip_path.name if r.zip_path else "アップロード用の ZIP"
+    gdir = graphics_dir(r)
+    rows = []
+    for i in imgs:
+        kinds = "・".join(i.edits)
+        rows.append((i.name, i.image_id, kinds, ART_NOTE if "アート効果" in i.edits else ""))
+    why = ("J-STAGE の画面では、Word の表示と見た目（向き・色・余白など）が違うことがあります。")
+    return Action(
+        TO_CHECK, "image_edits",
+        top="\n".join([(f"> **要確認: Word で回転・反転・色の変更などをした画像 {n} 件は、その加工を反映していないことがあります（9 章）。** "
+                        f"{why}出力した画像は {esc(zname)} の中の `{gdir}` にあります。違っていれば、加工した後の見た目の画像を"
+                        "画像編集ソフトなどで作り、Word で差し替えて変換し直してください。"), ">"]
+                      + [f"> - `{name}`（{iid}）: {kinds}{note}" for name, iid, kinds, note in rows]),
+        checklist=(f"- [ ] **Word で加工した画像 {n} 件**（9 章）の見た目が Word の表示と合っているか確かめる: "
+                   + "、".join(f"`{name}`（{kinds}）" for name, iid, kinds, note in rows)),
+        box_title=f"Word の加工（回転・反転・色の変更など）を反映していない画像が {n} 件あります（要確認）",
+        box_detail=(f"{why}出力した画像は {zname} の中の {gdir} にあります。違っていれば、加工した後の見た目の画像を"
+                    f"画像編集ソフトなどで作り、Word で差し替えた docx を{step('docx')}でアップロードし直し、そこから順にやり直してください"
+                    "（レポートの冒頭と 9 章）。\n" + "\n".join(f"・{name}（{iid}）: {kinds}{note}" for name, iid, kinds, note in rows)),
+        cli=(f"要確認: Word の加工（回転・反転・色の変更など）を反映していないことがある画像 {n} 件（レポートの冒頭と 9 章）: "
+             + ", ".join(f"{name}（{kinds}）" for name, iid, kinds, note in rows)))
 
 
 STYLE_HIDDEN_SAMPLES = 5     # スタイルの隠し文字の要確認に並べる段落の数（全件はレポートの 6 章）
@@ -1718,7 +1789,7 @@ def actions(r) -> list:
                            _upload_action, _ai_error_action, _ai_pending_action,
                            _partial_action, _forced_action, figure_body_action, _textbox_undecided_action,
                            _textbox_place_action, _textbox_figure_text_action, images_action, lost_action,
-                           lost_autonum_action, _style_hidden_action, _abstract_ja_action, _app_after_refs_action, _note_overlap_action, _float_ref_action,
+                           lost_autonum_action, _image_crop_action, _image_edits_action, _style_hidden_action, _abstract_ja_action, _app_after_refs_action, _note_overlap_action, _float_ref_action,
                            _fn_guess_action, _newline_action)]
     return [a for a in head if a is not None] + pdf_actions(r)
 

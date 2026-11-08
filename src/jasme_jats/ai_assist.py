@@ -500,7 +500,11 @@ def textbox_section(plan: ArticlePlan) -> list:
 
 
 def image_blocks(doc, images):
-    """AI に見せる画像（png / jpg / gif のみ。EMF などは変換できれば変換する）。"""
+    """AI に見せる画像（png / jpg / gif のみ。EMF などは変換できれば変換する）。
+
+    Word でトリミングした画像（ImageRef.crop）は、Word の表示どおりに切り取ったものを渡す。切り取れない画像（EMF/WMF の
+    トリミング、Exif の向きのある画像など。images.CropError）は渡さない（Word で見せていない部分を外に出さない。AI には
+    依頼文の文字だけ）。"""
     blocks = []
     for img in images:
         data = doc.media.get(img.target)
@@ -509,12 +513,22 @@ def image_blocks(doc, images):
         ext = img.target.rsplit(".", 1)[-1].lower()
         mt = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif"}.get(ext)
         if mt is None and ext in ("emf", "wmf"):
+            if img.crop:
+                continue
             from .images import convert_metafile
             png, _ = convert_metafile(data, ext, min_width_px=800)
             if png:
                 data, mt = png, "image/png"
         if mt is None:
             continue
+        if img.crop and ext in ("png", "jpg", "jpeg", "gif"):
+            from .images import CropError, crop_image
+            try:
+                out, _, _ = crop_image(data, {"png": "PNG", "jpg": "JPEG", "jpeg": "JPEG", "gif": "GIF"}[ext], img.crop)
+            except CropError:
+                continue
+            if out is not None:
+                data = out
         blocks.append((img.image_id, mt, data))
     return blocks
 

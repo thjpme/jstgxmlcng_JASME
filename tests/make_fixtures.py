@@ -141,14 +141,56 @@ def omathpara(inner):
     return f"<m:oMathPara><m:oMath>{inner}</m:oMath></m:oMathPara>"
 
 
-def drawing(rid, cx, cy, pid, name="図", anchor=False):
+def drawing(rid, cx, cy, pid, name="図", anchor=False, src_rect=None, xfrm="", blip=""):
+    """行内の画像。src_rect は a:srcRect の属性（'l="50000"'）、xfrm は a:xfrm の属性（' rot="5400000"'）、blip は a:blip の中身。"""
+    sr = f"<a:srcRect {src_rect}/>" if src_rect else ""
+    blip_xml = f'<a:blip r:embed="{rid}">{blip}</a:blip>' if blip else f'<a:blip r:embed="{rid}"/>'
     graphic = (f'<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
                f'<pic:pic><pic:nvPicPr><pic:cNvPr id="{pid}" name="{name}"/><pic:cNvPicPr/></pic:nvPicPr>'
-               f'<pic:blipFill><a:blip r:embed="{rid}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
-               f'<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>'
+               f'<pic:blipFill>{blip_xml}{sr}<a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
+               f'<pic:spPr><a:xfrm{xfrm}><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>'
                f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic>')
     return (f'<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="{cx}" cy="{cy}"/>'
             f'<wp:docPr id="{pid}" name="{name}"/>{graphic}</wp:inline></w:drawing></w:r>')
+
+
+def vml_image(rid, width="100pt", height="100pt", attrs="", style=""):
+    """VML の画像（w:pict）。attrs は v:imagedata の属性（'cropleft="16384f"'）、style は v:shape の style の後ろに足す文字。"""
+    extra = f";{style}" if style else ""
+    return (f'<w:r><w:pict><v:shape style="width:{width};height:{height}{extra}">'
+            f'<v:imagedata r:id="{rid}" {attrs}/></v:shape></w:pict></w:r>')
+
+
+def pic_group(rids_exts, pid, extent=None, ch_ext=None, blip_ext=False, grp_xfrm=""):
+    """1 つのグループ図形（wpg:wgp）に pic を複数入れた行内の図形。rids_exts は [(rid, cx, cy), ...]。"""
+    if extent is None:
+        extent = (max(c for _, c, _ in rids_exts), max(c for _, _, c in rids_exts))
+    ext_lst = ('<a:extLst><a:ext uri="{28A0092B-C50C-407E-A947-70E740481C1C}">'
+               '<a14:useLocalDpi xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main" val="0"/></a:ext></a:extLst>'
+               if blip_ext else "")
+    pics = ""
+    for k, (rid, cx, cy) in enumerate(rids_exts):
+        blip = f'<a:blip r:embed="{rid}">{ext_lst}</a:blip>' if ext_lst else f'<a:blip r:embed="{rid}"/>'
+        pics += (f'<pic:pic><pic:nvPicPr><pic:cNvPr id="{pid + k + 1}" name="図"/><pic:cNvPicPr/></pic:nvPicPr>'
+                 f'<pic:blipFill>{blip}<a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
+                 f'<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>'
+                 '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>')
+    chext = f'<a:chExt cx="{ch_ext[0]}" cy="{ch_ext[1]}"/>' if ch_ext else ""
+    grp = (f'<wpg:grpSpPr><a:xfrm{grp_xfrm}><a:off x="0" y="0"/><a:ext cx="{extent[0]}" cy="{extent[1]}"/>{chext}</a:xfrm>'
+           '</wpg:grpSpPr>')
+    graphic = ('<a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup">'
+               f'<wpg:wgp><wpg:cNvGrpSpPr/>{grp}{pics}</wpg:wgp></a:graphicData></a:graphic>')
+    return (f'<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="{extent[0]}" cy="{extent[1]}"/>'
+            f'<wp:docPr id="{pid}" name="図"/>{graphic}</wp:inline></w:drawing></w:r>')
+
+
+def two_tone(fmt="PNG", size=(200, 100), **save_kw) -> bytes:
+    """左半分が赤・右半分が青の画像。"""
+    img = Image.new("RGB", size, "red")
+    img.paste("blue", (size[0] // 2, 0, size[0], size[1]))
+    buf = io.BytesIO()
+    img.save(buf, fmt, **save_kw)
+    return buf.getvalue()
 
 
 def anchored(graphic, fallback, pid, cx, cy, h=("column", 0), v=("paragraph", 0), wrap="wrapNone"):

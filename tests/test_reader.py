@@ -738,3 +738,83 @@ def test_lvl_override_bullet_and_start_priority():
     n = _numbering_from(lvl, '<w:lvlOverride w:ilvl="0"><w:startOverride w:val="7"/>'
                              '<w:lvl w:ilvl="0"><w:start w:val="2"/></w:lvl></w:lvlOverride>')
     assert [n.label("1", 0), n.label("1", 0)] == ["7.", "8."]
+
+
+# ----------------------------------------------------------------------------- 画像の切り取り・加工の記録（u4-crop）
+def _images_of(tmp_path, *parts, name="img.docx"):
+    def body(b):
+        out = [mf.para(mf.S["sec1"], "１．検証")]
+        for part in parts:
+            out.append(mf.para(mf.S["body"], part(b)))
+        return out
+
+    path = tmp_path / name
+    mf.make_article(path, "画像の読み取り", body)
+    return read_docx(path).images
+
+
+def _draw(**kw):
+    return lambda b: mf.drawing(b.add_image("p.png", mf.two_tone()), 1000000, 800000, 700, **kw)
+
+
+def test_reader_reads_src_rect(tmp_path):
+    imgs = _images_of(tmp_path, _draw(src_rect='l="50000" r="10000"'), _draw(src_rect='l="50%"'),
+                      _draw(src_rect='l="0" t="0" r="0" b="0"'), _draw(src_rect='t="-5000" l="20000"'))
+    assert imgs[0].crop == (0.5, 0, 0.1, 0) and imgs[0].edits == ()
+    assert imgs[1].crop == (0.5, 0, 0, 0)
+    assert imgs[2].crop is None
+    assert imgs[3].crop == (0.2, 0, 0, 0) and "余白" in imgs[3].edits
+
+
+def test_reader_unreadable_src_rect(tmp_path):
+    (img,) = _images_of(tmp_path, _draw(src_rect='l="abc"'))
+    assert "切り取り（読めない指定）" in img.edits
+
+
+def test_tiny_negative_src_rect_not_padding(tmp_path):
+    (img,) = _images_of(tmp_path, _draw(src_rect='t="-50"'))
+    assert "余白" not in img.edits and img.crop is None
+
+
+def test_reader_reads_vml_crop(tmp_path):
+    (img,) = _images_of(tmp_path, lambda b: mf.vml_image(b.add_image("v.png", mf.two_tone()),
+                                                        attrs='cropleft="16384f" cropright="0.1"',
+                                                        style="rotation:90;flip:x"))
+    assert img.crop == (0.25, 0, 0.1, 0) and "回転" in img.edits and "左右反転" in img.edits
+
+
+def test_reader_records_rotation_flip_effects(tmp_path):
+    (img,) = _images_of(tmp_path, _draw(xfrm=' rot="5400000" flipV="1"', blip='<a:grayscl/><a:alphaModFix amt="50000"/>'))
+    assert img.edits == ("回転", "上下反転", "色の変更", "透明度") and img.crop is None
+
+    def grp(b):
+        r1 = b.add_image("g1.png", mf.two_tone())
+        return mf.pic_group([(r1, 1000000, 800000)], 710, grp_xfrm=' flipH="1"')
+
+    (g,) = _images_of(tmp_path, grp, name="grp.docx")
+    assert "左右反転" in g.edits
+
+
+def test_reader_records_art_effects(tmp_path):
+    art = ('<a:extLst><a:ext uri="{BEBA8EAE-BF5A-486C-A8C5-ECC9F3942E4B}">'
+           '<a14:imgProps xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main"/></a:ext></a:extLst>')
+    (img,) = _images_of(tmp_path, _draw(blip=art))
+    assert "アート効果" in img.edits
+
+
+def _group_images(tmp_path, **kw):
+    def grp(b):
+        r1, r2 = b.add_image("g1.png", mf.two_tone()), b.add_image("g2.png", mf.two_tone())
+        return mf.pic_group([(r1, 1000000, 800000), (r2, 500000, 400000)], 720, **kw)
+
+    return _images_of(tmp_path, grp)
+
+
+def test_group_pic_size_ignores_blip_extlst(tmp_path):
+    imgs = _group_images(tmp_path, blip_ext=True)
+    assert [i.cx_emu for i in imgs] == [1000000, 500000]
+
+
+def test_group_pic_size_scaled_by_chext(tmp_path):
+    imgs = _group_images(tmp_path, extent=(1000000, 800000), ch_ext=(2000000, 1600000))
+    assert [i.cx_emu for i in imgs] == [500000, 250000]

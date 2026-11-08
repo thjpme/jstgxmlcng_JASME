@@ -87,6 +87,11 @@ class Atom:
         return OBJ
 
 
+# Word の画像の加工のうち、書き出しで反映しないもの（ImageRef.edits の名前と順）
+IMAGE_EDITS = ("切り取り（読めない指定）", "余白", "並べて表示", "塗りつぶしの範囲", "回転", "左右反転", "上下反転",
+               "色の変更", "透明度", "図の効果", "アート効果")
+
+
 @dataclass
 class ImageRef:
     rel_id: str
@@ -103,6 +108,8 @@ class ImageRef:
     float_id: str = ""          # 浮動配置の図形（Float）の中の画像なら、その図形の ID
     hidden: bool = False        # 隠し文字（w:vanish）のランの中の画像。段落のアトムにしない（XML に出力しない）
     hidden_style: bool = False  # hidden のうち、スタイル・既定の書式の設定で隠したもの（ランの直接の指定でない。要確認で知らせる）
+    crop: tuple | None = None   # Word のトリミング（左・上・右・下）。元の画像の幅・高さに対する割合（0 以上）。4 つとも 0 なら None
+    edits: tuple = ()           # 書き出しで反映しない Word の加工の名前（IMAGE_EDITS の順・重複なし）。9 章と要確認 image_edits
 
     @property
     def height_cm(self) -> float:
