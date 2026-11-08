@@ -372,9 +372,9 @@ def test_failed_step_drops_later_steps(monkeypatch, tmp_path):
 
     from conftest import FULL
 
-    from jasme_jats.colab import report_details, result_boxes, summary_box
+    from jasme_jats.colab import report_details, result_boxes, structure_conflict_box, summary_box
     from jasme_jats.config import ArticleMeta, JournalConfig
-    from jasme_jats.pipeline import Options, add_images, convert
+    from jasme_jats.pipeline import Options, StructureConflictError, add_images, convert
     uploads = []
     files = types.SimpleNamespace(upload=lambda: uploads.pop(0), download=lambda p: None)
     colab = types.ModuleType("google.colab")
@@ -410,7 +410,8 @@ def test_failed_step_drops_later_steps(monkeypatch, tmp_path):
             "OUT": tmp_path / "output", "journal": JournalConfig.load(),
             "meta": ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり"}),
             "convert": convert, "Options": Options, "add_images": add_images, "result_boxes": result_boxes,
-            "summary_box": summary_box, "report_details": report_details, "HTML": lambda x: x, "display": shown.append}
+            "summary_box": summary_box, "report_details": report_details, "HTML": lambda x: x, "display": shown.append,
+            "StructureConflictError": StructureConflictError, "structure_conflict_box": structure_conflict_box}
     ns6 = dict(base, DONE={1, 2, 3, 4, 5, 7, 8}, convert=boom)
     with pytest.raises(RuntimeError):
         exec(src6, ns6)
@@ -418,3 +419,40 @@ def test_failed_step_drops_later_steps(monkeypatch, tmp_path):
     ns6 = dict(base, DONE={1, 2, 3, 4, 5, 7, 8})
     exec(src6, ns6)
     assert ns6["DONE"] == {1, 2, 3, 4, 5}
+
+
+def test_steps5_and_6_stop_on_structure_conflict(monkeypatch, tmp_path):
+    """原稿の構造の衝突（K1・K2）で変換が中止されたとき、手順 5 は赤い枠（structure_conflict_box）を出して SystemExit で止まり、
+    手順 6（守り）も同じ。どちらも `DONE` から 5 を消すので、手順 7〜8 は先に進めない。セル 5・6 に error_box( は書かない。"""
+    from test_structure import conflict_doc
+
+    from jasme_jats.colab import (ai_required_box, no_ai_box, prompt_box, report_details, result_boxes, structure_conflict_box,
+                                  summary_box)
+    from jasme_jats.config import ArticleMeta, JournalConfig
+    from jasme_jats.pipeline import AIRequiredError, Options, StructureConflictError, add_images, convert
+    for prefix in ("#@title 5.", "AI_RESPONSE = r'''"):
+        src = cell_source(prefix)
+        assert "except StructureConflictError as e:" in src and "display(HTML(structure_conflict_box(str(e))))" in src
+        assert "上の赤い枠のとおり Word で原稿を直して保存し、手順 2 から選び直してやり直してください。" in src
+        assert "error_box(" not in src
+    shown = fake_display(monkeypatch)
+    path = conflict_doc(tmp_path, "K1_ref_ref")
+    base = {"AI": "manual", "PROVIDER": "claude", "API_MODEL": "x", "CONVERT_EMF": False, "WORK": tmp_path, "OUT": tmp_path / "output",
+            "meta_input": {"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり"}, "docx_path": path, "pdf_path": None,
+            "ROUTE_KEY": "docx", "SPLIT_LABELS": None, "journal": JournalConfig.load(),
+            "meta": ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり"}),
+            "convert": convert, "Options": Options, "add_images": add_images, "result_boxes": result_boxes,
+            "summary_box": summary_box, "report_details": report_details, "prompt_box": prompt_box, "no_ai_box": no_ai_box,
+            "ai_required_box": ai_required_box, "AIRequiredError": AIRequiredError,
+            "StructureConflictError": StructureConflictError, "structure_conflict_box": structure_conflict_box,
+            "HTML": lambda x: x, "display": shown.append}
+    ns5 = dict(base, DONE={1, 2, 3, 4})
+    with pytest.raises(SystemExit, match="上の赤い枠のとおり Word で原稿を直して保存し"):
+        exec(cell_source("#@title 5."), ns5)
+    assert 5 not in ns5["DONE"] and ns5["DONE"] == {1, 2, 3, 4}
+    box = next(x for x in shown if "原稿の構造を直す必要があります（変換を中止しました）" in x)
+    assert "#dc2626" in box and "手順 2 から" in box and "\x00" not in box
+    ns6 = dict(base, DONE={1, 2, 3, 4, 5, 7, 8})
+    with pytest.raises(SystemExit, match="手順 2 から選び直して"):
+        exec(cell_source("AI_RESPONSE = r'''").replace("ここに AI の回答を貼り付ける", "{}", 1), ns6)
+    assert 5 not in ns6["DONE"] and ns6["DONE"] == {1, 2, 3, 4}

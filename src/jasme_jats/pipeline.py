@@ -1,10 +1,14 @@
 """変換の全体の流れ。
 
   1. docx を読み取る（docx_reader）
-  2. 段落の役割を決め、論文の構造を組み立てる（structure）
+  2. 段落の役割を決め、論文の構造を組み立てる（structure）。そのまま組み立てると段落の文字が XML にも除外の記録にも入らなくなる
+     構造（同じ種類の後付けの見出し・英文要旨の見出しが 2 つ、著者名の付かない所属。K1・K2）は plan.structure_conflicts に記録され、
+     組み立ての直後（AI を呼ぶ前。ルート2 は補った docx を作る前の元の docx で）に StructureConflictError で変換を中止する
   3. 機械的にリンクを付ける（linker, refparse）
   4. （任意）AI による補完: AI が返した操作を検証し、構造の組み直し・リンクの追加として適用する（ai_assist）。
-     回答が途中で切れていたら、最後まで書かれた図表の位置の指定（placements）だけを読んで反映し、要対応として知らせる
+     回答が途中で切れていたら、最後まで書かれた図表の位置の指定（placements）だけを読んで反映し、要対応として知らせる。
+     AI の役割の指定（set_role）で組み直すと構造の衝突（K1・K2）ができるときは、衝突の範囲の set_role を、なお残ればすべての
+     set_role を不採用（CONFLICT_ROLE_WHY。レポートの 2 章）にして組み直す（中止しない）
   5. XML を組み立てる（builder）
   6. 文字の不変性チェック（fidelity）… AI 補完を行った場合も、必ずこの最終段階で行う
   7. 目印を取り除いた最終出力を作り、もう一度文字列を照合する（fidelity.final_check）
@@ -51,9 +55,9 @@ from .package import article_dir, make_zip, unzipped_files, write_package, zip_i
 from .pdfdocx import DocxFix, make_fixed_docx, same_file
 from .pdfmatch import PdfCheck, check_pdf
 from .report import (BOX_PENDING_NOTE, NEEDS_ACTION, actions, figure_body_detail, images_to_prepare, render,
-                     render_ai_only, step)
+                     render_ai_only, step, structure_conflict_text)
 from .report import pdf_fallback as report_pdf_fallback
-from .structure import classify, float_caption, float_targets
+from .structure import classify, conflict_overrides, float_caption, float_targets
 from .tracking import GEN, SPAN
 from .validate import validate
 
@@ -73,6 +77,36 @@ class AIRequiredError(Exception):
             f"この原稿には、位置を機械的に決められない図表（テキストボックス・グループ図形に入った図表）が {len(self.floats)} 件"
             "あります。これらの位置と組み合わせは AI に判断させる必要があるため、AI による補完を「使わない」設定では変換できません。"
             + step("ai_modes") + "、もう一度変換してください。\n" + "\n".join(lines))
+
+
+class StructureConflictError(Exception):
+    """docx の構造に、そのまま変換すると段落の文字が XML に入らなくなる形（同じ種類の後付けの見出し・英文要旨の見出しが 2 つ、
+    著者名の付かない所属。docs/REVIEW_2026-11.md の K1・K2）があるので、変換を中止した。
+
+    report.actions の知らせではなく、AIRequiredError と同じ例外の表示。文の中の画面の操作は目印（report.step）で書き、
+    画面に出すときは colab.step_text で（ノートブックは colab.structure_conflict_box、1 画面版は app.py、コマンドラインは cli.py が
+    screen を指定して）語に置き換える。テストが中止のときの構造（plan.fns など）を見られるよう plan を持つ。
+    """
+
+    def __init__(self, plan):
+        self.plan = plan
+        self.conflicts = list(plan.structure_conflicts)
+        super().__init__(structure_conflict_text(plan))
+
+
+# AI の set_role を、構造の衝突（K1・K2）ができるので使わなかったときの理由（レポートの 2 章の不採用の一覧に出る。_reject_roles）
+CONFLICT_ROLE_WHY = ("この回答の役割の指定を合わせて組み直すと、同じ種類の後付けの見出し（英文要旨の見出し）が 2 つになるか、所属が著者名に付かなくなり、"
+                     "段落の文字が XML に入らなくなるので使わなかった")
+
+
+def _reject_roles(ops, outcome, pred):
+    """AI の set_role のうち、pred(op) が真で、まだ不採用の一覧にないものを、構造の衝突（CONFLICT_ROLE_WHY）で不採用にする（2 章）。
+
+    同じ段落への set_role が複数あれば、すべて不採用にする。apply_ops は不採用の一覧にある操作（同じ dict）を飛ばすので、
+    採用の一覧には入らない。"""
+    for op in ops:
+        if op.get("op") == "set_role" and pred(op) and not any(r[0] is op for r in outcome.rejected):
+            outcome.rejected.append((op, CONFLICT_ROLE_WHY))
 
 
 def _head(plan, src) -> str:
@@ -445,6 +479,15 @@ def fixed_docx_path(docx_path, out_dir, article_id: str) -> Path:
     return path
 
 
+def _drop_fixed(docx_fix, fixed_path):
+    """ルート2 で、この変換が書いた「出版版 PDF で補った docx」を消す（変換を中止するとき、中止のあとに残さない）。
+
+    docx_fix が None（ルート1、または PDF の文字を読めず docx を作らなかった）なら何もしない: 前の変換が書いた同じ名前のファイルは、
+    この変換のものではないので消さない。"""
+    if docx_fix is not None and fixed_path is not None:
+        Path(fixed_path).unlink(missing_ok=True)
+
+
 def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options) -> Result:
     docx_path = Path(docx_path)
     out_dir = Path(opts.out_dir)
@@ -454,11 +497,20 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     docx_name = docx_path.name
     original_docx = docx_path       # 元の docx（ルート2 で docx_path を補った docx に差し替える前。補完の確かめで使う）
     docx_fix = None
+    fixed_path = None
     if opts.route == "pdf":
         # ルート2: 出版版 PDF で補った docx（変更履歴つき）を作り、以降はそれを変換する
         if not opts.pdf_path:
             raise ValueError("docx から作り、出版版 PDF で補う（ルート2）には、記事の PDF が必要です")
-        fixed = fixed_docx_path(docx_path, out_dir, meta.article_id(journal))
+        fixed = fixed_path = fixed_docx_path(docx_path, out_dir, meta.article_id(journal))
+        # 構造の確かめ（K1・K2）と、位置を決められない図表の確かめは、補う前の docx で行う（補った docx を残さない。O7）。
+        # 校正の直し（(B)）で見出しの重複が消える原稿でも、利用者が直すのは元の docx なので、元の docx の抜粋を見せて中止する。
+        # fixed_docx_path は入力と同じパスにならない（入力がその名前なら番号つきの別の名前）ので、入力は消えない
+        _, plan0, _ = _mechanical(docx_path, journal)
+        if plan0.structure_conflicts:
+            raise StructureConflictError(plan0)
+        if plan0.unplaced_floats and opts.ai_mode == "none":
+            raise AIRequiredError(plan0)
         docx_fix = make_fixed_docx(docx_path, opts.pdf_path, fixed, journal)
         if docx_fix.check.ok:
             docx_path = fixed
@@ -466,7 +518,12 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
             docx_fix = None
 
     doc, plan, linker = _mechanical(docx_path, journal)
-    if plan.unplaced_floats and opts.ai_mode == "none":
+    if plan.structure_conflicts or (plan.unplaced_floats and opts.ai_mode == "none"):
+        # AI を呼ぶ前に止める（API の費用をかけず、手動モードでも AI依頼文.txt を書かない）。AI が直せる形（2 つ目の「注」に p など）
+        # でも、元の docx で止めて Word で直してもらう。ルート2 で、この run が補った docx を書いていれば消す（(1) をすり抜けたときだけ）
+        _drop_fixed(docx_fix, fixed_path)
+        if plan.structure_conflicts:
+            raise StructureConflictError(plan)
         raise AIRequiredError(plan)
     root, info = build(plan, meta, journal, split)
     outcome = AIOutcome(mode=opts.ai_mode, model=opts.ai_model if opts.ai_mode == "api" else "",
@@ -522,6 +579,26 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
             keys = target_keys(plan)
             # 構造を最初から組み直し（docx を読み直す）、AI の操作を適用する。リンク先は組み直した後の ID に読み替える
             doc, plan, linker = _mechanical(docx_path, journal, overrides, placements)
+            if plan.structure_conflicts:
+                # 元の docx に衝突がないことは上で確かめたので、AI の回答の set_role で衝突ができた（同じ種類の見出し・英文要旨の
+                # 見出しが 2 つになる、所属が著者名に付かなくなる）。中止せず、その set_role を不採用（2 章）にして組み直す。
+                # 1 段目: 衝突の範囲（落ちる段落から置き換えた段落まで。著者名の続かない所属は和文の冒頭の中まで。conflict_overrides）
+                # の段落への set_role だけを使わない（範囲に指定がなければ飛ばす）。2 段目: なお衝突が残れば、set_role をすべて使わない
+                dropped = conflict_overrides(plan, overrides)
+                if dropped:
+                    _reject_roles(ops, outcome, lambda op: op["src"] in dropped)
+                    overrides = {s: r for s, r in overrides.items() if s not in dropped}
+                    doc, plan, linker = _mechanical(docx_path, journal, overrides, placements)
+                if plan.structure_conflicts:
+                    _reject_roles(ops, outcome, lambda op: True)
+                    overrides = {}
+                    doc, plan, linker = _mechanical(docx_path, journal, overrides, placements)
+                if plan.structure_conflicts:
+                    # 守り（ここには来ない）: set_role をすべて使わない組み立ては、上で衝突がないと確かめた組み立てと同じになる。
+                    # placements は build_body（place_floats・place_boxes）でしか使わず、衝突を作る split_regions・build_front_ja・
+                    # build_back・build_front_en は overrides だけで決まる。補った docx は残さない
+                    _drop_fixed(docx_fix, fixed_path)
+                    raise StructureConflictError(plan)
             retarget_ops(ops, keys, plan)
             for sid, spec in placements.items():
                 if sid in plan.float_decisions:

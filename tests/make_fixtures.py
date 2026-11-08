@@ -1175,6 +1175,98 @@ def make_article(path, title, body_parts, endnotes=(), refs=None, footnotes=(), 
     b.save(path, body)
 
 
+# ----------------------------------------------------------------------------- 構造の衝突（K1・K2）の検証用
+def front_ja_rows(b: Builder, title, rows, loose=()):
+    """front_ja と同じだが、著者表の行を [(所属, 著者名)] で自由に与える（空文字は空のセル。所属に改行があれば、所属の欄に段落を
+    分けて並べる。行がなければ表を置かない）。loose は、表の後ろに足す段落の XML の一覧（表の外の所属・著者名の段落）。"""
+    k = b.kids
+    out = [copy.deepcopy(k[0]), copy.deepcopy(k[1])]
+    t = copy.deepcopy(k[2])
+    b.set_text(t, title)
+    out.append(t)
+    st = copy.deepcopy(k[3])
+    b.set_text(st, "―検証用―")
+    out.append(st)
+    out.append(copy.deepcopy(k[4]))
+    tbl = copy.deepcopy(k[5])
+    trs = tbl.findall(f"{{{W}}}tr")
+    proto = trs[0]
+    for r in trs:
+        tbl.remove(r)
+    for aff, name in rows:
+        r = copy.deepcopy(proto)
+        cells = r.findall(f"{{{W}}}tc")
+        first, *more = aff.split("\n")         # 所属の欄に段落を分けて並べるときは、改行で区切る
+        ap = cells[0].find(f".//{{{W}}}p")
+        b.set_text(ap, first)
+        for text in more:
+            extra = copy.deepcopy(ap)
+            b.set_text(extra, text)
+            ap.addnext(extra)
+            ap = extra
+        b.set_text(cells[1].find(f".//{{{W}}}p"), name)
+        tbl.append(r)
+    if rows:
+        out.append(tbl)
+    out.extend(b.frag("".join(loose)) if loose else [])
+    out.extend(copy.deepcopy(x) for x in k[6:9])
+    return out
+
+
+def front_en_rows(b: Builder, rows, abstract=("Small article abstract.",), heading=True):
+    """front_en と同じだが、英文の著者表の行を [("name" か "aff", 文字)] で自由に並べる。heading が偽なら英文要旨の見出し（Abstract）を
+    置かない。"""
+    k = b.kids
+    i2 = [i for i, el in enumerate(k) if el.find(f".//{{{W}}}sectPr") is not None][1]
+    out = [copy.deepcopy(k[i2]), copy.deepcopy(k[i2 + 1])]
+    t = copy.deepcopy(k[i2 + 2])
+    b.set_text(t, "A Small Article")
+    out.append(t)
+    st = copy.deepcopy(k[i2 + 3])
+    b.set_text(st, "For Checking")
+    out.append(st)
+    tbl = copy.deepcopy(k[i2 + 4])
+    trs = tbl.findall(f"{{{W}}}tr")
+    pn, pa = trs[0], trs[1]
+    for r in trs:
+        tbl.remove(r)
+    for kind, text in rows:
+        r = copy.deepcopy(pn if kind == "name" else pa)
+        b.set_text(r.find(f".//{{{W}}}p"), text)
+        tbl.append(r)
+    out.append(tbl)
+    if heading:
+        out.append(copy.deepcopy(k[i2 + 5]))    # Abstract 見出し
+    for text in abstract:
+        out.append(para(S["abs"], text))
+    return out
+
+
+def make_conflict(path, body=None, back=None, ja_rows=(("架空大学", "試験\u3000六郎"),), loose=(),
+                  en_rows=(("name", "Rokuro SHIKEN"), ("aff", "Fictional University")), en_after=None, en_heading=True):
+    """後付けの見出しの重複・所属の連続（docs/REVIEW_2026-11.md の K1・K2）の検証用の小さな論文。
+
+    body: 本文（章見出しの後ろ）に足す段落の XML の一覧。back: 後付け（引用文献の見出し・1 件の代わりに置く段落の XML の一覧。
+    省略すると引用文献の見出しと 1 件）。ja_rows・loose: 和文の著者表の行と、表の後ろの段落（front_ja_rows）。en_rows: 英文の著者表の
+    行（front_en_rows）。en_after: 英文要旨の後ろに足す段落の XML の一覧。en_heading が偽なら、英文の著者表の後ろの英文要旨の見出しを
+    置かない。
+    """
+    b = Builder()
+    parts = front_ja_rows(b, "検証用の論文", list(ja_rows), loose)
+    parts += [para(S["sec1"], "１．はじめに"), para(S["body"], "架空の主張である（試験，2024）。")]
+    parts += list(body or [])
+    if back is None:
+        parts.append(para(S["ref_head"], "引用文献"))
+        parts.append(para(S["ref"], "試験六郎（2024）．「小さな論文」．『架空誌』，第5巻，pp.9-10．"))
+    else:
+        parts += list(back)
+    parts += front_en_rows(b, list(en_rows), heading=en_heading)
+    parts += list(en_after or [])
+    parts.append(copy.deepcopy(b.kids[-1]))
+    b.save(path, parts)
+    return path
+
+
 # ----------------------------------------------------------------------------- sample_float_text
 def float_text_parts(b: Builder, down_cm=0):
     """テキストボックスの中で、画像と文字（説明文）が同じ段落にある図形。図1 はキャプションあり、もう 1 つはキャプションなし。

@@ -723,3 +723,34 @@ def test_manual_fields_stay_open_for_missing_abstract(tmp_path):
     box = next(a for a in actions(st.res) if a.key == "abstract_missing").box_detail
     assert step("repaste") in box and "出し直してもらい" in box
 
+
+
+def test_structure_conflict_shows_box(tmp_path):
+    """原稿の構造の衝突（K1・K2）で変換が中止されたとき: InputError で、文（args[0]）と赤い枠（html）に画面の操作が 1 画面版の語
+    （「docx（論文の Word ファイル）」の欄）で出る（目印が残らない）。結果は残らず、入力の写しは残る（入力を直して変換し直せる）。
+    手動の欄は閉じたまま。AIRequiredError と同じ扱い。"""
+    from test_structure import conflict_doc
+    st = filled(tmp_path, docx=conflict_doc(tmp_path, "K1_ref_ref"))
+    with pytest.raises(InputError) as ei:
+        st.convert()
+    msg = ei.value.args[0]
+    for t in (msg, ei.value.html):
+        assert "「docx（論文の Word ファイル）」の欄から" in t and "\x00" not in t and "step:" not in t
+    assert "変換を中止しました" in msg and "原稿の構造を直す必要があります（変換を中止しました）" in ei.value.html
+    assert st.res is None and st.run is not None
+    assert st.changed_inputs() == [] and st.settings_note() == "" and not st.answer_box_open
+    # 直した docx に差し替えて変換し直すと、続けられる
+    st.set_inputs(docx=str(FULL))
+    st.convert()
+    assert st.res is not None and st.res.fidelity.ok
+
+
+def test_structure_conflict_view_keeps_pending_screen(tmp_path):
+    """画面の更新（on_convert の戻り）も、中止の経路で例外にならず、枠に文を出す。"""
+    from test_structure import conflict_doc
+    st = filled(tmp_path, docx=conflict_doc(tmp_path, "K2_loose_trailing_aff"))
+    demo = app.build_app(st, app.IO())
+    fns = {f.fn.__name__: f.fn for f in demo.fns.values()}
+    out = fns["on_convert"](*[st.inputs[n] for n in app.INPUT_NAMES])
+    assert any(isinstance(x, str) and "最後の所属の段落" in x for x in out)
+    assert st.res is None

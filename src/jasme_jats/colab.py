@@ -212,6 +212,14 @@ def ai_required_box(message: str, screen: str = "notebook") -> str:
     return error_box("AI による補完が必要です（変換を中止しました）", step_text(message, screen))
 
 
+def structure_conflict_box(message: str, screen: str = "notebook") -> str:
+    """原稿の構造（同じ種類の後付けの見出しが 2 つ・著者名の付かない所属。K1・K2）で変換を中止したときの表示。
+
+    message は pipeline.StructureConflictError の文（画面の操作の目印つき）。screen は目印の置き換え先（step_text）。
+    """
+    return error_box("原稿の構造を直す必要があります（変換を中止しました）", step_text(message, screen))
+
+
 # ---------------------------------------------------------------------------- 画面の操作の言い方（画面ごと）
 # report.Action.box_detail などの文は、画面の操作を目印（report.step）で書く。ノートブックの手順番号・1 画面版（app.py）の欄の名前・
 # コマンドラインの指定の違いは、ここ 1 か所の表だけで決める。目印の名前は report.STEP_NAMES と同じ（食い違いはテストで見つける）。

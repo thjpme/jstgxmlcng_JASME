@@ -333,9 +333,10 @@ if AI == "none":
 #@title 5. 変換を実行
 """ + guard(1, 2, 3, 4) + unmark(5) + """import shutil
 from IPython.display import HTML, display
-from jasme_jats.colab import ai_required_box, no_ai_box, prompt_box, report_details, result_boxes, summary_box
+from jasme_jats.colab import (ai_required_box, no_ai_box, prompt_box, report_details, result_boxes, structure_conflict_box,
+                              summary_box)
 from jasme_jats.config import ArticleMeta, JournalConfig
-from jasme_jats.pipeline import AIRequiredError, Options, add_images, convert
+from jasme_jats.pipeline import AIRequiredError, Options, StructureConflictError, add_images, convert
 
 api_key = None
 if AI == "api":
@@ -369,6 +370,9 @@ try:
 except AIRequiredError as e:
     display(HTML(ai_required_box(str(e))))
     raise SystemExit("手順 4 で「API で自動実行」か「手動（チャットに貼り付け）」を選び、手順 4 からやり直してください。")
+except StructureConflictError as e:
+    display(HTML(structure_conflict_box(str(e))))
+    raise SystemExit("上の赤い枠のとおり Word で原稿を直して保存し、手順 2 から選び直してやり直してください。")
 if globals().get("USER_IMAGES"):
     _again = add_images(res, USER_IMAGES, skip_unneeded=True)
     if _again:
@@ -407,8 +411,12 @@ if not AI_RESPONSE.strip() or "ここに AI の回答を貼り付ける" in AI_R
 if globals().get("PREVIOUS") and AI_RESPONSE.strip() == PREVIOUS.get("ai_response"):
     raise SystemExit(f"貼り付けられているのは、前の論文（{PREVIOUS['docx']}）の AI の回答です。今回の論文の依頼文（手順 5 の枠）を "
                      "AI に渡し、返ってきた回答に貼り替えてから ▶ を押してください。")
-""" + unmark(5) + """res = convert(docx_path, meta, journal, Options(out_dir=OUT, ai_mode="manual", ai_response=AI_RESPONSE,
-                                              pdf_path=pdf_path, route=ROUTE_KEY, split_labels=SPLIT_LABELS))
+""" + unmark(5) + """try:
+    res = convert(docx_path, meta, journal, Options(out_dir=OUT, ai_mode="manual", ai_response=AI_RESPONSE,
+                                                  pdf_path=pdf_path, route=ROUTE_KEY, split_labels=SPLIT_LABELS))
+except StructureConflictError as e:     # 手順 5 で確かめ済みなので通常は来ない（守り）
+    display(HTML(structure_conflict_box(str(e))))
+    raise SystemExit("上の赤い枠のとおり Word で原稿を直して保存し、手順 2 から選び直してやり直してください。")
 LAST_AI_RESPONSE = AI_RESPONSE.strip()
 if globals().get("USER_IMAGES"):
     _again = add_images(res, USER_IMAGES, skip_unneeded=True)

@@ -17,7 +17,8 @@ U6 で本体を変えずに移した。これまでどおり、ここからも i
   1. 段落の役割: role_of（AI の指定 overrides、なければ style_role〈スタイルの基準の連鎖をたどる〉）。Word の脚注・文末脚注の
      段落も plan.paras・plan.note_of に記録する。AI が exclude とした段落は理由付きで除外する。
   2. 領域に分ける: split_regions（和文の冒頭・本文・後付け・英文の部分。table_roles・back_heading_by_text・guess_heading）。
-  3. 和文の冒頭: build_front_ja（read_author_table_ja・author_paragraph_ja → add_author_ja → aff_for）。
+  3. 和文の冒頭: build_front_ja（read_author_table_ja・author_paragraph_ja → add_author_ja → aff_for。著者名に付かない所属は
+     aff_conflict が plan.structure_conflicts に記録する〈K2〉）。
   4. 本文: build_body
      - 浮動配置の図表の置き場所: place_floats（float_captions・float_number・float_summary。機械的に組む float_mechanical
        〈表のセルの画像とキャプション cell_figures・cell_pairs・cell_caption〉、AI の指定で組む float_from_spec、位置を
@@ -29,7 +30,8 @@ U6 で本体を変えずに移した。これまでどおり、ここからも i
      - 図表・箇条書き・引用・別行数式に組む: assemble_floats（same_place・table_for_figure・formula_node・
        doc_numbering_is_bullet）
      - 章・節・項の入れ子: nest。段落の位置の説明: compute_locations（node_paras）
-  5. 後付け（付記・謝辞・注・引用文献）: build_back（outside_key・back_heading_by_text・note_mark・appendix_heading・formula_node）
+  5. 後付け（付記・謝辞・注・引用文献）: build_back（outside_key・back_heading_by_text・note_mark・appendix_heading・formula_node。
+     同じ種類の見出しが 2 つになるときは replace_back が plan.structure_conflicts に記録する〈K1〉）
   6. 英文の部分と資料: build_front_en（outside_key・appendix_heading・appendix_sentence・note_appendix_sentence・
      check_abstract_ja・add_author_en・add_aff_en）
   7. Word の脚注・文末脚注を注にする: attach_word_notes（unreferenced_note_reason・no_link_rule）
@@ -37,6 +39,8 @@ U6 で本体を変えずに移した。これまでどおり、ここからも i
   9. 段落記号の削除でつないだ段落のスタイルの違いを判断の一覧に記録する: joined_styles
 - レポート・AI 依頼文・Colab・コマンドラインが使う関数: float_caption・float_ids・float_targets（浮動配置の図形の中身と、それを
   出力した XML の要素の説明）。
+- pipeline.convert が使う関数: conflict_overrides（AI の set_role で構造の衝突ができたときに、まず使わない指定〈衝突の範囲の中の
+  段落への指定〉）。
 """
 from __future__ import annotations
 
@@ -63,6 +67,7 @@ from .article import (
     QuoteNode,
     RefNode,
     Sec,
+    StructureConflict,
     TableNode,
     _para_text,
 )
@@ -397,6 +402,8 @@ class Classifier:
         self.outside = dict(outside or {})
         self.box_members = {}       # テキストボックスの ID -> その最上位の要素 [(段落・表, 役割)]（run。AI の exclude を除く）
         self._top, self._top_index = [], {}     # 図形の外の最上位の段落・表の列と、段落 ID -> その位置（near_image）
+        self._heading_by_text = {}      # 後付けの見出しの段落 ID -> 文字から推定した見出しか（back_heading_by_text。replace_back が使う）
+        self._loose_affs, self._loose_used = [], True   # 和文の所属の段落で、まだ著者名に付いていないもの（build_front_ja）と、付いたか
         self.plan = ArticlePlan(lang=journal.lang)
 
     def style_role(self, para: Para) -> Optional[str]:
@@ -701,6 +708,7 @@ class Classifier:
     # ----------------------------------------------------------------- front (ja)
     def build_front_ja(self, items):
         plan = self.plan
+        self._loose_affs, self._loose_used = [], True
         for b, role in items:
             if isinstance(b, Table):
                 if self.table_roles(b) & {"aff_ja", "author_ja"}:
@@ -728,9 +736,11 @@ class Classifier:
                 why = (FRONT_DECORATION_EXCLUDED if front_decoration(b, self.journal.front_lines)
                        else FRONT_OTHER_EXCLUDED)
                 plan.exclude(b, why)
+        if self._loose_affs and not self._loose_used:
+            self.aff_conflict(self._loose_affs, None, "loose")      # 最後の所属に著者名が続かない
 
     def read_author_table_ja(self, t: Table):
-        current_affs = []
+        current_affs, used = [], True       # 行の所属と、著者名に付いたか（付かないまま次の所属に置き換わると落ちる。K2）
         for row in t.rows:
             row_affs, row_names = [], []
             for c in row.cells:
@@ -751,20 +761,34 @@ class Classifier:
                         else:
                             self.plan.exclude(p, AUTHOR_TABLE_OTHER_EXCLUDED)
             if row_affs:
-                current_affs = row_affs
+                if current_affs and not used:
+                    self.aff_conflict(current_affs, row_affs[0], "table")
+                current_affs, used = row_affs, False
             for n in row_names:
                 self.add_author_ja(n, current_affs)
+                used = True
+        if current_affs and not used:
+            self.aff_conflict(current_affs, None, "table")      # 表の最後の所属の行に著者名がない
 
     def author_paragraph_ja(self, p, role):
-        if not hasattr(self, "_loose_affs"):
-            self._loose_affs = []
         if p.is_blank:
             self.plan.exclude_blank(p)
             return
         if role == "aff_ja":
-            self._loose_affs = [p]
+            if self._loose_affs and not self._loose_used:
+                self.aff_conflict(self._loose_affs, p, "loose")     # 著者名に付かないまま次の所属で置き換わる
+            self._loose_affs, self._loose_used = [p], False
         else:
             self.add_author_ja(p, self._loose_affs)
+            self._loose_used = True
+
+    def aff_conflict(self, affs, by, where):
+        """著者名に付かないまま捨てられる所属 affs（空白だけの段落は入らない）を、plan.structure_conflicts に記録する（K2）。
+
+        by: それを置き換えた次の所属の段落（最後に著者名が続かないまま残った所属なら None）。where: "loose"（段落）か "table"（著者表）。
+        """
+        self.plan.structure_conflicts.append(
+            StructureConflict("aff", [p.src for p in affs], by.src if by is not None else "", where=where))
 
     def add_author_ja(self, name_para, aff_paras):
         plan = self.plan
@@ -1945,6 +1969,54 @@ class Classifier:
         return []
 
     # ----------------------------------------------------------------- back
+    def replace_back(self, kind, old, new, new_role) -> bool:
+        """後付けの見出し（付記・謝辞は節。BackSec）・英文要旨の見出し old を、同じ種類の見出し new で置き換えてよいか。真なら呼び出し側が
+        plan に new を代入する。
+
+        old（前の見出し・前の BackSec）を new で置き換えると old の段落が出力も除外もされなくなる（K1）。そうなるときだけ
+        plan.structure_conflicts に記録する（組み立ては止めず、すべての箇所を集める。pipeline.convert が中止する）。空白だけの見出しは
+        前でも後ろでも空白の除外にして記録しない: 後ろの見出し new が空白だけなら new を除外して False（前の見出し・節を残す）、
+        前の見出し（と中身）が空白だけならそれらを除外して True。落ちる節に中身があるとき、その節の空白だけの段落（見出しが空白だけなど）も
+        空白の除外に記録する（lost は含めない）。kind: ref_heading / fn_heading / notes / ack / abstract_heading。
+        new_role: new の役割（後付けの見出しの役割でなければ、文字から推定した見出し）。
+        """
+        plan = self.plan
+        if old is None:
+            return True
+        if new.is_blank:
+            plan.exclude_blank(new)
+            return False
+        paras = [old] if isinstance(old, Para) else [old.heading] + [p for c in old.children for p in self.node_paras(c)]
+        lost = [p for p in paras if not p.is_blank]
+        if not lost:
+            for p in paras:
+                plan.exclude_blank(p)
+            return True
+        by_text = (False, False)
+        if kind != "abstract_heading":
+            by_text = (self._heading_by_text.get(paras[0].src, False), new_role not in BACK_HEADINGS)
+        for p in paras:
+            if p.is_blank:      # 落ちる節の空白だけの段落（空白だけの見出しなど）も、出力しないので空白の除外に記録する
+                plan.exclude_blank(p)
+        plan.structure_conflicts.append(StructureConflict(
+            kind, [p.src for p in lost], new.src, by_text=by_text, between=self._back_between(kind, paras[-1].src, new.src)))
+        return True
+
+    def _back_between(self, kind, last_src, new_src) -> bool:
+        """前の見出しの節の最後の段落 last_src の後ろから後ろの見出し new_src の手前までに、kind とは別の種類の後付けの段落
+        （付記・謝辞・注・引用文献）があるか。真なら、後ろの見出しを消すだけでは、その後ろの段落が前の節に入らない
+        （report.structure_conflict_text の直し方が変わる）。英文要旨の見出しでは偽。"""
+        mine = {"ref_heading": "refs", "fn_heading": "fn", "notes": "notes", "ack": "ack"}.get(kind)
+        if mine is None:
+            return False
+        plan = self.plan
+        srcs = list(plan.paras)
+        if last_src not in plan.paras or new_src not in plan.paras:
+            return False
+        first, last = srcs.index(last_src), srcs.index(new_src)
+        return any(plan.region.get(x) in ("notes", "ack", "fn", "refs") and plan.region.get(x) != mine
+                   for x in srcs[first + 1:last])
+
     def build_back(self, items):
         plan = self.plan
         state = None
@@ -2043,21 +2115,27 @@ class Classifier:
                                 f"スタイル「{b.style_name}」の段落「{_para_text(b)[:20]}」を後付けの見出しと推定（文字列から）")
                 state = BACK_HEADINGS[heading]
                 plan.region[b.src] = state
+                # 同じ種類の見出しが 2 つになるときは、前の見出し（の節）が出力にも除外にも入らなくなる（replace_back。K1）
                 if state == "notes":
-                    plan.notes = BackSec(heading=b)
+                    if self.replace_back("notes", plan.notes, b, role):
+                        plan.notes = BackSec(heading=b)
                     plan.locations[b.src] = "付記（見出し）"
                 elif state == "ack":
-                    plan.ack = BackSec(heading=b)
+                    if self.replace_back("ack", plan.ack, b, role):
+                        plan.ack = BackSec(heading=b)
                     plan.locations[b.src] = "謝辞（見出し）"
                 elif state == "fn":
-                    plan.fn_heading = b
+                    if self.replace_back("fn_heading", plan.fn_heading, b, role):
+                        plan.fn_heading = b
                     plan.locations[b.src] = "注（見出し）"
                     if plan.ref_heading is not None:
                         plan.decide("mechanical", "note", b.src,
                                     "注の節が引用文献の後ろにある（テンプレートでは引用文献の前）。XML では位置に関係なく注の一覧として出力した")
                 elif state == "refs":
-                    plan.ref_heading = b
+                    if self.replace_back("ref_heading", plan.ref_heading, b, role):
+                        plan.ref_heading = b
                     plan.locations[b.src] = "引用文献（見出し）"
+                self._heading_by_text[b.src] = role not in BACK_HEADINGS
                 if pending and current_fn is not None:
                     settle(current_fn)      # キャプションだけの注の候補（表が続かなかった）の前の表は、その注に入れる
                 flush()                     # 次の見出しまでに注が始まらなかった表は除外（要確認）
@@ -2241,7 +2319,8 @@ class Classifier:
             elif role == "aff_en":
                 self.add_aff_en(b, pending_name)
             elif role == "abstract_heading":
-                plan.abstract_heading = b
+                if self.replace_back("abstract_heading", plan.abstract_heading, b, role):
+                    plan.abstract_heading = b
                 plan.locations[b.src] = "英文要旨（見出し）"
                 in_abstract = True
             elif role == "abstract" or in_abstract:
@@ -2514,6 +2593,32 @@ def classify(doc, journal, overrides=None, placements=None) -> ArticlePlan:
     for p, role, origin, note in saved:
         p.role, p.role_origin, p.note = role, origin, note
     return Classifier(doc, journal, overrides, placements, outside=first.outside).run()
+
+
+FRONT_JA_REGIONS = ("front_ja", "authors", "excluded")   # conflict_overrides: 著者名の付かない最後の所属の範囲が続く領域
+
+
+def conflict_overrides(plan, overrides) -> set:
+    """AI の set_role（overrides。段落 ID -> 役割）のうち、構造の衝突（plan.structure_conflicts。K1・K2）の範囲の中の段落への指定の、
+    段落 ID の集合。pipeline.convert が、AI の回答で組み直した後に衝突ができたとき、まずこれらの指定だけを使わずに組み直す。
+
+    範囲は衝突ごとに、落ちる段落（lost）と置き換えた段落（by）の、plan.paras の並び（docx の順）での最初から最後まで。著者名が
+    続かないまま残った所属（aff で by が ""）は、最初の所属から、和文の冒頭（front_ja・authors と、AI が除外した段落 excluded）が
+    続くところまで（本文・後付けへの指定を巻き込まない）。範囲の中に指定がなければ空の集合。
+    """
+    srcs = list(plan.paras)
+    order = {s: i for i, s in enumerate(srcs)}
+    spans = []
+    for c in plan.structure_conflicts:
+        pos = [order[s] for s in list(c.lost) + ([c.by] if c.by else []) if s in order]
+        if not pos:
+            continue
+        lo, hi = min(pos), max(pos)
+        if c.kind == "aff" and not c.by:
+            end = next((k for k in range(lo + 1, len(srcs)) if plan.region.get(srcs[k]) not in FRONT_JA_REGIONS), len(srcs))
+            hi = max(hi, end - 1)
+        spans.append((lo, hi))
+    return {s for s in overrides if s in order and any(lo <= order[s] <= hi for lo, hi in spans)}
 
 
 def _doc_paragraphs(doc):

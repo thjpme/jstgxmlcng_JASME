@@ -17,8 +17,8 @@ from jasme_jats import article, structure
 # article.py で定義する名前（structure.py から移したもの。structure からも、同じものを import できること）
 MOVED = {"Sec", "PNode", "ListNode", "QuoteNode", "FigNode", "TableNode", "FormulaNode", "BoxNode", "FnNode", "RefNode",
          "BackSec", "AppNode", "Author", "Aff", "FloatInfo", "BoxInfo", "ArticlePlan", "_para_text"}
-# 移したのではなく、article.py に新しく足した型（structure.py は使わないので、structure からは import できなくてよい）
-ADDED = {"UnlinkedRef"}
+# 移したのではなく、article.py に新しく足した型（structure からの import は求めない。再エクスポートの対象ではない）
+ADDED = {"UnlinkedRef", "StructureConflict"}
 
 
 def run_python(code):

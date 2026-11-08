@@ -25,9 +25,9 @@ from . import __version__
 from . import report as rp
 from .ai_assist import API_KEY_NAMES, DEFAULT_MODEL
 from .colab import (ANSWER_LABEL, APPLY_LABEL, CONVERT_LABEL, ai_required_box, error_box, no_ai_box, report_details, result_boxes,
-                    step_text, summary_box)
+                    step_text, structure_conflict_box, summary_box)
 from .config import ArticleMeta, JournalConfig, keyword_language_mismatch, keyword_problem
-from .pipeline import AIRequiredError, Options, add_images, convert
+from .pipeline import AIRequiredError, Options, StructureConflictError, add_images, convert
 from .report import NEEDS_ACTION, actions, ai_pending, images_to_prepare
 
 DOCS = "https://github.com/thjpme/jstgxmlcng_JASME/blob/main/docs/USAGE.md"
@@ -321,7 +321,8 @@ class AppState:
             res = convert(run.docx, run.meta, run.journal, opts)
         except AIRequiredError as e:
             raise InputError(step_text(str(e), "app"), ai_required_box(str(e), "app"))
-        # （0.31.0 で StructureConflictError の except をここに足す）
+        except StructureConflictError as e:
+            raise InputError(step_text(str(e), "app"), structure_conflict_box(str(e), "app"))
         step(0.9, "画像を入れ直しています…")
         if self.user_images:
             add_images(res, self.user_images, skip_unneeded=True)     # 変換をやり直したときに、受け取った画像を入れ直す

@@ -1123,3 +1123,100 @@ def test_route2_rerun_on_its_own_fixed_docx_keeps_input(journal, meta, tmp_path)
     with pytest.raises(ValueError):
         pdfdocx.write_fixed_docx(fixed, fixed, second.plan, [])
     assert fixed.read_bytes() == before
+
+
+# ----------------------------------------------------------------------------- 構造の衝突（K1・K2）で変換を中止する（u6-k1k2）
+def _structure_error():
+    from jasme_jats.pipeline import StructureConflictError
+    return StructureConflictError
+
+
+@pytest.mark.parametrize("ai_mode", ["none", "manual"])
+@pytest.mark.parametrize("name", ["K1_ref_ref", "K2_loose_aff_aff_author"])
+def test_structure_conflict_aborts_conversion(name, ai_mode, journal, meta, tmp_path):
+    """同じ種類の後付けの見出しが 2 つある原稿（K1）と、著者名の付かない所属のある原稿（K2）は、StructureConflictError で中止する
+    （終了コード 2 になる例外。XML・ZIP・レポートを作らない）。AI を呼ぶ前に止めるので、手動モード（回答なし）でも AI依頼文.txt を
+    作らない。例外は組み立ての plan と衝突の一覧を持つ。"""
+    from test_structure import conflict_doc
+    out = tmp_path / "out"
+    with pytest.raises(_structure_error()) as e:
+        convert(conflict_doc(tmp_path, name), meta, journal, Options(out_dir=out, ai_mode=ai_mode, convert_metafiles=False))
+    assert e.value.plan.structure_conflicts and e.value.conflicts == e.value.plan.structure_conflicts
+    assert "変換を中止しました" in str(e.value) and "step:docx" in str(e.value)
+    assert list(out.iterdir()) == []
+
+
+def test_structure_conflict_comes_before_ai_required(journal, meta, tmp_path):
+    """位置を決められない図表のある原稿（sample_float）に K1 の形（引用文献の見出しが 2 つ）があるときは、AI の判断を求める
+    AIRequiredError より先に、Word で直す StructureConflictError を出す（AI を使わない設定でも）。"""
+    import re
+    from conftest import FLOAT
+    from jasme_jats.pipeline import AIRequiredError
+    with zipfile.ZipFile(FLOAT) as z:
+        xml = z.read("word/document.xml").decode("utf-8")
+        m = re.search(r"<w:p[ >](?:(?!<w:p[ >]).)*?引用および参考文献.*?</w:p>", xml, re.S)
+        assert m
+        both = tmp_path / "float_k1.docx"
+        with zipfile.ZipFile(both, "w", zipfile.ZIP_DEFLATED) as zo:
+            for item in z.infolist():
+                data = z.read(item.filename)
+                if item.filename == "word/document.xml":
+                    data = xml.replace(m.group(0), m.group(0) + m.group(0), 1).encode("utf-8")
+                zo.writestr(item, data)
+    with pytest.raises(AIRequiredError):
+        convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "a", convert_metafiles=False))      # 対照: 元の sample_float
+    with pytest.raises(_structure_error()):
+        convert(both, meta, journal, Options(out_dir=tmp_path / "b", convert_metafiles=False))
+
+
+def test_structure_conflict_route2_stops_before_fixed_docx(journal, meta, tmp_path):
+    """ルート2 でも、構造の確かめは補う前の docx で行う: K1 の docx は、補った docx（…_PDFで補完した原稿.docx）を作る前に中止し、
+    出力フォルダに補った docx を残さない（照合の前に止まるので、PDF は記事の PDF でなくてよい）。"""
+    from conftest import PDFCHECK_PDF
+    from test_structure import conflict_doc
+    out = tmp_path / "out"
+    with pytest.raises(_structure_error()):
+        convert(conflict_doc(tmp_path, "K1_ref_ref"), meta, journal,
+                Options(out_dir=out, pdf_path=PDFCHECK_PDF, route="pdf", convert_metafiles=False))
+    assert list(out.iterdir()) == []
+
+
+def test_ai_required_route2_leaves_no_fixed_docx(journal, meta, tmp_path):
+    """O7: ルート2 で AI を使わない設定のまま、位置を決められない図表（sample_float）があって AIRequiredError で中止しても、
+    出版版 PDF で補った docx を出力フォルダに残さない（補った docx を作る前に止める）。"""
+    pytest.importorskip("pypdfium2")
+    from conftest import FLOAT, PDFCHECK_PDF
+    from jasme_jats.pipeline import AIRequiredError
+    out = tmp_path / "out"
+    with pytest.raises(AIRequiredError):
+        convert(FLOAT, meta, journal, Options(out_dir=out, pdf_path=PDFCHECK_PDF, route="pdf", convert_metafiles=False))
+    assert not list(out.glob("*PDFで補完した原稿*"))
+
+
+def test_structure_conflict_leaves_previous_fixed_docx_alone(journal, meta, tmp_path):
+    """中止のとき消すのは、この変換が書いた補った docx だけ。前の変換が同じ出力フォルダに書いたファイルは、この変換のものではない
+    ので消さない（_drop_fixed は docx_fix が None なら何もしない）。"""
+    from jasme_jats.pipeline import _drop_fixed
+    old = tmp_path / "old.docx"
+    old.write_bytes(b"PK")
+    _drop_fixed(None, old)
+    assert old.exists()
+    _drop_fixed(object(), old)
+    assert not old.exists()
+    _drop_fixed(object(), None)           # 補った docx を作らなかった（ルート1）なら何もしない
+
+
+def test_cli_structure_conflict_exit_code_2(tmp_path, capsys):
+    """コマンドラインでは、原稿の構造を直す必要があるときは中止の 2（要対応の 1 ではない）。標準エラーに段落 ID と Word での
+    直し方を出し（画面の操作の目印は「docx の指定」に置き換わる）、XML を作らない。"""
+    from conftest import META_EXAMPLE
+    from test_structure import conflict_doc
+
+    from jasme_jats.cli import main
+    out = tmp_path / "out"
+    code = main([str(conflict_doc(tmp_path, "K1_ref_ref")), "--meta", str(META_EXAMPLE), "--no-metafile-conversion", "--out", str(out)])
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "変換を中止しました" in err and "docx の指定から" in err and "引用文献の見出しが 2 つあります" in err
+    assert "\x00" not in err and "step:" not in err
+    assert not list(out.rglob("*.xml"))

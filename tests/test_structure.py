@@ -13,8 +13,8 @@ import make_fixtures as mf
 from conftest import STRUCTURE
 from jasme_jats.docx_reader import read_docx
 from jasme_jats.model import Atom, Cell, Para, Row, Table
-from jasme_jats.pipeline import Options, _mechanical, convert
-from jasme_jats.report import NEEDS_ACTION, TO_CHECK, actions
+from jasme_jats.pipeline import Options, StructureConflictError, _mechanical, convert
+from jasme_jats.report import NEEDS_ACTION, TO_CHECK, actions, structure_conflict_text
 from jasme_jats.structure import RE_APPENDIX, Classifier, appendix_heading, appendix_sentence
 
 S = mf.S
@@ -939,9 +939,11 @@ def test_real_notes_section_stays(note_style, journal, meta, tmp_path):
 
 
 def test_real_notes_section_followed_by_text_ref_heading(journal, meta, tmp_path):
-    """対照: 「注」（本文スタイル）の後ろの注の一覧のあとに、章見出しのスタイルで書いた「引用文献」（文字から推定する後付けの見出し）が
-    続く原稿は、注の節のまま（引用文献の見出しが先に現れるので本文に戻さない）。引用文献は 2 件目の見出しとして扱う。"""
-    tail = [mf.para(S["sec1"], "引用文献"), mf.para(S["ref"], "試験六郎（2023）．「別の論文」．『架空誌』，第4巻，pp.1-2．")]
+    """対照: 「注」（本文スタイル）の後ろの注の一覧のあとに、章見出しのスタイルで書いた「謝辞」（文字から推定する後付けの見出し）が
+    続く原稿は、注の節のまま（後付けの見出しが先に現れるので本文に戻さない）。謝辞は make_article の引用文献の見出しとは種類が違う
+    ので、見出しの重複にならない（章見出しのスタイルの「引用文献」だと引用文献の見出しが 2 つになる。その形は
+    test_structure_conflict_kinds の K1_notes_then_text_ref_heading）。"""
+    tail = [mf.para(S["sec1"], "謝辞"), mf.para(S["body"], "お世話になった方々に感謝します。")]
     def parts(b):
         return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "架空の主張である。"),
                 mf.para(S["body"], "注"), mf.para(S["body"], "1) 一つ目の注である。"), *tail]
@@ -949,6 +951,7 @@ def test_real_notes_section_followed_by_text_ref_heading(journal, meta, tmp_path
     mf.make_article(path, "注の節の検証用文書", parts)
     _, plan, _ = _mechanical(path, journal)
     assert [fn.number for fn in plan.fns] == [1] and plan.fn_heading is not None
+    assert plan.structure_conflicts == [] and plan.ack is not None and plan.ack.heading.plain() == "謝辞"
     assert not [d for d in plan.decisions if "本文に戻した" in d.message]
     assert [s.heading.plain() for s in plan.body if getattr(s, "heading", None) is not None] == ["１．はじめに"]
 
@@ -1331,17 +1334,23 @@ def test_fn_guess_span_matches_notes_when_each_note_is_made_heading(case, journa
     for k, head in enumerate(notes):
         if head not in plan.fn_guess_span:          # 先の「注」が注の節として扱われ、その中の「注」は推定の対象ではない
             continue
-        res2 = convert(fn_span_article(tmp_path, tokens, f"{case}_{k}", k), meta, journal,
-                       Options(out_dir=tmp_path / f"s_{case}_{k}", convert_metafiles=False))
-        # 注見出しが後ろにもう 1 つあると、見出しは 1 つしか持てず、先の見出しの段落が出力されない（K1 の形。直していない。その形では
-        # 助言に、すべての「注」の扱いを決めてから変換し直すよう添える。test_fn_guess_advice_for_several_notes...）。
-        # k より後ろに別の「注」があるときだけ許し、k が最後の「注」なら不変性チェックの合格を求める
-        assert res2.fidelity.final_ok and res2.dtd_valid, (case, k)
+        # 注見出しが後ろにもう 1 つあると、見出しは 1 つしか持てず、先の見出しの段落が出力されないので、変換を中止する（K1。
+        # StructureConflictError。その形では助言に、すべての「注」の扱いを決めてから変換し直すよう添える。
+        # test_fn_guess_advice_for_several_notes...）。k より後ろに別の「注」があるときだけ中止になり、k が最後の「注」なら合格する
+        opts2 = Options(out_dir=tmp_path / f"s_{case}_{k}", convert_metafiles=False)
         if k < len(notes) - 1:
-            assert all(t == "注" for _, t in res2.fidelity.missing) and (res2.fidelity.ok or res2.fidelity.missing), (case, k)
+            with pytest.raises(StructureConflictError) as e:
+                convert(fn_span_article(tmp_path, tokens, f"{case}_{k}", k), meta, journal, opts2)
+            plan2 = e.value.plan
+            assert e.value.conflicts and all(c.kind == "fn_heading" for c in e.value.conflicts), (case, k)
+            lost = {s for c in e.value.conflicts for s in c.lost}
+            assert lost and lost <= set(notes), (case, k)           # 落ちるのは「注」の見出しの段落だけ
         else:
+            res2 = convert(fn_span_article(tmp_path, tokens, f"{case}_{k}", k), meta, journal, opts2)
+            assert res2.fidelity.final_ok and res2.dtd_valid, (case, k)
             assert res2.fidelity.ok and not res2.fidelity.missing, (case, k)
-        actual = [p.src for fn in res2.plan.fns for p in fn.paras]
+            plan2 = res2.plan
+        actual = [p.src for fn in plan2.fns for p in fn.paras]
         assert plan.fn_guess_span[head] == actual, (case, head)
         assert not set(plan.fn_guess_span[head]) & set(notes), (case, head)       # 別の「注」の段落は数えない
         checked += 1
@@ -1370,7 +1379,7 @@ def test_fn_guess_advice_for_several_notes_decides_all_notes_before_reconverting
     """0.29.0 の 5 回目の点検: 文字から注の見出しと推定される「注」が 2 つ以上ある結果では、要確認 fn_guess の助言（冒頭・14 章・枠・
     コマンドライン）に、「注見出し」にするのは注の節の「注」1 つだけにし、ほかの「注」は「注本文」スタイルにするなど、すべての「注」の
     扱いを決めてから変換し直す注意と、対象の「注」の段落 ID と抜粋を添える（先の「注」だけを「注見出し」にして変換し直すと、後ろの
-    「注」も注の見出しと推定されて先の見出しが出力されず、要対応で止まる。K1 と同じ仕組みで構造は直していない）。1 つのときは添えない。
+    「注」も注の見出しと推定されて先の見出しが出力されないので、変換が中止される。StructureConflictError）。1 つのときは添えない。
     その助言どおり（先の「注」を注見出し、後ろの「注」を注本文）にした docx は不変性チェックに合格する。"""
     tokens = FN_SPAN_CASES[case]
     n = tokens.count("注")
@@ -1389,6 +1398,8 @@ def test_fn_guess_advice_for_several_notes_decides_all_notes_before_reconverting
             continue
         assert marker in t and "ほかの「注」（表の注の見出しなど）は「注本文」スタイル" in t and f"{n} 件あります" in t, (case, t)
         assert all(f"{s}「注」" in t for s in notes), (case, t)
+        assert "4 章の件数のほか、その範囲の中の「注」も数えています" in t and "変換が中止されることがあります" in t, (case, t)
+        assert "要対応で止まる" not in t
     if n < 2:
         return
     # 助言どおり: 先の「注」を「注見出し」、ほかの「注」を「注本文」にして変換し直すと、不変性チェックに合格する
@@ -1396,11 +1407,13 @@ def test_fn_guess_advice_for_several_notes_decides_all_notes_before_reconverting
                    Options(out_dir=tmp_path / "o2", convert_metafiles=False))
     assert res2.fidelity.ok and res2.fidelity.final_ok and res2.dtd_valid and not res2.fidelity.missing, case
     assert res2.plan.fn_heading is not None and res2.plan.fn_heading.src == notes[0] and not res2.needs_action
-    # 先の「注」だけを直して、後ろの「注」を本文スタイルのままにすると、後ろの「注」も注の見出しと推定されて先の見出しが出力されず、
-    # 不変性チェックが不合格になる（助言が止める形。K1 と同じ仕組みで、構造は直していない）
-    res3 = convert(fn_styled_article(tmp_path, tokens, case + "_first", ["fn_head"]), meta, journal,
-                   Options(out_dir=tmp_path / "o3", convert_metafiles=False))
-    assert res3.fidelity.final_ok and not res3.fidelity.ok and (notes[0], "注") in res3.fidelity.missing, case
+    # 先の「注」だけを直して、後ろの「注」を本文スタイルのままにすると、後ろの「注」も注の見出しと推定されて先の見出しが出力されない
+    # ので、変換が中止される（助言が止める形。K1）。先の「注」が落ちる段落に入る
+    with pytest.raises(StructureConflictError) as e:
+        convert(fn_styled_article(tmp_path, tokens, case + "_first", ["fn_head"]), meta, journal,
+                Options(out_dir=tmp_path / "o3", convert_metafiles=False))
+    lost = {s for c in e.value.conflicts for s in c.lost}
+    assert notes[0] in lost and lost <= set(notes) and all(c.kind == "fn_heading" for c in e.value.conflicts), case
 
 
 def test_fn_guess_advice_counts_each_note_range(journal, meta, tmp_path):
@@ -1643,9 +1656,9 @@ def test_no_unplaced_notices_for_fixtures(journal, meta, tmp_path):
         assert "excluded_unsure" not in keys and "abstract_missing" not in keys, doc.name
 
 
-@pytest.mark.xfail(strict=True, reason="u6 で中止にする")
 def test_two_abstract_heading_styles(journal, meta, tmp_path):
-    """「英文要旨見出し」の見出しと、別名のスタイル名「英文要約見出し」の見出しが両方ある原稿は、u6 で中止になる。"""
+    """「英文要旨見出し」の見出しと、別名のスタイル名「英文要約見出し」の見出しが両方ある原稿は、英文要旨の見出しが 2 つになるので
+    変換を中止する（K1 と同じ仕組み。StructureConflictError）。"""
     import re
     import zipfile
     sid, new_id = S["abs_head"], "AliasAbsHead"
@@ -1661,6 +1674,336 @@ def test_two_abstract_heading_styles(journal, meta, tmp_path):
                 copy = re.sub(r'(<w:name w:val=")[^"]*(")', r"\g<1>英文要約見出し\g<2>", copy, count=1)
                 data = styles.replace(m.group(0), m.group(0) + copy).encode("utf-8")
             zo.writestr(e, data)
-    from jasme_jats.pipeline import StructureConflictError      # u5 の時点ではない（u6 で足す）
-    with pytest.raises(StructureConflictError):
+    with pytest.raises(StructureConflictError) as e:
         convert(alias, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    [c] = e.value.conflicts
+    assert c.kind == "abstract_heading" and "英文要旨の見出しが 2 つ" in str(e.value)
+    assert [e.value.plan.paras[s].plain() for s in c.lost] == ["Abstract"] and e.value.plan.paras[c.by].plain() == "Abstract"
+
+
+# ----------------------------------------------------------------------------- 後付けの見出しの重複・連続する所属（u6-k1k2。K1・K2）
+def _p(style, t):
+    return mf.para(S[style], t)
+
+
+_REF_TEXT, _REF2_TEXT = "試験六郎（2024）．「小さな論文」．『架空誌』，第5巻，pp.9-10．", "架空花子（2020）．『本』．架空社．"
+_REF = _p("ref", _REF_TEXT)
+_REF2 = _p("ref", _REF2_TEXT)
+_FN1 = _p("body", "1) 注の本文である。")
+
+# 名前 -> make_fixtures.make_conflict の引数
+CONFLICT_DOCS = {
+    # --- K1
+    "K1_ref_ref": dict(back=[_p("ref_head", "引用文献"), _REF, _p("ref_head", "参考文献"), _REF2]),
+    "K1_ref_reftext": dict(back=[_p("ref_head", "引用文献"), _REF, _p("body", "参考文献"), _REF2]),
+    "K1_ack_ack_style": dict(back=[_p("ack_head", "謝辞"), _p("body", "先の謝辞の本文。"), _p("ack_head", "謝辞"),
+                                   _p("body", "後の謝辞の本文。"), _p("ref_head", "引用文献"), _REF]),
+    # 前の謝辞の見出しが空白だけ（中身あり）: 見出しは空白の除外に記録され、lost は中身だけ
+    "K1_ack_blankhead_ack": dict(back=[_p("ack_head", "　"), _p("body", "先の謝辞の本文。"), _p("ack_head", "謝辞"),
+                                       _p("body", "後の謝辞の本文。"), _p("ref_head", "引用文献"), _REF]),
+    "K1_ack_ack_text": dict(body=[_p("body", "謝辞"), _p("body", "先の謝辞の本文。"), _p("body", "謝辞"), _p("body", "後の謝辞の本文。")]),
+    "K1_notes_notes": dict(back=[_p("notes_head", "付記"), _p("body", "先の付記。"), _p("ref_head", "引用文献"), _REF,
+                                 _p("notes_head", "付記"), _p("body", "後の付記。")]),
+    "K1_fn_style2": dict(body=[_p("fn_head", "注"), _FN1, _p("fn_head", "注"), _p("body", "2) 二つ目の注。")]),
+    "K1_fn_style_text": dict(body=[_p("fn_head", "注"), _FN1, _p("body", "注"), _p("body", "2) 二つ目の注。")]),
+    "K1_fn_text2_kept": dict(body=[_p("body", "注"), _FN1, _p("body", "注"), _p("body", "2) 二つ目の注。")]),
+    "K1_fn_after_refs_then_ref_again": dict(back=[_p("ref_head", "引用文献"), _REF, _p("fn_head", "注"), _FN1,
+                                                  _p("ref_head", "参考文献"), _REF2]),
+    # 章見出しのスタイルで書いた「引用文献」（文字から推定した見出し）の後ろに、make_article と同じ引用文献の見出し
+    "K1_notes_then_text_ref_heading": dict(body=[_p("body", "注"), _FN1, _p("sec1", "引用文献"), _REF],
+                                           back=[_p("ref_head", "引用および参考文献"), _REF2]),
+    "X_abstract_heading2": dict(en_after=[_p("abs_head", "Abstract"), _p("abs", "Second abstract.")]),
+    # --- K2
+    "K2_loose_aff_aff_author": dict(ja_rows=(), loose=(_p("aff_ja", "第一大学"), _p("aff_ja", "第二大学"), _p("author_ja", "試験　六郎"))),
+    "K2_loose_trailing_aff": dict(ja_rows=(), loose=(_p("aff_ja", "第一大学"), _p("author_ja", "試験　六郎"), _p("aff_ja", "第二大学"))),
+    "K2_loose_dup_aff": dict(ja_rows=(), loose=(_p("aff_ja", "第一大学"), _p("author_ja", "試験　六郎"), _p("aff_ja", "第一大学"),
+                                                _p("aff_ja", "第一大学"), _p("author_ja", "架空　花子"))),
+    "K2_table_affonly_row_first": dict(ja_rows=(("第一大学", ""), ("第二大学", "試験　六郎"))),
+    "K2_table_affonly_row_last": dict(ja_rows=(("第一大学", "試験　六郎"), ("第二大学", ""))),
+    "K2_table_then_loose_author": dict(ja_rows=(("第一大学", ""),), loose=(_p("author_ja", "試験　六郎"),)),
+}
+
+# 中止しない対照（structure_conflicts も missing も空）
+NO_CONFLICT_DOCS = {
+    # 先の「注」が本文に戻る（K5。戻った「注」は build_back に届かない）
+    "K1_fn_text2_K5_returned": dict(body=[_p("body", "注"), _p("body", "表の下の説明。"), _p("sec1", "２．続き"),
+                                          _p("body", "本文。"), _p("body", "注"), _FN1]),
+    "K1_fn_text2_first_returned_second_kept_body": dict(body=[_p("body", "注"), _p("body", "表の下の説明。"), _p("sec1", "２．続き"),
+                                                              _p("body", "注"), _p("body", "表の下の説明2。")]),
+    "K2_loose_aff_author_author": dict(ja_rows=(), loose=(_p("aff_ja", "第一大学"), _p("author_ja", "試験　六郎"),
+                                                          _p("author_ja", "架空　花子"))),
+    "K2_loose_aff_blank_aff_author": dict(ja_rows=(), loose=(_p("aff_ja", "第一大学"), _p("aff_ja", ""), _p("author_ja", "試験　六郎"))),
+    "K2_table_nameonly_row": dict(ja_rows=(("第一大学", "試験　六郎"), ("", "架空　花子"))),
+    "K2_table_two_affs_in_cell": dict(ja_rows=(("第一大学\n第二大学", "試験　六郎"),)),
+    # 英文の側は文字が落ちないので検出しない（著者のない <aff> は K13 で別に残る）
+    "EN_aff_before_name": dict(en_rows=(("aff", "Fictional University"), ("name", "Rokuro SHIKEN"))),
+    "EN_aff_aff_name": dict(en_rows=(("aff", "First University"), ("aff", "Second University"), ("name", "Rokuro SHIKEN"))),
+    "EN_name_aff_aff": dict(en_rows=(("name", "Rokuro SHIKEN"), ("aff", "First University"), ("aff", "Second University"))),
+    "EN_trailing_aff": dict(en_rows=(("name", "Rokuro SHIKEN"), ("aff", "Fictional University"), ("aff", "Other University"))),
+}
+
+
+def conflict_doc(tmp_path, name):
+    kw = CONFLICT_DOCS.get(name) or NO_CONFLICT_DOCS[name]
+    return mf.make_conflict(tmp_path / f"{name}.docx", **kw)
+
+
+def build_missing(path, journal, meta):
+    """convert を通さず（中止されるので）組み立てて不変性チェックにかけ、出力も除外もされなかった段落 ID の集合を返す。"""
+    from jasme_jats.builder import build
+    from jasme_jats.fidelity import verify
+    _, plan, _ = _mechanical(path, journal)
+    root, info = build(plan, meta, journal, journal.split_labels)
+    fid = verify(path, root, plan.exclusions + info.exclusions)
+    return plan, {s for s, _ in fid.missing}
+
+
+@pytest.mark.parametrize("name", list(CONFLICT_DOCS))
+def test_structure_conflict_matches_lost_paragraphs(name, journal, meta, tmp_path):
+    """検出した衝突の lost の段落 ID の集合は、検出を外してそのまま組み立てたときに不変性チェックが不合格にする段落 ID の集合と一致する
+    （落ちる段落だけを、落ちるときだけ検出する）。"""
+    plan, missing = build_missing(conflict_doc(tmp_path, name), journal, meta)
+    lost = {s for c in plan.structure_conflicts for s in c.lost}
+    assert lost and lost == missing, name
+
+
+@pytest.mark.parametrize("name", list(NO_CONFLICT_DOCS))
+def test_no_structure_conflict_for_contrast_forms(name, journal, meta, tmp_path):
+    """対照: 本文に戻った「注」・著者名に付く所属・空の所属・同じ行の所属の欄に 2 段落・英文の側は、中止しない（missing も空）。"""
+    plan, missing = build_missing(conflict_doc(tmp_path, name), journal, meta)
+    assert plan.structure_conflicts == [] and not missing, name
+    res = convert(tmp_path / f"{name}.docx", meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid, name
+
+
+def test_two_affiliations_in_one_cell_attach_to_the_author(journal, meta, tmp_path):
+    """Word での直し方の案内の確かめ: 著者表の同じ行の所属の欄に段落を分けて並べると、その著者に所属が 2 つ付く。"""
+    _, plan, _ = _mechanical(conflict_doc(tmp_path, "K2_table_two_affs_in_cell"), journal)
+    [a] = plan.authors
+    assert [x.ja.plain() for x in a.affs] == ["第一大学", "第二大学"]
+
+
+# 名前 -> (kind, lost の文字, by の文字, where, by_text, between)
+CONFLICT_KINDS = {
+    "K1_ref_ref": ("ref_heading", ["引用文献"], "参考文献", "", (False, False), False),
+    "K1_ref_reftext": ("ref_heading", ["引用文献"], "参考文献", "", (False, True), False),
+    "K1_ack_ack_style": ("ack", ["謝辞", "先の謝辞の本文。"], "謝辞", "", (False, False), False),
+    "K1_ack_blankhead_ack": ("ack", ["先の謝辞の本文。"], "謝辞", "", (False, False), False),
+    "K1_ack_ack_text": ("ack", ["謝辞", "先の謝辞の本文。"], "謝辞", "", (True, True), False),
+    "K1_notes_notes": ("notes", ["付記", "先の付記。"], "付記", "", (False, False), True),
+    "K1_fn_style2": ("fn_heading", ["注"], "注", "", (False, False), False),
+    "K1_fn_style_text": ("fn_heading", ["注"], "注", "", (False, True), False),
+    "K1_fn_text2_kept": ("fn_heading", ["注"], "注", "", (True, True), False),
+    "K1_fn_after_refs_then_ref_again": ("ref_heading", ["引用文献"], "参考文献", "", (False, False), True),
+    "K1_notes_then_text_ref_heading": ("ref_heading", ["引用文献"], "引用および参考文献", "", (True, False), False),
+    "X_abstract_heading2": ("abstract_heading", ["Abstract"], "Abstract", "", (False, False), False),
+    "K2_loose_aff_aff_author": ("aff", ["第一大学"], "第二大学", "loose", (False, False), False),
+    "K2_loose_trailing_aff": ("aff", ["第二大学"], "", "loose", (False, False), False),
+    "K2_loose_dup_aff": ("aff", ["第一大学"], "第一大学", "loose", (False, False), False),
+    "K2_table_affonly_row_first": ("aff", ["第一大学"], "第二大学", "table", (False, False), False),
+    "K2_table_affonly_row_last": ("aff", ["第二大学"], "", "table", (False, False), False),
+    "K2_table_then_loose_author": ("aff", ["第一大学"], "", "table", (False, False), False),
+}
+
+
+@pytest.mark.parametrize("name", list(CONFLICT_KINDS))
+def test_structure_conflict_kinds(name, journal, meta, tmp_path):
+    """各形の衝突が 1 件ずつ、期待どおりの (種類, 落ちる段落, 置き換えた段落, 段落か表か, 文字からの推定, 間に別の節があるか) で記録される。"""
+    kind, lost, by, where, by_text, between = CONFLICT_KINDS[name]
+    _, plan, _ = _mechanical(conflict_doc(tmp_path, name), journal)
+    [c] = plan.structure_conflicts
+    assert (c.kind, c.where, c.by_text, c.between) == (kind, where, by_text, between), name
+    assert [plan.paras[s].plain() for s in c.lost] == lost, name
+    assert (plan.paras[c.by].plain() if c.by else "") == by, name
+    order = list(plan.paras)
+    assert not c.by or order.index(c.lost[-1]) < order.index(c.by)        # 落ちる段落は置き換えた段落より前
+
+
+def test_structure_conflicts_are_all_collected(journal, meta, tmp_path):
+    """組み立ては最初の衝突で止めず、すべての箇所を集める（K1 の見出しと K2 の所属が同じ原稿にあるとき、両方を文に挙げる）。"""
+    path = mf.make_conflict(tmp_path / "all.docx", ja_rows=(), loose=(_p("aff_ja", "第一大学"), _p("aff_ja", "第二大学"),
+                                                                   _p("author_ja", "試験　六郎")),
+                            back=[_p("ref_head", "引用文献"), _REF, _p("ref_head", "参考文献"), _REF2],
+                            en_after=[_p("abs_head", "Abstract"), _p("abs", "Second abstract.")])
+    with pytest.raises(StructureConflictError) as e:
+        convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert [c.kind for c in e.value.conflicts] == ["aff", "ref_heading", "abstract_heading"]
+    assert "3 か所" in str(e.value)
+    assert not list((tmp_path / "out").glob("*.xml"))
+
+
+BLANK_DOCS = {
+    # 前の見出しが空（文字なし）: 本物の見出しで置き換える（空の段落は記録しない）
+    "blank_first_empty": dict(back=[_p("ref_head", ""), _p("ref_head", "引用文献"), _REF]),
+    # 前の見出しが全角空白だけ: 除外（空白のみの段落）にして、本物の見出しで置き換える
+    "blank_first_space": dict(back=[_p("ref_head", "　"), _p("ref_head", "引用文献"), _REF]),
+    # 本物の見出しの後ろに空・全角空白だけの見出し: 前の本物の見出しを残す
+    "blank_last_empty": dict(back=[_p("ref_head", "引用文献"), _REF, _p("ref_head", "")]),
+    "blank_last_space": dict(back=[_p("ref_head", "引用文献"), _REF, _p("ref_head", "　")]),
+    "blank_fn_after_fn": dict(body=[_p("fn_head", "注"), _p("fn_head", ""), _FN1]),
+    # 謝辞の節の途中の空の謝辞見出し: 後ろの本文は前の謝辞の節に入る
+    "blank_ack_in_section": dict(back=[_p("ack_head", "謝辞"), _p("body", "先の謝辞の本文。"), _p("ack_head", ""),
+                                       _p("body", "後の謝辞の本文。"), _p("ref_head", "引用文献"), _REF]),
+}
+
+
+@pytest.mark.parametrize("name", list(BLANK_DOCS))
+def test_blank_heading_is_excluded_not_conflict(name, journal, meta, tmp_path):
+    """空白だけの見出しは、前でも後ろでも、中止せずに空白の除外にする。前の本物の見出しは残り（後ろが空白のとき）、
+    不変性チェックは合格する（0.31.0 より前は、前の空白は missing、後ろの空白は前の本物の見出しが落ちて不合格だった）。"""
+    path = mf.make_conflict(tmp_path / f"{name}.docx", **BLANK_DOCS[name])
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    plan = res.plan
+    assert plan.structure_conflicts == [] and res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid, name
+    heads = {"ref": plan.ref_heading, "fn": plan.fn_heading}
+    real = {"blank_first_empty": "ref", "blank_first_space": "ref", "blank_last_empty": "ref", "blank_last_space": "ref",
+            "blank_fn_after_fn": "fn"}
+    if name in real:
+        assert heads[real[name]] is not None and heads[real[name]].plain() == ("引用文献" if real[name] == "ref" else "注")
+    blank_texts = {"blank_first_space": "　", "blank_last_space": "　"}
+    if name in blank_texts:
+        [ex] = [x for x in res.fidelity.excluded if x[1] == "空白のみの段落"]
+        assert plan.paras[ex[0]].plain() == blank_texts[name]
+    if name == "blank_fn_after_fn":
+        assert [p.plain() for fn in plan.fns for p in fn.paras] == ["1) 注の本文である。"]
+    if name == "blank_ack_in_section":
+        assert plan.ack.heading.plain() == "謝辞"
+        assert [c.para.plain() for c in plan.ack.children] == ["先の謝辞の本文。", "後の謝辞の本文。"]
+
+
+def test_blank_back_heading_does_not_change_other_outputs(journal, meta, tmp_path):
+    """空白だけの後付けの見出しの扱いは、その段落を除外に記録するだけ: 空の見出しがない原稿と、XML の本文は同じ。"""
+    with_blank = mf.make_conflict(tmp_path / "with.docx", back=BLANK_DOCS["blank_last_space"]["back"])
+    without = mf.make_conflict(tmp_path / "without.docx")
+    texts = []
+    for i, path in enumerate((with_blank, without)):
+        res = convert(path, meta, journal, Options(out_dir=tmp_path / f"o{i}", convert_metafiles=False))
+        texts.append(text(load(res)))
+    assert texts[0] == texts[1]
+
+
+def test_structure_conflict_text_adds_other_fn_guess_notes_once(journal, tmp_path):
+    """注の見出しの衝突の文には、衝突にかかわらない文字から推定される「注」（本文に戻った「注」）があれば、文全体で 1 回だけ、
+    すべての「注」の扱いを一緒に決める注意を添える。衝突にかかわる「注」は挙げない。"""
+    from jasme_jats.report import structure_conflict_text
+    _, plan, _ = _mechanical(fn_span_article(tmp_path, FN_SPAN_CASES["three_mixed"], "other", 1), journal)
+    text_ = structure_conflict_text(plan)
+    returned = plan.fn_guess_notes[0]
+    assert text_.count("ほかに、文字から注の見出しと推定される「注」だけの段落") == 1
+    assert f"だけの段落 {returned}「注」があります" in text_ and "一緒に決めてから変換し直してください" in text_
+    lost = [s for c in plan.structure_conflicts for s in c.lost]
+    assert returned not in lost
+    _, plan2, _ = _mechanical(conflict_doc(tmp_path, "K1_fn_style2"), journal)
+    assert "ほかに" not in structure_conflict_text(plan2)
+
+
+_NAME1, _NAME2 = _p("author_ja", "試験　六郎"), _p("author_ja", "架空　花子")
+# 名前 -> (元の形〈CONFLICT_DOCS の名前か make_conflict の引数〉, 中止の文にある直し方の言葉, 直し方どおりに Word で直した形の
+# make_conflict の引数)。直した形は、元の段落の文字を変えずに、段落を消す・移す・スタイルを変える・著者表の欄に並べることだけで作る
+ADVICE_FIXES = {
+    # 引用文献 → 注 → 参考文献: 後ろの文献を前の引用文献の節の最後に移してから「参考文献」を消す
+    "ref_between": ("K1_fn_after_refs_then_ref_again", "の節の最後に移してから",
+                    dict(back=[_p("ref_head", "引用文献"), _REF, _REF2, _p("fn_head", "注"), _FN1])),
+    # 付記 → 引用文献 → 付記: 後の付記の本文を前の付記の後ろに移してから、後ろの「付記」を消す
+    "notes_between": ("K1_notes_notes", "）の最後に移してから",
+                      dict(back=[_p("notes_head", "付記"), _p("body", "先の付記。"), _p("body", "後の付記。"), _p("ref_head", "引用文献"),
+                                 _REF])),
+    # 注 → 引用文献 → 注、謝辞 → 引用文献 → 謝辞: 同じく、後ろの節の段落を前の節の最後に移してから、後ろの見出しを消す
+    "fn_between": (dict(back=[_p("fn_head", "注"), _FN1, _p("ref_head", "引用文献"), _REF, _p("fn_head", "注"),
+                              _p("body", "2) 二つ目の注。")]), "の節の最後に移してから",
+                   dict(back=[_p("fn_head", "注"), _FN1, _p("body", "2) 二つ目の注。"), _p("ref_head", "引用文献"), _REF])),
+    "ack_between": (dict(back=[_p("ack_head", "謝辞"), _p("body", "先の謝辞の本文。"), _p("ref_head", "引用文献"), _REF,
+                               _p("ack_head", "謝辞"), _p("body", "後の謝辞の本文。")]), "）の最後に移してから",
+                    dict(back=[_p("ack_head", "謝辞"), _p("body", "先の謝辞の本文。"), _p("body", "後の謝辞の本文。"),
+                               _p("ref_head", "引用文献"), _REF])),
+    # 間に節がない: 後ろの見出しを消すだけ
+    "ref_ref": ("K1_ref_ref", "の段落を消してください（その後ろの段落は、前の見出し",
+                dict(back=[_p("ref_head", "引用文献"), _REF, _REF2])),
+    "ack_ack": ("K1_ack_ack_style", "の段落を消してください（その後ろの段落は、前の節",
+                dict(back=[_p("ack_head", "謝辞"), _p("body", "先の謝辞の本文。"), _p("body", "後の謝辞の本文。"), _p("ref_head", "引用文献"),
+                           _REF])),
+    # 注の見出しが 2 つ: 注の一覧が 2 つに分かれているなら後ろの「注」を消す。そうでなければ 1 つだけを「注見出し」、ほかを「注本文」に
+    "fn_two_lists": ("K1_fn_style2", "注の一覧が 2 つに分かれているなら、後ろの見出し",
+                     dict(body=[_p("fn_head", "注"), _FN1, _p("body", "2) 二つ目の注。")])),
+    "fn_one_heading": ("K1_fn_text2_kept", "ほかの「注」（表の注の見出しなど）は「注本文」スタイル",
+                       dict(body=[_p("fn_head", "注"), _FN1, _p("fn_body", "注"), _p("body", "2) 二つ目の注。")])),
+    # 英文要旨の見出しが 2 つ: 要らない方の見出しを消す（後ろでも前でも）
+    "abstract_later": ("X_abstract_heading2", "要らない方の見出しの段落を消して",
+                       dict(en_after=[_p("abs", "Second abstract.")])),
+    "abstract_earlier": ("X_abstract_heading2", "要らない方の見出しの段落を消して",
+                         dict(en_heading=False, en_after=[_p("abs_head", "Abstract"), _p("abs", "Second abstract.")])),
+    # 所属・所属・著者（1 人の著者に所属が 2 つ）: テンプレートの著者表の、その著者の行の所属の欄に段落を分けて並べる
+    "aff_two_loose": ("K2_loose_aff_aff_author", "テンプレートの著者表を使い、その著者の行の所属の欄に段落を分けて並べて",
+                      dict(ja_rows=(("第一大学\n第二大学", "試験　六郎"),))),
+    "aff_trailing": ("K2_loose_trailing_aff", "テンプレートの著者表を使い、その著者の行の所属の欄に段落を分けて並べて",
+                     dict(ja_rows=(("第一大学\n第二大学", "試験　六郎"),))),
+    # 同じ所属を重ねて書いた: どちらかを消す
+    "aff_dup": ("K2_loose_dup_aff", "同じ所属を重ねて書いたのなら、どちらかの段落を消して",
+                dict(ja_rows=(), loose=(_p("aff_ja", "第一大学"), _NAME1, _p("aff_ja", "第一大学"), _NAME2))),
+    # 著者名の後ろに書いたほかの著者の所属（著者名・所属・所属・著者名）: その著者名の段落のすぐ前に移す
+    "aff_other_author": (dict(ja_rows=(), loose=(_NAME1, _p("aff_ja", "第一大学"), _p("aff_ja", "第二大学"), _NAME2)),
+                         "その著者名の段落のすぐ前に移して",
+                         dict(ja_rows=(), loose=(_p("aff_ja", "第一大学"), _NAME1, _p("aff_ja", "第二大学"), _NAME2))),
+    # 著者表: 著者名のない所属の行の所属を、その所属が付く著者の行の所属の欄に移す
+    "aff_table_row": ("K2_table_affonly_row_first", "その所属が付く著者の行の所属の欄に移し、段落を分けて並べて",
+                      dict(ja_rows=(("第一大学\n第二大学", "試験　六郎"),))),
+    "aff_table_last": ("K2_table_affonly_row_last", "ほかの著者の所属なら、その著者の行の所属の欄に移し",
+                       dict(ja_rows=(("第一大学\n第二大学", "試験　六郎"),))),
+    # 著者表の所属の行の著者名が表の外: 著者名をその行の著者名の欄に移す
+    "aff_table_name_outside": ("K2_table_then_loose_author", "その著者名をこの行の著者名の欄に移して",
+                               dict(ja_rows=(("第一大学", "試験　六郎"),))),
+}
+
+
+@pytest.mark.parametrize("name", list(ADVICE_FIXES))
+def test_advice_fixed_docx_passes(name, journal, meta, tmp_path):
+    """中止の文（report.structure_conflict_text）の Word での直し方どおりに直した docx は、中止せず、不変性チェックに合格し、要対応が
+    ない。間に別の後付けの節がある形（引用文献 → 注 → 参考文献、付記 → 引用文献 → 付記など）の文だけが「移して」と案内し、直した形
+    では後ろの文献・付記の本文などが前の節に入る（間の節に入らない）。"""
+    orig, phrase, fixed = ADVICE_FIXES[name]
+    path = conflict_doc(tmp_path, orig) if isinstance(orig, str) else mf.make_conflict(tmp_path / f"{name}_orig.docx", **orig)
+    _, plan, _ = _mechanical(path, journal)
+    assert plan.structure_conflicts, name
+    msg = structure_conflict_text(plan)
+    assert phrase in msg, (name, msg)
+    between = [c.between for c in plan.structure_conflicts if c.kind != "aff"]
+    assert ("移してから" in msg) == any(between), name
+    res = convert(mf.make_conflict(tmp_path / f"{name}_fixed.docx", **fixed), meta, journal,
+                  Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    p = res.plan
+    assert p.structure_conflicts == [] and res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid, name
+    assert not [a.key for a in actions(res) if a.level == NEEDS_ACTION], name
+    fn_paras = [[x.plain() for x in fn.paras] for fn in p.fns]
+    refs = [r.para.plain() for r in p.refs]
+    if name == "ref_between":
+        assert refs == [_REF_TEXT, _REF2_TEXT] and fn_paras == [["1) 注の本文である。"]]
+    if name == "notes_between":
+        assert [c.para.plain() for c in p.notes.children] == ["先の付記。", "後の付記。"] and refs == [_REF_TEXT]
+    if name == "ref_ref":
+        assert refs == [_REF_TEXT, _REF2_TEXT] and p.ref_heading.plain() == "引用文献"
+    if name == "fn_between":
+        assert fn_paras == [["1) 注の本文である。"], ["2) 二つ目の注。"]] and refs == [_REF_TEXT]
+    if name in ("ack_ack", "ack_between"):
+        assert [c.para.plain() for c in p.ack.children] == ["先の謝辞の本文。", "後の謝辞の本文。"]
+    if name in ("fn_two_lists", "fn_one_heading"):
+        assert [fn.number for fn in p.fns] == [1, 2] and p.fn_heading.plain() == "注"
+    if name in ("abstract_later", "abstract_earlier"):
+        assert [x.plain() for x in p.abstract] == ["Small article abstract.", "Second abstract."]
+    if name.startswith("aff_"):
+        affs = [[x.ja.plain() for x in a.affs] for a in p.authors]
+        assert affs == {"aff_dup": [["第一大学"], ["第一大学"]], "aff_other_author": [["第一大学"], ["第二大学"]],
+                        "aff_table_name_outside": [["第一大学"]]}.get(name, [["第一大学", "第二大学"]]), name
+
+
+def test_advice_delete_only_misplaces_paragraphs_between_sections(journal, meta, tmp_path):
+    """間に別の後付けの節がある形で、案内の「移して」をせずに後ろの見出しを消すだけだと、後ろの文献・付記の本文が間の節に入る
+    （不変性チェックは合格し、知らせもない。だから中止の文は、先に後ろの節の段落を前の節の最後に移すよう案内する）。"""
+    res = convert(mf.make_conflict(tmp_path / "ref.docx", back=[_p("ref_head", "引用文献"), _REF, _p("fn_head", "注"), _FN1, _REF2]),
+                  meta, journal, Options(out_dir=tmp_path / "a", convert_metafiles=False))
+    assert res.fidelity.ok and [r.para.plain() for r in res.plan.refs] == [_REF_TEXT]
+    assert [[x.plain() for x in fn.paras] for fn in res.plan.fns] == [["1) 注の本文である。", _REF2_TEXT]]     # 文献が注の続きになる
+    res = convert(mf.make_conflict(tmp_path / "notes.docx", back=[_p("notes_head", "付記"), _p("body", "先の付記。"),
+                                                                 _p("ref_head", "引用文献"), _REF, _p("body", "後の付記。")]),
+                  meta, journal, Options(out_dir=tmp_path / "b", convert_metafiles=False))
+    assert res.fidelity.ok and [c.para.plain() for c in res.plan.notes.children] == ["先の付記。"]
+    assert [r.para.plain() for r in res.plan.refs] == [_REF_TEXT, "後の付記。"]          # 付記の本文が引用文献の 2 件目になる

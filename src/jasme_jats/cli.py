@@ -8,7 +8,8 @@
 
 終了コード: 0 は要対応なし、1 は要対応あり（report.actions の「要対応」。一覧は標準エラーに出す。--meta がない・
 画像が足りない・手動モードで AI の回答をまだ指定していない、なども 1）、2 は変換を中止した（書誌情報の誤り、AI による補完が
-必要な原稿を --ai none で変換したとき、--images の画像を読めないとき。引数の誤り〈指定したファイル・フォルダがない、
+必要な原稿を --ai none で変換したとき、原稿の構造〈同じ種類の後付けの見出しが 2 つ・著者名の付かない所属。K1・K2〉を直す必要が
+あるとき、--images の画像を読めないとき。引数の誤り〈指定したファイル・フォルダがない、
 --ai manual でないのに --ai-response を指定した、など〉も argparse が 2 で止める）。
 """
 from __future__ import annotations
@@ -21,7 +22,7 @@ from pathlib import Path
 from .ai_assist import API_KEY_NAMES, DEFAULT_MODEL
 from .colab import step_text
 from .config import ArticleMeta, JournalConfig
-from .pipeline import AIRequiredError, Options, add_images, convert
+from .pipeline import AIRequiredError, Options, StructureConflictError, add_images, convert
 from .report import actions, images_to_prepare, pdf_summary, upload_issues
 
 
@@ -90,7 +91,7 @@ def main(argv=None):
                    pdf_path=a.pdf, route=a.route, convert_metafiles=not a.no_metafile_conversion)
     try:
         res = convert(a.docx, meta, journal, opts)
-    except AIRequiredError as e:
+    except (AIRequiredError, StructureConflictError) as e:
         print(step_text(str(e), "cli"), file=sys.stderr)       # 画面の操作の目印をコマンドラインの指定に置き換える
         return 2
     fid = res.fidelity

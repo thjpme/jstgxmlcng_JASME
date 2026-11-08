@@ -1708,3 +1708,141 @@ def test_set_role_abstract_fixes_missing_abstract(journal, meta, tmp_path):
     assert "abstract_missing" not in [a.key for a in actions(res)] and "excluded_unsure" not in [a.key for a in actions(res)]
     root = etree.fromstring(res.xml_path.read_bytes().split(b"\n", 2)[2])
     assert [_text(p) for p in root.findall(".//trans-abstract/p")] == ["First abstract.", "Second abstract."]
+
+
+# ----------------------------------------------------------------------------- 構造の衝突と AI（u6-k1k2）
+def test_conflict_in_original_docx_stops_before_ai(journal, meta, tmp_path):
+    """元の docx に K1 の形（本文スタイルの「注」が 2 つで、注の見出しが 2 つになる）があるときは、AI の回答を反映する前に
+    StructureConflictError で中止する。2 つ目の「注」に p を指定する回答（AI が直せる形）でも、元の docx で止めて Word で直してもらう
+    （手動モードでも AI依頼文.txt を書かない。API の費用もかけない）。"""
+    from test_structure import conflict_doc
+
+    from jasme_jats.pipeline import StructureConflictError, _mechanical
+    path = conflict_doc(tmp_path, "K1_fn_text2_kept")
+    _, plan, _ = _mechanical(path, journal)
+    second = [s for s, p in plan.paras.items() if p.plain() == "注"][1]
+    out = tmp_path / "out"
+    with pytest.raises(StructureConflictError) as e:
+        _manual(path, [_set_role(second, "p")], meta, journal, out)
+    assert e.value.conflicts and not (out / "AI依頼文.txt").exists() and list(out.iterdir()) == []
+
+
+def _src_of(plan, text):
+    [src] = [s for s, p in plan.paras.items() if p.plain() == text]
+    return src
+
+
+def _p(style, t):
+    return mf.para(mf.S[style], t)
+
+
+_K2_AUTHORS = dict(ja_rows=(), loose=(_p("aff_ja", "第一大学"), _p("author_ja", "試験　六郎"), _p("aff_ja", "第二大学"),
+                                      _p("author_ja", "架空　花子")))
+# 名前 -> (make_fixtures.make_conflict の引数, set_role する段落の文字, 役割)。元の docx には構造の衝突がなく、この set_role で組み直すと
+# 衝突ができる（引用文献の 2 件目の段落を引用文献の見出しに、本文の段落を謝辞の見出しに、所属・著者・所属・著者の著者 1 を除外・題目・副題に）
+CONFLICT_ROLE_CASES = {
+    "ref_heading_on_ref": (dict(back=[_p("ref_head", "引用文献"), _p("ref", "試験六郎（2024）．『本』．架空社．"), _p("ref", "参考文献"),
+                                      _p("ref", "架空花子（2020）．『本』．架空社．")]), "参考文献", "ref_heading"),
+    "ack_heading_on_body": (dict(body=[_p("body", "謝辞"), _p("body", "先の謝辞の本文。"), _p("body", "お礼"),
+                                       _p("body", "後の謝辞の本文。")]), "お礼", "ack_heading"),
+    "author_exclude": (_K2_AUTHORS, "試験　六郎", "exclude"),
+    "author_title": (_K2_AUTHORS, "試験　六郎", "title"),
+    "author_subtitle": (_K2_AUTHORS, "試験　六郎", "subtitle"),
+}
+
+
+@pytest.mark.parametrize("name", list(CONFLICT_ROLE_CASES))
+def test_set_role_that_makes_conflict_is_rejected(name, journal, meta, tmp_path):
+    """AI の set_role で組み直すと構造の衝突（同じ種類の後付けの見出しが 2 つ・著者名に付かない所属。K1・K2）ができるときは、中止せず、
+    その set_role を不採用（2 章。CONFLICT_ROLE_WHY）にして組み直す。不変性チェックは合格し、衝突は残らない。"""
+    kw, text, role = CONFLICT_ROLE_CASES[name]
+    path = mf.make_conflict(tmp_path / f"{name}.docx", **kw)
+    _, plan, _ = _mechanical(path, journal)
+    src = _src_of(plan, text)
+    assert plan.structure_conflicts == [] and _mechanical(path, journal, {src: role})[1].structure_conflicts
+    res = _manual(path, [_set_role(src, role)], meta, journal, tmp_path / "out")
+    assert [(op["src"], op["role"], why) for op, why in res.ai.rejected] == [(src, role, pipeline.CONFLICT_ROLE_WHY)], name
+    assert not [op for op, _ in res.ai.accepted if op["op"] == "set_role"], name
+    assert res.plan.structure_conflicts == [] and res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid, name
+    assert pipeline.CONFLICT_ROLE_WHY in res.report_path.read_text(encoding="utf-8")       # 2 章の不採用の一覧
+    assert "set_role" not in pipeline.CONFLICT_ROLE_WHY
+
+
+def _count_mechanical(monkeypatch):
+    """pipeline._mechanical の呼び出しごとの AI の役割の指定（overrides）を記録する（組み直しの回数と、使った指定を確かめる）。"""
+    calls, orig = [], pipeline._mechanical
+
+    def wrapped(docx_path, journal, overrides=None, placements=None):
+        calls.append(dict(overrides or {}))
+        return orig(docx_path, journal, overrides, placements)
+    monkeypatch.setattr(pipeline, "_mechanical", wrapped)
+    return calls
+
+
+@pytest.mark.parametrize("role", ["exclude", "title", "subtitle"])
+def test_conflict_range_keeps_other_set_roles(role, journal, meta, tmp_path, monkeypatch):
+    """AI の set_role で衝突ができたとき、1 段目は衝突の範囲（落ちる所属から次の所属まで。前付けの中）の段落への set_role だけを
+    不採用にして組み直す: 本文の見出しへの set_role は採用されたまま、著者 1 への set_role だけが不採用（組み立ては 3 回: 機械的な
+    組み立て・回答を反映・1 段目）。同じ段落への set_role を 2 つ書いた回答では、両方とも不採用になる。"""
+    path = mf.make_conflict(tmp_path / "k2.docx", **_K2_AUTHORS)
+    _, plan, _ = _mechanical(path, journal)
+    author, head = _src_of(plan, "試験　六郎"), _src_of(plan, "１．はじめに")
+    calls = _count_mechanical(monkeypatch)
+    res = _manual(path, [_set_role(author, role), _set_role(head, "sec2")], meta, journal, tmp_path / "a")
+    assert [(op["src"], why) for op, why in res.ai.rejected] == [(author, pipeline.CONFLICT_ROLE_WHY)]
+    assert [op["src"] for op, _ in res.ai.accepted if op["op"] == "set_role"] == [head]
+    assert calls == [{}, {author: role, head: "sec2"}, {head: "sec2"}]
+    assert res.plan.structure_conflicts == [] and res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    assert [x for x in res.plan.decisions if x.stage == "ai" and x.src == head]           # 本文の見出しの指定は判断の一覧に残る
+    assert [[x.ja.plain() for x in a.affs] for a in res.plan.authors] == [["第一大学"], ["第二大学"]]   # 著者 1 は元のまま
+    # 同じ段落への set_role が 2 つ（後ろの指定が使われる）: 両方とも不採用（2 章に 2 件）
+    calls.clear()
+    res = _manual(path, [_set_role(author, role), _set_role(author, "exclude")], meta, journal, tmp_path / "b")
+    assert [(op["src"], op["role"], why) for op, why in res.ai.rejected] == [
+        (author, role, pipeline.CONFLICT_ROLE_WHY), (author, "exclude", pipeline.CONFLICT_ROLE_WHY)]
+    assert not res.ai.accepted and calls == [{}, {author: "exclude"}, {}]
+    assert res.plan.structure_conflicts == [] and res.fidelity.ok
+
+
+def test_conflict_outside_range_rejects_all_set_roles(journal, meta, tmp_path, monkeypatch):
+    """衝突の範囲の中に AI の指定がない衝突（範囲の外の set_role だけでできた衝突）では、1 段目を飛ばし、2 段目で set_role をすべて
+    不採用にして組み直す。形: 本文スタイルの「注」が 2 つ続いた後ろに章見出しがあるので、機械的には先の「注」から章見出しの前までを
+    本文に戻す（K5）。AI がその章見出しを本文の段落（p）にすると、本文に戻さなくなり、注の見出しが 2 つになる（衝突の範囲は 2 つの
+    「注」の間で、章見出しは範囲の外）。本文の見出しへの別の set_role も不採用になる。"""
+    from jasme_jats.structure import conflict_overrides
+    path = mf.make_conflict(tmp_path / "k5.docx", body=[_p("body", "注"), _p("body", "1) 注の本文である。"), _p("body", "注"),
+                                                       _p("body", "2) 二つ目の注。"), _p("sec1", "２．続き"),
+                                                       _p("body", "本文の続きである。")])
+    _, plan, _ = _mechanical(path, journal)
+    chapter, head = _src_of(plan, "２．続き"), _src_of(plan, "１．はじめに")
+    assert plan.structure_conflicts == [] and [k for _, k, _ in plan.fn_guess_checks] == ["returned"]
+    _, plan_p, _ = _mechanical(path, journal, {chapter: "p", head: "sec1"})
+    [c] = plan_p.structure_conflicts
+    assert c.kind == "fn_heading" and conflict_overrides(plan_p, {chapter: "p", head: "sec1"}) == set()
+    calls = _count_mechanical(monkeypatch)
+    res = _manual(path, [_set_role(chapter, "p"), _set_role(head, "sec1")], meta, journal, tmp_path / "out")
+    assert [(op["src"], why) for op, why in res.ai.rejected] == [(chapter, pipeline.CONFLICT_ROLE_WHY),
+                                                                 (head, pipeline.CONFLICT_ROLE_WHY)]
+    assert calls == [{}, {chapter: "p", head: "sec1"}, {}]       # 1 段目の組み直しはない
+    assert not res.ai.accepted and res.plan.structure_conflicts == [] and res.fidelity.ok and res.fidelity.final_ok
+
+
+def test_conflict_overrides_range(journal, tmp_path):
+    """conflict_overrides: 範囲は落ちる段落と置き換えた段落の間（docx の順）。著者名の続かない最後の所属は、和文の冒頭（所属・著者表・
+    AI が除外した段落を含む）が続くところまでで、本文・後付けへの指定は範囲に入れない。範囲の中に指定がなければ空。"""
+    from test_structure import conflict_doc
+
+    from jasme_jats.structure import conflict_overrides
+    for name, inside, outside in (
+            ("K1_ref_ref", ["引用文献", "試験六郎（2024）．「小さな論文」．『架空誌』，第5巻，pp.9-10．", "参考文献"],
+             ["１．はじめに", "架空花子（2020）．『本』．架空社．"]),
+            ("K2_loose_aff_aff_author", ["第一大学", "第二大学"], ["試験　六郎", "１．はじめに"]),
+            ("K2_loose_trailing_aff", ["第二大学"], ["第一大学", "試験　六郎", "１．はじめに", "引用文献"]),
+            ("K2_table_then_loose_author", ["第一大学", "試験　六郎"], ["検証用の論文", "１．はじめに"])):
+        _, plan, _ = _mechanical(conflict_doc(tmp_path, name), journal)
+        every = {s: "p" for s in plan.paras}
+        got = conflict_overrides(plan, every)
+        assert {_src_of(plan, t) for t in inside} <= got, name
+        assert not {_src_of(plan, t) for t in outside} & got, name
+        assert all(plan.region.get(s) in ("front_ja", "authors", "excluded") for s in got) or not name.startswith("K2"), name
+        assert conflict_overrides(plan, {s: r for s, r in every.items() if s not in got}) == set(), name

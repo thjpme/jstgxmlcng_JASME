@@ -181,6 +181,20 @@ class BoxInfo:
 
 
 @dataclass
+class StructureConflict:
+    """そのまま組み立てると段落の文字が XML にも除外の記録にも入らなくなる構造（docs/REVIEW_2026-11.md の K1・K2）。
+
+    structure.Classifier が組み立ての途中で記録し、pipeline.convert が組み立ての直後に StructureConflictError で中止する。
+    """
+    kind: str                 # "ref_heading" / "fn_heading" / "notes" / "ack" / "abstract_heading" / "aff"
+    lost: list                # 出力も除外もされなくなる段落 ID（空白だけの段落を除く。先頭は前の見出し・所属）
+    by: str = ""              # 置き換えた段落 ID（後ろの見出し・次の所属）。著者名が続かないまま残った所属なら ""
+    where: str = ""           # aff のとき "loose"（段落）か "table"（著者表）
+    by_text: tuple = (False, False)   # 見出しのとき、(前の見出し, 後の見出し) が文字からの推定（back_heading_by_text）か
+    between: bool = False     # 前の見出しの節と後ろの見出しの間に、別の種類の後付けの段落があるか（直し方の文を変える）
+
+
+@dataclass
 class ArticlePlan:
     lang: str = "ja"
     title: list = field(default_factory=list)
@@ -246,6 +260,9 @@ class ArticlePlan:
     float_unlinked: list = field(default_factory=list)
     # 文字だけのテキストボックスの ID -> BoxInfo（Classifier.place_boxes が扱ったもの。空白だけのものも。出現順）
     textboxes: dict = field(default_factory=dict)
+    # そのまま組み立てると段落の文字が出力にも除外にも入らなくなる構造（StructureConflict。同じ種類の後付けの見出し・英文要旨の見出しが
+    # 2 つ、著者名の付かない所属。K1・K2）。あれば pipeline.convert が StructureConflictError で変換を中止する
+    structure_conflicts: list = field(default_factory=list)
 
     @property
     def unplaced_floats(self) -> list:

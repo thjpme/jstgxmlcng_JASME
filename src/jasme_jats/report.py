@@ -647,6 +647,116 @@ def step(name: str) -> str:
     return STEP_MARK + "step:" + name + STEP_MARK
 
 
+# ---------------------------------------------------------------------------- 構造の衝突で変換を中止するときの文（K1・K2）
+# report.actions の知らせではなく、pipeline.StructureConflictError の文（AIRequiredError と同じ例外の表示）。画面の操作は目印 step() で書く。
+# 抜粋・段落 ID・Word での直し方を、衝突（article.StructureConflict）ごとに 1 行で書く。直し方は Word のスタイル名（jasme.toml の名前）と
+# Word での操作（段落を消す・移す、スタイルを変える、著者表の欄に並べる）で書き、変換ツールの内部の名前は書かない。
+CONFLICT_HEADING_JA = {"ref_heading": "引用文献", "fn_heading": "注", "notes": "付記", "ack": "謝辞"}
+CONFLICT_PARAS_JA = {"ref_heading": "文献", "fn_heading": "注", "notes": "付記の本文", "ack": "謝辞の本文"}  # 後ろの節の段落の言い方
+# 所属の衝突の文の共通の部分（どの著者名に付くかの規則と、直し方）
+AFF_LOOSE_RULE = "所属の段落は、その後ろの著者名（次の所属の段落の手前まで）に付けて出力するので"
+AFF_TABLE_RULE = "著者表の所属は、同じ行と、次の所属の行の手前までの行の著者名に付けて出力するので"
+AFF_LOOSE_FIX = ("ほかの著者の所属なら、その著者名の段落のすぐ前に移してください。1 人の著者に所属が 2 つ以上あるときは、テンプレートの"
+                 "著者表を使い、その著者の行の所属の欄に段落を分けて並べてください。")
+
+
+def _sample(plan, src) -> str:
+    """段落 1 つの例（d12「文字の冒頭」。文字のない段落は d12（文字なし））。"""
+    p = plan.paras.get(src)
+    return _para_samples([(src, p.text_only() if p is not None else "")])
+
+
+def _conflict_fix(c, prev: str) -> str:
+    """見出し・節の衝突（ref_heading・fn_heading・notes・ack）の Word での直し方。prev: 前の節の言い方（「前の見出し d13 の節」など）。
+
+    前の節と後ろの見出しの間に別の種類の後付けの節があるとき（c.between）は、後ろの見出しを消すだけでは、後ろの節の段落が間の節に
+    入る（引用文献 → 注 → 参考文献で「参考文献」だけを消すと、後ろの文献が注の続きになる）ので、先に後ろの節の段落を前の節の最後に
+    移してもらう。"""
+    if not c.between:
+        return f"後ろの見出し {c.by} の段落を消してください（その後ろの段落は、{prev}に続きます）。"
+    return (f"後ろの見出し {c.by} の節の段落（{CONFLICT_PARAS_JA[c.kind]}）を{prev}の最後に移してから、後ろの見出し {c.by} の"
+            "段落を消してください（間にほかの後付けの節があるので、見出しを消すだけでは、後ろの節の段落が間の節に入ってしまいます）。")
+
+
+def _aff_line(plan, c, ids) -> str:
+    """所属の衝突（aff）の 1 行。"""
+    row = _para_samples([(s, plan.paras[s].text_only() if s in plan.paras else "") for s in c.lost])
+    if c.where == "loose" and c.by:
+        same = plan.paras[c.by].text_only().strip() == plan.paras[c.lost[-1]].text_only().strip()
+        nxt = "同じ文字の" if same else "次の"
+        fix = ("同じ所属を重ねて書いたのなら、どちらかの段落を消してください。" + AFF_LOOSE_FIX if same
+               else AFF_LOOSE_FIX + "要らない所属なら消してください。")
+        return (f"・所属の段落 {row}の後ろに、著者名がないまま{nxt}所属の段落 {_sample(plan, c.by)}が続いています。"
+                f"{AFF_LOOSE_RULE}、{ids} が XML に入りません。{fix}")
+    if c.where == "loose":
+        return (f"・最後の所属の段落 {row}の後ろに著者名がありません。{AFF_LOOSE_RULE}、{ids} が XML に入りません。"
+                f"{AFF_LOOSE_FIX}要らない所属なら消してください。")
+    if c.by:
+        return (f"・著者表の、所属 {row}の行に著者名がなく、次の所属の行 {_sample(plan, c.by)}が続いています。{AFF_TABLE_RULE}、"
+                f"{ids} が XML に入りません。その所属が付く著者の行の所属の欄に移し、段落を分けて並べてください。"
+                "要らなければ行を消してください。")
+    return (f"・著者表の最後の所属の行 {row}に著者名がありません。{AFF_TABLE_RULE}、{ids} が XML に入りません。著者名が表の外に"
+            "あるなら、その著者名をこの行の著者名の欄に移してください。ほかの著者の所属なら、その著者の行の所属の欄に移し、"
+            "段落を分けて並べてください。要らなければ行を消してください。")
+
+
+def _conflict_line(plan, c) -> str:
+    """衝突 c の 1 行（「・」で始まる）。"""
+    ids = "、".join(c.lost)
+    first = c.lost[0]
+    if c.kind == "aff":
+        return _aff_line(plan, c, ids)
+    before, after = _sample(plan, first), _sample(plan, c.by)
+    if c.kind == "abstract_heading":
+        return (f"・英文要旨の見出しが 2 つあります（前 {before}、後 {after}）。XML の英文要旨の見出しは 1 つだけなので、{first} が "
+                "XML に入りません。要らない方の見出しの段落を消してください（見出しの後ろの段落は、英文要旨の段落として続きます）。"
+                "見出しでない段落が英文要旨の見出しのスタイル（「英文要旨見出し」など）になっているなら、その段落のスタイルを"
+                "「英文要旨」にしてください。")
+    name = CONFLICT_HEADING_JA[c.kind]
+    if c.kind in ("notes", "ack"):
+        # lost は前の節の、空白だけの段落を除くすべて（先頭はふつう前の見出し）
+        k = len(c.lost)
+        span = f"{c.lost[0]}〜{c.lost[-1]}" if k > 1 else c.lost[0]
+        return (f"・{name}の節が 2 つあります（前の節 {before}から {k} 段落、後ろの見出し {after}）。XML の{name}は 1 つだけなので、"
+                f"前の節の {k} 段落（{span}）が XML に入りません。1 つの節にまとめてください。"
+                + _conflict_fix(c, f"前の節（{span}）"))
+    fix = _conflict_fix(c, f"前の見出し {first} の節")
+    if c.kind == "fn_heading":
+        kinds = ["本文などのスタイル。文字から注の見出しと推定" if t else "「注見出し」のスタイル" for t in c.by_text]
+        return (f"・注の見出しが 2 つあります（前 {before}〈{kinds[0]}〉、後 {after}〈{kinds[1]}〉）。注の一覧の見出しは 1 つだけなので、"
+                f"{first} が XML に入りません。注の節の見出しにする「注」1 つだけを「注見出し」スタイルにし、ほかの「注」（表の注の"
+                "見出しなど）は「注本文」スタイルにしてください（本文・標準・章見出しのスタイルの「注」だけの段落は、文字から注の見出しと"
+                f"推定されます）。注の一覧が 2 つに分かれているなら、{fix}")
+    guessed = [src for src, t in ((first, c.by_text[0]), (c.by, c.by_text[1])) if t]
+    guess = ""      # 文字から推定した引用文献の見出しなら、見出しでないときの直し方を添える
+    if guessed:
+        srcs = "・".join(guessed)
+        guess = (f"{srcs} は「参考文献見出し」のスタイルではありませんが、文字から引用文献の見出しと推定しました。見出しでなければ、"
+                 "スタイルを「参考文献」などにしてください。")
+    return (f"・引用文献の見出しが 2 つあります（前 {before}、後 {after}）。XML の引用文献の見出しは 1 つだけなので、{first} が "
+            f"XML に入りません。{fix}文献の順はそのままでかまいません。{guess}")
+
+
+def structure_conflict_text(plan) -> str:
+    """原稿の構造の衝突（plan.structure_conflicts）で変換を中止するときの文（pipeline.StructureConflictError の文）。
+
+    衝突ごとに、段落 ID・抜粋・Word での直し方を 1 行で書く（すべて挙げる）。Markdown ではない。画面の操作は目印 step() で書く。
+    """
+    cs = plan.structure_conflicts
+    docx = step("docx")
+    head = (f"この原稿には、そのまま変換すると段落の文字が XML に入らなくなる箇所が {len(cs)} か所あるため、変換を中止しました"
+            "（XML とレポートは作っていません）。docx の文字を 1 文字も変えずに XML にするため、どちらの段落を残すか・どこに"
+            f"まとめるかを変換ツールは決めません。Word で次のように直して保存し、{docx}からやり直してください。")
+    lines = [_conflict_line(plan, c) for c in cs]
+    if any(c.kind == "fn_heading" for c in cs):
+        used = {s for c in cs for s in c.lost + [c.by]}
+        others = [(s, plan.paras[s].text_only()) for s in plan.fn_guess_notes if s in plan.paras and s not in used]
+        if others:
+            lines.append(f"・ほかに、文字から注の見出しと推定される「注」だけの段落 {_para_samples(others)}があります。すべての「注」の"
+                         "扱いを一緒に決めてから変換し直してください。")
+    return head + "\n" + "\n".join(lines)
+
+
 @dataclass
 class Action:
     """利用者に知らせる 1 件（要対応か要確認）。文面の欄が空なら、そこには出さない。
@@ -1626,18 +1736,20 @@ def _fn_guess_span_clause(r, checks) -> str:
 def _fn_guess_multi_clause(r) -> str:
     """文字から注の見出しと推定される「注」の段落が 2 つ以上あるときの助言の注意（要確認 fn_guess の助言に添える。plan.fn_guess_notes）。
 
-    「注見出し」の段落は 1 つしか持てず、ほかの「注」が文字から推定されると先の見出しが出力されない（要対応で止まる。docs/REVIEW_2026-11.md の
-    K1）ので、「注」を 1 つだけ直して変換し直さずに、すべての「注」の扱いを決めてから変換し直してもらう。「注」が 1 つ以下なら空文字。
+    「注見出し」の段落は 1 つしか持てず、ほかの「注」が文字から推定されると先の見出しが出力されない（変換が中止される。
+    StructureConflictError。docs/REVIEW_2026-11.md の K1）ので、「注」を 1 つだけ直して変換し直さずに、すべての「注」の扱いを決めて
+    から変換し直してもらう。「注」が 1 つ以下なら空文字。
     """
     plan = r.plan
     notes = [s for s in plan.fn_guess_notes if s in plan.paras]
     if len(notes) < 2:
         return ""
     listed = _para_samples([(s, plan.paras[s].text_only()) for s in notes])
-    return (f"文字から注の見出しと推定される「注」だけの段落が {len(notes)} 件あります（{listed}）。「注見出し」にするのは注の節の「注」"
+    return (f"文字から注の見出しと推定される「注」だけの段落が {len(notes)} 件あります（4 章の件数のほか、その範囲の中の「注」も"
+            f"数えています。{listed}）。「注見出し」にするのは注の節の「注」"
             "1 つだけにし、ほかの「注」（表の注の見出しなど）は「注本文」スタイルにするなど、すべての「注」の扱いを決めてから"
             "変換し直してください（「注」を 1 つずつ直しては変換し直すと、「注見出し」の「注」が 2 つ以上になったり、文字から注の見出しと"
-            "推定される「注」が残ったりして、要対応で止まることがあります）。")
+            "推定される「注」が残ったりして、変換が中止されることがあります（注の見出しが 2 つになるため））。")
 
 
 def _fn_guess_action(r):

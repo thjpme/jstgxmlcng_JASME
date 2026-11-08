@@ -463,3 +463,42 @@ def test_report_details_shows_angle_brackets(journal, meta, tmp_path):
             rep = r.report_path.read_text(encoding="utf-8")
             assert markdown_text_only(rep) == markdown.markdown(rep, extensions=["tables", "fenced_code"]), (docx.name, mode)
     assert checked >= 15
+
+
+def test_structure_conflict_box_and_text(journal, tmp_path):
+    """原稿の構造の衝突（K1・K2）で変換を中止するときの枠（赤）と文: 3 つの画面（ノートブック・1 画面版・コマンドライン）で画面の操作の
+    目印が語に置き換わって残らない。すべての衝突の段落 ID と抜粋が文にあり、種類ごとの直し方（注見出し・注本文、所属の欄、
+    間に別の節があるときだけ「移して」）が書かれる。"""
+    from test_structure import CONFLICT_DOCS, CONFLICT_KINDS, conflict_doc
+
+    from jasme_jats.colab import structure_conflict_box
+    from jasme_jats.pipeline import _mechanical
+    from jasme_jats.report import structure_conflict_text
+    for name in CONFLICT_DOCS:
+        _, plan, _ = _mechanical(conflict_doc(tmp_path, name), journal)
+        msg = structure_conflict_text(plan)
+        assert "変換を中止しました" in msg and f"箇所が {len(plan.structure_conflicts)} か所ある" in msg
+        for c in plan.structure_conflicts:
+            for src in [c.lost[0]] + ([c.by] if c.by else []):          # 節は最初の段落と置き換えた見出しの抜粋、最後の段落の ID
+                text = plan.paras[src].text_only().strip()
+                assert f"{src}「{text}」" in msg, (name, src)
+            assert c.lost[-1] in msg
+        for screen, word in (("notebook", "手順 2 から"), ("app", "「docx（論文の Word ファイル）」の欄から"),
+                             ("cli", "docx の指定から")):
+            box = structure_conflict_box(msg, screen)
+            assert "#dc2626" in box and "原稿の構造を直す必要があります（変換を中止しました）" in box, (name, screen)
+            assert word in box and "\x00" not in box and "step:" not in box, (name, screen)
+        kind = CONFLICT_KINDS[name]
+        body = msg.split("\n", 1)[1]
+        if kind[0] == "fn_heading":
+            assert "「注見出し」スタイルにし" in body and "「注本文」スタイル" in body
+        if kind[0] == "aff":
+            if kind[3] == "table":
+                assert "所属の欄" in body
+            elif kind[2]:
+                assert "所属の欄" in body and "テンプレートの著者表" in body
+            else:
+                assert "最後の所属の段落" in body and "著者名の段落のすぐ前に移して" in body and "テンプレートの著者表" in body
+        if kind[0] in ("ref_heading", "fn_heading", "notes", "ack"):
+            assert ("移して" in body) == kind[5], name        # 間に別の節があるときだけ「移して」
+        assert "set_role" not in msg and "不具合" not in msg
