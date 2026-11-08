@@ -119,9 +119,11 @@ class Emitter:
         return el
 
     @staticmethod
-    def gen(parent, text, kind):
+    def gen(parent, text, kind, src=None):
         el = etree.SubElement(parent, GEN)
         el.set("kind", kind)
+        if src is not None:
+            el.set("src", src)
         el.text = text
         return el
 

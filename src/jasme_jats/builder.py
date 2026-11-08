@@ -44,6 +44,10 @@ TABLE_HEAD_SPAN_MSG = ("{where}: 見出し行から本文の行へ続く縦の�
                        "出力しました。文字は落としていません）。")
 TABLE_SPAN_MISMATCH_MSG = ("{where}の {row} 行目: 縦に結合したセルの幅（横に結合した列の数）が上の行のセルと違うため、結合せずに"
                            "別のセルとして出力しました。Word で表の結合を確かめてください。")
+# 題目・副題・著者名・所属の段落に Word の自動番号があるときの 10 章の警告（番号は XML に出さない。J-STAGE の書誌に入らないように）
+UNSHOWN_NUMBERS_MSG = ("題目・著者名・所属の段落に、Word の自動番号があります（{items}）。J-STAGE の書誌に番号が入らないよう、XML には番号を"
+                       "出していません（Word の表示と違います）。番号が題目・著者名・所属の一部なら、Word で番号を文字として打ち込んでから"
+                       "変換し直してください。番号が要らなければ、このままでかまいません。")
 
 
 @dataclass
@@ -59,6 +63,9 @@ class BuildInfo:
     unsplit_names: list = field(default_factory=list)
     # 出力した表 [(<table> の要素, model.Table, Word で探す手がかり)]。pipeline.table_problems が出力した表の形を確かめるのに使う
     tables: list = field(default_factory=list)
+    # 番号を XML に出さなかった題目・副題・著者名・所属の段落 [(段落 ID, 番号, 場所の名前, 段落の文字の冒頭 20 字)]
+    # （10 章の警告。pipeline.lost_autonums は飛ばす）
+    unshown_numbers: list = field(default_factory=list)
 
 
 def _overlaps(owner, col, span) -> bool:
@@ -104,6 +111,29 @@ class Builder:
         """段落の Word の自動番号（ルート2 では、全角・半角と字形を出版版 PDF に合わせたもの）。"""
         return self.plan.pdf_numbers.get(("auto", p.src), p.autonum)
 
+    def autonum_mark(self, parent, p) -> None:
+        """段落 p の Word の自動番号を、生成した文字（jx:gen kind autonum、src は p.src）として parent の今の末尾に補う
+        （段落の jx:span の直前に呼ぶ）。番号と本文の区切りは、docx の文字が空白で始まるか、番号が全角の文字で終われば補わず、
+        そうでなければ半角の空白 1 つ。"""
+        if not p.autonum:
+            return
+        mark = self.autonum(p).strip()
+        if mark:
+            sep = "" if _starts_with_space(p) or unicodedata.east_asian_width(mark[-1]) in ("F", "W") else " "
+            self.em.gen(parent, mark + sep, "autonum", p.src)
+
+    def heading_title(self, parent, p):
+        """後付け（付記・謝辞・注・引用文献・資料）と英文要旨の見出しの <title>。自動番号は <title> の先頭に生成文字で補う。"""
+        t = _sub(parent, "title")
+        self.autonum_mark(t, p)
+        self.em.span(t, p, E.SECTITLE)
+        return t
+
+    def unshown_number(self, p, what) -> None:
+        """題目・副題・著者名・所属の段落の自動番号は XML に出さず、記録する（10 章の警告。守り lost_autonums は飛ばす）。"""
+        if (p.autonum or "").strip():
+            self.info.unshown_numbers.append((p.src, self.autonum(p).strip(), what, p.text_only().strip()[:20]))
+
     # ------------------------------------------------------------------ 画像
     def name_image(self, img) -> str:
         if id(img) in self._named:
@@ -140,7 +170,15 @@ class Builder:
             root.append(back)
         self.em_warnings()
         self.newline_warnings()
+        self.unshown_warnings()
         return root
+
+    def unshown_warnings(self):
+        """番号を出さなかった題目・副題・著者名・所属の段落があれば、10 章の警告を 1 行足す。"""
+        if not self.info.unshown_numbers:
+            return
+        items = "、".join(f"{src}「{head}」（{what}）の「{num}」" for src, num, what, head in self.info.unshown_numbers)
+        self.info.warnings.append(UNSHOWN_NUMBERS_MSG.format(items=items))
 
     def em_warnings(self):
         for w in sorted(set(self.em.math_warnings)):
@@ -311,8 +349,7 @@ class Builder:
             else:
                 ab = _lang(_sub(am, "trans-abstract"), lang_abs)
             if plan.abstract_heading:
-                t = _sub(ab, "title")
-                self.em.span(t, plan.abstract_heading, E.SECTITLE)
+                self.heading_title(ab, plan.abstract_heading)
             for p in plan.abstract:
                 self.paragraph_or_formula(ab, p, E.ABSTRACT)
             n = sum(len("".join(pe.itertext())) for pe in ab.findall("p"))
@@ -343,21 +380,21 @@ class Builder:
             main, main_sub, other, other_sub, other_lang = plan.title, plan.subtitle, plan.title_en, plan.subtitle_en, "en"
         tg = _sub(am, "title-group")
         at = _lang(_sub(tg, "article-title"), lang)
-        self.multi(at, main, E.TITLE)
+        self.multi(at, main, E.TITLE, "題目")
         if not main:
             self.info.warnings.append("題目（スタイル「題目（日）」）が見つからない")
         self.check_length(at, 2000, "題目")
         if main_sub:
             st = _lang(_sub(tg, "subtitle"), lang)
-            self.multi(st, main_sub, E.TITLE)
+            self.multi(st, main_sub, E.TITLE, "副題")
         if other:
             ttg = _lang(_sub(tg, "trans-title-group"), other_lang)
             tt = _sub(ttg, "trans-title")
-            self.multi(tt, other, E.TITLE)
+            self.multi(tt, other, E.TITLE, "翻訳題目")
             self.check_length(tt, 2000, "翻訳題目")
             if other_sub:
                 ts = _sub(ttg, "trans-subtitle")
-                self.multi(ts, other_sub, E.TITLE)
+                self.multi(ts, other_sub, E.TITLE, "翻訳副題")
         elif other_sub:
             self.info.warnings.append("副題（翻訳）があるが題目（翻訳）がない（J-STAGE ではエラーになる）")
 
@@ -366,8 +403,9 @@ class Builder:
         if n > limit:
             self.info.warnings.append(f"{what}が {n} 文字あり、J-STAGE の上限（{limit} 文字）を超えている")
 
-    def multi(self, parent, paras, ctx):
+    def multi(self, parent, paras, ctx, what):
         for p in paras:
+            self.unshown_number(p, what)
             self.em.span(parent, p, ctx)
 
     def contrib_group(self, am):
@@ -396,15 +434,18 @@ class Builder:
                 for lang, p in (("ja", aff.ja), ("en", aff.en)):
                     af = _lang(_sub(alt, "aff"), lang)
                     inst = _sub(af, "institution")
+                    self.unshown_number(p, "所属")
                     self.em.span(inst, p, E.AFF)
             else:
                 p = aff.ja if aff.ja is not None else aff.en
                 af = _lang(_sub(cg, "aff", id=aff.aid), "ja" if aff.ja is not None else "en")
                 inst = _sub(af, "institution")
+                self.unshown_number(p, "所属")
                 self.em.span(inst, p, E.AFF)
 
     def person_name(self, parent, p: Para, style, lang, split):
         """氏名を姓と名に分ける。分ける位置の空白だけを落とす（検証のため記録する）。"""
+        self.unshown_number(p, "著者名")
         nm = _lang(_sub(parent, "name", name_style=style), lang)
         text = p.plain()
         n = len(text)
@@ -477,6 +518,7 @@ class Builder:
                 dq = _sub(parent, "disp-quote")
                 for p in node.paras:
                     pe = _sub(dq, "p")
+                    self.autonum_mark(pe, p)
                     self.em.span(pe, p, E.BODY)
             elif isinstance(node, FigNode):
                 self.fig(parent, node)
@@ -503,7 +545,7 @@ class Builder:
         else:
             if h.autonum:
                 lab = _sub(s, "label")
-                self.em.gen(lab, self.autonum(h), "autonum")
+                self.em.gen(lab, self.autonum(h), "autonum", h.src)
             self.labelled(s, h, RE_HEAD_SPLIT, E.SECTITLE, title_tag="title", allow_label=not h.autonum)
         self.nodes(s, node.children)
 
@@ -538,19 +580,14 @@ class Builder:
                 sep_e = sep_s   # 空白以外（「：」など）は本体側に残す
         self.em.span(holder, p, ctx, start=sep_e, seq=seq)
 
-    def paragraph_or_formula(self, parent, p: Para, ctx, autonum_mark: bool = False):
-        """段落 p を <p> に書く。autonum_mark: 自動番号のある段落の番号を、生成した文字として <p> の先頭に補う。
+    def paragraph_or_formula(self, parent, p: Para, ctx):
+        """段落 p を <p> に書く。自動番号のある段落の番号は、生成した文字（jx:gen。docx の文字ではない）として <p> の先頭に補う。
 
-        自動番号のある段落が <p> になるのは、後付け（付記・謝辞・資料）の中の見出しの役割の段落だけ（箇条にしない。
-        structure.add_back_para）。<p> に <label> は置けないので、番号は注と同じく生成した文字（jx:gen。docx の文字ではない）で補う。
-        本文・英文要旨の <p> は変えない。
+        自動番号のある段落が <p> になるのは、箇条（ListNode）にしない段落だけ: 後付け（付記・謝辞・資料）の中の見出しの役割の段落
+        （structure.add_back_para）と、英文要旨の段落など。<p> に <label> は置けないので、番号は注と同じく生成した文字で補う。
         """
         pe = _sub(parent, "p")
-        if autonum_mark and p.autonum:
-            mark = self.autonum(p).strip()
-            if mark:
-                sep = "" if _starts_with_space(p) or unicodedata.east_asian_width(mark[-1]) in ("F", "W") else " "
-                self.em.gen(pe, mark + sep, "autonum")
+        self.autonum_mark(pe, p)
         self.em.span(pe, p, ctx)
 
     def list_node(self, parent, node: ListNode, ctx=E.BODY):
@@ -561,7 +598,7 @@ class Builder:
             li = _sub(lst, "list-item")
             if p.autonum:
                 lab = _sub(li, "label")
-                self.em.gen(lab, self.autonum(p), "autonum")
+                self.em.gen(lab, self.autonum(p), "autonum", p.src)
             pe = _sub(li, "p")
             self.em.span(pe, p, ctx)
 
@@ -570,14 +607,7 @@ class Builder:
         if node.fid:
             f.set("id", node.fid)
         if node.caption is not None:
-            cap_parent = f
-            m = RE_LABEL_SPLIT.match(node.caption.plain()) if self.split else None
-            if m and m.group(2):
-                self.labelled(f, node.caption, RE_LABEL_SPLIT, E.CAPTION, title_tag="caption", wrap_p=True)
-            else:
-                cap = _sub(cap_parent, "caption")
-                pe = _sub(cap, "p")
-                self.em.span(pe, node.caption, E.CAPTION)
+            self.caption(f, node.caption)
             self.caption_more(f, node.caption_more)
         graphics = 0
         for ip in node.image_paras:
@@ -613,6 +643,20 @@ class Builder:
         if graphics == 0 and not node.tables and node.caption is not None:
             self.info.warnings.append(f"{node.fid or '図'}: 画像が見つからないため <graphic> なしで出力")
 
+    def caption(self, holder, cap):
+        """図・表のキャプション。自動番号があれば、章見出しと同じく番号を <label> に出し、キャプションの文字は分けない
+        （split_labels にかかわらず）。なければ今までどおり（split_labels のとき「図1」を <label> に分ける）。"""
+        if cap.autonum and self.autonum(cap).strip():
+            self.em.gen(_sub(holder, "label"), self.autonum(cap), "autonum", cap.src)
+            self.labelled(holder, cap, RE_LABEL_SPLIT, E.CAPTION, title_tag="caption", allow_label=False, wrap_p=True)
+            return
+        m = RE_LABEL_SPLIT.match(cap.plain()) if self.split else None
+        if m and m.group(2):
+            self.labelled(holder, cap, RE_LABEL_SPLIT, E.CAPTION, title_tag="caption", wrap_p=True)
+        else:
+            pe = _sub(_sub(holder, "caption"), "p")
+            self.em.span(pe, cap, E.CAPTION)
+
     def caption_more(self, holder, paras):
         if not paras:
             return
@@ -621,6 +665,7 @@ class Builder:
             cap = _sub(holder, "caption")
         for p in paras:
             pe = _sub(cap, "p")
+            self.autonum_mark(pe, p)
             self.em.span(pe, p, E.CAPTION)
 
     def formula_image(self, parent, node: FigNode):
@@ -640,13 +685,7 @@ class Builder:
         if node.tid:
             tw.set("id", node.tid)
         if node.caption is not None:
-            m = RE_LABEL_SPLIT.match(node.caption.plain()) if self.split else None
-            if m and m.group(2):
-                self.labelled(tw, node.caption, RE_LABEL_SPLIT, E.CAPTION, title_tag="caption", wrap_p=True)
-            else:
-                cap = _sub(tw, "caption")
-                pe = _sub(cap, "p")
-                self.em.span(pe, node.caption, E.CAPTION)
+            self.caption(tw, node.caption)
             self.caption_more(tw, node.caption_more)
         if node.table is not None:
             if node.table.skipped_rows and not node.table.rows:
@@ -775,6 +814,7 @@ class Builder:
                 continue
             if not first:
                 _sub(td, "break")
+            self.autonum_mark(td, p)
             self.em.span(td, p, E.CELL)
             first = False
             if p.align:
@@ -790,6 +830,7 @@ class Builder:
         if node.fid:
             df.set("id", node.fid)
         p = node.para
+        self.autonum_mark(df, p)
         self.em.span(df, p, E.DISPF)
 
     # ------------------------------------------------------------------ 後付け
@@ -801,23 +842,22 @@ class Builder:
         if plan.refs or plan.ref_heading is not None:
             rl = _sub(back, "ref-list")
             if plan.ref_heading is not None:
-                t = _sub(rl, "title")
-                self.em.span(t, plan.ref_heading, E.SECTITLE)
+                self.heading_title(rl, plan.ref_heading)
             for r in plan.refs:
                 self.ref(rl, r)
         if plan.apps:
             ag = _sub(back, "app-group")
             for app in plan.apps:
                 ap = _sub(ag, "app")
-                t = _sub(ap, "title")
                 if app.title is not None:
-                    self.em.span(t, app.title, E.SECTITLE)
+                    self.heading_title(ap, app.title)
+                else:
+                    _sub(ap, "title")
                 self.app_children(ap, app.children)
         if plan.fns:
             fg = _sub(back, "fn-group")
             if plan.fn_heading is not None:
-                t = _sub(fg, "title")
-                self.em.span(t, plan.fn_heading, E.SECTITLE)
+                self.heading_title(fg, plan.fn_heading)
             else:
                 # docx に注の見出しがない（Word の脚注機能で書かれた注など）。設定の見出しを生成した文字として補う
                 title = self.j.fn_title_en if self.article_lang() == "en" else self.j.fn_title
@@ -834,13 +874,12 @@ class Builder:
 
     def backsec(self, el, sec: BackSec, ctx):
         if sec.heading is not None:
-            t = _sub(el, "title")
-            self.em.span(t, sec.heading, E.SECTITLE)
+            self.heading_title(el, sec.heading)
         # <ack> の内容は <p> と <sec> だけ（別行数式・表・リストは <p> で包む）。<notes> は本文と同じ要素を直接置ける
         wrap = el.tag == "ack"
         for node in sec.children:
             if isinstance(node, PNode):
-                self.paragraph_or_formula(el, node.para, ctx, autonum_mark=True)
+                self.paragraph_or_formula(el, node.para, ctx)
             elif isinstance(node, (FormulaNode, TableNode, ListNode)):
                 holder = _sub(el, "p") if wrap else el
                 if isinstance(node, FormulaNode):
@@ -853,7 +892,7 @@ class Builder:
     def app_children(self, ap, children):
         for node in children:
             if isinstance(node, PNode):
-                self.paragraph_or_formula(ap, node.para, E.BACKP, autonum_mark=True)
+                self.paragraph_or_formula(ap, node.para, E.BACKP)
             elif isinstance(node, ListNode):
                 self.list_node(ap, node, E.BACKP)
             elif isinstance(node, FormulaNode):
@@ -873,7 +912,7 @@ class Builder:
             mc.set("publication-type", typ)
         if r.para.autonum:
             lab = etree.Element("label")
-            self.em.gen(lab, self.autonum(r.para), "autonum")
+            self.em.gen(lab, self.autonum(r.para), "autonum", r.para.src)
             ref.insert(0, lab)
         self.em.span(mc, r.para, E.REF)
         self.check_length(mc, 4000, f"引用文献 {r.rid}")
@@ -883,6 +922,7 @@ class Builder:
 
         - Word の自動番号・脚注番号: 生成した番号と空白を p の先頭に（jx:gen。docx の文字ではない）
         - 手で打たれた番号「1)」: docx の文字なので、そのまま p の中に残す（label に分けない）
+        - 2 段落目以降の自動番号も、生成した文字として各 p の先頭に補う
         """
         el = _sub(fg, "fn", id=fn.fid)
         mark = ""
@@ -893,10 +933,20 @@ class Builder:
         for i, p in enumerate(fn.paras):
             pe = _sub(el, "p")
             if i == 0 and mark:
-                # 番号の後の空白は、docx の文字が空白で始まっていなければ補う（Word の脚注は記号の後に空白があることが多い）。
-                # 番号が全角の文字で終わる（出版版 PDF に合わせた「１）」など）ときは補わない
-                sep = "" if _starts_with_space(p) or unicodedata.east_asian_width(mark[-1]) in ("F", "W") else " "
-                self.em.gen(pe, mark + sep, "footnote-mark" if fn.word_note else "autonum")
+                wide = unicodedata.east_asian_width(mark[-1]) in ("F", "W")
+                if fn.word_note:
+                    numbered = bool(p.autonum and self.autonum(p).strip())
+                    # 1 段落目に自動番号があれば、脚注番号の後ろには必ず空白を補う（「1)1. …」にしない）
+                    sep = "" if wide or (_starts_with_space(p) and not numbered) else " "
+                    self.em.gen(pe, mark + sep, "footnote-mark")
+                    self.autonum_mark(pe, p)       # 1 段落目の自動番号（区切りは docx の文字で決める）
+                else:
+                    # 番号の後の空白は、docx の文字が空白で始まっていなければ補う。番号が全角の文字で終わる
+                    # （出版版 PDF に合わせた「１）」など）ときは補わない
+                    sep = "" if _starts_with_space(p) or wide else " "
+                    self.em.gen(pe, mark + sep, "autonum", p.src)   # 自動番号を注の番号にした（2 回出さない）
+            else:
+                self.autonum_mark(pe, p)
             self.em.span(pe, p, E.BACKP)
 
 

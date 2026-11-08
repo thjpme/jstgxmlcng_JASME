@@ -10,7 +10,8 @@
   7. 目印を取り除いた最終出力を作り、もう一度文字列を照合する（fidelity.final_check）
   8. J-STAGE 指定 DTD で検証する（validate）
   9. docx の画像のうち XML に出力しなかったもの（画像を置けない場所・出力しなかった段落の中の画像）を調べる（lost_images）。
-     あわせて、出力した表の形（行ごとの列の数・セルの重なり・縦の結合の範囲・セルのない行）を調べる（table_problems）
+     あわせて、出力した表の形（行ごとの列の数・セルの重なり・縦の結合の範囲・セルのない行）を調べる（table_problems）。
+     Word の自動番号のある段落で、文字を出したのに番号を出していないものも調べる（lost_autonums）
  10. J-STAGE のアップロード時のチェックのうち XML だけで判定できるものを再現する（jstage_rules。画像の名前を使うので、
      11 の画像の書き出しの後、ZIP を作る前に、出力した画像の名前で行う）
  11. 画像の書き出し、J-STAGE のフォルダ構成と ZIP（今回の XML・PDF・出力できた画像だけを入れ、読み直して確かめる）、
@@ -44,7 +45,7 @@ from .fidelity import SupplementResult, final_check, supplement_targets, verify,
 from .images import ImageResult, export_images, user_image
 from .jstage_rules import check as jstage_check
 from .linker import cited_refs, link
-from .model import Decision, LostImage, TableProblem
+from .model import Decision, LostImage, LostNumber, TableProblem
 from .package import article_dir, make_zip, unzipped_files, write_package, zip_image_names, zip_problems
 from .pdfdocx import DocxFix, make_fixed_docx, same_file
 from .pdfmatch import PdfCheck, check_pdf
@@ -52,7 +53,7 @@ from .report import (BOX_PENDING_NOTE, NEEDS_ACTION, actions, figure_body_detail
                      render_ai_only, step)
 from .report import pdf_fallback as report_pdf_fallback
 from .structure import classify, float_caption, float_targets
-from .tracking import SPAN
+from .tracking import GEN, SPAN
 from .validate import validate
 
 
@@ -161,6 +162,8 @@ class Result:
     forced_floats: list = field(default_factory=list)   # AI による補完でも位置が決まらず、仮の位置（アンカー段落の後ろ・本文の最後）に置いた図表の説明
     pdf_check: Optional[PdfCheck] = None                # 出版版 PDF との照合（PDF がなければ None）。ルート2 では補った docx との照合
     lost_images: list = field(default_factory=list)     # docx にあるのに XML に出力しなかった画像（LostImage。要対応）
+    lost_autonums: list = field(default_factory=list)   # Word の自動番号があるのに XML に番号を出さなかった段落（model.LostNumber。要対応）
+    unshown_numbers: list = field(default_factory=list)  # 番号を出さなかった題目・副題・著者名・所属の段落（BuildInfo.unshown_numbers。10 章）
     table_problems: list = field(default_factory=list)  # 出力した XML の表の形の崩れ（TableProblem。要対応 table_shape）
     tables_checked: int = 0                             # 形を確かめた表の数（12 章。すべての行が削除された空の表は数えない）
     zip_issues: list = field(default_factory=list)      # アップロード用の ZIP を読み直して見つけた問題（package.zip_problems。jstage_issues とは別）
@@ -293,8 +296,7 @@ def lost_images(doc, plan, root, info, exclusions) -> tuple:
                        f"{f'「{head}」' if head else ' '}に結び付いている")
         elif p.in_textbox:
             reason += "。テキストボックスの中の画像"
-        loc = (plan.locations.get(p.src) or REGION_JA.get(plan.region.get(p.src, ""), "")
-               or NOTE_PARTS.get(p.src[:1], ""))
+        loc = _place(plan, p.src)
         lost.append(LostImage(img.image_id, p.src, loc, reason, text=p.text_only().strip()[:20], source=img.target))
     return lost, hidden
 
@@ -354,6 +356,37 @@ def _table_name(tbl, where) -> str:
         return where
     aid = anc.get("id")
     return f"表 {aid}" if anc.tag == "table-wrap" else f"図 {aid} の中の表"
+
+
+def _place(plan, src) -> str:
+    """段落の場所（plan.locations。なければ領域の名前・Word の脚注など）。"""
+    return (plan.locations.get(src) or REGION_JA.get(plan.region.get(src, ""), "") or NOTE_PARTS.get(src[:1], ""))
+
+
+def lost_autonums(plan, root, info) -> list:
+    """Word の自動番号のある段落のうち、段落の文字を XML に出した（jx:span がある）のに、番号（jx:gen kind autonum、src がその段落）を
+    出していないもの（model.LostNumber）。不変性チェックは docx の文字しか見ず、番号は docx の文字ではないので、ここで調べないと黙って落ちる。
+    root は最後の組み立ての XML（目印が残っているもの）、info はその BuildInfo。次は調べない: 文字を出していない段落（除外・空白だけ・
+    画像だけ・段落記号の削除でつないだ後ろの段落）、番号が空白だけの段落、builder が番号を出さないと決めて記録した段落
+    （info.unshown_numbers。題目・副題・著者名・所属）。"""
+    shown = {g.get("src") for g in root.iter(GEN) if g.get("kind") == "autonum"}
+    skip = {u[0] for u in info.unshown_numbers}
+    out, seen = [], set()
+    for sp in root.iter(SPAN):
+        src = sp.get("src")
+        if src in seen:
+            continue
+        seen.add(src)
+        p = plan.paras.get(src)
+        if p is None or src in shown or src in skip:
+            continue
+        number = plan.pdf_numbers.get(("auto", src), p.autonum or "").strip()
+        if not number:
+            continue
+        parent = sp.getparent()
+        out.append(LostNumber(src, number, _place(plan, src), parent.tag if parent is not None else "",
+                              p.text_only().strip()[:20]))
+    return out
 
 
 def table_problems(root, info) -> tuple:
@@ -550,6 +583,8 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     lost, hidden_images = lost_images(doc, plan, root, info, plan.exclusions + info.exclusions)
     # 表の形の崩れ（不変性チェックは文字しか、DTD 検証は要素の並びしか見ない）
     table_issues, tables_checked = table_problems(root, info)
+    # 自動番号の出力漏れ（番号は docx の文字ではないので、不変性チェックは見ない）
+    lost_numbers = lost_autonums(plan, root, info)
 
     # ---------------------------------------------------------------- 出力
     adir = article_dir(out_dir, journal, meta)
@@ -634,6 +669,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         comments=doc.comments, has_pdf=has_pdf, output_note=output_note, xml_path=flat_xml, zip_path=zip_path,
         prompt_path=prompt_path, forced_floats=forced_floats, pdf_check=pdf_check, route=opts.route, docx_fix=docx_fix,
         supplement=supplement, lost_images=lost, hidden_images=hidden_images,
+        lost_autonums=lost_numbers, unshown_numbers=list(info.unshown_numbers),
         table_problems=table_issues, tables_checked=tables_checked, zip_issues=zip_problems(zip_path, journal, meta),
         not_zipped=unzipped_files(out_dir, journal, meta, zip_path), joined=doc.joined, deleted_rows=doc.deleted_rows,
         newlines=info.newlines, style_hidden=doc.style_hidden,

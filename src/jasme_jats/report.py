@@ -184,6 +184,12 @@ def lost_image_label(li) -> str:
     return f"{li.image_id}（{'、'.join(where)}）" if where else li.image_id
 
 
+def lost_autonum_label(ln) -> str:
+    """XML に番号を出せなかった段落（pipeline.lost_autonums）1 件の見出し。例: d95（本文 > 3．方法 / 第4要素）「番号付きの質問」の番号「1.」（XML の td）。"""
+    head = f"{ln.src}（{ln.location}）" if ln.location else ln.src
+    return f"{head}{f'「{ln.text}」' if ln.text else ''}の番号「{ln.number}」（XML の {ln.where}）"
+
+
 def textbox_summary(plan) -> str:
     """文字だけのテキストボックスの扱いの要約（1 章）。空白だけのものは数えない。該当がなければ ''。"""
     boxes = [b for b in plan.textboxes.values() if b.kind != "blank"]
@@ -1130,6 +1136,31 @@ def lost_action(r):
              + "\n".join(f"  {lost_image_label(li)}: {li.reason}" for li in lost)))
 
 
+LOST_AUTONUM_WHY = ("Word では段落の先頭に番号が表示されますが、XML のその段落には番号がありません（変換ツールの不具合の可能性があります）。"
+                    "番号は docx の文字ではないため、文字の不変性チェックでは見つかりません。")
+
+
+def lost_autonum_action(r):
+    """Word の自動番号があるのに XML に番号を出さなかった段落（pipeline.lost_autonums）。なければ None。"""
+    lost = getattr(r, "lost_autonums", None) or []
+    if not lost:
+        return None
+    n = len(lost)
+    return Action(
+        NEEDS_ACTION, "autonum_lost",
+        top="\n".join([f"> **要対応: Word の自動番号が XML に出ていない段落が {n} 件あります（8 章）。** {LOST_AUTONUM_WHY}"
+                        "変換レポートを添えて開発者に知らせてください。", ">"]
+                      + [f"> - {esc(lost_autonum_label(ln))}" for ln in lost]),
+        checklist=(f"- [ ] **XML に出ていない Word の自動番号 {n} 件**（8 章）: 変換レポートを添えて開発者に知らせる"
+                   "（変換ツールの不具合の可能性がある）: " + "、".join(esc(ln.src) for ln in lost)),
+        box_title=f"Word の自動番号が XML に出ていない段落が {n} 件あります（要対応）",
+        box_detail=(f"{LOST_AUTONUM_WHY}変換レポートを添えて開発者に知らせてください（レポートの冒頭と 8 章）。\n"
+                    + "\n".join(f"・{lost_autonum_label(ln)}" for ln in lost)),
+        cli=(f"要対応: Word の自動番号が XML に出ていない段落 {n} 件（変換ツールの不具合の可能性がある。レポートの冒頭と 8 章）。"
+             "変換レポートを添えて開発者に知らせること。\n"
+             + "\n".join(f"  {ln.src}: 「{ln.number}」…" for ln in lost)))
+
+
 STYLE_HIDDEN_SAMPLES = 5     # スタイルの隠し文字の要確認に並べる段落の数（全件はレポートの 6 章）
 
 
@@ -1687,7 +1718,7 @@ def actions(r) -> list:
                            _upload_action, _ai_error_action, _ai_pending_action,
                            _partial_action, _forced_action, figure_body_action, _textbox_undecided_action,
                            _textbox_place_action, _textbox_figure_text_action, images_action, lost_action,
-                           _style_hidden_action, _abstract_ja_action, _app_after_refs_action, _note_overlap_action, _float_ref_action,
+                           lost_autonum_action, _style_hidden_action, _abstract_ja_action, _app_after_refs_action, _note_overlap_action, _float_ref_action,
                            _fn_guess_action, _newline_action)]
     return [a for a in head if a is not None] + pdf_actions(r)
 
@@ -1947,9 +1978,12 @@ def render(r) -> str:
                       "本文で最初に参照される順の通し番号を本誌の形式〈設定 fn_mark〉で付けています。対応は下の表）")
     else:
         word_marks = "（Word の脚注機能で書かれた注の番号だけは、Word の表示「1」ではなく本誌の形式（設定 fn_mark）にしています）"
+    unshown = "（題目・著者名・所属の段落の番号は出していません。10 章）" if getattr(r, "unshown_numbers", None) else ""
     L.append("Word の自動段落番号や脚注番号は docx の文字ではなく Word が表示時に作るものです。表示どおりの文字を XML に出力しました"
-             f"{word_marks}。"
-             "「docx から作り、出版版 PDF で補う」では、自動番号・脚注番号の全角・半角と字形を PDF に合わせています（13 章）。"
+             f"{word_marks}{unshown}。"
+             "「docx から作り、出版版 PDF で補う」では、章・節・項の見出し・本文・キャプション・注・付記・謝辞・引用文献・英文要旨の段落の"
+             "自動番号と脚注番号の全角・半角と字形を PDF に合わせています（表のセル・囲み・別行数式の段落と、付記・謝辞・注・引用文献・"
+             "資料・英文要旨の見出しの番号は PDF と照合しないので、Word の形のままです。13 章）。"
              "docx に注の見出しがない場合（Word の脚注機能で書かれた注など）は、見出し（設定 fn_title）を補いました。")
     L.append("")
     if fid.generated:
@@ -1960,6 +1994,13 @@ def render(r) -> str:
     else:
         L.append("ありません。")
     L.append("")
+    lost_nums = getattr(r, "lost_autonums", None) or []
+    if lost_nums:
+        L.append("XML に番号を出せなかった段落（要対応。変換ツールの不具合の可能性）:")
+        L.append("")
+        L.append(table(["段落", "場所", "Word の番号", "XML の要素", "段落の書き出し"],
+                       [(ln.src, ln.location, ln.number, ln.where, ln.text) for ln in lost_nums]))
+        L.append("")
     note_rows = word_note_rows(r)
     if note_rows:
         L.append(f"{'Word の脚注・文末脚注' if has_endnotes(plan) else 'Word の脚注'}と、XML の注の対応（「Word の注」の番号は docx の"

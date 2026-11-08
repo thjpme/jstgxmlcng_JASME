@@ -3936,3 +3936,31 @@ def test_caption_more_typeset_difference_is_fixed(journal, meta, tmp_path, monke
     assert len(res.docx_fix.applied_typeset) == 4
     xml = res.xml_path.read_text(encoding="utf-8")
     assert f"<p>{pub}</p>" in xml
+
+
+CELL_ITEM = "番号付きのセルの質問である。"
+
+
+def test_cell_autonum_is_not_compared_and_uses_word_form(journal, meta, tmp_path):
+    """表のセルの自動番号は PDF と照合しない（target_paragraphs の外。number_edits に鍵がない）ので、ルート2 でも Word の形のまま。
+    plan.pdf_numbers に鍵を入れて組み立てると、Builder.autonum を通して PDF の形（全角・区切りの空白なし）で出る。"""
+    from jasme_jats.builder import build
+    from jasme_jats.pdfmatch import target_paragraphs
+
+    def parts(b):
+        return [mf.para(mf.S["sec1"], "１．はじめに"), mf.para(mf.S["body"], TALK),
+                mf.table([[mf.cell(mf.list_item(mf.S["body"], CELL_ITEM, num_id=7)), mf.cell("回答")]])]
+    mf.make_article(tmp_path / "n10.docx", "ページ番号の判定の検証用文書", parts)
+    _, plan, _ = _mechanical(tmp_path / "n10.docx", journal)
+    src = next(s for s, p in plan.paras.items() if p.plain() == CELL_ITEM)
+    assert plan.paras[src].autonum.strip() == "1." and src not in {p.src for p in target_paragraphs(plan)}
+    pages = n10_pages([*SMALL_FRONT, *body_lines(TALK), f"１．{CELL_ITEM}", "回答", *N10_TAIL])
+    pc = compare(plan, pages)
+    assert ("auto", src) not in pc.number_edits
+
+    def cell_text():
+        root, _ = build(plan, meta, journal)
+        return next("".join(td.itertext()) for td in root.iter("td") if CELL_ITEM in "".join(td.itertext()))
+    assert cell_text() == f"1. {CELL_ITEM}"
+    plan.pdf_numbers[("auto", src)] = "１．"
+    assert cell_text() == f"１．{CELL_ITEM}"

@@ -5,8 +5,9 @@
       （姓と名など）場合は、docx 上の順に seq を 0, 1, 2… と振る。
   <jx:drop src="d12" seq="1" reason="…">　</jx:drop>
       構造の区切りとして出力しない空白（姓と名の間など）。検証で空白だけであることを確かめてから取り除く。
-  <jx:gen kind="autonum">1.</jx:gen>
-      docx の文字ではなく Word が自動生成して表示する文字（自動番号・脚注番号）。
+  <jx:gen kind="autonum" src="d12">1.</jx:gen>
+      docx の文字ではなく Word が自動生成して表示する文字（自動番号・脚注番号）。kind が autonum のとき、src は番号の段落の ID
+      （pipeline.lost_autonums が、番号を出していない段落を調べるのに使う）。
   jx:implicit="1"（MathML の mo 要素）
       数式の括弧・積分記号など、docx では文字ではなく属性として持っている記号。
   <jx:ai decision="A-003">…</jx:ai>

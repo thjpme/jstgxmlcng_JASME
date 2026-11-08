@@ -273,6 +273,19 @@ class LostImage:
 
 
 @dataclass
+class LostNumber:
+    """Word の自動番号のある段落で、段落の文字は XML に出したのに番号を出さなかったもの（pipeline.lost_autonums。要対応）。
+
+    番号は docx の文字ではないので、文字の不変性チェックでは見つからない。題目・副題・著者名・所属の段落は、番号を出さないと
+    決めているので対象にしない（BuildInfo.unshown_numbers。10 章の警告）。"""
+    src: str
+    number: str        # Word の番号（ルート2 では PDF に合わせたもの。builder.autonum と同じ）
+    location: str      # 段落の場所（plan.locations。なければ領域の名前・Word の脚注など）
+    where: str         # 段落の文字を出した XML の要素（td・p など。最初の jx:span の親の要素名）
+    text: str = ""     # 段落の文字の冒頭 20 字（Word で探す手がかり）
+
+
+@dataclass
 class TableProblem:
     """出力した XML の表の形の崩れ（pipeline.table_problems が変換の後に調べる。要対応 table_shape）。
 
