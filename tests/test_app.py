@@ -338,7 +338,7 @@ def test_manual_fields_stay_for_repaste(tmp_path):
         assert ("新しい回答を最初から最後まで貼り付けて" if key == "partial" else "貼り付け直して「反映」を押し") in boxes, key
     out = fns["on_apply"](json.dumps(FLOAT_RESPONSE, ensure_ascii=False))     # 貼り直した回答で決まれば、欄を隠す
     assert not st.needs_action and out[2]["visible"] is False and out[3] == ""
-    # 手動でなければ欄は出ない
+    # 変換の後に「AI による補完の方法」の欄を変えても判定は変わらない（O3）。この時点では貼り直す枠がないので欄は出ない
     st.set_inputs(ai_mode="none")
     assert not st.answer_box_open
 
@@ -363,7 +363,7 @@ def test_apply_crash_hides_manual_fields_as_advised(tmp_path, monkeypatch):
 
 
 def test_apply_crash_before_result_dropped_keeps_manual_fields(tmp_path, monkeypatch):
-    """回答の反映が、前の結果を捨てる前に想定外の例外で止まったとき（入力ファイルを作業用の場所に写せないなど）は、手動の欄も結果も
+    """回答の反映が、前の結果を捨てる前に想定外の例外で止まったとき（変換の設定を作れないなど）は、手動の欄も結果も
     画面に残っている。案内も「欄は隠れている」ではなく、残っていることを言う。"""
     st = filled(tmp_path)
     st.set_inputs(ai_mode="manual")
@@ -373,7 +373,7 @@ def test_apply_crash_before_result_dropped_keeps_manual_fields(tmp_path, monkeyp
 
     def boom(*args, **kwargs):
         raise OSError("写せません")
-    monkeypatch.setattr(app.shutil, "copyfile", boom)
+    monkeypatch.setattr(app, "Options", boom)
     out = fns["on_apply"]('{"operations": []}')
     assert st.res is not None and out[2]["visible"] is True
     assert "OSError: 写せません" in out[0] and "そのまま残っています" in out[0] and "隠れています" not in out[0]
@@ -407,3 +407,295 @@ def test_app_words_match_the_real_labels(tmp_path):
     assert f"「{colab.ANSWER_LABEL}」の欄" in app.AppState.CRASH_ADVICE["apply"]
     assert f"「{colab.CONVERT_LABEL}」をもう一度押" in app.AppState.CRASH_ADVICE["convert"]
     assert words["docx"] in app.AppState.CRASH_ADVICE["convert"] and words["meta"] in app.AppState.CRASH_ADVICE["convert"]
+
+
+# ---------------------------------------------------------------------------- 入力の写し（0.30.0。u2-app）
+def make_pair(tmp_path):
+    """本文の段落の形が同じで、題目と本文の文字だけ違う架空の論文 A・B。"""
+    import make_fixtures as mf
+    S = mf.S
+
+    def parts(word):
+        return lambda b: [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], f"{word}の本文。試験（2024）を引く。"),
+                          mf.para(S["body"], f"{word}の二つ目の段落。")]
+    a, b = tmp_path / "A.docx", tmp_path / "B.docx"
+    mf.make_article(a, "論文Aの題目", parts("論文A"))
+    mf.make_article(b, "論文Bの題目", parts("論文B"))
+    return a, b
+
+
+def xml_root(res):
+    from lxml import etree
+    return etree.fromstring(res.xml_path.read_bytes().split(b"\n", 2)[2])
+
+
+def xml_text(res):
+    return "".join(xml_root(res).itertext())
+
+
+def exclude_answer(res, word):
+    """本文の「二つ目の段落」を除外する AI の回答（src は res の段落 ID）。"""
+    import json
+    cand = [pid for pid, p in res.plan.paras.items() if word in str(getattr(p, "text", "") or getattr(p, "plain", "") or p)]
+    assert cand, "段落が見つからない"
+    return json.dumps({"placements": [], "operations": [{"op": "set_role", "src": cand[0], "text": "", "occurrence": 1,
+                                                         "target": "", "role": "exclude", "image": "", "confidence": "高",
+                                                         "reason": "試験"}], "notes": []}, ensure_ascii=False)
+
+
+EMPTY_ANSWER = '{"placements": [], "operations": [], "notes": []}'
+
+
+def check_text(t):
+    assert "\x00" not in t and "手順" not in t
+
+
+def test_inputs_changed_after_convert_are_refused(tmp_path):
+    a, b = make_pair(tmp_path)
+    st = filled(tmp_path, docx=a)
+    st.set_inputs(ai_mode="manual")
+    res = st.convert()
+    st.set_inputs(docx=str(b), fpage="77")
+    assert st.changed_inputs() == ["docx", "最初のページ"]
+    with pytest.raises(InputError) as ei:
+        st.apply_answer(EMPTY_ANSWER)
+    msg = str(ei.value)
+    check_text(msg)
+    assert "入力が前回の変換から変わっています" in msg and "「変換する」をもう一度押してください" in msg and "新しい依頼文が出る" in msg
+    assert st.res is res and "<fpage>1</fpage>" in res.xml_path.read_text(encoding="utf-8")
+    assert st.download() == (None, msg) and st.download(accept_todo=True) == (None, msg)
+    assert "入力が前回の変換から変わっています" in st.ready_text() and "入力が前回の変換から変わっています" not in st.result_html()
+    st.set_inputs(docx=str(a), fpage=" １ ")
+    assert st.changed_inputs() == []
+    st.apply_answer(EMPTY_ANSWER)
+    assert "論文Aの題目" in xml_text(st.res)
+    # ページだけを変えたときは、欄の回答でもう一度反映する案内
+    st.set_inputs(fpage="2")
+    text = st.stale_text(st.changed_inputs())
+    assert "貼り付けた回答は欄に残る" in text and "もう一度「反映」を押します" in text and "新しい依頼文が出る" not in text
+    check_text(text)
+
+
+def test_same_file_reselected_is_not_a_change(tmp_path, monkeypatch):
+    a, b = make_pair(tmp_path)
+    st = filled(tmp_path, docx=a)
+    st.set_inputs(ai_mode="manual")
+    st.convert()
+    copy = tmp_path / "gradio" / "A.docx"
+    copy.parent.mkdir()
+    copy.write_bytes(a.read_bytes())
+    st.set_inputs(docx=str(copy))
+    assert st.changed_inputs() == []
+    copy.write_bytes(a.read_bytes() + b"\0")
+    assert st.changed_inputs() == ["docx"]
+    demo = app.build_app(st, app.IO())
+    fns = {f.fn.__name__: f.fn for f in demo.fns.values()}
+    st.set_inputs(docx=None)
+    assert st.changed_inputs() == ["docx"]
+    out = fns["on_apply"](EMPTY_ANSWER)
+    assert "入力が前回の変換から変わっています" in out[0] and "想定外のエラー" not in out[0]
+    # ファイルを読めないとき: 例外を外に出さない。変換は「読めませんでした」で断り、前の結果と写しを残す
+    st.set_inputs(docx=str(a))
+    res, run = st.res, st.run
+
+    def bad(path):
+        raise OSError("読めません")
+    monkeypatch.setattr(app, "file_digest", bad)
+    values = [st.inputs[n] for n in app.INPUT_NAMES]
+    fns["on_change"](*values)
+    out = fns["on_apply"](EMPTY_ANSWER)
+    assert "入力が前回の変換から変わっています" in out[0] and "想定外のエラー" not in out[0]
+    with pytest.raises(InputError, match="のファイルを読めませんでした") as ei:
+        st.convert()
+    check_text(str(ei.value))
+    assert st.res is res and st.run is run
+
+
+def test_images_not_carried_to_changed_input(tmp_path, monkeypatch):
+    import dataclasses
+    import io
+    from PIL import Image
+    a, b = make_pair(tmp_path)
+    real = app.convert
+    monkeypatch.setattr(app, "convert", lambda d, m, j, o: real(d, m, j, dataclasses.replace(o, convert_metafiles=False)))
+    st = filled(tmp_path, docx=TEMPLATE)
+    st.set_inputs(ai_mode="manual")
+    st.convert()
+    rows = st.missing_images()
+    buf = io.BytesIO()
+    Image.new("RGB", (60, 40), "white").save(buf, "PNG")
+    pic = tmp_path / "pic.png"
+    pic.write_bytes(buf.getvalue())
+    st.add_images({rows[0][0]: str(pic)})
+    st.set_inputs(docx=str(b))
+    for call in (lambda: st.add_images({rows[0][0]: str(pic)}), lambda: st.apply_answer(EMPTY_ANSWER)):
+        with pytest.raises(InputError, match="入力が前回の変換から変わっています"):
+            call()
+    assert st.user_images
+    st.convert()
+    assert st.user_images == {} and "論文Bの題目" in xml_text(st.res)
+
+
+def test_ai_mode_change_after_convert_keeps_screen(tmp_path):
+    """O3: 変換の後に「AI による補完の方法」の欄を変えても、手動の欄・結果の枠は変わらない。"""
+    st = filled(tmp_path)
+    st.set_inputs(ai_mode="manual")
+    st.convert()
+    for mode in ("api", "none"):
+        st.set_inputs(ai_mode=mode)
+        assert st.waiting_for_answer and st.answer_box_open
+        html = st.result_html()
+        assert "AI の回答をまだ反映していません" not in html and "AI による補完を「使わない」" not in html
+        assert st.changed_inputs() == [] and "次に変換するときに使われます" in st.ready_text()
+        check_text(st.settings_note())
+    st.apply_answer(EMPTY_ANSWER)
+    st2 = filled(tmp_path / "x")
+    st2.convert()                                   # ai_mode="none"
+    st2.set_inputs(ai_mode="manual")
+    assert not st2.answer_box_open
+    with pytest.raises(InputError, match="手動モードで変換してから"):
+        st2.apply_answer(EMPTY_ANSWER)
+
+
+def test_failed_convert_keeps_previous_run(tmp_path, monkeypatch):
+    st = filled(tmp_path)
+    res = st.convert()
+    run = st.run
+    st.set_inputs(fpage="77", ai_mode="api")
+    monkeypatch.delenv(app.API_KEY_NAMES["claude"][0], raising=False)
+    for name in app.API_KEY_NAMES["claude"]:
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(InputError, match="API キー"):
+        st.convert(app.IO())
+    assert st.run is run and st.run.meta.fpage == "1" and st.res is res
+    assert st.changed_inputs() == ["最初のページ"]
+    path, note = st.download()
+    assert path is None and "入力が前回の変換から変わっています" in note
+
+
+def test_new_paper_clears_answer_field(tmp_path):
+    a, b = make_pair(tmp_path)
+    st = filled(tmp_path, docx=a)
+    st.set_inputs(ai_mode="manual")
+    demo = app.build_app(st, app.IO())
+    fns = {f.fn.__name__: f.fn for f in demo.fns.values()}
+    n_views = 9 + app.MAX_IMAGE_SLOTS
+
+    def values(**kw):
+        st.set_inputs(**kw)
+        return [st.inputs[n] for n in app.INPUT_NAMES]
+    out = fns["on_convert"](*values())
+    assert len(out) == n_views + 2 and "value" not in out[-2]
+    out = fns["on_convert"](*values(docx=str(b)))
+    assert out[-2].get("value") == ""
+    out = fns["on_convert"](*values(docx=str(a)))
+    assert out[-2].get("value") == ""                 # b -> a: また別の論文
+    out = fns["on_convert"](*values())
+    assert "value" not in out[-2]                     # 同じ docx の変換し直しでは残す
+    out = fns["on_convert"](*values(docx=str(b)))
+    out = fns["on_convert"](*values(received="あした"))
+    assert "入力を確認してください" in out[0] and "value" not in out[-2]
+    # ready: 入力を変えると文が出て、変換に成功すると空になる
+    out = fns["on_change"](*values(received="", fpage="9"))
+    assert "入力が前回の変換から変わっています" in out[1]
+    out = fns["on_convert"](*values())
+    assert out[-1] == ""
+
+
+def test_previous_paper_answer_refused(tmp_path):
+    import zipfile as zf
+    import make_fixtures as mf
+    a, b = make_pair(tmp_path)
+    st = filled(tmp_path, docx=a)
+    st.set_inputs(ai_mode="manual")
+    res_a = st.convert()
+    ans_a = exclude_answer(res_a, "二つ目")
+    st.apply_answer(ans_a)
+
+    def switch(path):
+        st.set_inputs(docx=str(path))
+        st.convert()
+    switch(b)
+    with pytest.raises(InputError, match="前に別の依頼文（A.docx のとき）に対して反映した AI の回答です") as ei:
+        st.apply_answer(ans_a)
+    check_text(str(ei.value))
+    assert "論文Bの二つ目の段落" in xml_text(st.res)
+    st.reset()
+    st.set_inputs(docx=str(b), volume="31", issue="1", fpage="1", lpage="12", peer_review="査読あり",
+                  manuscript_type=type_choices()[0], ai_mode="manual", route="docx")
+    st.convert()
+    with pytest.raises(InputError, match="前に別の依頼文"):
+        st.apply_answer(ans_a)
+    st.apply_answer(EMPTY_ANSWER)                      # 違う回答は通る
+    # A と同じ中身（別のパス）・依頼文の変わらない同名の直した版では、ans_A が通る
+    same = tmp_path / "copy" / "A.docx"
+    same.parent.mkdir()
+    same.write_bytes(a.read_bytes())
+    switch(same)
+    st.apply_answer(ans_a)
+    fixed = tmp_path / "fixed" / "A.docx"
+    fixed.parent.mkdir()
+    with zf.ZipFile(a) as src, zf.ZipFile(fixed, "w", zf.ZIP_DEFLATED) as dst:
+        for item in src.infolist():
+            data = src.read(item.filename)
+            if item.filename == "docProps/core.xml":        # 更新日だけを書き換える（本文は変えない）
+                data = data.replace(b"</cp:coreProperties>", b"<dcterms:modified xmlns:dcterms='http://purl.org/dc/terms/'>2030-01-01</dcterms:modified></cp:coreProperties>")
+                assert data != src.read(item.filename)
+            dst.writestr(item, data)
+    switch(b)
+    st.apply_answer(EMPTY_ANSWER)
+    switch(fixed)
+    st.apply_answer(ans_a)
+    # 依頼文が変わる（本文の段落を足した A）なら断る
+    longer = tmp_path / "longer" / "A.docx"
+    longer.parent.mkdir()
+    S = mf.S
+    mf.make_article(longer, "論文Aの題目", lambda b_: [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "論文Aの本文。試験（2024）を引く。"),
+                                                       mf.para(S["body"], "論文Aの二つ目の段落。"), mf.para(S["body"], "足した段落。")])
+    switch(longer)
+    with pytest.raises(InputError, match="前に別の依頼文"):
+        st.apply_answer(ans_a)
+
+
+def test_stopped_convert_leaves_no_stale_text(tmp_path):
+    from conftest import FLOAT
+    st = filled(tmp_path)
+    st.convert()
+    st.set_inputs(docx=str(FLOAT))
+    with pytest.raises(InputError):
+        st.convert()                                   # 図の位置を AI が決める必要がある（AI なし）
+    assert st.res is None and st.run is not None
+    st.set_inputs(fpage="77")
+    assert st.changed_inputs() == [] and "今の結果は" not in st.ready_text() and not st.answer_box_open
+
+
+def test_subject_other_ignored_unless_other_type(tmp_path):
+    st = filled(tmp_path)
+    st.convert()
+    st.set_inputs(subject_other="何か", subject_other_en="x")
+    assert st.changed_inputs() == []
+    st = filled(tmp_path / "o")
+    st.set_inputs(manuscript_type=app.OTHER_TYPE, subject_other="資料", subject_other_en="Material")
+    st.convert()
+    st.set_inputs(subject_other="報告")
+    assert st.changed_inputs() == ["原稿種別（日本語）"]
+
+
+def test_stale_texts_use_real_labels(tmp_path):
+    a, _b = make_pair(tmp_path)
+    st = filled(tmp_path, docx=a)
+    st.convert()
+    st.set_inputs(fpage="3", ai_mode="manual")
+    demo = app.build_app(st, app.IO())
+    labels = {getattr(b, "label", None) for b in demo.blocks.values()} | {getattr(b, "value", None) for b in demo.blocks.values()}
+    texts = [st.stale_text(["docx"]), st.stale_text(["最初のページ"]), st.settings_note()]
+    st.set_inputs(docx=str(tmp_path / "none.docx"))
+    with pytest.raises(InputError) as ei:
+        st.convert()
+    texts.append(str(ei.value))
+    import re
+    for t in texts:
+        check_text(t)
+        for q in re.findall(r"「([^」]+)」", t):
+            assert q in labels, q
+    assert "のファイルを読めませんでした" in texts[-1]

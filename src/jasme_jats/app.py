@@ -12,10 +12,14 @@ Gradio の版は pyproject の gui の extra で固定している（上げる�
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import tempfile
+import unicodedata
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 from . import __version__
 from . import report as rp
@@ -50,7 +54,11 @@ LABELS = {"docx": "docx", "pdf": "PDF", "volume": "巻", "issue": "号", "fpage"
           "peer_review": "査読の有無", "manuscript_type": "原稿種別", "approved": "最終査読日", "keywords_ja": "キーワード（日本語）",
           "keywords_en": "キーワード（英語）", "pub_date": "発行日", "epub_date": "J-STAGE 公開日", "received": "受付日",
           "accepted": "受理日", "corresp": "責任著者", "doi": "DOI", "subject_other": "原稿種別（日本語）",
-          "subject_other_en": "原稿種別（英語）"}
+          "subject_other_en": "原稿種別（英語）", "route": "作り方", "split_labels": "SPLIT_LABELS"}
+# 変わると依頼文も変わり得る入力の名前（stale_text の文の分岐に使う）
+DOCXISH = (LABELS["docx"], LABELS["pdf"], LABELS["route"], LABELS["split_labels"])
+# 変換の結果を左右する入力（前回の変換と比べる）。AI の方法・モデルは次に変換するときに使う設定なので比べない（O3）
+COMPARED_INPUTS = tuple(n for n in INPUT_NAMES if n not in ("ai_mode", "model"))
 
 
 class InputError(Exception):
@@ -59,6 +67,45 @@ class InputError(Exception):
     def __init__(self, message: str, html: str = ""):
         super().__init__(message)
         self.html = html
+
+
+_DIGESTS: dict = {}
+
+
+def file_digest(path: "str | Path") -> str:
+    """ファイルの中身の sha256（16 進）。on_change がキーを押すたびに呼ぶので、（パス・大きさ・更新時刻）ごとに覚える。
+    例外は捕まえない（捕まえるのは AppState.fingerprint）。"""
+    path = Path(path)
+    st = path.stat()
+    key = (str(path), st.st_size, st.st_mtime_ns)
+    if key not in _DIGESTS:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        _DIGESTS[key] = h.hexdigest()
+    return _DIGESTS[key]
+
+
+def _model_value(v) -> str:
+    """MODEL の欄の値を Options.ai_model に渡す値にする。"""
+    return "auto" if str(v).startswith("自動") else str(v).strip()
+
+
+@dataclass(frozen=True)
+class RunInputs:
+    """変換したときの入力の写し。AppState.convert が作り、_run・apply_answer・add_images・download が使う。"""
+    compared: dict
+    docx: Path
+    pdf: Optional[Path]
+    route: str
+    split_labels: bool
+    ai_mode: str
+    model: str
+    meta: ArticleMeta
+    journal: JournalConfig
+    docx_name: str
+    api_key: Optional[str] = field(default=None, repr=False)
 
 
 def type_choices() -> list:
@@ -117,9 +164,10 @@ class AppState:
         self.res = None
         self.notes: list = []                  # 入力を確かめたときの知らせ（全角の数字を半角にしたなど）
         self.user_images: dict = {}            # 足りない画像: 出力ファイル名 → (元のファイル名, 中身)
-        self._meta = None
-        self._journal = None
-        self._api_key = None
+        self.run: Optional[RunInputs] = None   # 変換したときの入力の写し（入力が写しと違えば、結果を残したまま断る）
+        self.paper_changed = False             # 直前の convert() で docx の中身が前回と違った（on_convert が回答の欄を空にするか決める）
+        self._last_docx = None                 # 最後に convert() が手順 3 まで進んだときの docx の digest（変換が後で失敗しても残す）
+        self._last_answer = None               # (依頼文の sha256, docx_name, 回答を strip した文字)。最後に反映に成功した回答
 
     @property
     def out_dir(self) -> Path:
@@ -177,14 +225,82 @@ class AppState:
             self.notes.append("日本語・英語の欄を取り違えていないか確認してください: " + "、".join(keyword_language_mismatch(meta)))
         return meta
 
+    # ---- 入力の写しとの比べ
+    # 変換の後に入力が変わったとき、前の結果・貼り付けた回答・入れた画像は消さずに残し、理由を示して断る。on_change はキーを
+    # 押すたびと「次の論文」で呼ばれ、触っただけで消すと取り返せないため。比べるのはファイルの中身（sha256）で、同じファイルの
+    # 選び直しは変わっていない扱いにする。
+    def fingerprint(self) -> dict:
+        """COMPARED_INPUTS の名前ごとに、前回の変換と比べる値。"""
+        out = {}
+        f = self.inputs
+        for name in COMPARED_INPUTS:
+            v = f[name]
+            if name in ("docx", "pdf"):
+                if not v:
+                    out[name] = None
+                    continue
+                try:
+                    out[name] = file_digest(Path(v))
+                except OSError:
+                    out[name] = ("読めない", str(v))
+            elif name == "split_labels":
+                out[name] = bool(v)
+            elif name == "route":
+                out[name] = str(v)
+            elif name in ("subject_other", "subject_other_en") and f["manuscript_type"] != OTHER_TYPE:
+                out[name] = ""
+            else:
+                out[name] = unicodedata.normalize("NFKC", str(v or "")).strip()
+        return out
+
+    def changed_inputs(self) -> list:
+        """前回の変換から変わった入力の LABELS の名前（COMPARED_INPUTS の順）。結果がないときは空。"""
+        if self.res is None or self.run is None:
+            return []
+        now = self.fingerprint()
+        return [LABELS[n] for n in COMPARED_INPUTS if now[n] != self.run.compared[n]]
+
+    def stale_text(self, changed) -> str:
+        names = "、".join(changed)
+        if any(n in DOCXISH for n in changed):
+            inner = ("入れた画像は消えるので、変換の後にもう一度入れてください。手動モードでは新しい依頼文が出るので、"
+                     "AI に渡して回答を貼り替えます")
+        else:
+            inner = ("入れた画像は消えるので、変換の後にもう一度入れてください。貼り付けた回答は欄に残るので、変換の後にもう一度"
+                     + rp.step("apply_button") + "を押します")
+        text = ("入力が前回の変換から変わっています（変わった項目: " + names + "）。今の結果は、変える前の入力で作ったものです。"
+                "変えた入力で作るには、" + rp.step("convert_again") + "してください（" + inner + "）。"
+                "今の結果のまま続けるときは、入力を前回の変換のときの値に戻してください（同じファイルを選び直せば、変わっていない扱いになります）。")
+        return _app_text(text)
+
+    def settings_note(self) -> str:
+        if self.res is None or self.run is None:
+            return ""
+        if self.inputs["ai_mode"] != self.run.ai_mode or _model_value(self.inputs["model"]) != self.run.model:
+            return _app_text("「AI による補完の方法」の欄・MODEL の変更は、次に変換するときに使われます（今の結果は前の設定のままです。"
+                             "変えた設定で作るには、" + rp.step("convert_again") + "してください）。")
+        return ""
+
+    def ready_text(self) -> str:
+        """変換ボタンの横の文: 足りない項目、入力が変わったこと、設定の変更。"""
+        parts = []
+        miss = self.missing()
+        if miss:
+            parts.append("足りない項目: " + "、".join(miss))
+        changed = self.changed_inputs()
+        note = self.stale_text(changed) if changed else self.settings_note()
+        if note:
+            parts.append(note)
+        return "\n\n".join(parts)
+
     # ---- 変換
-    def _run(self, ai_mode: str, ai_response: "str | None", progress=None):
-        step = progress or (lambda fraction, desc="": None)
+    def _copy_inputs(self) -> tuple:
+        """画面から受け取ったファイルを、元の名前で作業用の場所（work/input）に置く。戻り値: (docx の写し, PDF の写し or None)。"""
         f = self.inputs
         docx = Path(f["docx"])
         pdf = Path(f["pdf"]) if f["pdf"] else None
         (self.work / "input").mkdir(parents=True, exist_ok=True)
-        local = self.work / "input" / docx.name       # 画面から受け取ったファイルは、元の名前で作業用の場所に置く
+        local = self.work / "input" / docx.name
         if docx.resolve() != local.resolve():
             shutil.copyfile(docx, local)
         local_pdf = None
@@ -192,16 +308,20 @@ class AppState:
             local_pdf = self.work / "input" / pdf.name
             if pdf.resolve() != local_pdf.resolve():
                 shutil.copyfile(pdf, local_pdf)
+        return local, local_pdf
+
+    def _run(self, ai_mode: str, ai_response: "str | None", progress=None):
+        step = progress or (lambda fraction, desc="": None)
+        run = self.run
+        opts = Options(out_dir=self.out_dir, ai_mode=ai_mode, ai_provider="claude", ai_model=run.model, ai_api_key=run.api_key,
+                       ai_response=ai_response, pdf_path=run.pdf, route=run.route, split_labels=run.split_labels)
         self.res = None                        # 出力フォルダを消すので、前の結果は先に捨てる（途中で止まったとき、消えたファイルを指さないため）
         shutil.rmtree(self.out_dir, ignore_errors=True)
         try:
-            res = convert(local, self._meta, self._journal, Options(
-                out_dir=self.out_dir, ai_mode=ai_mode, ai_provider="claude",
-                ai_model="auto" if str(f["model"]).startswith("自動") else str(f["model"]).strip(),
-                ai_api_key=self._api_key, ai_response=ai_response, pdf_path=local_pdf, route=f["route"],
-                split_labels=bool(f["split_labels"])))
+            res = convert(run.docx, run.meta, run.journal, opts)
         except AIRequiredError as e:
             raise InputError(step_text(str(e), "app"), ai_required_box(str(e), "app"))
+        # （0.31.0 で StructureConflictError の except をここに足す）
         step(0.9, "画像を入れ直しています…")
         if self.user_images:
             add_images(res, self.user_images, skip_unneeded=True)     # 変換をやり直したときに、受け取った画像を入れ直す
@@ -209,23 +329,41 @@ class AppState:
         return res
 
     def convert(self, io: "IO | None" = None, progress=None):
-        """「変換する」。足りない項目・入力の誤り・API キーの読み出し失敗は InputError。"""
+        """「変換する」。足りない項目・入力の誤り・API キーの読み出し失敗・ファイルを読めないときは InputError。
+
+        確かめ（足りない項目・入力の誤り・API キー・ファイルを読めない）で止まったときは、前の結果と入力の写しをそのまま残す。
+        """
         io = io or IO()
         step = progress or (lambda fraction, desc="": None)
-        self._meta = self._article_meta()
-        self._journal = JournalConfig.load()
-        self._api_key = None
+        self.paper_changed = False             # 入力の誤りで止まったときに、前回の値で回答の欄を消さないため
+        meta = self._article_meta()
+        journal = JournalConfig.load()
+        api_key = None
         if self.inputs["ai_mode"] == "api":
             names = API_KEY_NAMES["claude"]
-            self._api_key = io.read_secret(names)
-            if not self._api_key:
+            api_key = io.read_secret(names)
+            if not api_key:
                 raise InputError(f"API キー（シークレット {' または '.join(names)}）を読めませんでした。")
+        compared = self.fingerprint()
+        for name in ("docx", "pdf"):
+            v = compared[name]
+            if isinstance(v, tuple) and v[0] == "読めない":
+                raise InputError(_app_text(rp.step(name) + "のファイルを読めませんでした。選び直してから、"
+                                           + rp.step("convert_again") + "してください。"))
+        self.paper_changed = self._last_docx is not None and compared["docx"] != self._last_docx
+        self._last_docx = compared["docx"]
         self.res = None
-        self.user_images = {}                  # 前の変換で受け取った画像は持ち越さない（同じ論文のやり直しは apply_answer）
+        self.user_images = {}                  # 前の変換で受け取った画像は持ち越さない（入力を変えずに回答を反映し直すときは apply_answer が入れ直す）
+        self.run = None
+        local_docx, local_pdf = self._copy_inputs()
+        f = self.inputs
+        self.run = RunInputs(compared=compared, docx=local_docx, pdf=local_pdf, route=str(f["route"]),
+                             split_labels=bool(f["split_labels"]), ai_mode=f["ai_mode"], model=_model_value(f["model"]),
+                             meta=meta, journal=journal, docx_name=Path(f["docx"]).name, api_key=api_key)
         step(0.05, "LibreOffice を準備中…")
         io.libreoffice_ready()
         step(0.2, "変換中…（数分かかることがあります）")
-        res = self._run(self.inputs["ai_mode"], None, progress)
+        res = self._run(self.run.ai_mode, None, progress)
         step(1.0, "完了")
         return res
 
@@ -233,7 +371,7 @@ class AppState:
     @property
     def waiting_for_answer(self) -> bool:
         """手動モードで、AI の回答をまだ反映していない。"""
-        return self.res is not None and self.inputs["ai_mode"] == "manual" and ai_pending(self.res)
+        return self.res is not None and self.run is not None and self.run.ai_mode == "manual" and ai_pending(self.res)
 
     # 手動モードで、AI の回答を貼り付け直す案内（report.py の枠。colab.STEP_WORDS の repaste）が出る Action の key。これらが出ている
     # ときも、手動の欄（依頼文・回答の欄・「反映」）を見せたままにする。float_ref（リンクしなかった図・表の参照。AI の回答を反映した後も
@@ -248,11 +386,10 @@ class AppState:
         AI の回答をまだ反映していないとき（waiting_for_answer）に加えて、反映した後も、回答を読めない（ai_error）・途中で切れた
         （partial）・図表の位置が決まらない（forced）・AI もリンクを付けなかった図・表の参照がある（float_ref）・囲みか注記か決められないテキストボックスが残る（textbox_undecided）の枠が出ているあいだは、
         貼り付け直せるように見せたままにする。
-        回答の反映（apply_answer）ができるときだけ見せる（waiting_for_answer と同じく、「AI による補完の方法」の欄が手動のとき）。
-        さらに、その結果が手動モードで作られたとき（依頼文があるとき）だけ見せる: AI を使っていない・API の結果のまま「AI による
-        補完の方法」の欄だけを手動に切り替えても、空の依頼文と「反映」は出さない（変換し直すと出る）。
+        手動モードで変換した結果のときだけ見せる（変換したときの入力の写し run.ai_mode で決める。変換の後に「AI による補完の方法」の
+        欄を変えても変わらない。O3）。
         """
-        if self.res is None or self.inputs["ai_mode"] != "manual" or self.res.ai.mode != "manual" or not self.res.prompt_path:
+        if self.res is None or self.run is None or self.run.ai_mode != "manual" or self.res.ai.mode != "manual" or not self.res.prompt_path:
             return False
         return ai_pending(self.res) or any(a.key in self.REPASTE_KEYS for a in actions(self.res))
 
@@ -268,12 +405,23 @@ class AppState:
 
     def apply_answer(self, text: str, io: "IO | None" = None, progress=None):
         """AI の回答を付けて変換し直す。"""
-        if self.res is None or self.inputs["ai_mode"] != "manual":
+        if self.res is None or self.run is None or self.run.ai_mode != "manual":
             raise InputError("手動モードで変換してから、回答を貼り付けてください。")
+        changed = self.changed_inputs()
+        if changed:
+            raise InputError(self.stale_text(changed))
         if not (text or "").strip():
             raise InputError("AI の回答が貼り付けられていません。")
+        prompt_digest = hashlib.sha256(self.prompt_text().encode("utf-8")).hexdigest()    # _run は出力フォルダを消すので先に取る
+        last = self._last_answer
+        if last is not None and last[2] == text.strip() and last[0] != prompt_digest:
+            raise InputError(_app_text("貼り付けられているのは、前に別の依頼文（" + last[1] + " のとき）に対して反映した AI の回答です。今の"
+                                       + rp.step("prompt") + "を AI に渡し、返ってきた回答に貼り替えてから" + rp.step("apply_button")
+                                       + "を押してください。"))
         (progress or (lambda fraction, desc="": None))(0.2, "回答を反映して変換し直しています…")
-        return self._run("manual", text)
+        res = self._run("manual", text)
+        self._last_answer = (prompt_digest, self.run.docx_name, text.strip())
+        return res
 
     # ---- 足りない画像
     def missing_images(self) -> list:
@@ -304,6 +452,9 @@ class AppState:
         """選んだ画像を、図ごとに入れる。mapping: 出力ファイル名 → ファイルのパス。戻り値: 入れた出力ファイル名。"""
         if self.res is None:
             raise InputError("先に変換してください。")
+        changed = self.changed_inputs()
+        if changed:
+            raise InputError(self.stale_text(changed))
         chosen = {name: Path(p) for name, p in (mapping or {}).items() if p}
         if not chosen:
             raise InputError("画像が選ばれていません。")
@@ -386,7 +537,7 @@ class AppState:
         if self.res is None:
             return ""
         res = self.res
-        parts = [no_ai_box("app")] if self.inputs["ai_mode"] == "none" else []
+        parts = [no_ai_box("app")] if self.run is not None and self.run.ai_mode == "none" else []
         parts.append(result_boxes(res, skip=("ai_pending",) if self.waiting_for_answer else (), screen="app"))
         parts.append(summary_box(res))
         parts.append(report_details(res.report_path.read_text(encoding="utf-8")))
@@ -396,6 +547,9 @@ class AppState:
         """ダウンロード用の ZIP を作る。戻り値: (ZIP のパス, 知らせ)。要対応が残っていて accept_todo でなければ (None, 知らせ)。"""
         if self.res is None:
             return None, "先に変換してください。"
+        changed = self.changed_inputs()
+        if changed:
+            return None, self.stale_text(changed)       # 「このままダウンロード」でも断る
         if self.needs_action and not accept_todo:
             return None, ("要対応が残っています: " + "／".join(self.todo_titles())
                           + "。このままダウンロードするときは、「このままダウンロード」にチェックを入れてもう一度押してください。")
@@ -410,7 +564,9 @@ class AppState:
         self.res = None
         self.notes = []
         self.user_images = {}
-        self._meta = self._journal = self._api_key = None
+        self.run = None
+        self.paper_changed = False
+        self._last_docx = None
         shutil.rmtree(self.work / "input", ignore_errors=True)
         shutil.rmtree(self.out_dir, ignore_errors=True)
         for archive in self.work.glob("変換結果*.zip"):
@@ -530,18 +686,21 @@ def build_app(state: AppState, io: "IO | None" = None):
 
         def on_change(*values):
             sync(values)
-            miss = state.missing()
-            return gr.update(interactive=not miss), ("足りない項目: " + "、".join(miss) if miss else "")
+            return gr.update(interactive=not state.missing()), state.ready_text()
 
         def on_convert(*values, progress=gr.Progress()):
             sync(values)
+
+            def tail():
+                # 別の論文に変えて変換したときだけ回答の欄を空にする。ready は変換し直した後に古い文を残さないため作り直す
+                return [gr.update(value="") if state.paper_changed else gr.update(), state.ready_text()]
             try:
                 state.convert(io, progress)
             except InputError as e:
-                return view(e)
+                return view(e) + tail()
             except Exception as e:                 # 想定外の例外。Gradio の「Error」だけにせず、枠に出す
-                return view(state.crash(e, "convert"))
-            return view()
+                return view(state.crash(e, "convert")) + tail()
+            return view() + tail()
 
         def on_apply(text, progress=gr.Progress()):
             try:
@@ -579,7 +738,7 @@ def build_app(state: AppState, io: "IO | None" = None):
 
         for comp in inputs:
             comp.change(on_change, inputs, [go, ready], api_name=False)
-        go.click(on_convert, inputs, views)
+        go.click(on_convert, inputs, views + [answer, ready])
         apply_btn.click(on_apply, [answer], views)
         images_btn.click(on_images, image_files, views)
         download_btn.click(on_download, [accept], views)

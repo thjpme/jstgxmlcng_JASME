@@ -954,20 +954,22 @@ def test_manual_fields_hidden_when_result_was_not_made_in_manual_mode(journal, m
     """0.29.0 の 4 回目の点検: AI を使っていない（または API の）結果のまま、変換し直さずに「AI による補完の方法」の欄だけを手動に切り替えても、
     手動の欄（依頼文・「反映」）は出さない（図・表の参照の知らせ float_ref が出ていても。空の依頼文と回答を反映できない「反映」になるため）。
     手動モードで作った結果（依頼文がある）では出る。"""
+    from types import SimpleNamespace
+
     from jasme_jats.app import AppState
     path, src = _float_ref_states(tmp_path, journal, meta)
     none = convert(path, meta, journal, Options(out_dir=tmp_path / "none", convert_metafiles=False))
     assert none.ai.mode == "none" and [a for a in actions(none) if a.key == "float_ref"]
     st = AppState(tmp_path / "w")
     st.set_inputs(ai_mode="none")
-    st.res = none
+    st.res, st.run = none, SimpleNamespace(ai_mode="none")      # 変換したときの入力の写し
     assert not st.answer_box_open
     st.set_inputs(ai_mode="manual")
     assert not st.answer_box_open and st.prompt_text() == ""
     # API の結果も同じ
     done = _manual(path, [_link_op(src, "F1", 1)], meta, journal, tmp_path / "api_like")
     done.ai.mode, done.prompt_path = "api", None
-    st.res = done
+    st.res, st.run = done, SimpleNamespace(ai_mode="manual")
     assert not st.answer_box_open
     # 手動モードで作った結果（AI を使った後）は、貼り直せるように見える
     done = _manual(path, [_link_op(src, "F1", 1)], meta, journal, tmp_path / "manual_done")
@@ -1027,10 +1029,12 @@ def test_float_ref_advice_names_operations_each_screen_can_take(journal, meta, t
     assert "「AI の回答（json のコードブロック）を貼り付ける」の欄に貼り付け直して「反映」を押してください" in t["app"]
     assert "--ai manual --ai-response 回答のファイル を指定し直して実行してください" in t["cli"]
     assert "貼り付け直して反映" in t["report"] and "手順" not in t["app"] and "\x00" not in "".join(t.values())
+    from types import SimpleNamespace
+
     from jasme_jats.app import AppState
     st = AppState(tmp_path / "work")
     st.set_inputs(ai_mode="manual")
-    st.res = res
+    st.res, st.run = res, SimpleNamespace(ai_mode="manual")
     assert st.answer_box_open                                   # 案内のとおり、貼り付け直す欄が見えている
     # (c) AI を使った後（API）: もう一度変換する
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "api_done", convert_metafiles=False))

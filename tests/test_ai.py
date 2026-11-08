@@ -988,7 +988,7 @@ def test_textbox_undecided_advice_after_ai_names_operation_of_each_screen(journa
     assert "\x00" not in step_text(act.box_detail, "cli") + act.top + act.cli
     st = AppState(tmp_path / "work")
     st.set_inputs(ai_mode="manual")
-    st.res = res
+    st.res, st.run = res, types.SimpleNamespace(ai_mode="manual")      # 変換したときの入力の写し（手動の欄は写しで決まる）
     assert st.answer_box_open and st.prompt_text()                     # 案内のとおり、貼り付け直す欄が見えている
     # API: もう一度変換する
     api = _manual_pl(STRUCTURE, [_box_pl(hint, _src(plan, "囲みの後の段落である。")), _box_pl(note, "", kind="label")],

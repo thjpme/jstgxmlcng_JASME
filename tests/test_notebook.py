@@ -98,6 +98,10 @@ def test_step_guard_and_mark():
     assert ns["DONE"] == {1, 2, 3}
     with pytest.raises(SystemExit, match="先に手順 4 を"):
         exec(mk.guard(1, 2, 3, 4), ns)
+    # 手順の最初の unmark は、自分とそれより後の手順を（成功するかどうかにかかわらず）未実行に戻す
+    ns = {"DONE": {1, 2, 3, 4}}
+    exec(mk.unmark(3), ns)
+    assert ns["DONE"] == {1, 2}
 
 
 def fake_display(monkeypatch):
@@ -358,3 +362,59 @@ def test_step3_reads_full_width_numbers_and_common_dates(capsys):
         run(volume="31巻")
     with pytest.raises(SystemExit, match="入力を確認してください: 受付日「2026/13/1」を読めません"):
         run(received="2026/13/1")
+
+
+def test_failed_step_drops_later_steps(monkeypatch, tmp_path):
+    """途中で止まった手順の後では、後ろの手順の「済み」が残らない（unmark）。手順 2（PDF を選ばずに止まる）・手順 3（受付日の誤り）・
+    手順 6（変換が例外で止まる）で確かめる。"""
+    import sys
+    import types
+
+    from conftest import FULL
+
+    from jasme_jats.colab import report_details, result_boxes, summary_box
+    from jasme_jats.config import ArticleMeta, JournalConfig
+    from jasme_jats.pipeline import Options, add_images, convert
+    uploads = []
+    files = types.SimpleNamespace(upload=lambda: uploads.pop(0), download=lambda p: None)
+    colab = types.ModuleType("google.colab")
+    colab.files = files
+    google = types.ModuleType("google")
+    google.colab = colab
+    monkeypatch.setitem(sys.modules, "google", google)
+    monkeypatch.setitem(sys.modules, "google.colab", colab)
+    work = f"Path({str(tmp_path)!r})"
+    # 手順 2: docx は選んだが、PDF を選ばずに止まる
+    src2 = cell_source("#@title 2.").replace('Path("/content/jasme_work")', work)
+    ns = {"DONE": {1, 2, 3, 4, 5}}
+    uploads[:] = [{"B.docx": b"PK"}, {}]
+    with pytest.raises(SystemExit):
+        exec(src2, ns)
+    assert ns["DONE"] == {1}
+    with pytest.raises(SystemExit, match="先に手順"):
+        exec(mk.guard(1, 2, 3, 4, 5), dict(ns))
+    # 手順 3: 受付日が誤り
+    src3 = cell_source("#@title 3.").replace('peer_review = "（選んでください）"  #@param', 'peer_review = "査読あり"  #@param')
+    src3 = src3.replace('received = ""  #@param', 'received = "あした"  #@param', 1)
+    ns3 = {"DONE": {1, 2, 3, 4, 5}, "docx_path": Path("a.docx")}
+    with pytest.raises(SystemExit):
+        exec(src3, ns3)
+    assert ns3["DONE"] == {1, 2}
+    # 手順 6: 変換が例外で止まる / 成功する
+    shown = fake_display(monkeypatch)
+    src6 = cell_source("AI_RESPONSE = r'''").replace("ここに AI の回答を貼り付ける", "提案はありません（JSON ではない回答）", 1)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("途中で止まる")
+    base = {"AI": "manual", "docx_path": FULL, "pdf_path": None, "ROUTE_KEY": "docx", "SPLIT_LABELS": None,
+            "OUT": tmp_path / "output", "journal": JournalConfig.load(),
+            "meta": ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり"}),
+            "convert": convert, "Options": Options, "add_images": add_images, "result_boxes": result_boxes,
+            "summary_box": summary_box, "report_details": report_details, "HTML": lambda x: x, "display": shown.append}
+    ns6 = dict(base, DONE={1, 2, 3, 4, 5, 7, 8}, convert=boom)
+    with pytest.raises(RuntimeError):
+        exec(src6, ns6)
+    assert 5 not in ns6["DONE"] and ns6["DONE"] == {1, 2, 3, 4}
+    ns6 = dict(base, DONE={1, 2, 3, 4, 5, 7, 8})
+    exec(src6, ns6)
+    assert ns6["DONE"] == {1, 2, 3, 4, 5}

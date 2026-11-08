@@ -69,7 +69,8 @@ def md(text):
 
 
 # Colab ではどのセルの ▶ も押せてしまうので、各手順の最初で前の手順が済んでいるかを確かめる。
-# 済んだ手順は変数 DONE に記録し、ある手順をやり直したら、それより後の手順は「未実行」に戻す。
+# 済んだ手順は変数 DONE に記録する。各手順の最初（guard の直後）で、自分とそれより後の手順を「未実行」に戻し（unmark）、
+# 最後まで済んだら自分を記録する（mark）。途中で止まった手順の後では、後ろの手順の guard が止める。
 GUARD = """_need = [n for n in (NEED) if n not in globals().get("DONE", set())]
 if _need:
     raise SystemExit("先に手順 " + "・".join(map(str, _need)) + " を実行してください（上から順に ▶ を押します。"
@@ -83,6 +84,10 @@ def guard(*steps):
 
 def mark(step):
     return f'DONE = {{n for n in globals().get("DONE", set()) if n < {step}}} | {{{step}}}\n'
+
+
+def unmark(step):
+    return f'DONE = {{n for n in globals().get("DONE", set()) if n < {step}}}\n'
 
 
 def code(text, form=True):
@@ -175,7 +180,7 @@ cells = [
 ROUTE = "docx から作り、出版版 PDF で補う"  #@param ["docx から作り、出版版 PDF で補う", "docx から作る"]
 #@markdown **UPLOAD_PDF**: J-STAGE に登載する PDF もアップロードします。PDF がまだないときはチェックを外し、作り方を「docx から作る」にします。
 UPLOAD_PDF = True  #@param {type:"boolean"}
-""" + guard(1) + """
+""" + guard(1) + unmark(2) + """
 from pathlib import Path
 from google.colab import files
 
@@ -249,7 +254,7 @@ doi = ""  #@param {type:"string"}
 """ + TYPE_PARAM + """subject_other = ""  #@param {type:"string"}
 subject_other_en = ""  #@param {type:"string"}
 corresponding_author = ""  #@param {type:"string"}
-""" + guard(1, 2) + """if peer_review not in ("査読あり", "査読なし"):
+""" + guard(1, 2) + unmark(3) + """if peer_review not in ("査読あり", "査読なし"):
     raise SystemExit("査読の有無（peer_review）を選んでください。")
 if peer_review == "査読なし" and last_review_date.strip():
     raise SystemExit("査読なしのときは、最終査読日（last_review_date）を空欄にしてください。")
@@ -300,7 +305,7 @@ AI_MODE = "手動（チャットに貼り付け）"  #@param ["使わない", "A
 #@markdown **MODEL**（Claude のモデル。通常は変更不要）・**OTHER_MODEL**（ChatGPT・Gemini・Sakana AI のときは必ず入力。各社の最上位クラスのモデルを推奨）・**SPLIT_LABELS**（図表番号「図1」を <label> 要素に分ける。既定は分けない）
 """ + MODEL_LINE + """OTHER_MODEL = ""  #@param {type:"string"}
 SPLIT_LABELS = False  #@param {type:"boolean"}
-""" + guard(1, 2, 3) + """AI = "api" if AI_MODE.startswith("API") else {"使わない": "none", "手動（チャットに貼り付け）": "manual"}[AI_MODE]
+""" + guard(1, 2, 3) + unmark(4) + """AI = "api" if AI_MODE.startswith("API") else {"使わない": "none", "手動（チャットに貼り付け）": "manual"}[AI_MODE]
 PROVIDER = {"API で自動実行（ChatGPT）": "openai", "API で自動実行（Gemini）": "gemini",
             "API で自動実行（Sakana AI）": "sakana"}.get(AI_MODE, "claude")
 if PROVIDER == "claude":
@@ -326,7 +331,7 @@ if AI == "none":
 """ + mark(4)),
     code("""
 #@title 5. 変換を実行
-""" + guard(1, 2, 3, 4) + """import shutil
+""" + guard(1, 2, 3, 4) + unmark(5) + """import shutil
 from IPython.display import HTML, display
 from jasme_jats.colab import ai_required_box, no_ai_box, prompt_box, report_details, result_boxes, summary_box
 from jasme_jats.config import ArticleMeta, JournalConfig
@@ -402,7 +407,7 @@ if not AI_RESPONSE.strip() or "ここに AI の回答を貼り付ける" in AI_R
 if globals().get("PREVIOUS") and AI_RESPONSE.strip() == PREVIOUS.get("ai_response"):
     raise SystemExit(f"貼り付けられているのは、前の論文（{PREVIOUS['docx']}）の AI の回答です。今回の論文の依頼文（手順 5 の枠）を "
                      "AI に渡し、返ってきた回答に貼り替えてから ▶ を押してください。")
-res = convert(docx_path, meta, journal, Options(out_dir=OUT, ai_mode="manual", ai_response=AI_RESPONSE,
+""" + unmark(5) + """res = convert(docx_path, meta, journal, Options(out_dir=OUT, ai_mode="manual", ai_response=AI_RESPONSE,
                                               pdf_path=pdf_path, route=ROUTE_KEY, split_labels=SPLIT_LABELS))
 LAST_AI_RESPONSE = AI_RESPONSE.strip()
 if globals().get("USER_IMAGES"):
@@ -412,11 +417,11 @@ if globals().get("USER_IMAGES"):
 display(HTML(result_boxes(res)))      # 要対応（赤）・要確認（黄）の枠（report.actions）
 display(HTML(summary_box(res)))
 display(HTML(report_details(res.report_path.read_text(encoding="utf-8"))))
-""", form=False),
+""" + mark(5), form=False),
     code("""
 #@title 7. 足りない画像をアップロード（画像を用意できなかった図があるときだけ）
 #@markdown 手順 5 の赤い枠「画像ファイルを用意できなかった図」があるときだけ ▶ を押します。図ごとに「ファイル選択」が出るので、その図の画像（PNG・JPEG か、図の部分だけの 1 ページの PDF。記事の PDF から切り取るか、Word で図を右クリック →「図として保存」。ファイル名は何でもかまいません。図の題目は含めません）を選びます。用意できない図は「キャンセル」で飛ばせます。
-""" + guard(1, 2, 3, 4, 5) + """from IPython.display import HTML, Image, display
+""" + guard(1, 2, 3, 4, 5) + unmark(7) + """from IPython.display import HTML, Image, display
 from jasme_jats.colab import error_box, missing_images_box
 from jasme_jats.pipeline import add_images, graphics_path
 from jasme_jats.report import images_to_prepare
@@ -454,7 +459,7 @@ if _missing:
     code("""
 #@title 8. 結果をダウンロード
 #@markdown 「変換結果_巻_開始ページ.zip」（J-STAGE にアップロードする jasme_巻_開始ページ.zip、XML、変換レポート。「docx から作り、出版版 PDF で補う」では（PDF の文字を読めたとき）PDF で補った docx も）をダウンロードします。要対応（赤い枠）が残っていると一度止まります（そのままダウンロードするときは、もう一度 ▶）。
-""" + guard(1, 2, 3, 4, 5) + """from IPython.display import HTML, display
+""" + guard(1, 2, 3, 4, 5) + unmark(8) + """from IPython.display import HTML, display
 from jasme_jats.colab import result_boxes
 from jasme_jats.report import NEEDS_ACTION, actions, images_to_prepare
 
