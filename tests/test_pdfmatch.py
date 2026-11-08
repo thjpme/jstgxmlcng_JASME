@@ -3888,6 +3888,9 @@ def test_route2_chapter13_sections(journal, meta, tmp_path):
     heads1 = re.findall(r"^### (13\.\d .*)$", chapters(res1)[1], flags=re.M)
     assert heads1 == ["13.1 文字の違い（要確認）", "13.2 組版の違い（docx のまま）", "13.3 PDF の中に見つからなかった段落",
                       f"13.4 {IGNORED_TITLE}"]
+    # 13.4 は、PDF と照合しない番号（表のセルなど）が Word の形のままであることを、番号の有無にかかわらず添える
+    from jasme_jats.report import NUMBERS_NOT_MATCHED
+    assert NUMBERS_NOT_MATCHED in chapters(res2)[1].split("### 13.4")[1].split("### 13.5")[0]
 
 
 @pytest.mark.parametrize("space, dropped", [("　", False), (" ", True)], ids=["fullwidth", "halfwidth"])

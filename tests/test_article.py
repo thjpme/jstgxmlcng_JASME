@@ -454,7 +454,7 @@ def test_title_author_aff_autonum_is_not_written_and_warned(split, journal, meta
     assert len(warn) == 1 and all(u[0] in warn[0] for u in unshown)
     assert not res.needs_action
     report = res.report_path.read_text(encoding="utf-8")
-    assert "（題目・著者名・所属の段落の番号は出していません。10 章）" in report.split("## 8.")[1].split("## 9.")[0]
+    assert "（題目・副題・著者名・所属の段落の番号は出していません。10 章）" in report.split("## 8.")[1].split("## 9.")[0]
 
 
 @pytest.mark.parametrize("spaced", [False, True], ids=["plain", "leading-space"])

@@ -172,6 +172,12 @@ def images_to_prepare(r) -> list:
     return out
 
 
+# PDF と照合しない番号の但し書き（8 章・13.4 で共用）
+NUMBERS_NOT_MATCHED_BODY = ("表のセル・囲み・別行数式の段落と、付記・謝辞・注・引用文献・資料・英文要旨の見出しの番号は PDF と照合しないので、"
+                            "Word の形のままです。")
+NUMBERS_NOT_MATCHED = "（" + NUMBERS_NOT_MATCHED_BODY + "）"
+
+
 LOST_IMAGES_WHY = ("docx にあるのに、画像を出力できない場所（引用文献・題目・著者名・所属の段落など）や、XML に出力しなかった"
                    "段落の中にあるため、XML にも Graphics/ にも入っていません。このままでは、その画像は J-STAGE の画面に表示されません。")
 LOST_IMAGES_ACTION = ("本文に必要な画像なら、Word でその画像（テキストボックスなどの図形に入っているときは図形ごと）を本文の段落に"
@@ -1105,7 +1111,7 @@ def images_action(r):
     items = "\n".join(f"・{name}: {cap or '（キャプションなし）'}（{why}）" for name, cap, why in need)
     return Action(
         NEEDS_ACTION, "images",
-        top="\n".join([(f"> **要対応: 画像ファイルを用意できなかった図が {len(need)} 件あります（9 章）。** 次の名前の画像（名前の拡張子の形式。.png は PNG、.jpg は JPEG）を"
+        top="\n".join([(f"> **要対応: 画像ファイルを用意できなかった図が {len(need)} 件あります（9 章）。** 次の名前の画像（拡張子の形式で。.png なら PNG、.jpg なら JPEG）を"
                         f"作り、{esc(zname)} の中の `{graphics_dir(r)}` に入れてください。画像がないままでは、その図が J-STAGE の"
                         "画面に表示されません。"), ">"]
                       + [f"> - `{name}`: {esc(cap, 40) or '（キャプションなし）'}（{esc(why)}）" for name, cap, why in need]),
@@ -1177,13 +1183,19 @@ def _image_crop_action(r):
     zname = r.zip_path.name if r.zip_path else "アップロード用の ZIP"
     gdir = graphics_dir(r)
     caps = _image_captions(r)
+    holder = {}                                  # 画像の ID -> 画像のある段落の場所（図に入っていない画像の手がかり）
+    for p in r.plan.paras.values():
+        for img in p.images:
+            holder.setdefault(img.image_id, r.plan.locations.get(p.src) or p.src)
     rows = []
     for i in imgs:
-        cap = caps.get(i.image_id, "")
-        rows.append((i.name, i.image_id, cap, crop_text(i.crop)))
-    top_rows = [f"> - `{name}`（{iid}。{esc(cap, 20) or 'キャプションなし'}）: {ct}" for name, iid, cap, ct in rows]
-    detail_rows = [f"・{name}（{esc(cap, 20) or 'キャプションなし'}）: {ct}" for name, iid, cap, ct in rows]
-    check_rows = "、".join(f"`{name}`（{esc(cap, 20) or 'キャプションなし'}）" for name, iid, cap, ct in rows)
+        cap = caps.get(i.image_id)
+        label = esc(cap, 20) if cap else (f"図に入っていない画像。{esc(holder[i.image_id], 30)}" if i.image_id in holder
+                                           else "図に入っていない画像")
+        rows.append((i.name, i.image_id, label or "キャプションなし", crop_text(i.crop)))
+    top_rows = [f"> - `{name}`（{iid}。{label}）: {ct}" for name, iid, label, ct in rows]
+    detail_rows = [f"・{name}（{label}）: {ct}" for name, iid, label, ct in rows]
+    check_rows = "、".join(f"`{name}`（{label}）" for name, iid, label, ct in rows)
     cli_rows = ", ".join(f"{name}（{ct}）" for name, iid, cap, ct in rows)
     return Action(
         TO_CHECK, "image_crop",
@@ -2049,12 +2061,11 @@ def render(r) -> str:
                       "本文で最初に参照される順の通し番号を本誌の形式〈設定 fn_mark〉で付けています。対応は下の表）")
     else:
         word_marks = "（Word の脚注機能で書かれた注の番号だけは、Word の表示「1」ではなく本誌の形式（設定 fn_mark）にしています）"
-    unshown = "（題目・著者名・所属の段落の番号は出していません。10 章）" if getattr(r, "unshown_numbers", None) else ""
+    unshown = "（題目・副題・著者名・所属の段落の番号は出していません。10 章）" if getattr(r, "unshown_numbers", None) else ""
     L.append("Word の自動段落番号や脚注番号は docx の文字ではなく Word が表示時に作るものです。表示どおりの文字を XML に出力しました"
              f"{word_marks}{unshown}。"
              "「docx から作り、出版版 PDF で補う」では、章・節・項の見出し・本文・キャプション・注・付記・謝辞・引用文献・英文要旨の段落の"
-             "自動番号と脚注番号の全角・半角と字形を PDF に合わせています（表のセル・囲み・別行数式の段落と、付記・謝辞・注・引用文献・"
-             "資料・英文要旨の見出しの番号は PDF と照合しないので、Word の形のままです。13 章）。"
+             "自動番号と脚注番号の全角・半角と字形を PDF に合わせています（" + NUMBERS_NOT_MATCHED_BODY + "13 章）。"
              "docx に注の見出しがない場合（Word の脚注機能で書かれた注など）は、見出し（設定 fn_title）を補いました。")
     L.append("")
     if fid.generated:
@@ -2389,11 +2400,11 @@ def render_route2(L, r, pc, fx):
     L.append("")
     if pc.numbers:
         L.append("Word が付ける番号（自動段落番号・脚注番号）は docx の文字ではないので、変換のときに全角・半角と字形を PDF に"
-                 "合わせました。")
+                 "合わせました。" + NUMBERS_NOT_MATCHED)
         L.append("")
         L.append(table(["番号", "場所", "変更前 → 変更後"], number_rows(r)))
     else:
-        L.append("PDF と全角・半角や字形が違う番号（自動段落番号・脚注番号）はありません。")
+        L.append("PDF と全角・半角や字形が違う番号（自動段落番号・脚注番号）はありません。" + NUMBERS_NOT_MATCHED)
     L.append("")
     L.append("### 13.5 補った docx と PDF の照合（残っている違い）")
     L.append("")

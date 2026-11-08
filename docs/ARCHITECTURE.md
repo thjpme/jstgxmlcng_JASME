@@ -1,7 +1,7 @@
 # コードの地図（引き継ぎ用）
 
-このツール（jasme-jats 0.29.0）の「どこが何をしているか」を、別の人や AI が短時間で把握できるようにまとめたもの。
-2026-11-03 にコード全体を読み直して書いた。
+このツール（jasme-jats 0.30.0）の「どこが何をしているか」を、別の人や AI が短時間で把握できるようにまとめたもの。
+2026-11-03 にコード全体を読み直して書き、2026-11-08 に 0.30.0 の修正（`docs/FIX_PLAN_2026-11.md` の u1〜u4）に合わせて直した。
 
 既存の文書との関係:
 
@@ -14,6 +14,7 @@
 | `docs/GUI_PLAN.md` | 1 画面版（Gradio）の設計と経緯 |
 | **この文書** | **コードの構成（モジュールの層・依存・データの流れ・入口）と、「変えたいときはどこを見るか」** |
 | `docs/REVIEW_2026-11.md` | 2026-11 の点検で見つけた問題と、その分類（直すべき度合い） |
+| `docs/FIX_PLAN_2026-11.md` | 2026-11 の別の AI の点検に基づく修正計画（0.30.0・0.31.0）と、単位ごとの設計書（`docs/fix_plan_2026-11/units/`） |
 
 ---
 
@@ -40,8 +41,10 @@
   builder.finalize / serialize ───▶ 目印を外した最終 XML → fidelity.final_check で再照合 → validate.validate（DTD）
   [ルート2] fidelity.verify_supplement: 補った docx が元の docx から (A)(B) 以外に変わっていないか
   pipeline.lost_images ───────────▶ XML に入らなかった画像
+  pipeline.table_problems ────────▶ 形の崩れた表（行ごとの列の数・セルの重なり・縦の結合の範囲・セルのない行）
+  pipeline.lost_autonums ─────────▶ XML に番号が出なかった Word の自動番号の段落
         │
-  images.export_images → jstage_rules.check → package.write_package（ZIP）→ report.render（レポート）
+  images.export_images（Word のトリミングは切り取る）→ jstage_rules.check → package.write_package（ZIP）→ report.render（レポート）
         │
 出力: {記事識別子}.xml、jasme_{記事識別子}.zip、{記事識別子}_変換レポート.md、（AI 依頼文.txt、AI判断一覧.md、PDFで補完した原稿.docx）
 ```
@@ -52,7 +55,7 @@
 
 ```
 画面      cli.py   colab.py（表示部品）   app.py（Gradio）   tools/make_notebook.py（ノートブック生成）
-流れ      pipeline.py（convert / add_images / lost_images / Result）
+流れ      pipeline.py（convert / add_images / lost_images / table_problems / lost_autonums / Result）
 出力      report.py（レポート・利用者への知らせ actions）  package.py（ZIP）  images.py（画像）  jstage_rules.py
 検証      fidelity.py（不変性チェック・補完の確かめ）  validate.py（DTD）
 組み立て  builder.py → emit.py → omml.py（数式）  tracking.py（目印）
@@ -68,11 +71,11 @@ PDF       pdfmatch.py（照合）  pdfdocx.py（補った docx を書く）
 
 | モジュール | 使うモジュール |
 |---|---|
-| `cli` | ai_assist, config, pipeline, report |
+| `cli` | ai_assist, colab（`step_text`）, config, pipeline, report |
 | `app` | ai_assist, colab, config, pipeline, report |
 | `colab` | report（`STEP_MARK_PATTERN`・`NEEDS_ACTION` など。`step_text` が目印を読む） |
 | `pipeline` | ai_assist, article, builder, config, docx_reader, fidelity, images, jstage_rules, linker, model, package, pdfdocx, pdfmatch, report, structure, tracking, validate |
-| `report` | ai_assist, docx_reader, linker, model, package, pdfdocx, pdfmatch, structure, validate（`md_tag` が要素名を引く） |
+| `report` | ai_assist, docx_reader, images（`crop_text`）, linker, model, package, pdfdocx, pdfmatch, structure, validate（`md_tag` が要素名を引く） |
 | `fidelity` | omml, ooxml, pdfdocx（定数 AUTHOR・PARTS だけ）, pdfmatch（定数だけ）, tracking |
 | `pdfdocx` | builder, docx_reader, linker, model, ooxml, pdfmatch, structure |
 | `pdfmatch` | linker, model |
@@ -97,9 +100,10 @@ PDF       pdfmatch.py（照合）  pdfdocx.py（補った docx を書く）
 
 | 型（定義場所） | 作る所 | 読む所 | 中身 |
 |---|---|---|---|
-| `model.Document` | `docx_reader.read_docx` | structure, builder（画像）, pipeline, report | `blocks`（Para と Table の列。本文の順）、`footnotes`/`endnotes`（ID → [Para]）、`media`（画像のバイト列）、`styles`、`images`（ImageRef）、`floats`（浮動配置の図形）、`textboxes`、`layout`（段組み）、`hidden_text`/`style_hidden`、`joined`/`joins`（段落記号の削除でつないだ段落）、`deleted_rows`、`warnings` |
+| `model.Document` | `docx_reader.read_docx` | structure, builder（画像）, pipeline, report | `blocks`（Para と Table の列。本文の順）、`footnotes`/`endnotes`（ID → [Para]）、`media`（画像のバイト列）、`styles`、`images`（ImageRef。Word のトリミングの割合 `crop` と、書き出しで反映しない加工の名前 `edits`〈`model.IMAGE_EDITS` の順〉も）、`floats`（浮動配置の図形）、`textboxes`、`layout`（段組み）、`hidden_text`/`style_hidden`、`joined`/`joins`（段落記号の削除でつないだ段落）、`deleted_rows`、`warnings` |
 | `model.Para` | docx_reader | すべて | `src`（段落 ID: 本文 d1, d2…、脚注 f…、文末脚注 e…）、`atoms`、`style_id`、`numbering`/`autonum`、`float_id`/`textbox_id`、`role`（structure が決める） |
 | `model.Atom` | docx_reader | linker, emit | `kind` が text / math / image / fnref / gen。`text`、`fmt`（bold など）、`href`、`link`（LinkSpec）。`plain()` は文字でないものを U+FFFC にする |
+| `model.Table` / `Row` / `Cell` | docx_reader | structure, builder, pipeline.table_problems | `Table.rows`（Row）、`Row.cells`（Cell）・`header`・`grid_before`/`grid_after`（行の前後で飛ばしたグリッドの列の数）・`number`（docx の表の何行目か。警告の行の番号）、`Cell.gridspan`（0・負・数でない値は 1）・`vmerge`（restart / continue）・`blocks`。縦の結合の `rowspan` は中間表現に持たず、builder が組み立てのときに数える |
 | `model.LinkSpec` | linker, refparse, ai_assist | emit | `kind`（xref / uri / ext-link / pub-id / year / article-title / source / label）、`attrs`、`origin`（word / mechanical / ai） |
 | `article.ArticlePlan` | `structure.classify` | linker, ai_assist, builder, report, pipeline, pdfmatch, pdfdocx | 論文の構造（`title`、`authors`、`body`〈Sec の木〉、`fns`、`refs`、`abstract`、`apps`…）、`paras`（src → Para）、`region`（src → 領域）、`locations`（src → 人が読む位置）、`exclusions`、`decisions`、`floats`（FloatInfo）、`textboxes`（BoxInfo）、`figures`/`tables`/`formulas`、`body_seq`、`float_unlinked`（リンクしなかった図・表の参照。`UnlinkedRef`〈図か表, 段落 ID, 文字, 段落の中の範囲〉）、`fn_guess_checks`・`fn_guess_numbered`・`fn_guess_span`（文字から推定した「注」の扱い。要確認 `fn_guess`。`fn_guess_span` は「注見出し」にしたとき注の節に入る段落、`fn_guess_notes` は文字から注の見出しと推定した「注」の段落 ID） |
 | `article` のノード | structure | builder, report | `Sec`、`PNode`、`ListNode`、`QuoteNode`、`FigNode`、`TableNode`、`FormulaNode`、`BoxNode`、`FnNode`、`RefNode`、`BackSec`、`AppNode`、`Author`、`Aff` |
@@ -107,12 +111,13 @@ PDF       pdfmatch.py（照合）  pdfdocx.py（補った docx を書く）
 | `model.Exclusion` | `plan.exclude()`/`exclude_blank()`、builder | fidelity, report（6 章）, pipeline.lost_images | 出力しない段落の ID・理由・全文。`blank` は空白だけの段落 |
 | `linker.Linker` | `linker.link` | pipeline, ai_assist, report | `count`（リンクの数）、`unresolved`（リンク先が見つからなかった参照）、`note_style`/`bare_notes`、`float_numbers`（図・表の番号 → ID、リンクしない番号〈重なる・枝番つき〉、枝番の有無）。リンクしなかった参照は `_unlinked` が判断の一覧と `plan.float_unlinked` に記録 |
 | `ai_assist.AIOutcome` | pipeline | report, colab, app | `mode`/`provider`/`model`、`raw`（回答）、`accepted`/`rejected`（操作と Decision・理由）、`notes`、`error`、`cut`/`partial`（途中で切れた回答） |
-| lxml の木 + `builder.BuildInfo` | `builder.build` | fidelity, pipeline, report | `images`（出力した画像）、`exclusions`（builder 側の除外）、`drops`、`notes`、`newlines`、`unsplit_names`、`warnings` |
+| lxml の木 + `builder.BuildInfo` | `builder.build` | fidelity, pipeline, report | `images`（出力した画像）、`exclusions`（builder 側の除外）、`drops`、`notes`、`newlines`、`unsplit_names`、`warnings`、`tables`（出力した表〈`<table>` の要素・`model.Table`・Word で探す手がかり〉。`table_problems` が使う）、`unshown_numbers`（番号を出さなかった題目・副題・著者名・所属の段落。10 章の警告） |
+| `model.LostImage` / `LostNumber` / `TableProblem` | `pipeline.lost_images` / `lost_autonums` / `table_problems` | report（9 章・8 章・12 章と要対応） | XML に入らなかった画像、XML に番号が出なかった自動番号の段落（`src`・`number`・`location`・`where`〈文字を出した要素〉・`text`）、形の崩れた表（`tid`・`where`・`name`・`problems`） |
 | `fidelity.FidelityResult` | `fidelity.verify` / `final_check` | pipeline（Result.ok）, report（5 章） | `ok`、`mismatches`、`missing`、`duplicates`、`stray`、`conflicts`、`bad_excluded`、`final_ok`、`final_unreadable`（最終出力が XML として読めない・実体の宣言がある）、`final_differs`（最終出力の文字が検証済みの木と違う） |
 | `pdfmatch.PdfCheck` | `pdfmatch.check_pdf` | pdfdocx, report（13 章）, pipeline | `diffs`（TextDiff）、`unmatched`、`width`/`drops`/`numbers`（(A) の直し）、`drop_basis`（`drops` の空白の根拠の全角・半角の直しまたは番号）、`ignored_lines`、`case_srcs` |
 | `pdfdocx.DocxFix` | `pdfdocx.make_fixed_docx` | pipeline, fidelity.verify_supplement, report | `path`（補った docx。入力が同名なら `_2` などの別名）、`fixes`（Fix の一覧。applied / reason。`Fix.group`＝1 つの違いを分けた組〈双方向〉、`Fix.needs`＝空白の削除が従う根拠の全角・半角の直し〈片方向〉）、`check`（照合の結果） |
 | `fidelity.SupplementResult` | `fidelity.verify_supplement` | pipeline, report（13.8） | 補完の確かめの合否と問題 |
-| `pipeline.Result` | `pipeline.convert` | report, cli, colab, app | 上のすべてを束ねたもの。`ok`（3 つの検証の合格）、`needs_action`（要対応があるか。`report.actions` から決まる）、出力ファイルのパス |
+| `pipeline.Result` | `pipeline.convert` | report, cli, colab, app | 上のすべてを束ねたもの。`ok`（3 つの検証の合格）、`needs_action`（要対応があるか。`report.actions` から決まる）、出力ファイルのパス。守りの結果は `lost_images`（XML に入らなかった画像）・`table_problems`（形の崩れた表）と `tables_checked`（形を確かめた表の数。12 章）・`lost_autonums`（XML に番号が出なかった自動番号の段落）・`unshown_numbers`（番号を出さなかった題目・著者名・所属の段落。10 章）。ほかに `images`（`images.ImageResult`。切り取った割合 `crop`・反映しなかった加工 `edits`）、`zip_issues`・`not_zipped`、`supplement`（ルート2）など |
 | `report.Action` | `report.actions(res)` | report（冒頭・14 章）, colab（枠）, cli（標準エラー）, pipeline（終了コード） | `level`（NEEDS_ACTION / TO_CHECK）、`key`、`top`、`checklist`、`box_title`/`box_detail`、`cli` |
 
 ### 段落 ID（`src`）
@@ -126,23 +131,23 @@ XML の要素の ID は `structure.Classifier.assign_ids` が付ける: 図 `F1`
 
 ## 3. 各モジュールの役割と入口
 
-行数は 0.29.0 のもの。「入口」は、ほかのモジュールから呼ばれる主な関数。
+行数は 0.30.0 のもの（`wc -l`）。「入口」は、ほかのモジュールから呼ばれる主な関数。
 
 ### 基盤
 
 | ファイル | 行 | 役割 | 入口 |
 |---|---|---|---|
 | `ooxml.py` | 453 | docx の低水準処理と**文字ポリシー**（何が docx の文字か）。`DocxPackage`（zip を開いて `mc:AlternateContent` を前処理）、`HiddenRule`（隠し文字の判定。styles.xml から作る）、`joined_paragraphs`/`unjoined_deleted_marks`（段落記号の削除でつなぐ段落）、`canonical_text`/`canonical_texts`（検証用の文字の取り出し。読み取りとは別実装）、`sym_char`（Symbol フォント）、`in_deleted_run`（削除の変更履歴の中の図形の段落を欠番にする判定。読み取り・検証・ルート2 が共有） | `DocxPackage`, `HiddenRule`, `canonical_texts`, `joined_paragraphs`, `paragraph_ids`, `in_deleted_run` |
-| `model.py` | 342 | 中間表現の型（上の表）。`note_key`/`note_label`（Word の脚注・文末脚注の鍵「footnote:5」） | 型 |
+| `model.py` | 377 | 中間表現の型（上の表）。`note_key`/`note_label`（Word の脚注・文末脚注の鍵「footnote:5」）。守りの結果の `LostImage`・`LostNumber`・`TableProblem`、反映しない Word の画像の加工の名前 `IMAGE_EDITS` | 型 |
 | `config.py` | 244 | `JournalConfig`（`data/jasme.toml`。誌名・ISSN・DOI 形式・スタイル名の対応・原稿種別）と `ArticleMeta`（記事ごとの書誌情報。`from_dict` が巻・号・ページを NFKC にして確かめ、日付を `_date` で読む） | `JournalConfig.load`, `ArticleMeta.from_dict`/`load`, `article_id`, `doi_value` |
-| `tracking.py` | 27 | 変換中の目印の名前空間（`jx:span`、`jx:drop`、`jx:gen`、`jx:implicit`、`jx:o`、`jx:ai`） | 定数 |
+| `tracking.py` | 28 | 変換中の目印の名前空間（`jx:span`、`jx:drop`、`jx:gen`〈kind が autonum なら `src` に番号の段落 ID〉、`jx:implicit`、`jx:o`、`jx:ai`） | 定数 |
 
 ### 読み取り
 
 | ファイル | 行 | 役割 | 入口 |
 |---|---|---|---|
-| `docx_reader.py` | 849 | docx → `Document`。`Reader.read` が document.xml の `w:body` を `read_block` で順にたどる（段落 `read_paragraph`、表 `read_table`、`w:sdt`/`w:customXml` は `_children` で中身をたどる）。`_walk`/`_run` がランをアトムにし、ハイパーリンク・フィールド・変更履歴・隠し文字を扱う。`_graphic` が画像（DrawingML・VML・OLE）と図形（`_new_float`・`_new_textbox`。テキストボックスの中の段落・表は `_read_nested_*`）を記録。`read_notes` が脚注・文末脚注。`read_styles`/`read_layout` | `read_docx(path) -> Document` |
-| `numbering.py` | 183 | numbering.xml から自動段落番号の表示文字列（`Numbering.label`）。`w:lvlOverride`・`w:startOverride`、ローマ数字・英字・漢数字。`w:numStyleLink` は styles.xml の番号付けスタイルをたどる（`Numbering(root, styles_root)`・`_follow_style_links`） | `Numbering`, `format_number` |
+| `docx_reader.py` | 1020 | docx → `Document`。`Reader.read` が document.xml の `w:body` を `read_block` で順にたどる（段落 `read_paragraph`、表 `read_table`、`w:sdt`/`w:customXml` は `_children` で中身をたどる）。`_walk`/`_run` がランをアトムにし、ハイパーリンク・フィールド・変更履歴・隠し文字を扱う。`_graphic` が画像（DrawingML・VML・OLE）と図形（`_new_float`・`_new_textbox`。テキストボックスの中の段落・表は `_read_nested_*`）を記録し、Word のトリミング（`a:srcRect`、VML は `v:imagedata` の `crop*`）と回転・反転・色の変更などの加工を `ImageRef.crop`・`edits` に記録する（`_pic_edits`・`_vml_edits`。1 つの `w:drawing` に `pic` が複数あるときの大きさは `pic` の `a:xfrm/a:ext` にグループの縮尺を掛ける）。表は `w:gridSpan`（`_grid_span`。0・負・数でない値は 1）と行の `w:gridBefore`・`w:gridAfter`（`_grid_skip`）・行の番号を読む。`read_notes` が脚注・文末脚注。`read_styles`/`read_layout` | `read_docx(path) -> Document` |
+| `numbering.py` | 217 | numbering.xml から自動段落番号の表示文字列（`Numbering.label`）。`w:lvlOverride` の `w:lvl`（段の定義の上書き。書かれた子要素だけを abstractNum の段に重ねる）と `w:startOverride`（`_levels`）、ローマ数字・英字・漢数字。`w:numStyleLink` は styles.xml の番号付けスタイルをたどる（`Numbering(root, styles_root)`・`_follow_style_links`） | `Numbering`, `format_number` |
 | `omml.py` | 407 | OMML → MathML 2.0（`OmmlConverter.convert`）。属性で表される記号は `jx:implicit`、順序が入れ替わる文字は `jx:o`。`math_plain`（数式の文字だけ）。根号は `m:deg` に文字があれば `degHide` でも `mroot`（`h_rad`） | `OmmlConverter`, `omml_to_mathml`, `math_plain` |
 
 ### 構造
@@ -150,7 +155,7 @@ XML の要素の ID は `structure.Classifier.assign_ids` が付ける: 図 `F1`
 | ファイル | 行 | 役割 | 入口 |
 |---|---|---|---|
 | `article.py` | 368 | `ArticlePlan` とノードの型、`FloatInfo`/`BoxInfo`、`plan.decide`（段階ごとの件数を持ち O(1) で番号を付ける）/`exclude`/`exclude_blank`/`float_place`/`box_place`/`no_link_paras`、`float_unlinked`・`fn_guess_checks`・`fn_guess_numbered`・`fn_guess_span`・`fn_guess_notes`。規則は置かない | 型 |
-| `structure.py` | 2408 | 段落の役割の決定と構造の組み立て。`classify(doc, journal, overrides, placements)` → `Classifier.run`。流れ（冒頭の docstring に目次）: ① `role_of`（AI の指定 → スタイル → 推定）② `split_regions`（和文の冒頭 / 本文 / 後付け / 英文の部分）③ `build_front_ja`（題目・著者・所属）④ `build_body`（`place_floats` 浮動配置の図表、`place_boxes` 文字だけのテキストボックス、`assemble_floats` 図表・箇条書き・引用・別行数式に組む、`nest` 章節項、`compute_locations`）⑤ `build_back`（付記・謝辞・注・引用文献）⑥ `build_front_en`（英文題目・著者・要旨・資料）⑦ `attach_word_notes`（Word の脚注・文末脚注を通し番号の注に）⑧ `assign_ids` ⑨ `joined_styles`。②では、本文スタイルの「注」だけの段落を文字から注の見出しと推定して後付けに切り替えた後、見出しのスタイル（sec1〜sec3）の段落が資料の見出し以外で現れたら本文に戻し、要確認 `fn_guess` の材料（`plan.fn_guess_checks`・`fn_guess_numbered`）を記録する（`check_fn_guess`。ブロックの識別は `block_id`）。「注見出しにすると注の節に入る段落」（`plan.fn_guess_span`）は、推定した「注」ごとに `feed_fn_span` が、その「注」を「注見出し」スタイルにしたときの `build_back` と同じ規則（別の「注」は見出しとして数えない）で数える。⑤の付記・謝辞・資料の自動番号の段落は `add_back_para` で `ListNode` にする。図表のキャプションの番号と枝番は `caption_label`・`RE_CAP_BRANCH`（区切り `CAP_BRANCH_SEP`・数字 `CAP_BRANCH_NUM` は builder・linker が共有）で読む。本文の外の段落に結び付いた図形があれば 2 回組み立てる（`Classifier.outside`）。正規表現（`RE_FIGCAP`、`RE_TABCAP`、`RE_APPENDIX` など）と除外の理由の文言もここ | `classify`, `float_caption`, `float_targets`, `appendix_heading` |
+| `structure.py` | 2409 | 段落の役割の決定と構造の組み立て。`classify(doc, journal, overrides, placements)` → `Classifier.run`。流れ（冒頭の docstring に目次）: ① `role_of`（AI の指定 → スタイル → 推定）② `split_regions`（和文の冒頭 / 本文 / 後付け / 英文の部分）③ `build_front_ja`（題目・著者・所属）④ `build_body`（`place_floats` 浮動配置の図表、`place_boxes` 文字だけのテキストボックス、`assemble_floats` 図表・箇条書き・引用・別行数式に組む、`nest` 章節項、`compute_locations`）⑤ `build_back`（付記・謝辞・注・引用文献）⑥ `build_front_en`（英文題目・著者・要旨・資料）⑦ `attach_word_notes`（Word の脚注・文末脚注を通し番号の注に）⑧ `assign_ids` ⑨ `joined_styles`。②では、本文スタイルの「注」だけの段落を文字から注の見出しと推定して後付けに切り替えた後、見出しのスタイル（sec1〜sec3）の段落が資料の見出し以外で現れたら本文に戻し、要確認 `fn_guess` の材料（`plan.fn_guess_checks`・`fn_guess_numbered`）を記録する（`check_fn_guess`。ブロックの識別は `block_id`）。「注見出しにすると注の節に入る段落」（`plan.fn_guess_span`）は、推定した「注」ごとに `feed_fn_span` が、その「注」を「注見出し」スタイルにしたときの `build_back` と同じ規則（別の「注」は見出しとして数えない）で数える。⑤の付記・謝辞・資料の自動番号の段落は `add_back_para` で `ListNode` にする。図表のキャプションの番号と枝番は `caption_label`・`RE_CAP_BRANCH`（区切り `CAP_BRANCH_SEP`・数字 `CAP_BRANCH_NUM` は builder・linker が共有）で読む。本文の外の段落に結び付いた図形があれば 2 回組み立てる（`Classifier.outside`）。正規表現（`RE_FIGCAP`、`RE_TABCAP`、`RE_APPENDIX` など）と除外の理由の文言もここ | `classify`, `float_caption`, `float_targets`, `appendix_heading` |
 | `floats.py` | 193 | 浮動配置の図形の位置の判定（`at_anchor`: 機械的に置けるか）、AI に渡す説明（`describe`）と行数の推定（`para_lines`, `box_lines`）、文字だけのテキストボックスが囲みか注記か（`textbox_kind`。しきい値 `BOX_CHARS` など） | `at_anchor`, `textbox_kind`, `describe` |
 
 ### リンク
@@ -158,20 +163,20 @@ XML の要素の ID は `structure.Classifier.assign_ids` が付ける: 図 `F1`
 | ファイル | 行 | 役割 | 入口 |
 |---|---|---|---|
 | `linker.py` | 723 | 機械的リンク。`Linker.run`: 数式のラベル → 段落ごとに Word のハイパーリンク・URL/DOI・図表の参照（`float_refs`）・数式の参照（`eq_refs`）・注の参照（`fn_marks`。上付きの種類分け `_sup_marks`、論文の注番号の書き方 `note_style`）→ 引用（refparse）。`apply_span` がアトムに LinkSpec を付ける唯一の共通関数（リンクが重なる・数式をまたぐときは付けない）。`unresolved` にリンク先のない参照を記録。図・表の番号が重なる・枝番つきのキャプションの番号は `float_numbers` でリンク先から外し、その参照と枝番つきの参照（`RE_BRANCH_REF`）はリンクせず `_unlinked` が記録する（K4）。`body_paragraphs` は図・表の `caption_more`（2 段落目以降）も文脈 `caption` で返す | `link(plan, ref_doi) -> Linker`, `apply_span`, `find_in_para`, `occurrence_at`, `cited_refs` |
-| `refparse.py` | 423 | 引用文献の解析（`parse_entry`: 著者・年・題名・誌名・DOI）と、本文の著者・年方式の引用の抽出・照合（`extract_citations`, `match_citation`, `link_citations`）、番号方式（`link_numeric`）。NFKC で照合して元の位置に戻す | `link_citations`, `tag_reference`, `link_numeric` |
+| `refparse.py` | 424 | 引用文献の解析（`parse_entry`: 著者・年・題名・誌名・DOI）と、本文の著者・年方式の引用の抽出・照合（`extract_citations`, `match_citation`〈同じ第一著者・同じ年の候補は、いちばんよく当てはまる候補が 1 つのときだけ採り、2 つ以上なら「特定できない」〉, `link_citations`）、番号方式（`link_numeric`）。NFKC で照合して元の位置に戻す | `link_citations`, `tag_reference`, `link_numeric` |
 
 ### AI 補完
 
 | ファイル | 行 | 役割 | 入口 |
 |---|---|---|---|
-| `ai_assist.py` | 1607 | ① 依頼文 `build_request`（段落一覧 `para_view`、位置を決められない図表 `float_section`、文字だけのテキストボックス `textbox_section`、除外の案内 `set_role_hint`、画像 `image_blocks`）② 呼び出し `call_provider` → `call_api`（Claude。構造化出力・ストリーミング。モデルがなければ `latest_opus`）/ `call_openai` / `call_gemini` / `call_sakana`。手動モードは `manual_prompt` ③ 回答の読み取り `parse_response`（最初の `{` から最後の `}`）、途中で切れた回答 `parse_cut_response` ④ 検証と適用: `split_ops` → `role_overrides`（`set_role_problem` で可否）と `float_placements`（`_placement_problem`/`_box_placement_problem`）→ classify をやり直す（pipeline）→ `retarget_ops`（ID の読み替え）→ `apply_ops`（link_* / split_name / formula_image の検証。題目・著者名・所属・引用文献・別行数式の段落へのリンクと、表・移した画像・キャプションの続きのある図への formula_image は不採用。AI が付けた図表のリンクは、範囲が重なる参照だけ `plan.float_unlinked` から除く）。回答の項目の型は `split_ops`、`notes` は `_notes_list`、MathML は `parse_mathml`（DOCTYPE・実体参照などを不採用）で確かめる。`SYSTEM_PROMPT`、`RESPONSE_SCHEMA`、`DEFAULT_MODEL`/`DEFAULT_MODEL_INFO` | 上のとおり |
+| `ai_assist.py` | 1661 | ① 依頼文 `build_request`（段落一覧 `para_view`、位置を決められない図表 `float_section`、文字だけのテキストボックス `textbox_section`、除外の案内 `set_role_hint`、画像 `image_blocks`〈Word でトリミングした画像は切り取って渡し、切り取れない画像は渡さない〉）② 呼び出し `call_provider` → `call_api`（Claude。構造化出力・ストリーミング。モデルがなければ `latest_opus`）/ `call_openai` / `call_gemini` / `call_sakana`。手動モードは `manual_prompt` ③ 回答の読み取り `parse_response`（最初の `{` から最後の `}`。最上位が一覧〈`[ ]`。`_top_level_array`〉の回答、`operations` のない回答、入れ子が深すぎる回答〈`RecursionError`〉は読めない回答にし、それぞれの文〈`TOP_ARRAY_MSG`・`SINGLE_OP_MSG`・`NO_OPS_MSG`・`OPS_NOT_LIST_MSG`・`DEEP_MSG`〉を出す）、途中で切れた回答 `parse_cut_response`（最上位が一覧のもの・深すぎるものは読まない） ④ 検証と適用: `split_ops`（`{ }` でない操作は理由付きで不採用に記録する） → `role_overrides`（`set_role_problem` で可否）と `float_placements`（`_placement_problem`/`_box_placement_problem`）→ classify をやり直す（pipeline）→ `retarget_ops`（ID の読み替え）→ `apply_ops`（link_* / split_name / formula_image の検証。題目・著者名・所属・引用文献・別行数式の段落へのリンクと、表・移した画像・キャプションの続きのある図への formula_image は不採用。AI が付けた図表のリンクは、範囲が重なる参照だけ `plan.float_unlinked` から除く）。回答の項目の型は `split_ops`、`notes` は `_notes_list`、MathML は `parse_mathml`（DOCTYPE・実体参照などを不採用）で確かめる。`SYSTEM_PROMPT`、`RESPONSE_SCHEMA`、`DEFAULT_MODEL`/`DEFAULT_MODEL_INFO` | 上のとおり |
 
 ### XML の組み立て
 
 | ファイル | 行 | 役割 | 入口 |
 |---|---|---|---|
-| `builder.py` | 901 | `build(plan, meta, journal, split) -> (root, BuildInfo)`。`Builder` が `<article>` → `<front>`（journal-meta・article-meta: 題目・著者・所属・日付・要旨・キーワード）→ `<body>`（Sec の木。段落・箇条書き・引用・図 `fig`・表 `table-wrap`・数式 `disp-formula`・囲み `boxed-text`）→ `<back>`（付記 `notes`・謝辞 `ack`・注 `fn-group`・文献 `ref-list`・資料 `app-group`）の順に作る。`word_note_marks`（Word の注の番号）、`finalize`（目印を外す）、`serialize`（DOCTYPE 付きで直列化）。全行が見出し行の表は `thead` を作らず、謝辞 `ack` の中の別行数式・表・リストは `p` で包み、付記・謝辞・資料の自動番号の段落は `list_node` で `<list>` に書く | `build`, `finalize`, `serialize`, `word_note_marks` |
-| `emit.py` | 297 | 段落のアトムを JATS の要素に書く。`Emitter.span` が **文字を書く唯一の経路**（`<jx:span>` の中に、書式・リンクの要素で包んで書く）。`Ctx` が文脈ごとの制限（TITLE・NAME・AFF・REF・CELL・DISPF…: 使える書式、リンクの書き方、xref の可否、画像の可否、`<break/>` の有無、改行を要確認にする名前）。`drop`（空白だけ落とす）、`gen`（生成文字）、`write_object`（数式・画像・脚注参照） | `Emitter`, `Ctx` と定数 |
+| `builder.py` | 1006 | `build(plan, meta, journal, split) -> (root, BuildInfo)`。`Builder` が `<article>` → `<front>`（journal-meta・article-meta: 題目・著者・所属・日付・要旨・キーワード）→ `<body>`（Sec の木。段落・箇条書き・引用・図 `fig`・表 `table-wrap`・数式 `disp-formula`・囲み `boxed-text`）→ `<back>`（付記 `notes`・謝辞 `ack`・注 `fn-group`・文献 `ref-list`・資料 `app-group`）の順に作る。`word_note_marks`（Word の注の番号）、`finalize`（目印を外す）、`serialize`（DOCTYPE 付きで直列化）。全行が見出し行の表は `thead` を作らず、謝辞 `ack` の中の別行数式・表・リストは `p` で包み、付記・謝辞・資料の自動番号の段落は `list_node` で `<list>` に書く。Word の自動番号は、段落の先頭の生成文字 `autonum_mark`（表のセル・引用・別行数式・英文要旨・注の 2 段落目以降など）、キャプションの `<label>`（`caption`。`split_labels` にかかわらず）、後付けと英文要旨の見出しの `<title>` の先頭（`heading_title`）に書き、題目・副題・著者名・所属の番号は出さずに `unshown_number` が `BuildInfo.unshown_numbers` に記録する（10 章の警告 `UNSHOWN_NUMBERS_MSG`）。表（`table`）は、縦の結合の結合元を「開始列 → (セル, 幅)」で覚えて行ごとに作り直し、幅の同じ継続だけを結合し（違えば別のセル。10 章の警告 `TABLE_SPAN_MISMATCH_MSG`）、見出し行から本文の行へは結合を延ばさず（`TABLE_HEAD_SPAN_MSG`）、すべてのセルが継続の行は出力せず `rowspan` は出力する行だけで数え、行の前後で飛ばしたグリッドは空のセルで埋める（`_grid_cell`）。出力した表は `BuildInfo.tables` に記録する | `build`, `finalize`, `serialize`, `word_note_marks` |
+| `emit.py` | 299 | 段落のアトムを JATS の要素に書く。`Emitter.span` が **文字を書く唯一の経路**（`<jx:span>` の中に、書式・リンクの要素で包んで書く）。`Ctx` が文脈ごとの制限（TITLE・NAME・AFF・REF・CELL・DISPF…: 使える書式、リンクの書き方、xref の可否、画像の可否、`<break/>` の有無、改行を要確認にする名前）。`drop`（空白だけ落とす）、`gen`（生成文字。自動番号には段落 ID の `src` を付ける）、`write_object`（数式・画像・脚注参照） | `Emitter`, `Ctx` と定数 |
 | `validate.py` | 49 | 同梱 DTD（`dtd/JATS-journalpublishing1.dtd`）で検証（`resolve_entities=False` なので未定義の実体参照は見つけない。`fidelity.final_check` が補う）。`jats_element_names()` は DTD の要素名（`report.md_tag` が使う） | `validate(xml_bytes) -> (ok, errors)`, `jats_element_names` |
 | `jstage_rules.py` | 163 | J-STAGE のアップロード時チェックのうち XML だけで判定できるもの（題目と要旨の言語、日付の前後、所属番号、DOI の文字、画像名など）。`docs/JSTAGE_NOTES.md` | `check(root, aid, image_names) -> [(ID, 内容)]` |
 
@@ -192,24 +197,24 @@ XML の要素の ID は `structure.Classifier.assign_ids` が付ける: 図 `F1`
 
 | ファイル | 行 | 役割 | 入口 |
 |---|---|---|---|
-| `images.py` | 198 | `export_images`: 画像を `Graphics/` に書く（png/jpg/gif はそのまま、bmp 等は Pillow、EMF/WMF は LibreOffice → PDF → pypdfium2 で PNG。変換できなければ `要変換/` に元を置く）。`user_image`: 利用者が用意した画像（PDF 1 ページも）を出力形式に | `export_images`, `user_image`, `ImageResult` |
+| `images.py` | 363 | `export_images`: 画像を `Graphics/` に書く（png/jpg/gif はそのまま、bmp 等は Pillow、EMF/WMF は LibreOffice → PDF → pypdfium2 で PNG。変換できなければ `要変換/` に元を置く）。Word のトリミング（`ImageRef.crop`）があれば Pillow で表示される範囲に切り取る（`crop_image`。状態は converted。出力ファイル名・拡張子は変えない）。切り取れなければ（EMF/WMF のトリミング、Exif の向きのある画像、複数のコマの画像、保存できない形式など。`CropError`）切り取る前の画像を `要変換/` に置き、用意が必要な画像（failed）にする。反映しない加工は `ImageResult.edits`、切り取った割合は `ImageResult.crop`（表示は `crop_text`）。`user_image`: 利用者が用意した画像（PDF 1 ページも）を出力形式に | `export_images`, `user_image`, `ImageResult`, `crop_image`, `CropError`, `crop_text` |
 | `package.py` | 160 | J-STAGE のフォルダ構成（`jasme/巻/号/記事識別子/`）と ZIP。`upload_entries` が ZIP に入れるものを決める唯一の場所。`zip_problems`（ZIP を読み直して EMSGM034E/053E/059E/073E/074E など）、`unzipped_files`（入れなかったファイル） | `write_package`, `make_zip`, `zip_problems`, `unzipped_files`, `article_dir` |
-| `report.py` | 2302 | 変換レポート（Markdown）`render(res)`: 冒頭の要約 → 1 結果の要約 → 2 AI → 3 解決できなかった箇所 → 4 機械的な推定 → 5 不変性チェック → 6 出力しなかった文字 → 7 落とした空白 → 8 生成文字 → 9 画像 → 10 警告 → 11 書誌情報 → 12 DTD と J-STAGE チェック → 13 PDF との照合（`render_route1`/`render_route2`）→ 14 登載前のチェックリスト。`render_ai_only`（AI 判断一覧）。**`actions(res)`** が利用者への知らせ（要対応・要確認）を `Action` の一覧にする唯一の場所（`_fidelity_action`、`_dtd_action`、`_upload_action`、`_ai_*`、`_forced_action`、`images_action`、`lost_action`、`_style_hidden_action`、`_newline_action`、`pdf_actions`…）。`images_to_prepare`（用意が必要な画像）。画面の操作は目印 `step()`（`STEP_NAMES`）で書く（`colab.step_text` が画面ごとの語に置き換える）。レポートの生のタグは `md_tag()` で囲む。0.29.0 で `_float_ref_action`（key `float_ref`。AI の状態で文を分ける `float_ref_manual`・`float_ref_ai`）と `_fn_guess_action`（key `fn_guess`）を足した | `render`, `actions`, `images_to_prepare`, `upload_issues`, `pdf_summary` |
+| `report.py` | 2460 | 変換レポート（Markdown）`render(res)`: 冒頭の要約 → 1 結果の要約 → 2 AI → 3 解決できなかった箇所 → 4 機械的な推定 → 5 不変性チェック → 6 出力しなかった文字 → 7 落とした空白 → 8 生成文字 → 9 画像 → 10 警告 → 11 書誌情報 → 12 DTD と J-STAGE チェック → 13 PDF との照合（`render_route1`/`render_route2`）→ 14 登載前のチェックリスト。`render_ai_only`（AI 判断一覧）。**`actions(res)`** が利用者への知らせ（要対応・要確認）を `Action` の一覧にする唯一の場所（`_fidelity_action`、`_dtd_action`、`_table_shape_action`〈key `table_shape`〉、`_upload_action`、`_ai_*`、`_forced_action`、`images_action`、`lost_action`、`lost_autonum_action`〈key `autonum_lost`〉、`_image_crop_action`〈key `image_crop`〉、`_image_edits_action`〈key `image_edits`〉、`_style_hidden_action`、`_newline_action`、`pdf_actions`…。並びは 4 章の「利用者への知らせの経路」）。8 章に XML に番号を出せなかった段落の表、12 章に「表の形の確かめ」の節を出す。`images_to_prepare`（用意が必要な画像）。画面の操作は目印 `step()`（`STEP_NAMES`）で書く（`colab.step_text` が画面ごとの語に置き換える）。レポートの生のタグは `md_tag()` で囲む。0.29.0 で `_float_ref_action`（key `float_ref`。AI の状態で文を分ける `float_ref_manual`・`float_ref_ai`）と `_fn_guess_action`（key `fn_guess`）を、0.30.0 で `table_shape`・`autonum_lost`・`image_crop`・`image_edits` を足した | `render`, `actions`, `images_to_prepare`, `upload_issues`, `pdf_summary` |
 
 ### 流れと画面
 
 | ファイル | 行 | 役割 | 入口 |
 |---|---|---|---|
-| `pipeline.py` | 600 | `Options`（出力先・AI の方法・PDF・ルート）、`Result`、`convert`（4 章）、`add_images`（利用者の画像を入れて ZIP とレポートを作り直す）、`lost_images`、`fixed_docx_path`（補った docx の書き出し先。入力が同名なら `_2` などの別名）、`AIRequiredError`、`tool_version` | `convert`, `add_images`, `Options`, `Result` |
+| `pipeline.py` | 731 | `Options`（出力先・AI の方法・PDF・ルート）、`Result`、`convert`（4 章）、`add_images`（利用者の画像を入れて ZIP とレポートを作り直す）、守り `lost_images`・`table_problems`（出力した `<table>` の形を、builder の結合の判断に頼らず、docx の行ごとの列の数と HTML の表の割り当てだけで確かめる）・`lost_autonums`（文字を出したのに番号の `jx:gen` がない自動番号の段落）、`fixed_docx_path`（補った docx の書き出し先。入力が同名なら `_2` などの別名）、`AIRequiredError`、`tool_version` | `convert`, `add_images`, `Options`, `Result`, `lost_images`, `table_problems`, `lost_autonums` |
 | `cli.py` | 148 | `python -m jasme_jats` の引数と終了コード（0 要対応なし / 1 要対応あり / 2 中止。`--ai-response` は `--ai manual` のときだけ指定でき、それ以外は引数の誤りで 2）。`user_images_in` | `main` |
 | `colab.py` | 338 | Colab の表示部品（HTML）: 依頼文の枠 `prompt_box`、要対応（赤）・要確認（黄）の枠 `result_boxes`（`actions` の順）、要約 `summary_box`、畳んだレポート `report_details`（Markdown → HTML は `markdown_text_only`。生の HTML・実体を無効にして docx の文字の `<`・`&` をそのまま見せる）、続けて変換するときの確認 `same_first_page`/`carried_over`。画面の操作の目印の置き換えは `STEP_WORDS`（`notebook`・`app`・`cli`）と `step_text`（枠を作る関数が `screen` 引数を受ける）。1 画面版の欄・ボタンのラベルは定数 `ANSWER_LABEL`・`APPLY_LABEL`・`CONVERT_LABEL`（`app.py` も使う） | `result_boxes`, `summary_box`, `report_details`, `prompt_box` |
-| `app.py` | 641 | 1 画面版（Gradio）。`AppState`（Gradio に依存しない状態: 入力 → `convert` → `waiting_for_answer`/`apply_answer`（手動モード）→ `missing_images`/`add_images` → `needs_action`/`download` → `reset`）と `build_app(state, io)`（画面）、`launch()`（share は必ず False。Colab では `colab_embed` で iframe に埋め込む）。`answer_box_open`（手動の欄を見せるか。手動モードで作った結果のときだけ、`waiting_for_answer` に加え、`REPASTE_KEYS`〈`ai_error`・`partial`・`forced`・`float_ref`・`textbox_undecided`〉の Action が出ているあいだ。`Action` の key を直書きするので、`report.py` で key を変えるときは合わせる）。想定外の例外は `crash(error, operation)` で赤い枠にする（`report.actions()` の知らせではなく例外の表示）。`_run` は最初に前の結果を捨てる | `launch`, `AppState`, `build_app` |
-| `tools/make_notebook.py` | 605 | 2 つのノートブック（従来版 9 手順、1 画面版 1 セル）を生成する。`REPO`/`BRANCH`/`DOCS`、手順ごとのセルの文字列、`ai_assist.py` から既定モデルを読む `module_constants` | `python tools/make_notebook.py [--branch]` |
-| `tools/sanitize_docx.py` | — | docx からコメント・作成者情報を取り除く（リポジトリに docx を入れる前に通す） | CLI |
+| `app.py` | 800 | 1 画面版（Gradio）。`AppState`（Gradio に依存しない状態: 入力 → `convert` → `waiting_for_answer`/`apply_answer`（手動モード）→ `missing_images`/`add_images` → `needs_action`/`download` → `reset`）と `build_app(state, io)`（画面）、`launch()`（share は必ず False。Colab では `colab_embed` で iframe に埋め込む）。`answer_box_open`（手動の欄を見せるか。手動モードで作った結果のときだけ、`waiting_for_answer` に加え、`REPASTE_KEYS`〈`ai_error`・`partial`・`forced`・`float_ref`・`textbox_undecided`〉の Action が出ているあいだ。`Action` の key を直書きするので、`report.py` で key を変えるときは合わせる）。想定外の例外は `crash(error, operation)` で赤い枠にする（`report.actions()` の知らせではなく例外の表示）。変換したときの入力の写し `AppState.run`（`RunInputs`。docx・PDF は作業用の場所に写したもの、比べる値 `compared`〈ファイルは中身の sha256。`fingerprint`・`file_digest`〉、作り方・SPLIT_LABELS・AI の方法・モデル・書誌情報・API キー）を `convert` が作り、`_run`・`apply_answer`・`add_images`・`download` はこの写しだけを使う。入力が写しと違えば、前の結果を残したまま理由の文で断る（`changed_inputs`・`stale_text`。「このままダウンロード」でも断る。AI の方法・モデルは比べず、変えたら `settings_note` で次の変換から使うと言う）。手動かどうか（`waiting_for_answer`・`answer_box_open`）も写しで決める（O3）。`convert` は確かめ（足りない項目・入力の誤り・API キー・ファイルを読めない）が済むまで前の結果と写しを変えず、`_run` は Options を作ってから前の結果を捨てる。別の論文（docx の中身が違う）で変換すると回答の欄を空にし（`paper_changed`）、前に別の依頼文へ反映したのと同じ文字の回答は断る（依頼文の sha256 で結び付ける）。変換ボタンの横の文は `ready_text` | `launch`, `AppState`, `build_app` |
+| `tools/make_notebook.py` | 610 | 2 つのノートブック（従来版 9 手順、1 画面版 1 セル）を生成する。従来版の各手順は、最初に前の手順の「済み」を確かめ（`guard`）、自分と後ろの手順の「済み」を消し（`unmark`）、最後まで済んだら自分を記録する（`mark`）。`REPO`/`BRANCH`/`DOCS`、手順ごとのセルの文字列、`ai_assist.py` から既定モデルを読む `module_constants` | `python tools/make_notebook.py [--branch]` |
+| `tools/sanitize_docx.py` | 234 | リポジトリに入れる docx から個人情報を取り除く（lxml で部品を書き直す）。取り除くもの: コメント（comments*.xml・people.xml と本文・脚注・文末脚注のコメントの範囲と参照）、`customXml/`・`docProps/custom.xml`・`docProps/thumbnail.*`、`w:attachedTemplate`（テンプレートのパス）とその関係、ヘッダー/フッターの文字（ページ番号のフィールドは残す）。空にするもの: 文書のプロパティの作成者・最終更新者・題目・主題・説明・キーワード・分類、app.xml の Company・Manager・HyperlinkBase・TitlesOfParts、`w:initials`。変更履歴の作成者は「作成者」（`pdfdocx.AUTHOR` は残す）。入力と同じ出力先は断り（`SAME_FILE_MSG`）、一時ファイルに書いて本文の文字（`fidelity.source_texts`）と画像の名前が同じことを確かめてから置き換える（`CHANGED_MSG`）。残った外部のローカルのパスは警告だけ | `sanitize`, `main`（終了コード 0 成功・1 断った・読めない・2 使い方の誤り） |
 
 ---
 
-## 4. `pipeline.convert()` の段階（0.29.0）
+## 4. `pipeline.convert()` の段階（0.30.0）
 
 `convert(docx_path, meta, journal, opts) -> Result`。以下の番号は `pipeline.py` の処理順。
 
@@ -223,8 +228,9 @@ XML の要素の ID は `structure.Classifier.assign_ids` が付ける: 図 `F1`
 5. **PDF との照合**（`opts.pdf_path` があれば。ルート1 でも）: `check_pdf`。ルート2 で Word が付ける番号の直し（`number_edits`）があれば `plan.pdf_numbers` に入れて **3 回目の `build`**。
 6. **検証**: `verify` → `finalize` → `serialize` → `final_check` → `validate`。DTD が不合格で AI の数式（`FigNode.formula`）があれば、それを取り消してもう一度 build から検証まで。
 7. **補完の確かめ**（ルート2 で補った docx があるとき）: `supplement_targets` → `verify_supplement`。
-8. **画像の出力漏れ** `lost_images`。
-9. **出力**: `export_images` → `jstage_check` → `write_package`（XML・PDF の配置と ZIP）→ `out_dir/{aid}.xml`。
+8. **守り**（どれも最後の組み立ての木と `BuildInfo` を使い、変換の結果は変えずに要対応として知らせる）: 画像の出力漏れ `lost_images` →
+   表の形 `table_problems`（`Result.table_problems`・`tables_checked`。要対応 `table_shape`）→ 自動番号の出力漏れ `lost_autonums`（`Result.lost_autonums`。要対応 `autonum_lost`）。
+9. **出力**: `export_images`（Word のトリミングの切り取り。切り取れない画像は failed）→ `jstage_check` → `write_package`（XML・PDF の配置と ZIP）→ `out_dir/{aid}.xml`。
 10. **未解決の一覧の整理**: `linker.unresolved` から AI が解決したものを除き、仮に置いた図表・決められないテキストボックス・図の本体が見つからない図を足す（`unresolved_after`。レポート 3 章）。
 11. **`Result` を作り**、レポート（`render`）と AI 判断一覧（`render_ai_only`）を書く。`zip_problems`・`unzipped_files` もここで計算する。
 
@@ -240,6 +246,10 @@ pipeline.Result ──▶ report.actions(res) ──▶ [Action(level, key, top,
                                               ├─ app.AppState.needs_action / todo_titles: 「ZIP を保存」の前に一度止める
                                               └─ app.AppState.answer_box_open: 手動モードで作った結果（依頼文がある）で、ai_error・partial・forced・float_ref・textbox_undecided があるあいだ手動の欄を見せる
 ```
+
+`actions()` の並び（0.30.0。レポートの冒頭の順）: fidelity, supplement, dtd, table_shape, upload, ai_error, ai_pending, partial, forced, figbody,
+textbox_undecided, textbox_place, textbox_figure_text, images, lost, autonum_lost, image_crop, image_edits, style_hidden, abstract_ja,
+app_after_refs, note_overlap, float_ref, fn_guess, newline、その後ろに `pdf_actions`（PDF との照合の知らせ）。
 
 知らせを足すときは `report.py` に `_xxx_action(res) -> Action | None` を作り、`actions()` の並びに加えるだけ（DEVELOPMENT.md の原則 8）。
 `box_detail` の画面の操作は目印 `report.step()` で書き、枠を作るとき（`colab._box`・`result_boxes` の `screen` 引数）に `colab.STEP_WORDS` の語
@@ -258,7 +268,7 @@ pipeline.Result ──▶ report.actions(res) ──▶ [Action(level, key, top,
                ├─ _verify（読み直した段落の文字が、期待どおりか）・_structure（役割・領域・リンク・注の区切りが元と同じか）
                │    └─ 合わない段落は Fix を外して書き直す
                └─ DocxFix（path, fixes, check）
-補った docx ──▶ convert の 2〜6（ルート1 と同じ）── 5 で Word の番号を PDF に合わせる（plan.pdf_numbers）
+補った docx ──▶ convert の 2〜6（ルート1 と同じ）── 5 で Word の番号を PDF に合わせる（plan.pdf_numbers。PDF と照合する段落だけ）
               ──▶ fidelity.verify_supplement（元の docx と補った docx を比べ、変更履歴の単位が (A) か報告した (B) だけか）
 レポート 13 章: 13.1 補った校正の直し / 13.2 組版の違い / 13.3 直さなかった箇所と理由 / 13.4 Word の番号 / 13.5 残る違い / 13.6 見つからない段落 / 13.7 照合に使わなかった PDF の文字 / 13.8 補完の確かめ
 ```
@@ -279,11 +289,11 @@ pipeline.Result ──▶ report.actions(res) ──▶ [Action(level, key, top,
 
 ## 7. テストの地図
 
-`python -m pytest -q`（0.29.0 で 1298 件）。各ファイルが何を守っているかの詳細は `docs/DEVELOPMENT.md` の「テスト」。
+`python -m pytest -q`（0.30.0 で 1433 件）。各ファイルが何を守っているかの詳細は `docs/DEVELOPMENT.md` の「テスト」。
 
 | テスト | 守っている動き |
 |---|---|
-| `test_reader.py` | 読み取りの文字が検証側（canonical_texts）と一致、文字ポリシー（段落記号の削除・隠し文字・削除された行）、テキストボックスの記録 |
+| `test_reader.py` | 読み取りの文字が検証側（canonical_texts）と一致、文字ポリシー（段落記号の削除・隠し文字・削除された行）、テキストボックスの記録、自動番号の上書き（`w:lvlOverride/w:lvl`）、画像のトリミングと加工の記録 |
 | `test_fidelity.py` | わざと壊した XML を不変性チェックが必ず検出する |
 | `test_structure.py` / `test_article.py` | 領域の分け方、資料の見出し、囲み・注記、循環 import がない |
 | `test_floats.py` / `test_figure_body.py` | 浮動配置の図表の配置と組み方、仮の位置、表のセルの図 |
@@ -291,6 +301,10 @@ pipeline.Result ──▶ report.actions(res) ──▶ [Action(level, key, top,
 | `test_ai.py` | AI の回答の検証と適用、途中で切れた回答、4 社の呼び出し（偽のクライアント） |
 | `test_pdfmatch.py` / `test_supplement.py` | PDF との照合、ルート2 の直し、組版で入る文字、補完の確かめ |
 | `test_pipeline.py` / `test_lost_images.py` / `test_jstage_rules.py` | 全体の流れ、ZIP の中身、終了コード、画像の出力漏れ、J-STAGE チェック |
+| `test_tables.py` | 表の縦の結合・飛ばしたグリッドの組み立てと、表の形の確かめ（`table_problems`・要対応 `table_shape`・12 章） |
+| `test_lost_autonums.py` / `test_article.py` | 自動番号の出力（場所ごと）と、自動番号の出力漏れの守り（`lost_autonums`・要対応 `autonum_lost`）、題目・著者名・所属の番号の 10 章の警告 |
+| `test_images.py` | Word でトリミングした画像の切り取り（`crop_image`）、切り取れない画像の扱い、要確認 `image_crop`・`image_edits`、AI に渡す画像 |
+| `test_sanitize.py` | `tools/sanitize_docx.py`（同じファイルを断る、取り除くもの・残すもの、本文の文字が変わらないこと） |
 | `test_colab.py` / `test_app.py` / `test_notebook.py` | 表示部品、1 画面版の状態、ノートブックが最新か（版・既定モデル） |
 | `test_omml.py` | 数式の変換 |
 | `test_syntax.py` | Python 3.10 でも読める書き方か（f 文字列の式の中のバックスラッシュ・同じ引用符。全 `.py` のコンパイル）、レポートに生のタグがないか |
@@ -319,6 +333,9 @@ fixture の docx は `tests/make_fixtures.py` が作る（架空の内容。`mak
 | レポートの章を変える | `report.render`（章ごとに `L.append`）。13 章は `render_route1`/`render_route2` |
 | ZIP に入れるものを変える | `package.upload_entries`（1 か所）と `zip_problems`（確かめ） |
 | 画像の形式の対応を増やす | `images.export_images`（`DIRECT`・`PILLOW`・`METAFILE`） |
+| Word の画像の加工（トリミング・回転など）の扱いを変える | 読み取りは `docx_reader._pic_edits`・`_vml_edits`（`ImageRef.crop`・`edits`。名前は `model.IMAGE_EDITS`）、切り取りは `images.crop_image`、AI に渡す画像は `ai_assist.image_blocks`、知らせは `report._image_crop_action`・`_image_edits_action` |
+| 表の組み立て（縦の結合・飛ばしたグリッド）を変える | `builder.Builder.table`。変えた後も `pipeline.table_problems`（builder の判断に頼らない確かめ）が通ること（`tests/test_tables.py`） |
+| Word の自動番号の出し方を変える | `builder.Builder.autonum_mark`・`caption`・`heading_title`・`unshown_number`。出した番号の `jx:gen` には段落 ID の `src` を付ける（`pipeline.lost_autonums` が使う） |
 | J-STAGE のチェックを足す | `jstage_rules.check`（XML で判定できるもの）、`package.zip_problems`（ZIP の形） |
 | AI の依頼内容・操作の種類を変える | `ai_assist.SYSTEM_PROMPT`、`RESPONSE_SCHEMA`/`OP_SCHEMA`、`apply_ops`、`set_role_problem` |
 | 既定の AI モデルを変える | `ai_assist.DEFAULT_MODEL`・`DEFAULT_MODEL_INFO` → `python tools/make_notebook.py` |
@@ -342,7 +359,7 @@ fixture の docx は `tests/make_fixtures.py` が作る（架空の内容。`mak
 | 領域 | 段落がある区画: 和文の冒頭 `front_ja` / 著者表 `authors` / 本文 `body` / 付記 `notes` / 謝辞 `ack` / 注 `fn` / 引用文献 `refs` / 後付け `back` / 英文の部分 `front_en` / 資料 `app` |
 | 役割 | 段落の種類（見出し・本文・図キャプション・引用文献…）。スタイル名から決め、想定外は推定（`Para.role`、`role_origin`） |
 | 除外 / Exclusion | XML に出力しない段落。必ず理由付きで記録し、レポート 6 章に全文を載せる |
-| 生成文字 | docx の文字ではなく Word が表示時に作る文字（自動番号・脚注番号・補った注の見出し）。`jx:gen` |
+| 生成文字 | docx の文字ではなく Word が表示時に作る文字（自動番号・脚注番号・補った注の見出し）。`jx:gen`（自動番号は `src` に段落 ID） |
 | 不変性チェック | docx の文字と XML の文字を 1 文字ずつ照合すること（`fidelity.verify`） |
 | 浮動配置の図形 / Float | テキストボックス・グループ図形で、本文の段落（アンカー段落）に結び付いて浮いているもの（`s1…`） |
 | 文字だけのテキストボックス | 画像・表・キャプションを含まないテキストボックス。囲み（`<boxed-text>`）/ 図の注記（除外）/ 決められない（除外して要確認） |
@@ -362,4 +379,4 @@ fixture の docx は `tests/make_fixtures.py` が作る（架空の内容。`mak
 - Word で未確認の規則（隠し文字・段落のつながり・削除されたセル）と、架空の docx でしか確かめていない機能の一覧は
   `docs/DEVELOPMENT.md` の「残っている課題」と `docs/DESIGN.md` の 7 章。
 - 2026-11 の点検で見つけた問題と、直すべき度合いの分類は `docs/REVIEW_2026-11.md`。
-- `grep -n "暫定" src/jasme_jats/*.py` で、コードの中の暫定の判断の場所が出る（0.29.0 で 20 か所）。
+- `grep -n "暫定" src/jasme_jats/*.py` で、コードの中の暫定の判断の場所が出る（0.30.0 で 20 か所）。

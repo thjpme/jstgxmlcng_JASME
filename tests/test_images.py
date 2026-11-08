@@ -265,7 +265,7 @@ def test_image_crop_comes_before_image_edits(journal, meta, tmp_path):
 def test_uncroppable_jpeg_images_action_text(journal, meta, tmp_path):
     res = run(tmp_path, one_image("a.jpg", exif_jpeg(6), src_rect='l="50000"'), journal, meta)
     a = images_action(res)
-    assert ".jpg は JPEG" in a.top and "画像（PNG）を作り" not in a.top
+    assert ".jpg なら JPEG" in a.top and "画像（PNG）を作り" not in a.top
     assert a.box_detail.startswith("Word の図形で描かれた図や、変換・切り取りができなかった画像は")
 
 

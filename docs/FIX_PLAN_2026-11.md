@@ -348,3 +348,27 @@ Action にしないもの: 10 章の警告（見出し行をまたぐ結合を�
   PR 1 の画面や古いコミットのハッシュの URL からは、書き換え前の docx をまだ取り出せる。これを消すには、リポジトリの持ち主が GitHub Support に
   「Removing sensitive data」として依頼する（リポジトリ名、PR 1、書き換え前のコミット e4222ed などを伝える）。フォークがあれば、そちらにも残る。
 - `tools/sanitize_docx.py` はまだ `attachedTemplate` を取り除かない（u1 で直す）。それまでに docx をリポジトリに加えるときは、`word/_rels/settings.xml.rels` を確かめる。
+  → 0.30.0 の u1 で直した（`attachedTemplate` とその関係を取り除く）。
+
+## 0.30.0 の実装で設計書と違えたところ（2026-11-08）
+
+単位の設計書（`fix_plan_2026-11/units/`）は計画の記録として直さずに残し、実装（作業の枝の 0.30.0）と違うところをここに挙げる。
+文書（docs/）は実装に合わせて直した（`docs/REVIEW_2026-11.md` の「0.30.0 での直し方」）。
+
+実装が設計書と違うもの:
+
+| 単位 | 設計書の記述 | 実装 |
+|---|---|---|
+| u3-tables | 「直し方 5.2」と「利用者向けの文」: 12 章の「表の形の確かめ」で、表がなければ「出力した表はありません。」 | 「形を確かめた表はありません（表がないか、変更履歴ですべての行が削除された表だけです）。」（すべての行が削除された表は数えないので、表があってもこの文になる） |
+| u1-small | テスト `test_same_author_year_ambiguity_uses_all_best_candidates`（K10） | `tests/test_refparse.py` の `test_same_year_ties_ignore_lower_candidates`・`test_same_year_low_high_low_is_exact`・`test_same_year_two_tied_top_candidates_ambiguous`・`test_same_year_coauthored_citation_picks_coauthored_among_three`・`test_same_year_two_candidates_unchanged` に分けた |
+| u3-autonum | テスト `test_guard_uses_final_tree`（最後の組み立ての木を使うこと） | `tests/test_lost_autonums.py` の `test_guard_uses_final_tree_after_dtd_retraction`（DTD に合わない数式の取り消しの後）と `test_guard_uses_final_tree_after_route2_numbers`（ルート2 で番号を PDF に合わせた後）に分けた |
+
+文書の更新の案と違えたもの（コードの書き方に合わせた）:
+
+| 単位 | 設計書の「文書の更新」の案 | 直した形 |
+|---|---|---|
+| u3-autonum | `docs/DESIGN.md` 3 章の処理の流れに「自動番号の出力漏れの検出」を 10. として足し、後ろの番号を送る | `pipeline.py` の docstring が 9. に `lost_images`・`table_problems`・`lost_autonums` をまとめているので、DESIGN.md も 9. にまとめた（番号は送らない） |
+| u3-autonum | 「`docs/DEVELOPMENT.md` の 43 行目の『ルート2 で Word の番号…を PDF に合わせるときは』を絞る」 | この文は `docs/DESIGN.md` の 43 行目（3 章）にあった。DESIGN.md の側を直した |
+| u2-app | `docs/REVIEW_2026-11.md` に、直したもの（入力の混ざり・前の回答・ノートブックの「済み」）を O 系の続きの番号（O15〜）で足す | 点検の一覧（2026-11-03 の点検の分類）に後から番号を足さず、この計画の番号（指摘 4・N4・N5）で「0.30.0 での直し方」に書いた |
+| u1-small・u2-app | `docs/REVIEW_2026-11.md` の A10 の場所「ai_assist.py 1033」と O3 の場所「app.py 225〜228」は 0.29.0 の行と合わないので直す | REVIEW の行番号は点検の対象の 0.28.1 のもので、0.28.1 では合っている（1033 は `parse_cut_response` の捕まえていない `json.loads`、226 は `waiting_for_answer`）。直さなかった |
+| u2-app | `docs/USAGE.md` に、従来のノートブックのフォームの値は ▶ を押すまで変数にならないことを書くか、版の最後に決める | 確かめていないので書かなかった |
