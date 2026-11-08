@@ -18,7 +18,9 @@ U6 で本体を変えずに移した。これまでどおり、ここからも i
      段落も plan.paras・plan.note_of に記録する。AI が exclude とした段落は理由付きで除外する。
   2. 領域に分ける: split_regions（和文の冒頭・本文・後付け・英文の部分。table_roles・back_heading_by_text・guess_heading）。
   3. 和文の冒頭: build_front_ja（read_author_table_ja・author_paragraph_ja → add_author_ja → aff_for。著者名に付かない所属は
-     aff_conflict が plan.structure_conflicts に記録する〈K2〉）。
+     aff_conflict が plan.structure_conflicts に記録する〈K2〉。題目・著者以外の段落は front_decoration で、テンプレートの
+     装飾・誌名行〈JournalConfig.front_lines〉なら FRONT_DECORATION_EXCLUDED〈知らせない〉、そうでなければ位置を決められない
+     除外 FRONT_OTHER_EXCLUDED〈UNPLACED_EXCLUSIONS。要確認 excluded_unsure〉）。
   4. 本文: build_body
      - 浮動配置の図表の置き場所: place_floats（float_captions・float_number・float_summary。機械的に組む float_mechanical
        〈表のセルの画像とキャプション cell_figures・cell_pairs・cell_caption〉、AI の指定で組む float_from_spec、位置を
@@ -31,14 +33,19 @@ U6 で本体を変えずに移した。これまでどおり、ここからも i
        doc_numbering_is_bullet）
      - 章・節・項の入れ子: nest。段落の位置の説明: compute_locations（node_paras）
   5. 後付け（付記・謝辞・注・引用文献）: build_back（outside_key・back_heading_by_text・note_mark・appendix_heading・formula_node。
-     同じ種類の見出しが 2 つになるときは replace_back が plan.structure_conflicts に記録する〈K1〉）
+     同じ種類の見出しが 2 つになるときは replace_back が plan.structure_conflicts に記録する〈K1〉。注の節の中の表は FnNode.tables
+     に入れる〈表の枝の pending・caption_only・note_table・settle。注に入れられない表は flush が BACK_TABLE_EXCLUDED で除外〉）
   6. 英文の部分と資料: build_front_en（outside_key・appendix_heading・appendix_sentence・note_appendix_sentence・
-     check_abstract_ja・add_author_en・add_aff_en）
+     check_abstract_ja・add_author_en・add_aff_en。英文要旨の見出しが 2 つになるときも replace_back が記録する。題目・著者・
+     要旨・資料以外の段落と表は EN_OTHER_EXCLUDED・EN_TABLE_EXCLUDED〈EN_PART_EXCLUSIONS。英文要旨が 1 段落もなければ
+     abstract_missing_srcs が要対応 abstract_missing の対象にする〉）
   7. Word の脚注・文末脚注を注にする: attach_word_notes（unreferenced_note_reason・no_link_rule）
   8. ID を付ける: assign_ids（図・表・数式・注・文献・所属）
   9. 段落記号の削除でつないだ段落のスタイルの違いを判断の一覧に記録する: joined_styles
 - レポート・AI 依頼文・Colab・コマンドラインが使う関数: float_caption・float_ids・float_targets（浮動配置の図形の中身と、それを
   出力した XML の要素の説明）。
+- 除外の理由の文言は定数（FRONT_*・BACK_*・EN_*_EXCLUDED など）で書き、位置を決められずに除く理由は UNPLACED_EXCLUSIONS に
+  まとめる（report が要確認 excluded_unsure・要対応 abstract_missing で知らせる）。
 - pipeline.convert が使う関数: conflict_overrides（AI の set_role で構造の衝突ができたときに、まず使わない指定〈衝突の範囲の中の
   段落への指定〉）。
 """
@@ -2115,18 +2122,25 @@ class Classifier:
                                 f"スタイル「{b.style_name}」の段落「{_para_text(b)[:20]}」を後付けの見出しと推定（文字列から）")
                 state = BACK_HEADINGS[heading]
                 plan.region[b.src] = state
+                keep_prev = False       # 空白だけの後ろの見出しで、前の見出し（の節）を残すとき真（replace_back が False）
                 # 同じ種類の見出しが 2 つになるときは、前の見出し（の節）が出力にも除外にも入らなくなる（replace_back。K1）
                 if state == "notes":
                     if self.replace_back("notes", plan.notes, b, role):
                         plan.notes = BackSec(heading=b)
+                    else:
+                        keep_prev = True
                     plan.locations[b.src] = "付記（見出し）"
                 elif state == "ack":
                     if self.replace_back("ack", plan.ack, b, role):
                         plan.ack = BackSec(heading=b)
+                    else:
+                        keep_prev = True
                     plan.locations[b.src] = "謝辞（見出し）"
                 elif state == "fn":
                     if self.replace_back("fn_heading", plan.fn_heading, b, role):
                         plan.fn_heading = b
+                    else:
+                        keep_prev = True
                     plan.locations[b.src] = "注（見出し）"
                     if plan.ref_heading is not None:
                         plan.decide("mechanical", "note", b.src,
@@ -2134,7 +2148,11 @@ class Classifier:
                 elif state == "refs":
                     if self.replace_back("ref_heading", plan.ref_heading, b, role):
                         plan.ref_heading = b
+                    else:
+                        keep_prev = True
                     plan.locations[b.src] = "引用文献（見出し）"
+                if keep_prev:
+                    continue            # 空白だけの見出しは除外に記録するだけ。注の途中の状態（表の候補・current_fn）は変えない
                 self._heading_by_text[b.src] = role not in BACK_HEADINGS
                 if pending and current_fn is not None:
                     settle(current_fn)      # キャプションだけの注の候補（表が続かなかった）の前の表は、その注に入れる

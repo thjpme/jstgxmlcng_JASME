@@ -10,7 +10,7 @@
 | 所属（日）/ 著者名（日） | aff_ja / author_ja | `contrib-group/contrib/name-alternatives/name[@name-style="eastern"]`, `aff-alternatives/aff[@xml:lang="ja"]` |
 | 題目（英）/ 副題（英） | title_en / subtitle_en | `title-group/trans-title-group[@xml:lang="en"]/trans-title`, `trans-subtitle` |
 | 著者名（英）/ 所属（英） | author_en / aff_en | `name[@name-style="western"]`, `aff[@xml:lang="en"]`（和文の著者・所属と順番で対応付け） |
-| 英文要旨見出し / 英文要旨 | abstract_heading / abstract | `trans-abstract[@xml:lang="en"]/title`, `p`（英文の論文では `abstract[@xml:lang="en"]`） |
+| 英文要旨見出し / 英文要旨（テンプレートの別の版の 英文要約見出し / 英文要約 も、jasme.toml の別名で同じ役割） | abstract_heading / abstract | `trans-abstract[@xml:lang="en"]/title`, `p`（英文の論文では `abstract[@xml:lang="en"]`） |
 | 章見出し / 節見出し / 項見出し | sec1 / sec2 / sec3 | 入れ子の `sec/title` |
 | 本文（Body Text） | p | `p` |
 | 図キャプション | fig_caption | `fig/caption/p`（直前の画像段落と組にする。2 段落目以降は caption の中の追加の p で、出典の行の引用・URL・注番号のリンクと PDF との照合の対象になる）。番号が重なる・枝番がある（図1-1・図1-2、図2.1）ときは、その番号の参照にリンクを付けない（要確認。枝番は 1〜2 桁で直後に数字が続かないもの。「図1―2019年度の推移」は枝番にしない） |
@@ -18,14 +18,18 @@
 | ブロック引用 | quote | `disp-quote/p`（連続する段落を 1 つにまとめる） |
 | 付記見出し | notes_heading | `back/notes/title` |
 | 謝辞見出し | ack_heading | `back/ack/title` |
-| 注見出し | fn_heading | `back/fn-group/title`（以降の段落を 1 段落 1 件の `fn` に。番号（「1)」「(1)」「注1)」「（注1）」「［注1］」など）で始まらない段落は前の注の続き。注の番号は `fn/p` の先頭に入れる。J-STAGE は `fn/label` を表示しないため） |
+| 注見出し | fn_heading | `back/fn-group/title`（以降の段落を 1 段落 1 件の `fn` に。番号（「1)」「(1)」「注1)」「（注1）」「［注1］」など）で始まらない段落は前の注の続き。注の番号は `fn/p` の先頭に入れる。J-STAGE は `fn/label` を表示しないため）。注の節の中の表は直前の注に入れ、`fn/p/table-wrap` で出す（表の前の「表キャプション」の段落はキャプションになる。注の見出しの後ろ、最初の注より前の表は最初の注の 1 段落目の後ろに入れる。注に入れられない表〈注のない注の節の表など〉は出力せず、要確認。J-STAGE での表示は未確認） |
 | 注本文 | fn | 注の一覧の各注の段落。本文の領域に現れたときは**本文の段落**（`p`）として出し、文字から注の見出しとは推定されない（「注」だけの段落を本文の続きにしたいときの手段。下記）。ブロック引用・図表キャプション・節見出し・項見出しのスタイルを付けると別の要素（`disp-quote`・`fig`/`table-wrap`・`sec` のタイトル）になるので、この用途には使えない |
 | 参考文献見出し / 参考文献 | ref_heading / ref | `back/ref-list/title`, `ref/mixed-citation` |
 | 標準（Normal） | normal | 位置と内容から推定（下記） |
 
 ## 位置による扱い
 
-- 冒頭（題目〜最初の章見出し）の「標準」スタイルの段落（誌名・装飾行など）は出力しない（レポートに全文）。
+- 冒頭（題目〜最初の章見出し）の、題目・副題・著者名・所属以外の段落は出力しない（レポートの 6 章に全文）。テンプレートの装飾行（記号だけの行）と
+  誌名行（jasme.toml の `front_lines`。「全国数学教育学会誌　数学教育学研究」）は知らせずに除き、それ以外（数式・注の参照のある段落も）は
+  位置を決められない段落として「要確認」で知らせる（著者表の中の所属・著者名以外の文字、冒頭部の表も同じ。docs/DESIGN.md の 4.3）。
+- 英文の部分（英文題目〜）で、題目・著者・所属・要旨・資料以外の段落と表も、位置を決められない段落として出力せず「要確認」で知らせる。
+  英文要旨が 1 段落もない（「英文要旨」「英文要約」のスタイルがない）ときは「要対応」（英文要旨が見つかりません）。
 - 英文要旨の後に「資料」「付録」「附録」「Appendix」で始まる見出しの形の段落（「資料（授業プリント）」「【資料1】」「資料Ⅱ（ワークシート）」
   「付録①　調査票」「資料1-2」「資料2　児童の記述（下線は筆者。）」「資料2 iPad の画面」「Appendix 1 questionnaire」なども。
   「資料を配布した。」「資料1、2は授業の記録である。」のような「。」か「．」で終わる和文の文と、「(Appendix 1) lists ….」のような

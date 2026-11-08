@@ -15,7 +15,7 @@ from jasme_jats.docx_reader import read_docx
 from jasme_jats.model import Atom, Cell, Para, Row, Table
 from jasme_jats.pipeline import Options, StructureConflictError, _mechanical, convert
 from jasme_jats.report import NEEDS_ACTION, TO_CHECK, actions, structure_conflict_text
-from jasme_jats.structure import RE_APPENDIX, Classifier, appendix_heading, appendix_sentence
+from jasme_jats.structure import BACK_TABLE_EXCLUDED, RE_APPENDIX, Classifier, appendix_heading, appendix_sentence
 
 S = mf.S
 
@@ -1841,6 +1841,9 @@ BLANK_DOCS = {
     "blank_last_empty": dict(back=[_p("ref_head", "引用文献"), _REF, _p("ref_head", "")]),
     "blank_last_space": dict(back=[_p("ref_head", "引用文献"), _REF, _p("ref_head", "　")]),
     "blank_fn_after_fn": dict(body=[_p("fn_head", "注"), _p("fn_head", ""), _FN1]),
+    # 注の見出しの後ろの表のあとの空の注見出し: 表は空の見出しに左右されず、注 1 の 1 段落目の後ろに入る（知らせは出ない）
+    "blank_fn_after_table": dict(body=[_p("fn_head", "注"), mf.table([[mf.cell("区分"), mf.cell("人数")]]),
+                                       _p("fn_head", ""), _FN1]),
     # 謝辞の節の途中の空の謝辞見出し: 後ろの本文は前の謝辞の節に入る
     "blank_ack_in_section": dict(back=[_p("ack_head", "謝辞"), _p("body", "先の謝辞の本文。"), _p("ack_head", ""),
                                        _p("body", "後の謝辞の本文。"), _p("ref_head", "引用文献"), _REF]),
@@ -1856,7 +1859,7 @@ def test_blank_heading_is_excluded_not_conflict(name, journal, meta, tmp_path):
     plan = res.plan
     assert plan.structure_conflicts == [] and res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid, name
     heads = {"ref": plan.ref_heading, "fn": plan.fn_heading}
-    real = {"blank_first_empty": "ref", "blank_first_space": "ref", "blank_last_empty": "ref", "blank_last_space": "ref",
+    real = {"blank_fn_after_table": "fn", "blank_first_empty": "ref", "blank_first_space": "ref", "blank_last_empty": "ref", "blank_last_space": "ref",
             "blank_fn_after_fn": "fn"}
     if name in real:
         assert heads[real[name]] is not None and heads[real[name]].plain() == ("引用文献" if real[name] == "ref" else "注")
@@ -1864,6 +1867,10 @@ def test_blank_heading_is_excluded_not_conflict(name, journal, meta, tmp_path):
     if name in blank_texts:
         [ex] = [x for x in res.fidelity.excluded if x[1] == "空白のみの段落"]
         assert plan.paras[ex[0]].plain() == blank_texts[name]
+    if name == "blank_fn_after_table":
+        assert "excluded_unsure" not in {a.key for a in actions(res)}
+        assert [(fn.number, len(fn.tables)) for fn in plan.fns] == [(1, 1)]
+        assert not any(e.reason == BACK_TABLE_EXCLUDED for e in plan.exclusions)
     if name == "blank_fn_after_fn":
         assert [p.plain() for fn in plan.fns for p in fn.paras] == ["1) 注の本文である。"]
     if name == "blank_ack_in_section":

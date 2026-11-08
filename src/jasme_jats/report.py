@@ -714,11 +714,11 @@ def _conflict_line(plan, c) -> str:
                 "「英文要旨」にしてください。")
     name = CONFLICT_HEADING_JA[c.kind]
     if c.kind in ("notes", "ack"):
-        # lost は前の節の、空白だけの段落を除くすべて（先頭はふつう前の見出し）
-        k = len(c.lost)
-        span = f"{c.lost[0]}〜{c.lost[-1]}" if k > 1 else c.lost[0]
-        return (f"・{name}の節が 2 つあります（前の節 {before}から {k} 段落、後ろの見出し {after}）。XML の{name}は 1 つだけなので、"
-                f"前の節の {k} 段落（{span}）が XML に入りません。1 つの節にまとめてください。"
+        # lost は前の節の、空白だけの段落を除くすべて（先頭はふつう前の見出し）。表のセルの段落も含むので、段落の件数は書かず、
+        # ID の範囲で示す（Word で見える段落・表の数と合わない件数を出さない）
+        span = f"{c.lost[0]}〜{c.lost[-1]}" if len(c.lost) > 1 else c.lost[0]
+        return (f"・{name}の節が 2 つあります（前の節 {before}から、後ろの見出し {after}）。XML の{name}は 1 つだけなので、"
+                f"前の節の段落（{span}。節の中の表のセルの段落も含む）が XML に入りません。1 つの節にまとめてください。"
                 + _conflict_fix(c, f"前の節（{span}）"))
     fix = _conflict_fix(c, f"前の見出し {first} の節")
     if c.kind == "fn_heading":

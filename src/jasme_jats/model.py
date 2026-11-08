@@ -251,7 +251,10 @@ class Layout:
 
 @dataclass
 class Exclusion:
-    """XML に出力しない docx の文字列。必ずレポートに一覧で出す。
+    """XML に出力しない docx の文字列。必ずレポートに一覧で出す（6 章）。
+
+    位置を決められない理由（structure.UNPLACED_EXCLUSIONS）の除外は、さらに要確認・要対応で知らせる（report._unplaced_action の
+    excluded_unsure・_abstract_missing_action の abstract_missing）。意図した除外（装飾・誌名行、図の注記など）は知らせない。
 
     blank: 空白だけの段落（の空白）として除外したもの。不変性チェックで、docx の文字が本当に空白だけかを確かめる
     （空白以外の文字があれば不合格）。付けるのは article.ArticlePlan.exclude_blank()（空白だけの段落）と
