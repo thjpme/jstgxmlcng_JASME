@@ -100,6 +100,25 @@ def read_styles(pkg: DocxPackage) -> dict:
     return styles
 
 
+def _grid_span(gs) -> int:
+    """w:gridSpan の値（横に結合した列の数）。0・負・数でない値は 1（Word などは 1 として表示する）。"""
+    try:
+        return max(1, int(wval(gs, "1") or 1))
+    except ValueError:
+        return 1
+
+
+def _grid_skip(trpr, name) -> int:
+    """w:trPr の w:gridBefore / w:gridAfter（行の前後で飛ばしたグリッドの列の数）。なければ 0。負・数でない値も 0。"""
+    el = trpr.find(w(name)) if trpr is not None else None
+    if el is None:
+        return 0
+    try:
+        return max(0, int(wval(el, "0") or 0))
+    except ValueError:
+        return 0
+
+
 class Reader:
     def __init__(self, path):
         self.pkg = DocxPackage(path)
@@ -249,6 +268,9 @@ class Reader:
         for k, tr in enumerate(_children(tbl, (w("tr"),)), 1):
             trpr = tr.find(w("trPr"))
             row = Row(header=trpr is not None and on_off(trpr.find(w("tblHeader"))))
+            row.grid_before = _grid_skip(trpr, "gridBefore")
+            row.grid_after = _grid_skip(trpr, "gridAfter")
+            row.number = k
             row_deleted = trpr is not None and trpr.find(w("del")) is not None
             shapes = (len(self.images), len(self.floats), len(self.textboxes))
             records = (len(self.joined), len(self.joins), len(self.deleted_rows), len(self.hidden), len(self.warnings),
@@ -262,7 +284,7 @@ class Reader:
                 if tcpr is not None:
                     gs = tcpr.find(w("gridSpan"))
                     if gs is not None:
-                        cell.gridspan = int(wval(gs, "1") or 1)
+                        cell.gridspan = _grid_span(gs)
                     vm = tcpr.find(w("vMerge"))
                     if vm is not None:
                         cell.vmerge = "restart" if wval(vm) == "restart" else "continue"

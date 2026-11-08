@@ -1460,10 +1460,11 @@ class Classifier:
 
         同じ列で上下に隣り合う組（画像の行とキャプションの行など）か、同じ行で左右に隣り合う組で、表全体で向き
         （列ごとか行ごとか、画像が先かキャプションが先か）が一つに決まるときだけ組む（空白だけのセルは飛ばす）。
-        結合したセルがある、行ごとのセルの数が違う、どの向きでも組めない・二つ以上の向きで組めるときは None。
+        結合したセル・飛ばしたグリッド（gridBefore・gridAfter）がある、行ごとのセルの数が違う、どの向きでも組めない・二つ以上の向きで組めるときは None。
         戻り値: [(画像の段落の一覧, キャプションの組)]（組の最初のセルの行・列の順）
         """
-        if any(c.gridspan != 1 or c.vmerge for row in t.rows for c in row.cells) or len({len(line) for line in grid}) != 1:
+        if (any(c.gridspan != 1 or c.vmerge for row in t.rows for c in row.cells)
+                or any(r.grid_before or r.grid_after for r in t.rows) or len({len(line) for line in grid}) != 1):
             return None
         kind = {}
         for r, line in enumerate(grid):

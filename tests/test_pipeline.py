@@ -25,6 +25,7 @@ def test_fidelity_and_dtd(path, split, journal, meta, tmp_path):
     assert res.dtd_valid, res.dtd_errors[:5]
     assert res.jstage_issues == [], res.jstage_issues
     assert res.lost_images == [] and res.hidden_images == [], res.lost_images   # 画像の出力漏れがない
+    assert res.table_problems == [], res.table_problems                          # 表の形の崩れがない
     if not split:
         assert all(reason == "姓と名の間の空白" for _, _, reason in fid.drops)
 

@@ -36,6 +36,9 @@ tests/fixtures/sample_links.docx : 注・図表へのリンクの規則の境界
 tests/fixtures/sample_links_bare.docx : sample_links と同じ規則の、注番号が番号だけの上付きの論文（「主張である¹」「（試験, 2024）²」と
                                    「4 m²」、上付きの「1-3」「1, 2」、文の括弧を閉じる直前の上付きの「3」＋本文の「）」。注の一覧の番号も上付き）
 
+make_fixtures の部品（テストの中で docx をその場で作るもの）: cell()（セル）・table()（表）・tr()/table_row()/table_of_rows()
+（行を並べた表。table_row は gridBefore・gridAfter・見出し行を書ける）・make_article()（下）など。
+
 make_article() は小さな論文を作る。テストの中で、境界ケースの docx をその場で作るのにも使う。
 
 内容は架空のもので、実在の論文ではない。
@@ -739,6 +742,25 @@ def custom_xml(inner, element="item"):
 def tr(*cells):
     """表の行。cells は cell() の XML か文字列（文字列は本文の段落 1 つのセルにする）。"""
     return "<w:tr>" + "".join(c if c.startswith("<") else cell(c) for c in cells) + "</w:tr>"
+
+
+def table_row(cells, header=False, grid_before=0, grid_after=0):
+    """表の行（table_of_rows と組み合わせる）。cells は cell() の XML か文字列。trPr に gridBefore・gridAfter
+    （と幅の wBefore・wAfter）・tblHeader を書く（OOXML の順: gridBefore, gridAfter, wBefore, wAfter, …, tblHeader）。"""
+    trpr = ""
+    if grid_before:
+        trpr += f'<w:gridBefore w:val="{grid_before}"/>'
+    if grid_after:
+        trpr += f'<w:gridAfter w:val="{grid_after}"/>'
+    if grid_before:
+        trpr += f'<w:wBefore w:w="{2000 * grid_before}" w:type="dxa"/>'
+    if grid_after:
+        trpr += f'<w:wAfter w:w="{2000 * grid_after}" w:type="dxa"/>'
+    if header:
+        trpr += "<w:tblHeader/>"
+    pr = f"<w:trPr>{trpr}</w:trPr>" if trpr else ""
+    body = "".join(c if c.startswith("<") else cell(c) for c in cells)
+    return f"<w:tr>{pr}{body}</w:tr>"
 
 
 def table_of_rows(rows, ncol, style="a5"):

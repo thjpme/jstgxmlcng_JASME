@@ -156,13 +156,15 @@ class Cell:
     blocks: list = field(default_factory=list)   # Para | Table
     gridspan: int = 1
     vmerge: Optional[str] = None                 # "restart" | "continue" | None
-    rowspan: int = 1
 
 
 @dataclass(eq=False)
 class Row:
     cells: list = field(default_factory=list)
     header: bool = False
+    grid_before: int = 0    # 行の前で飛ばしたグリッドの列の数（w:trPr/w:gridBefore。セルのない列）
+    grid_after: int = 0     # 行の後ろで飛ばしたグリッドの列の数（w:trPr/w:gridAfter）
+    number: int = 0         # docx の表の何行目か（1 から。変更履歴で削除して読み飛ばした行も数える。警告の行の番号）
 
 
 @dataclass(eq=False)
@@ -268,6 +270,19 @@ class LostImage:
     reason: str         # 出力しなかった理由の推定
     text: str = ""      # 段落の文字の冒頭（Word で探す手がかり。図形の中の画像なら、図形が結び付いている段落を reason に書く）
     source: str = ""    # docx の中のファイル（word/media/...）。Word の図形なら空
+
+
+@dataclass
+class TableProblem:
+    """出力した XML の表の形の崩れ（pipeline.table_problems が変換の後に調べる。要対応 table_shape）。
+
+    不変性チェックは文字しか、DTD 検証は要素の並びしか見ないので、出力した表の形（行ごとの列の数・セルの重なり・縦の結合が
+    見出し行や本文の行の外にはみ出していないか・セルのない行）はここで確かめる。崩れていれば変換ツールの不具合の可能性がある。
+    """
+    tid: str            # model.Table.tid（組み立ての記録がない表は空）
+    where: str          # Word で探す手がかり（builder の where。docx_reader.table_where の形）
+    name: str           # 知らせに出す名前（「表 T1」「図 F1 の中の表」。どちらの id もなければ where）
+    problems: list      # 問題の文の一覧（同じ文は 1 つ）
 
 
 @dataclass

@@ -39,6 +39,11 @@ NEWLINE_SHOWN = 10      # レポートの 10 章の改行の一覧に並べる�
 # 変更履歴ですべての行が削除された表（docx_reader が行をすべて読み飛ばした表。修正計画の N8）の 10 章の警告
 ALL_ROWS_DELETED_MSG = ("{where}: 変更履歴で表のすべての行が削除されています（Word で変更をすべて承諾すると、表が消えます）。XML には"
                         "{what}を出力しました。Word で確かめ、表が要らなければ、{how}保存してから変換し直してください。")
+# 表の縦の結合を XML の表の形に合わせて変えたときの 10 章の警告（文字は落とさない。Action にはしない）
+TABLE_HEAD_SPAN_MSG = ("{where}: 見出し行から本文の行へ続く縦の結合を、見出し行の終わりで止めました（本文の行の側は別のセルとして"
+                       "出力しました。文字は落としていません）。")
+TABLE_SPAN_MISMATCH_MSG = ("{where}の {row} 行目: 縦に結合したセルの幅（横に結合した列の数）が上の行のセルと違うため、結合せずに"
+                           "別のセルとして出力しました。Word で表の結合を確かめてください。")
 
 
 @dataclass
@@ -52,6 +57,13 @@ class BuildInfo:
     # 姓と名を分けられなかった氏名 [(段落の ID, 氏名〈前後の空白・タブを除く〉, 言語 ja / en)]。AI 依頼文の「姓と名の区切りがない
     # 氏名」に使う（ai_assist.build_request。notes の文言から氏名を切り出さない）
     unsplit_names: list = field(default_factory=list)
+    # 出力した表 [(<table> の要素, model.Table, Word で探す手がかり)]。pipeline.table_problems が出力した表の形を確かめるのに使う
+    tables: list = field(default_factory=list)
+
+
+def _overlaps(owner, col, span) -> bool:
+    """列の範囲 [col, col+span) が、結合元（owner: 開始列 -> (セル, 幅)）のどれかの範囲と重なるか。"""
+    return any(s < col + span and col < s + w for s, (_, w) in owner.items())
 
 
 def _sub(parent, tag, text=None, **attrs):
@@ -593,7 +605,7 @@ class Builder:
             graphics += 1
         for t in node.tables:
             # 表で組んだ図（問題文など）: 図の中に表を入れる（JATS の fig は table-wrap を含められる）
-            self.table(_sub(f, "table-wrap"), t)
+            self.table(_sub(f, "table-wrap"), t, node.caption)
         if node.formula is not None:
             parent.remove(f)
             self.formula_image(parent, node)
@@ -639,7 +651,7 @@ class Builder:
         if node.table is not None:
             if node.table.skipped_rows and not node.table.rows:
                 self.all_rows_deleted(node)
-            self.table(tw, node.table)
+            self.table(tw, node.table, node.caption)
 
     def all_rows_deleted(self, node: TableNode):
         """変更履歴ですべての行が削除された表を、10 章の警告にする（キャプションは docx の文字なので出力し、表は今までどおり
@@ -651,59 +663,102 @@ class Builder:
             where=where, what="キャプションと空の表" if cap else "空の表",
             how="変更をすべて承諾し、キャプションも消して" if cap else "変更をすべて承諾して"))
 
-    def table(self, parent, t):
-        # 縦の結合（vMerge）を rowspan に変換する（中間表現は書き換えない）
-        rowspan, merged, extra = {}, set(), {}
-        owner = {}
-        for row in t.rows:
-            col = 0
-            for c in row.cells:
-                if c.vmerge == "continue" and col in owner:
-                    top = owner[col]
-                    rowspan[id(top)] = rowspan.get(id(top), 1) + 1
-                    # 結合された側のセルに文字があれば、結合元のセルに続けて出す（文字を落とさないため）
-                    extra.setdefault(id(top), []).extend(c.blocks)
-                    merged.add(id(c))
-                elif c.vmerge == "restart":
-                    owner[col] = c
-                else:
-                    owner.pop(col, None)
-                col += c.gridspan
-        tbl = _sub(parent, "table")
+    def table(self, parent, t, caption=None):
+        """表を <table> にする。縦の結合（vMerge）は rowspan にする（中間表現は書き換えない）。
+
+        結合元は「開始列 -> (セル, 幅)」で覚え、行ごとに作り直す（その行に合う継続か restart があった列だけ結合が続く。
+        横に広いセル・飛ばしたグリッド・セルのない列で切れる）。継続は、開始列と幅が結合元と同じときだけ結合し、幅が違えば
+        別のセル（新しい結合元）にする（10 章の警告）。HTML の表では rowspan を行グループ（thead/tbody）の外に延ばせないので、
+        本文の 1 行目で結合を止める（10 章の警告）。結合元のない継続（表・本文の 1 行目、削除された結合元の下）は新しい結合元に
+        する。すべてのセルが結合した継続の行は出力せず（セルの文字は結合元のセルに続けて出す）、rowspan は出力する行だけで数える。
+        行の前後で飛ばしたグリッド（gridBefore・gridAfter）は空のセルで埋める。
+        """
+        rows = t.rows
         n_head = 0
-        for row in t.rows:
+        for row in rows:
             if row.header:
                 n_head += 1
             else:
                 break
-        if n_head == len(t.rows):
+        if n_head == len(rows):
             n_head = 0      # すべての行が見出し行なら <thead> は作らない（DTD は thead? の後に tbody+ が必要）
-        sections = []
-        if n_head:
-            sections.append(("thead", t.rows[:n_head]))
-        sections.append(("tbody", t.rows[n_head:] or []))
-        for tag, rows in sections:
-            if not rows:
+        top_of, conts, extra = {}, {}, {}   # id(継続) -> 結合元、id(結合元) -> 継続の行の番号、id(結合元) -> 継続の blocks
+        owner = {}                          # 開始列 -> (結合元のセル, 幅)
+        crossed, mismatch = False, []
+        for r, row in enumerate(rows):
+            col = row.grid_before
+            if n_head and r == n_head:
+                # 本文の 1 行目: 見出し行の結合の範囲に重なる継続があれば、止めたことを警告する（幅は比べない）
+                c0 = col
+                for c in row.cells:
+                    if c.vmerge == "continue" and _overlaps(owner, c0, c.gridspan):
+                        crossed = True
+                    c0 += c.gridspan
+                owner = {}
+            new = {}
+            for c in row.cells:
+                span = c.gridspan
+                if c.vmerge == "continue":
+                    o = owner.get(col)
+                    if o is not None and o[1] == span:
+                        top = o[0]
+                        top_of[id(c)] = top
+                        conts.setdefault(id(top), []).append(r)
+                        # 結合された側のセルに文字があれば、結合元のセルに続けて出す（文字を落とさないため）
+                        extra.setdefault(id(top), []).extend(c.blocks)
+                        new[col] = o
+                    else:
+                        if _overlaps(owner, col, span):
+                            mismatch.append(row.number or r + 1)
+                        new[col] = (c, span)
+                elif c.vmerge == "restart":
+                    new[col] = (c, span)
+                col += span
+            owner = new
+        # 出力しない行: すべてのセルが結合した継続の行（セルのない行も。今と同じ）
+        dropped = {r for r, row in enumerate(rows) if all(id(c) in top_of for c in row.cells)}
+        rowspan = {k: 1 + sum(1 for r in rs if r not in dropped) for k, rs in conts.items()}
+        where = table_where(table_head(t), caption.text_only() if caption is not None else "")
+        if crossed:
+            self.info.warnings.append(TABLE_HEAD_SPAN_MSG.format(where=where))
+        for k in dict.fromkeys(mismatch):
+            self.info.warnings.append(TABLE_SPAN_MISMATCH_MSG.format(where=where, row=k))
+        tbl = _sub(parent, "table")
+        for tag, lo, hi in (("thead", 0, n_head), ("tbody", n_head, len(rows))):
+            if lo >= hi:
                 continue
             sec = _sub(tbl, tag)
-            for row in rows:
+            cell_tag = "th" if tag == "thead" else "td"
+            for r in range(lo, hi):
+                if r in dropped:
+                    continue
+                row = rows[r]
                 tr = _sub(sec, "tr")
+                self._grid_cell(tr, cell_tag, row.grid_before)
                 for c in row.cells:
-                    if id(c) in merged:
+                    if id(c) in top_of:
                         continue
-                    td = _sub(tr, "th" if tag == "thead" else "td")
+                    td = _sub(tr, cell_tag)
                     if c.gridspan > 1:
                         td.set("colspan", str(c.gridspan))
                     if rowspan.get(id(c), 1) > 1:
                         td.set("rowspan", str(rowspan[id(c)]))
                     self.cell_content(td, c.blocks + extra.get(id(c), []))
-                if not len(tr):
-                    sec.remove(tr)
+                self._grid_cell(tr, cell_tag, row.grid_after)
             if not len(sec):
                 tbl.remove(sec)
         if not len(tbl):
             tr = _sub(_sub(tbl, "tbody"), "tr")
             _sub(tr, "td")
+        self.info.tables.append((tbl, t, where))
+
+    @staticmethod
+    def _grid_cell(tr, tag, n):
+        """飛ばしたグリッド n 列ぶんの空のセル（n が 0 なら何もしない。2 以上なら colspan）。文字がないので不変性チェックに関係しない。"""
+        if n > 0:
+            el = _sub(tr, tag)
+            if n > 1:
+                el.set("colspan", str(n))
 
     def cell_content(self, td, blocks):
         paras = []

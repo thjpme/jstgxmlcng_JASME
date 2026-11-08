@@ -9,7 +9,8 @@
   6. 文字の不変性チェック（fidelity）… AI 補完を行った場合も、必ずこの最終段階で行う
   7. 目印を取り除いた最終出力を作り、もう一度文字列を照合する（fidelity.final_check）
   8. J-STAGE 指定 DTD で検証する（validate）
-  9. docx の画像のうち XML に出力しなかったもの（画像を置けない場所・出力しなかった段落の中の画像）を調べる（lost_images）
+  9. docx の画像のうち XML に出力しなかったもの（画像を置けない場所・出力しなかった段落の中の画像）を調べる（lost_images）。
+     あわせて、出力した表の形（行ごとの列の数・セルの重なり・縦の結合の範囲・セルのない行）を調べる（table_problems）
  10. J-STAGE のアップロード時のチェックのうち XML だけで判定できるものを再現する（jstage_rules。画像の名前を使うので、
      11 の画像の書き出しの後、ZIP を作る前に、出力した画像の名前で行う）
  11. 画像の書き出し、J-STAGE のフォルダ構成と ZIP（今回の XML・PDF・出力できた画像だけを入れ、読み直して確かめる）、
@@ -43,7 +44,7 @@ from .fidelity import SupplementResult, final_check, supplement_targets, verify,
 from .images import ImageResult, export_images, user_image
 from .jstage_rules import check as jstage_check
 from .linker import cited_refs, link
-from .model import Decision, LostImage
+from .model import Decision, LostImage, TableProblem
 from .package import article_dir, make_zip, unzipped_files, write_package, zip_image_names, zip_problems
 from .pdfdocx import DocxFix, make_fixed_docx, same_file
 from .pdfmatch import PdfCheck, check_pdf
@@ -160,6 +161,8 @@ class Result:
     forced_floats: list = field(default_factory=list)   # AI による補完でも位置が決まらず、仮の位置（アンカー段落の後ろ・本文の最後）に置いた図表の説明
     pdf_check: Optional[PdfCheck] = None                # 出版版 PDF との照合（PDF がなければ None）。ルート2 では補った docx との照合
     lost_images: list = field(default_factory=list)     # docx にあるのに XML に出力しなかった画像（LostImage。要対応）
+    table_problems: list = field(default_factory=list)  # 出力した XML の表の形の崩れ（TableProblem。要対応 table_shape）
+    tables_checked: int = 0                             # 形を確かめた表の数（12 章。すべての行が削除された空の表は数えない）
     zip_issues: list = field(default_factory=list)      # アップロード用の ZIP を読み直して見つけた問題（package.zip_problems。jstage_issues とは別）
     not_zipped: list = field(default_factory=list)      # 記事フォルダにあるのに ZIP に入れなかったファイル（package.unzipped_files。10 章）
     hidden_images: list = field(default_factory=list)   # 隠し文字の中の画像の ID（Word で表示されないので出力しない）
@@ -294,6 +297,95 @@ def lost_images(doc, plan, root, info, exclusions) -> tuple:
                or NOTE_PARTS.get(p.src[:1], ""))
         lost.append(LostImage(img.image_id, p.src, loc, reason, text=p.text_only().strip()[:20], source=img.target))
     return lost, hidden
+
+
+SECTION_JA = {"thead": "見出し行（thead）", "tbody": "本文の行（tbody）", "tfoot": "脚の行（tfoot）"}
+NO_RECORD = "組み立ての記録がない表"
+
+
+def _cell_span(cell, name) -> int:
+    try:
+        return max(1, int(cell.get(name, "1")))
+    except ValueError:
+        return 1
+
+
+def _shape_problems(tbl, expect) -> list:
+    """<table> の形を HTML の表の割り当てで調べる。expect は docx の表の列の数（docx がもともと不ぞろいなら None）。"""
+    out = []
+    for sec in tbl:
+        if sec.tag not in SECTION_JA:       # コメントなどは tag が文字列でないので入らない
+            continue
+        name = SECTION_JA[sec.tag]
+        carry = {}                          # 列 -> 上の行の rowspan がまだ覆う行の数（この行を含む）
+        trs = [x for x in sec if x.tag == "tr"]
+        for k, tr in enumerate(trs, 1):
+            cells = [x for x in tr if x.tag in ("th", "td")]
+            taken = set(carry)
+            nxt = {c: n - 1 for c, n in carry.items() if n > 1}
+            if not cells:
+                out.append(f"XML の{name}の {k} 行目にセルがない")
+            col = 0
+            for cell in cells:
+                while col in taken:
+                    col += 1
+                cover = range(col, col + _cell_span(cell, "colspan"))
+                rs = _cell_span(cell, "rowspan")
+                if any(x in taken for x in cover):
+                    out.append(f"XML の{name}の {k} 行目でセルが重なっている")
+                taken.update(cover)
+                if rs > 1:
+                    for x in cover:
+                        nxt[x] = rs - 1
+                col = cover.stop
+            if taken and max(taken) + 1 != len(taken):
+                out.append(f"XML の{name}の {k} 行目に、どのセルも覆わない列がある")
+            if expect is not None and cells and len(taken) != expect:
+                out.append(f"XML の{name}の {k} 行目が {len(taken)} 列ぶん（docx の表は {expect} 列）")
+            carry = nxt
+        if carry:
+            out.append(f"縦の結合（rowspan）が XML の{name}の外にはみ出している")
+    return out
+
+
+def _table_name(tbl, where) -> str:
+    anc = next((a for a in tbl.iterancestors("table-wrap", "fig") if a.get("id")), None)
+    if anc is None:
+        return where
+    aid = anc.get("id")
+    return f"表 {aid}" if anc.tag == "table-wrap" else f"図 {aid} の中の表"
+
+
+def table_problems(root, info) -> tuple:
+    """出力した表の形の確かめ（不変性チェックは文字しか、DTD 検証は要素の並びしか見ないため）。
+
+    builder の結合の判断には頼らず、docx の行ごとの列の数（gridBefore + gridSpan の和 + gridAfter）と、出力した <table> の
+    HTML の表の割り当て（行ごとの列の数・セルの重なり・縦の結合の節の外へのはみ出し・セルのない行）だけで判定する。
+    docx の表がもともと行ごとに列の数の違う表なら、列の数は比べない。root の外に外した表（数式の画像にした図の中の表）は数えず、
+    root の中の組み立ての記録がない <table> は、割り当てだけ確かめて「組み立ての記録がない表」とする。
+    戻り値: (TableProblem の一覧, 確かめた表の数)
+    """
+    found, checked, recorded = [], 0, []
+    for tbl, t, where in info.tables:
+        if not any(a is root for a in tbl.iterancestors()):     # 外した要素の getroottree() は元の木を指すので、祖先をたどる
+            continue
+        recorded.append(tbl)
+        if not t.rows:
+            continue        # 変更履歴ですべての行が削除された表（空の td を 1 つ書く。10 章の警告）
+        checked += 1
+        widths = {row.grid_before + sum(max(1, c.gridspan) for c in row.cells) + row.grid_after
+                  for row in t.rows if row.cells}
+        expect = next(iter(widths)) if len(widths) == 1 else None
+        probs = list(dict.fromkeys(_shape_problems(tbl, expect)))
+        if probs:
+            found.append(TableProblem(tid=t.tid, where=where, name=_table_name(tbl, where), problems=probs))
+    for tbl in root.iter("table"):
+        if any(tbl is x for x in recorded):
+            continue
+        checked += 1
+        probs = list(dict.fromkeys([NO_RECORD] + _shape_problems(tbl, None)))
+        found.append(TableProblem(tid="", where=NO_RECORD, name=_table_name(tbl, NO_RECORD), problems=probs))
+    return found, checked
 
 
 def _mechanical(docx_path, journal, overrides=None, placements=None):
@@ -456,6 +548,8 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
 
     # 画像の出力漏れ（不変性チェックは文字しか見ない）
     lost, hidden_images = lost_images(doc, plan, root, info, plan.exclusions + info.exclusions)
+    # 表の形の崩れ（不変性チェックは文字しか、DTD 検証は要素の並びしか見ない）
+    table_issues, tables_checked = table_problems(root, info)
 
     # ---------------------------------------------------------------- 出力
     adir = article_dir(out_dir, journal, meta)
@@ -539,7 +633,8 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         build_notes=build_notes, hidden_text=doc.hidden_text, tracked_changes=doc.tracked_changes,
         comments=doc.comments, has_pdf=has_pdf, output_note=output_note, xml_path=flat_xml, zip_path=zip_path,
         prompt_path=prompt_path, forced_floats=forced_floats, pdf_check=pdf_check, route=opts.route, docx_fix=docx_fix,
-        supplement=supplement, lost_images=lost, hidden_images=hidden_images, zip_issues=zip_problems(zip_path, journal, meta),
+        supplement=supplement, lost_images=lost, hidden_images=hidden_images,
+        table_problems=table_issues, tables_checked=tables_checked, zip_issues=zip_problems(zip_path, journal, meta),
         not_zipped=unzipped_files(out_dir, journal, meta, zip_path), joined=doc.joined, deleted_rows=doc.deleted_rows,
         newlines=info.newlines, style_hidden=doc.style_hidden,
         style_hidden_images=[img.image_id for img in doc.images if img.hidden_style])

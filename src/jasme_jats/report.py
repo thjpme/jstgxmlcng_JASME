@@ -736,6 +736,36 @@ def _dtd_action(r):
              "アップロードできない（変換ツールの不具合の可能性がある）。\n" + "\n".join(f"  {e}" for e in errs)))
 
 
+TABLE_SHAPE_WHY = ("行ごとの列の数がそろわない・縦の結合が見出し行や本文の行の外にはみ出すなど、docx の表と違う形で出力しました"
+                   "（変換ツールの不具合の可能性があります）。")
+
+
+def _table_shape_action(r):
+    """出力した XML の表の形の崩れ（pipeline.table_problems）。なければ None。"""
+    probs = r.table_problems
+    if not probs:
+        return None
+    n = len(probs)
+    lines = [(p.name, "、".join(p.problems)) for p in probs]
+    names = "、".join(esc(name) for name, _ in lines)
+    shown = lines[:DTD_SHOWN]
+    rest = [f"…ほか {n - DTD_SHOWN} 件"] if n > DTD_SHOWN else []
+    return Action(
+        NEEDS_ACTION, "table_shape",
+        top="\n".join([f"> **要対応: 出力した XML の表 {n} 件の形が崩れています（12 章）。** {TABLE_SHAPE_WHY}"
+                       "この XML は登載に使わず、変換レポートを添えて開発者に知らせてください。", ">"]
+                      + [f"> - {esc(name)}: {esc(what)}" for name, what in lines]),
+        checklist=(f"- [ ] **表の形が崩れている {n} 件**（12 章）: この XML は登載に使わない（変換レポートを添えて開発者に"
+                   f"知らせる）: {names}"),
+        box_title=f"出力した XML の表の形が崩れています（{n} 件。この XML は登載に使わないでください）",
+        box_detail=("docx の表と違う形（行ごとの列の数・縦の結合の範囲など）で出力しました。変換ツールの不具合の可能性があります。"
+                    "レポートの 12 章を確認し、変換レポートを添えて開発者に知らせてください。\n"
+                    + "\n".join([f"・{name}: {what}" for name, what in shown] + rest)),
+        cli=(f"要対応: 出力した XML の表 {n} 件の形が崩れている（行ごとの列の数がそろわないなど。レポートの冒頭と 12 章。"
+             "変換ツールの不具合の可能性がある）。この XML は登載に使わないこと。\n"
+             + "\n".join([f"  {name}: {what}" for name, what in shown] + rest)))
+
+
 def _upload_action(r):
     issues = upload_issues(r)
     if not issues:
@@ -1653,7 +1683,8 @@ def actions(r) -> list:
     すべて直せたときにも出すものなので、ここには入れない（render の固定の部分。直せなかった箇所は pdf_unfixed の枠）。
     記事フォルダにあるのに ZIP に入れなかったファイル（Result.not_zipped）は 10 章の警告のまま。
     """
-    head = [f(r) for f in (_fidelity_action, _supplement_action, _dtd_action, _upload_action, _ai_error_action, _ai_pending_action,
+    head = [f(r) for f in (_fidelity_action, _supplement_action, _dtd_action, _table_shape_action,
+                           _upload_action, _ai_error_action, _ai_pending_action,
                            _partial_action, _forced_action, figure_body_action, _textbox_undecided_action,
                            _textbox_place_action, _textbox_figure_text_action, images_action, lost_action,
                            _style_hidden_action, _abstract_ja_action, _app_after_refs_action, _note_overlap_action, _float_ref_action,
@@ -2033,6 +2064,21 @@ def render(r) -> str:
         L.append(table(["メッセージ ID", "内容"], upload_issues(r)))
     else:
         L.append("該当するエラーはありませんでした（J-STAGE 側でしか判定できない項目は、アップロード時に確認してください）。")
+    L.append("")
+    L.append("### 表の形の確かめ")
+    L.append("")
+    if r.table_problems:
+        L.append(f"出力した表 {r.tables_checked} 件のうち {len(r.table_problems)} 件の形が、docx の表と違います（変換ツールの"
+                 "不具合の可能性があります。この XML は登載に使わず、変換レポートを添えて開発者に知らせてください）。")
+        L.append("")
+        L.append(table(["表", "Word で探す手がかり", "見つかった問題"],
+                       [(p.name, p.where, "、".join(p.problems)) for p in r.table_problems]))
+    elif r.tables_checked:
+        L.append(f"出力した表 {r.tables_checked} 件について、行ごとの列の数（縦に結合したセルが覆う列を含む）が docx の表と同じか、"
+                 "セルが重なっていないか、縦の結合が見出し行・本文の行の外にはみ出していないか、セルのない行がないかを確かめ、"
+                 "問題はありませんでした（変更履歴ですべての行が削除された表は数えていません）。")
+    else:
+        L.append("形を確かめた表はありません（表がないか、変更履歴ですべての行が削除された表だけです）。")
     L.append("")
 
     # ------------------------------------------------------------------ 13. 出版版 PDF との照合
