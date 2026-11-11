@@ -4,6 +4,8 @@
 作業の前に `docs/DEVELOPMENT.md`（コードの構成・守るべき原則・反映の流れ）と `docs/DESIGN.md`（設計）を読むこと。
 コードの地図（層・依存・データの流れ・逆引き）は `docs/ARCHITECTURE.md`、未修正の問題の一覧は `docs/REVIEW_2026-11.md`。
 新しく引き継いだ人向けの環境の作り方は `docs/HANDOFF.md`。
+正式リリース前の実地テスト（実際の原稿 28 論文）とソース点検の結果は `docs/FIELD_TEST_2026-11.md`（問題 C001〜C163 と決定事項）、
+その修正計画は `docs/FIX_PLAN_RELEASE.md`（まだ実装していない）。
 
 ## 最優先の原則
 
