@@ -314,7 +314,7 @@ Action にしないもの: 10 章の警告（見出し行をまたぐ結合を�
 
 - J-STAGE が `<fn><p><table-wrap>`（注の中の表）と、`<title>` の先頭に置いた後付けの見出しの番号を表示するか（試験登載で確かめる）。
 - Word が、子要素の足りない `w:lvlOverride/w:lvl`、結合元のない縦結合の継続、JPEG の Exif の向きを、どう表示するか。
-- 新しい `sanitize_docx.py` で整えた docx を、Word で開けるか（利用者が一度開いて確かめる）。
+- ~~新しい `sanitize_docx.py` で整えた docx を、Word で開けるか~~ → 2026-11-11 に利用者が Word で開いて確かめた（`tests/fixtures/JASME_template_20261009.docx`。修復の確認なく開け、見た目も変わらない）。
 - Pillow の新しい版での 16 ビットの PNG などの保存（新しい環境のテストで確かめる）。
 
 ## 利用者に聞くこと
