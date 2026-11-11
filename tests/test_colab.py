@@ -30,7 +30,7 @@ def test_summary_box_and_report_details(journal, meta, tmp_path, monkeypatch):
     assert "J-STAGE のアップロード時チェック: 問題なし" in html and "出版版 PDF との照合: PDF なし" in html
     assert "#b91c1c" not in html and "PDF で補った docx" not in html
     res.dtd_valid = False
-    assert "color:#b91c1c;font-weight:bold'>DTD 検証: 不合格" in summary_box(res)
+    assert "color:#b91c1c !important;font-weight:bold'>DTD 検証: 不合格" in summary_box(res)
     # ルート2 で補った docx の名前。PDF の文字を読めなかったときは、補えなかったことを赤い文字で
     res.docx_fix = SimpleNamespace(path=tmp_path / "31_1_PDFで補完した原稿.docx")
     assert "PDF で補った docx: 31_1_PDFで補完した原稿.docx（変更履歴つき" in summary_box(res)
@@ -39,7 +39,7 @@ def test_summary_box_and_report_details(journal, meta, tmp_path, monkeypatch):
     res.supplement = SimpleNamespace(ok=True)
     assert "<div style='white-space:pre-wrap'>出版版 PDF による補完の確かめ: 合格" in summary_box(res)
     res.supplement = SimpleNamespace(ok=False)
-    assert "color:#b91c1c;font-weight:bold'>出版版 PDF による補完の確かめ: 不合格" in summary_box(res)
+    assert "color:#b91c1c !important;font-weight:bold'>出版版 PDF による補完の確かめ: 不合格" in summary_box(res)
     res.supplement = None
     res.docx_fix = None
     monkeypatch.setattr(type(res), "pdf_fallback", property(lambda self: True))
@@ -502,3 +502,23 @@ def test_structure_conflict_box_and_text(journal, tmp_path):
         if kind[0] in ("ref_heading", "fn_heading", "notes", "ack"):
             assert ("移して" in body) == kind[5], name        # 間に別の節があるときだけ「移して」
         assert "set_role" not in msg and "不具合" not in msg
+
+
+def test_every_box_is_light_with_important_colors(journal, meta, tmp_path):
+    """白地の枠はすべて jasme-light のクラスと <style> を持ち、色の指定は !important（ダークモードでも白地に暗い文字）。"""
+    import re
+    from jasme_jats.colab import (LIGHT_STYLE, ai_required_box, check_box, next_article_box, no_ai_box, report_details,
+                                  structure_conflict_box, summary_box)
+    from jasme_jats.pipeline import Options, convert
+    from conftest import FULL
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "s", convert_metafiles=False))
+    boxes = [error_box("見出し", "詳細"), check_box("見出し", "詳細"), prompt_box("依頼文", ["a.png"]), no_ai_box(),
+             ai_required_box("x"), structure_conflict_box("x"), next_article_box("a.docx"), summary_box(res),
+             report_details("# 見出し\n\n本文")]
+    for h in boxes:
+        assert "class='jasme-light'" in h and LIGHT_STYLE in h
+        assert re.search(r"\.jasme-light div[^{]*\{color:#1f2937 !important\}", h)
+        outside = h.replace(LIGHT_STYLE, "")
+        # インラインの color（border-color・background-color 以外）は、すべて !important つき
+        for m in re.finditer(r"(?<![-\w])(color|background):[^;'\"]*", outside):
+            assert "!important" in m.group(0), m.group(0)

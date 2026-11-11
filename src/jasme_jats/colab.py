@@ -1,7 +1,7 @@
 """Colab ノートブックで使う表示部品（HTML）。
 
 ノートブックのセルを短く保ち、テストできるようにするため、表示用の HTML はここで作る。
-Colab の出力欄は暗い配色のこともあるので、枠の中の文字色・背景色は明示する。
+Colab の出力欄は暗い配色のこともあるので、枠の中の文字色・背景色は明示し、枠は白地に暗い文字に固定する（`LIGHT_STYLE`。ダークモードでも読める）。
 
 枠の色は 3 つ: 要対応は赤（error_box）、要確認は黄（check_box）、結果の要約は灰（summary_box）。変換の後は、要対応・要確認の
 枠（result_boxes）→ 結果の要約（summary_box）→ レポート全文（report_details。畳んで出す）の順に出す。
@@ -32,11 +32,40 @@ function jasmeCopy(id) {
 </script>
 """
 
-_BOX = ("border:3px solid #d97706;border-radius:8px;padding:12px 16px;margin:12px 0;background:#fffbeb;"
-        "color:#1f2937;font-size:14px;line-height:1.6")
-_BUTTON = ("background:#d97706;color:#ffffff;border:none;border-radius:6px;padding:8px 16px;font-size:15px;"
+_LIGHT_INK = "#1f2937"
+_LIGHT_TAGS = ("div", "p", "span", "li", "ol", "ul", "table", "thead", "tbody", "tr", "td", "th", "h1", "h2", "h3", "h4", "h5", "h6",
+               "b", "strong", "em", "i", "u", "small", "code", "pre", "blockquote", "summary", "details", "label", "caption", "sup", "sub", "a", "kbd", "del", "ins", "s", "mark")
+
+
+def _light_css() -> str:
+    def sel(tags, prefix=".jasme-light"):
+        return ",".join(f"{prefix} {t}" for t in tags)
+    plain = tuple(t for t in _LIGHT_TAGS if t not in ("blockquote", "pre"))
+    return ("<style>"
+            f".jasme-light,{sel(_LIGHT_TAGS)}{{color:{_LIGHT_INK} !important}}"
+            f".jasme-light{{color-scheme:light}}"
+            f"{sel(plain)}{{background:transparent !important}}"
+            f"{sel(('blockquote', 'pre'))}{{background:#f3f4f6 !important}}"
+            ".jasme-light a{color:#1d4ed8 !important}"
+            ".jasme-report table{border-collapse:collapse;margin:8px 0}"
+            ".jasme-report th,.jasme-report td{border:1px solid #9ca3af;padding:3px 8px;vertical-align:top;text-align:left}"
+            ".jasme-report blockquote{border-left:4px solid #9ca3af;margin:8px 0;padding:2px 12px}"
+            ".jasme-report pre{padding:8px;overflow-x:auto}"
+            ".jasme-report h1,.jasme-report h2,.jasme-report h3{margin-top:1em}"
+            "</style>")
+
+
+# 白地の枠に共通の <style>（クラス jasme-light）。Gradio のダークモードや暗い出力欄が、中の要素に明るい文字の色・暗い背景を当てても、
+# 枠の中は白地に暗い文字で読めるように、文字の色と背景を !important で決める。枠ごとに独立に描かれるので、枠の HTML ごとに含める。
+# 枠の見出しの色など、わざと色を付けるところはインラインの指定に !important を付ける（インラインの !important が勝つ）。
+LIGHT_STYLE = _light_css()
+
+
+_BOX = ("border:3px solid #d97706;border-radius:8px;padding:12px 16px;margin:12px 0;background:#fffbeb !important;"
+        "color:#1f2937 !important;font-size:14px;line-height:1.6")
+_BUTTON = ("background:#d97706 !important;color:#ffffff !important;border:none;border-radius:6px;padding:8px 16px;font-size:15px;"
            "font-weight:bold;cursor:pointer")
-_TEXTAREA = ("width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;color:#111827;background:#ffffff;"
+_TEXTAREA = ("width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;color:#111827 !important;background:#ffffff !important;"
              "border:1px solid #9ca3af;border-radius:4px;padding:6px;margin-top:8px")
 
 
@@ -55,11 +84,11 @@ def prompt_box(prompt: str, image_names=()) -> str:
              "<li>返ってきた回答（<code>json</code> と書かれたコードブロック）を、コードブロック右上のコピーボタンでコピーします。</li>"
              "<li>この下の<b>手順 6</b> のセルに貼り付けて ▶ を押します。</li>"
              "</ol>")
-    return (f"{_COPY_JS}<div style=\"{_BOX}\">"
+    return (f"{LIGHT_STYLE}{_COPY_JS}<div class='jasme-light' style=\"{_BOX}\">"
             f"<div style='font-size:18px;font-weight:bold;margin-bottom:4px'>{html.escape(head)}</div>"
             f"{steps}"
             f"<button style=\"{_BUTTON}\" onclick=\"jasmeCopy('{tid}')\">依頼文をコピー</button>"
-            f"<span id='{tid}-msg' style='margin-left:12px;font-weight:bold'></span>"
+            f"<span id='{tid}-msg' style='margin-left:12px;font-weight:bold;color:#1f2937 !important'></span>"
             f"<textarea id='{tid}' readonly style=\"{_TEXTAREA};height:220px\">{html.escape(prompt)}</textarea>"
             "</div>")
 
@@ -76,9 +105,9 @@ def no_ai_box(screen: str = "notebook") -> str:
 
 
 def _notice(title: str, detail: str, border: str, background: str, heading: str) -> str:
-    return (f"<div style='border:3px solid {border};border-radius:8px;padding:12px 16px;margin:12px 0;background:{background};"
-            "color:#1f2937;font-size:14px;line-height:1.6'>"
-            f"<div style='font-size:17px;font-weight:bold;color:{heading}'>{html.escape(title)}</div>"
+    return (f"{LIGHT_STYLE}<div class='jasme-light' style='border:3px solid {border};border-radius:8px;padding:12px 16px;"
+            f"margin:12px 0;background:{background} !important;color:#1f2937 !important;font-size:14px;line-height:1.6'>"
+            f"<div style='font-size:17px;font-weight:bold;color:{heading} !important'>{html.escape(title)}</div>"
             f"<div style='white-space:pre-wrap'>{html.escape(detail)}</div></div>")
 
 
@@ -92,8 +121,8 @@ def check_box(title: str, detail: str) -> str:
     return _notice(title, detail, "#d97706", "#fffbeb", "#b45309")
 
 
-_SUMMARY = ("border:2px solid #9ca3af;border-radius:8px;padding:10px 16px;margin:12px 0;background:#f9fafb;"
-            "color:#1f2937;font-size:14px;line-height:1.7")
+_SUMMARY = ("border:2px solid #9ca3af;border-radius:8px;padding:10px 16px;margin:12px 0;background:#f9fafb !important;"
+            "color:#1f2937 !important;font-size:14px;line-height:1.7")
 
 
 def summary_box(res) -> str:
@@ -117,20 +146,13 @@ def summary_box(res) -> str:
         rows.append(("PDF で補った docx", f"{res.docx_fix.path.name}（変更履歴つき。ダウンロードする ZIP に入ります）", True))
     elif res.pdf_fallback:
         rows.append(("PDF で補った docx", "作れませんでした（PDF の文字を読めなかったため、docx を補わずに変換しました）", False))
-    lines = "".join(f"<div style='white-space:pre-wrap{'' if ok else ';color:#b91c1c;font-weight:bold'}'>"
+    lines = "".join(f"<div style='white-space:pre-wrap{'' if ok else ';color:#b91c1c !important;font-weight:bold'}'>"
                     f"{html.escape(label)}: {html.escape(value)}</div>" for label, value, ok in rows)
-    return f"<div style=\"{_SUMMARY}\"><div style='font-weight:bold;margin-bottom:2px'>結果の要約</div>{lines}</div>"
+    return f"{LIGHT_STYLE}<div class='jasme-light' style=\"{_SUMMARY}\"><div style='font-weight:bold;margin-bottom:2px'>結果の要約</div>{lines}</div>"
 
 
-_REPORT_CSS = ("color:#1f2937;background:#ffffff;padding:8px 16px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;"
-               "line-height:1.6")
-_REPORT_STYLE = """<style>
-.jasme-report table{border-collapse:collapse;margin:8px 0}
-.jasme-report th,.jasme-report td{border:1px solid #9ca3af;padding:3px 8px;vertical-align:top;text-align:left}
-.jasme-report blockquote{border-left:4px solid #9ca3af;margin:8px 0;padding:2px 12px;background:#f3f4f6}
-.jasme-report pre{background:#f3f4f6;padding:8px;overflow-x:auto}
-.jasme-report h1,.jasme-report h2,.jasme-report h3{margin-top:1em}
-</style>"""
+_REPORT_CSS = ("color:#1f2937 !important;background:#ffffff !important;padding:8px 16px;border:1px solid #d1d5db;"
+               "border-radius:8px;font-size:14px;line-height:1.6")
 
 
 def markdown_text_only(markdown_text: str) -> str:
@@ -165,8 +187,10 @@ def report_details(markdown_text: str, title: str = "変換レポートの全文
         body = markdown_text_only(markdown_text)
     except ImportError:
         body = f"<pre style='white-space:pre-wrap'>{html.escape(markdown_text)}</pre>"
-    return (f"{_REPORT_STYLE}<details style='margin:12px 0'><summary style='cursor:pointer;font-weight:bold;font-size:15px'>"
-            f"{html.escape(title)}</summary><div class='jasme-report' style=\"{_REPORT_CSS}\">{body}</div></details>")
+    # 「全文を見る」の行も暗い背景の上に出ないよう、details ごと白地の枠にする
+    return (f"{LIGHT_STYLE}<details class='jasme-light' style=\"margin:12px 0;{_REPORT_CSS}\">"
+            f"<summary style='cursor:pointer;font-weight:bold;font-size:15px'>"
+            f"{html.escape(title)}</summary><div class='jasme-report'>{body}</div></details>")
 
 
 # ---------------------------------------------------------------------------- 続けて他の論文を変換するとき（手順 9 の後）
