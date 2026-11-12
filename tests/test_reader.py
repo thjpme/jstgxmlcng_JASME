@@ -672,7 +672,8 @@ def test_num_style_link_numbering_is_followed(tmp_path, journal, meta):
 def _with_lvl_override(src, dst):
     """numbering.xml に、abstractNum 0（段 0 は decimal・「%1.」）を指す、w:lvlOverride/w:lvl つきの num を足した docx を作る。
     92: lvl（upperLetter・「(%1)」）、93: startOverride 5 と lvl（lowerRoman・「%1)」）、94: startOverride 3 だけ、
-    95: ilvl 0 が upperLetter・「%1.」、ilvl 1 が decimal・「%1-%2」。"""
+    95: startOverride 1 と、ilvl 0 が upperLetter・「%1.」、ilvl 1 が decimal・「%1-%2」
+    （同じ abstractNum の num は番号を共有して数えるので、94 の続きにならないよう 1 から振り直す。C008）。"""
     import zipfile
     n = ('<w:num w:numId="92"><w:abstractNumId w:val="0"/><w:lvlOverride w:ilvl="0"><w:lvl w:ilvl="0">'
          '<w:start w:val="1"/><w:numFmt w:val="upperLetter"/><w:lvlText w:val="(%1)"/></w:lvl></w:lvlOverride></w:num>'
@@ -680,7 +681,7 @@ def _with_lvl_override(src, dst):
          '<w:numFmt w:val="lowerRoman"/><w:lvlText w:val="%1)"/></w:lvl></w:lvlOverride></w:num>'
          '<w:num w:numId="94"><w:abstractNumId w:val="0"/><w:lvlOverride w:ilvl="0"><w:startOverride w:val="3"/></w:lvlOverride></w:num>'
          '<w:num w:numId="95"><w:abstractNumId w:val="0"/>'
-         '<w:lvlOverride w:ilvl="0"><w:lvl w:ilvl="0"><w:numFmt w:val="upperLetter"/><w:lvlText w:val="%1."/></w:lvl></w:lvlOverride>'
+         '<w:lvlOverride w:ilvl="0"><w:startOverride w:val="1"/><w:lvl w:ilvl="0"><w:numFmt w:val="upperLetter"/><w:lvlText w:val="%1."/></w:lvl></w:lvlOverride>'
          '<w:lvlOverride w:ilvl="1"><w:lvl w:ilvl="1"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1-%2"/></w:lvl></w:lvlOverride></w:num>')
     with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
         for item in zin.infolist():
@@ -738,6 +739,132 @@ def test_lvl_override_bullet_and_start_priority():
     n = _numbering_from(lvl, '<w:lvlOverride w:ilvl="0"><w:startOverride w:val="7"/>'
                              '<w:lvl w:ilvl="0"><w:start w:val="2"/></w:lvl></w:lvlOverride>')
     assert [n.label("1", 0), n.label("1", 0)] == ["7.", "8."]
+
+
+def _with_nums(src, dst, nums_xml):
+    """numbering.xml の最後に w:num を足した docx を作る。"""
+    import zipfile
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "word/numbering.xml":
+                data = data.decode("utf-8").replace("</w:numbering>", nums_xml + "</w:numbering>").encode("utf-8")
+            zout.writestr(item, data)
+
+
+# テンプレートの numId=3 は abstractNum 6（1 段目が丸数字「①」）。numId=91 は同じ abstractNum 6 で、1 段目を 1 から振り直す
+_NUM_RESTART = ('<w:num w:numId="91"><w:abstractNumId w:val="6"/>'
+                '<w:lvlOverride w:ilvl="0"><w:startOverride w:val="1"/></w:lvlOverride></w:num>')
+
+
+def test_shared_abstract_num_counts_together_and_restart_only_at_first_use(tmp_path, journal, meta):
+    """同じ abstractNum を使う w:num は、番号を共有して数える。w:startOverride は、その num を最初に使った段落で振り直すだけで、
+    元の num に戻った段落は、振り直した後の続きになる（C008。Word・出版版 PDF の表示）。"""
+    from jasme_jats.pipeline import Options, convert
+    S = mf.S
+
+    def parts(b):
+        order = [3, 3, 3, 91, 3, 3]
+        return ([mf.para(S["sec1"], "１．はじめに")]
+                + [mf.list_item(S["body"], f"項目{i}", num_id=n) for i, n in enumerate(order, 1)]
+                + [mf.para(S["body"], "最後の文。")])
+    base = tmp_path / "base.docx"
+    mf.make_article(base, "番号の共有の検証用文書", parts)
+    path = tmp_path / "shared.docx"
+    _with_nums(base, path, _NUM_RESTART)
+    doc = read_docx(path)
+    assert [p.autonum for p in doc.all_paragraphs() if p.numbering] == ["①", "②", "③", "①", "②", "③"]
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok
+    xml = (tmp_path / "out" / next(p.name for p in (tmp_path / "out").iterdir() if p.suffix == ".xml")).read_text("utf-8")
+    assert "④" not in xml
+
+
+def test_shared_abstract_num_after_deleted_row_restarts_at_first_use(tmp_path):
+    """削除された行を読み飛ばすと、その中で数えた番号と「振り直し済みの num」の記録も戻る。行の中だけで使った num は、
+    表の後の本文で最初に使うとき、振り直しが起きる。"""
+    S = mf.S
+
+    def parts(b):
+        row = ("<w:tr><w:trPr><w:del w:id=\"965\" w:author=\"x\"/></w:trPr>"
+               + mf.cell(mf.list_item(S["body"], mf.deleted(mf.run("削除した行の番号")), num_id=91))
+               + mf.cell(mf.para(S["body"], mf.deleted(mf.run("削除した内容")))) + "</w:tr>")
+        return [mf.para(S["sec1"], "１．はじめに"),
+                mf.list_item(S["body"], "表の前の一つ目。", num_id=3), mf.list_item(S["body"], "表の前の二つ目。", num_id=3),
+                mf.table_of_rows([mf.tr("区分", "内容"), row, mf.tr("最後", "最後の内容")], 2),
+                mf.list_item(S["body"], "表の後の振り直しの項目。", num_id=91),
+                mf.list_item(S["body"], "表の後の元の num の項目。", num_id=3)]
+    base = tmp_path / "base.docx"
+    mf.make_article(base, "削除された行と番号の検証用文書", parts)
+    path = tmp_path / "rowshared.docx"
+    _with_nums(base, path, _NUM_RESTART)
+    doc = read_docx(path)
+    nums = [p.autonum for p in read_paragraphs(doc) if p.text_only().startswith("表の")]
+    assert nums == ["①", "②", "①", "②"]
+    assert doc.deleted_rows
+
+
+def _abstract_two_levels(num_body=""):
+    """1 段目「%1.」・2 段目「%1-%2」の abstractNum 0 を指す num 1（上書きなし）と num 2（num_body つき）。"""
+    from jasme_jats.numbering import Numbering
+    x = (f'<w:numbering xmlns:w="{W_NS}"><w:abstractNum w:abstractNumId="0">'
+         '<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl>'
+         '<w:lvl w:ilvl="1"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1-%2"/></w:lvl></w:abstractNum>'
+         '<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>'
+         f'<w:num w:numId="2"><w:abstractNumId w:val="0"/>{num_body}</w:num></w:numbering>')
+    return Numbering(etree.fromstring(x))
+
+
+def test_shared_abstract_num_two_levels_restart_clears_deeper_and_shares_upper():
+    """1 段目に w:startOverride のある num が挟まると、深い段が消え、上位の番号（%1）は A と B で共有される。"""
+    n = _abstract_two_levels('<w:lvlOverride w:ilvl="0"><w:startOverride w:val="1"/></w:lvlOverride>')
+    got = [n.label("1", 0), n.label("1", 1), n.label("1", 1), n.label("1", 0),   # 1. 1-1 1-2 2.
+           n.label("2", 0), n.label("2", 1),                                     # B の初出: 1. 1-1（深い段も消える）
+           n.label("1", 1), n.label("1", 0), n.label("1", 1)]                    # A に戻る: 1-2 2. 2-1（B の続き）
+    assert got == ["1.", "1-1", "1-2", "2.", "1.", "1-1", "1-2", "2.", "2-1"]
+    # 2 段目だけの振り直しは、1 段目に触らない
+    n = _abstract_two_levels('<w:lvlOverride w:ilvl="1"><w:startOverride w:val="1"/></w:lvlOverride>')
+    got = [n.label("1", 0), n.label("1", 1), n.label("1", 1), n.label("2", 1), n.label("1", 1)]
+    assert got == ["1.", "1-1", "1-2", "1-1", "1-2"]
+
+
+def test_shared_abstract_num_upper_level_unseen_uses_start_override():
+    """上位の段（startOverride つき）が未出現のうちに下位の段が来ても、%1 は直す前（0.31.1）と同じく振り直しの開始番号（R8）。"""
+    ov = '<w:lvlOverride w:ilvl="0"><w:startOverride w:val="1"/></w:lvlOverride>'
+    n = _abstract_two_levels(ov)
+    assert [n.label("2", 1), n.label("2", 1), n.label("2", 0), n.label("2", 1)] == ["1-1", "1-2", "1.", "1-1"]
+    ov = '<w:lvlOverride w:ilvl="0"><w:startOverride w:val="3"/></w:lvlOverride>'
+    n = _abstract_two_levels(ov)
+    assert [n.label("2", 1), n.label("2", 0), n.label("2", 0), n.label("2", 1)] == ["3-1", "3.", "4.", "4-1"]
+    # 振り直しのない num の %1 は、その段の start のまま
+    n = _abstract_two_levels(ov)
+    assert [n.label("1", 1), n.label("1", 0)] == ["1-1", "1."]
+
+
+def test_shared_abstract_num_start_override_order_independent():
+    """w:startOverride を書いた順（深い段が先）でも、浅い段の振り直しが深い段の振り直しを消さない。"""
+    ov = ('<w:lvlOverride w:ilvl="1"><w:startOverride w:val="5"/></w:lvlOverride>'
+          '<w:lvlOverride w:ilvl="0"><w:startOverride w:val="2"/></w:lvlOverride>')
+    n = _abstract_two_levels(ov)
+    assert [n.label("1", 0), n.label("1", 1), n.label("2", 0), n.label("2", 1), n.label("2", 1)] == \
+        ["1.", "1-1", "2.", "2-5", "2-6"]
+    ov2 = ('<w:lvlOverride w:ilvl="0"><w:startOverride w:val="2"/></w:lvlOverride>'
+           '<w:lvlOverride w:ilvl="1"><w:startOverride w:val="5"/></w:lvlOverride>')
+    n = _abstract_two_levels(ov2)
+    assert [n.label("1", 0), n.label("1", 1), n.label("2", 0), n.label("2", 1), n.label("2", 1)] == \
+        ["1.", "1-1", "2.", "2-5", "2-6"]
+
+
+def test_numbering_snapshot_restore_includes_started():
+    """snapshot() は数えと「振り直し済みの num」の写し。restore() で両方が戻る。"""
+    n = _abstract_two_levels('<w:lvlOverride w:ilvl="0"><w:startOverride w:val="5"/></w:lvlOverride>')
+    assert [n.label("1", 0), n.label("1", 0)] == ["1.", "2."]
+    snap = n.snapshot()
+    assert [n.label("2", 0), n.label("2", 0)] == ["5.", "6."]
+    n.restore(snap)
+    assert [n.label("1", 0), n.label("2", 0), n.label("2", 0)] == ["3.", "5.", "6."]
+    n.restore(snap)   # 同じ写しを何度戻してもよい（写しは後の数えに影響されない）
+    assert [n.label("1", 0)] == ["3."]
 
 
 # ----------------------------------------------------------------------------- 画像の切り取り・加工の記録（u4-crop）

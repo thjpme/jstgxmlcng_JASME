@@ -1815,6 +1815,98 @@ def _deleted_row_where(r):
     return where
 
 
+NAME_SPLIT_SAMPLES = 5  # 著者名の要確認に並べる氏名の数（全件はレポートの 4 章）
+
+
+def name_split_items(r) -> list:
+    """要確認 name_split に挙げる和文の著者名 [(段落 ID, builder.EasternSplit)]: 字の間の空白のいちばん長い所で分けたもの・
+    境目を推定して分けたもの・AI が分けたもの・空白がなく分けられなかったもの（C010・C064）。空白が 1 か所の氏名と、AI が機械の
+    分け方（空白が 1 か所・いちばん長い空白が 1 か所）と同じ位置を指定しただけの氏名は入らない（BuildInfo.name_splits に入れない）。"""
+    return [(s, sp) for s, sp in getattr(r, "name_splits", ()) if sp.how in ("longest", "context", "count", "ai", "none")]
+
+
+def _ai_name_confidence(r, src) -> str:
+    """段落 src の氏名を AI が分けた判断（2 章）の確度。なければ ""。"""
+    for d in getattr(getattr(r, "plan", None), "decisions", ()):
+        if d.stage == "ai" and d.category == "name" and d.src == src:
+            return d.confidence
+    return ""
+
+
+def _name_split_line(sp, confidence="") -> str:
+    """氏名 1 人の分け方の文（「試　験　六　郎」を 試験／六郎 に分けました〈…〉）。末尾の「。」は付けない。4 章の記録は builder.name_split_note。
+    「誤っていることがあります」は、ここには書かず、知らせ全体で 1 回（_name_split_action の check）。"""
+    if sp.how == "none":
+        return f"「{_clean(sp.name)}」は姓と名の間に空白がなく、分けられなかったので、全体を姓として出力しました"
+    if sp.how == "longest":
+        why = "字の間の空白がいちばん長い所を、姓と名の境目にしました"
+    elif sp.how == "context":
+        why = (f"推定。いちばん長い空白が 2 か所以上あって境目を決められないので、論文の中の表記「{_clean(sp.hint)}」から境目を"
+               "決めました。その表記が、この著者の引用でないこともあります")
+    elif sp.how == "count":
+        why = ("推定。いちばん長い空白が 2 か所以上あって境目を決められないので、字数だけから境目を決め、"
+               f"姓を {len(sp.surname)} 字としました")
+    else:
+        # 「誤っていることがあります」は、知らせ全体で 1 回（_name_split_action の check）。機械の推定は別の文に書く
+        conf = f"（確度 {_clean(confidence)}）" if confidence else ""
+        before = f"。AI の指定がなければ、{_clean(sp.machine.describe())}" if sp.machine is not None else ""
+        return (f"「{_clean(sp.name)}」を {_clean(sp.surname)}／{_clean(sp.given)} に分けました。AI が境目を決めました{conf}{before}")
+    return f"「{_clean(sp.name)}」を {_clean(sp.surname)}／{_clean(sp.given)} に分けました（{why}）"
+
+
+def _name_split_action(r):
+    """和文の著者名の分け方を確かめてもらう（要確認。C010・C064）。なければ None。
+
+    字の間に空白を入れて揃えた氏名は、空白のいちばん長い所か、推定した境目で分け、字の間の空白は落としている（builder.split_eastern）。
+    空白のない氏名は全体を姓として出力している（J-STAGE に名のない著者として出る）。AI が境目を指定した氏名も、推定なので挙げる。
+    どれも、出版版 PDF の氏名と見比べてもらい、違えば Word で姓と名の間に空白を 1 つだけ置いて変換し直してもらう。
+    推定を含むときは、見出し・14 章・コマンドラインの文にも書く。字数だけの推定は誤りやすいので強く書く。"""
+    items = name_split_items(r)
+    if not items:
+        return None
+    split = [sp for _, sp in items if sp.how != "none"]
+    unsplit = [sp for _, sp in items if sp.how == "none"]
+    guessed = [sp for sp in split if sp.how in ("context", "count", "ai")]
+    by_count = [sp for sp in split if sp.how == "count"]
+    lines = [_name_split_line(sp, _ai_name_confidence(r, src) if sp.how == "ai" else "") for src, sp in items[:NAME_SPLIT_SAMPLES]]
+    if len(items) > NAME_SPLIT_SAMPLES:
+        lines.append(f"ほか {len(items) - NAME_SPLIT_SAMPLES} 人（4 章）")
+    names = "、".join(f"「{_clean(sp.name)}」" for _, sp in items[:NAME_SPLIT_SAMPLES]) + ("、ほか" if len(items) > NAME_SPLIT_SAMPLES
+                                                                                       else "")
+    what = "著者名の姓と名の分け方を確かめてください"
+    refs = ("推定を含みます。" if guessed else "") + "4 章・7 章"
+    check = ("出版版 PDF の氏名と、姓と名の境目が合っているか確かめてください（英文の著者名の姓も手がかりになります）。"
+             if split else "")
+    if guessed:
+        check += "推定で境目を決めた氏名は、誤っていることがあります。"
+    if by_count:
+        check += "字数だけで境目を推定した氏名は、誤りやすいので、必ず確かめてください。"
+    how = ""
+    if split:
+        how += ("違っていたら、Word でその氏名の姓と名の間の空白を 1 つだけ残し、字の間の空白を消して保存してから、変換し直して"
+                "ください。")
+    if unsplit:
+        how += ("分けられなかった氏名に名もあるなら、Word で姓と名の間に空白を 1 つ入れて保存してから、変換し直してください"
+                "（名のない著者として J-STAGE に出ます）。")
+    if ai_pending(r):
+        how += "AI の回答を反映すると、AI が姓と名の境目を確かめます（AI が分けた氏名もここに挙げます）。"
+    # 「字数だけの推定は誤りやすい」は、字数だけの推定（how が count）の氏名を含むときだけ書く
+    guess_check = (f" 推定で分けた氏名が {len(guessed)} 人あります（誤っていることがあります"
+                   + ("。字数だけの推定は誤りやすいので、必ず確かめる" if by_count else "") + "）。") if guessed else ""
+    guess_cli = (f"推定で分けた氏名が {len(guessed)} 人あります（誤っていることがあります）。"
+                 + ("字数だけの推定は誤りやすいので、必ず確かめること。" if by_count else "") if guessed else "")
+    listed = "。".join(lines) + "。"
+    return Action(
+        TO_CHECK, "name_split",
+        top=f"> **要確認: {what}（{refs}）。** {listed}{check}{how}",
+        checklist=(f"- [ ] **著者名の姓と名**（{len(items)} 人。4 章・7 章）: 出版版 PDF の氏名と、姓と名の境目が合っているか"
+                   "確かめる。違えば Word で姓と名の間に空白を 1 つだけ置いて変換し直す。" + guess_check.strip()),
+        box_title="著者名の姓と名の分け方を確かめてください（" + ("推定を含みます。" if guessed else "") + "要確認）",
+        box_detail=f"{listed}\n{check}{how}（レポートの冒頭・4 章・7 章）",
+        cli=(f"要確認: 著者名の姓と名の分け方を確かめること（{names}。レポートの冒頭・4 章・7 章）。{guess_cli}出版版 PDF の氏名と境目が"
+             "違えば、docx で姓と名の間に空白を 1 つだけ置いて変換し直すこと"))
+
+
 def _newline_action(r):
     """題目・副題・著者名・所属・引用文献の段落の中の改行（Word の Shift+Enter。builder の BuildInfo.newlines の label）。なければ None。
 
@@ -2033,7 +2125,7 @@ def actions(r) -> list:
                            _partial_action, _forced_action, figure_body_action, _textbox_undecided_action,
                            _textbox_place_action, _textbox_figure_text_action, _unplaced_action, images_action,
                            lost_action, lost_autonum_action, _abstract_missing_action, _image_crop_action, _image_edits_action, _style_hidden_action, _abstract_ja_action, _app_after_refs_action, _note_overlap_action, _float_ref_action,
-                           _fn_guess_action, _newline_action)]
+                           _fn_guess_action, _name_split_action, _newline_action)]
     return [a for a in head if a is not None] + pdf_actions(r)
 
 
@@ -2278,8 +2370,10 @@ def render(r) -> str:
     # ------------------------------------------------------------------ 7. 落とした空白
     L.append("## 7. XML の構造に合わせて落とした空白（全件）")
     L.append("")
-    L.append("姓と名、図表番号とタイトルのように、JATS で別々の要素に分ける箇所の区切りの空白だけを落としています"
-             "（J-STAGE の表示では区切りが補われます）。空白以外の文字は落としていません。")
+    L.append("姓と名、図表番号とタイトルのように、JATS で別々の要素に分ける箇所の区切りの空白と、著者名の前後の空白・和文の著者名の"
+             "字の間の空白だけを落としています（J-STAGE の表示では区切りが補われます）。空白以外の文字は落としていません。"
+             "姓と名の間の空白の理由に「推定」とあるものは、いちばん長い空白が 2 か所以上あって姓と名の境目を決められない氏名で、"
+             "境目を推定したもの、「AI の指定」とあるものは、AI が境目を指定したものです（どちらも冒頭と 14 章の要確認）。")
     L.append("")
     if fid.drops:
         L.append(table(["段落", "場所", "落とした文字", "理由"],

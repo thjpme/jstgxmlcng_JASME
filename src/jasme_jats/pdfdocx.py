@@ -751,8 +751,11 @@ def _people(plan) -> tuple:
 
 def _name_shape(text: str, style: str, split) -> tuple:
     """氏名の姓と名の分け方（builder.person_name と同じ規則で、位置ではなく形で表す）: 分けないなら ()、AI の指定の位置で
-    分けるなら ("split",)、和文の氏名は ("eastern", 語の数)、英文の氏名は ("western", 語の数, 姓の語の番号)。直した文字で
-    分け方が変わったか（大文字の語の位置・空白の数）を比べるため。"""
+    分けるなら ("split",)、和文の氏名は ("eastern", 分け方, 姓の字数, 語の数)（分け方は builder.split_eastern の how）、英文の
+    氏名は ("western", 語の数, 姓の語の番号)。直した文字で分け方が変わったか（大文字の語の位置・空白の数と長さ）を比べるため。
+
+    和文の氏名の境目の推定のうち、論文の中の表記からの推定（how が context）は氏名の段落の外の文字で決まり、氏名の段落を
+    直さないことでは守れないので、論文の文字を渡さずに比べる（字数からの推定と同じ形になる。変換では論文の文字も使う）。"""
     n = len(text)
     core_s = n - len(text.lstrip(" \u3000\t"))
     core_e = len(text.rstrip(" \u3000\t"))
@@ -763,7 +766,9 @@ def _name_shape(text: str, style: str, split) -> tuple:
     if len(toks) < 2:
         return ()
     if style == "eastern":
-        return ("eastern", len(toks))
+        from .builder import split_eastern
+        sp = split_eastern(text)
+        return ("eastern", sp.how, len(sp.surname), len(toks))
     caps = [k for k, t in enumerate(toks) if re.fullmatch(r"[A-ZÀ-Ý][A-ZÀ-Ý'’\-]+", t)]
     k = caps[0] if len(caps) == 1 and caps[0] in (0, len(toks) - 1) else len(toks) - 1
     return ("western", len(toks), k)

@@ -114,7 +114,7 @@ PDF       pdfmatch.py（照合）  pdfdocx.py（補った docx を書く）
 | `model.Exclusion` | `plan.exclude()`/`exclude_blank()`、builder | fidelity, report（6 章・要確認 `excluded_unsure`・要対応 `abstract_missing`）, pipeline.lost_images | 出力しない段落の ID・理由・全文。`blank` は空白だけの段落。理由は `structure` の定数で、位置を決められない理由は `structure.UNPLACED_EXCLUSIONS` |
 | `linker.Linker` | `linker.link` | pipeline, ai_assist, report | `count`（リンクの数）、`unresolved`（リンク先が見つからなかった参照）、`note_style`/`bare_notes`、`float_numbers`（図・表の番号 → ID、リンクしない番号〈重なる・枝番つき〉、枝番の有無）。リンクしなかった参照は `_unlinked` が判断の一覧と `plan.float_unlinked` に記録 |
 | `ai_assist.AIOutcome` | pipeline | report, colab, app | `mode`/`provider`/`model`、`raw`（回答）、`accepted`/`rejected`（操作と Decision・理由）、`notes`、`error`、`cut`/`partial`（途中で切れた回答） |
-| lxml の木 + `builder.BuildInfo` | `builder.build` | fidelity, pipeline, report | `images`（出力した画像）、`exclusions`（builder 側の除外）、`drops`、`notes`、`newlines`、`unsplit_names`、`warnings`、`tables`（出力した表〈`<table>` の要素・`model.Table`・Word で探す手がかり〉。`table_problems` が使う）、`unshown_numbers`（番号を出さなかった題目・副題・著者名・所属の段落。10 章の警告） |
+| lxml の木 + `builder.BuildInfo` | `builder.build` | fidelity, pipeline, report | `images`（出力した画像）、`exclusions`（builder 側の除外）、`drops`、`notes`、`newlines`、`unsplit_names`、`name_splits`（確かめてもらう和文の著者名の分け方〈`builder.EasternSplit`〉。要確認 `name_split`・AI 依頼文）、`warnings`、`tables`（出力した表〈`<table>` の要素・`model.Table`・Word で探す手がかり〉。`table_problems` が使う）、`unshown_numbers`（番号を出さなかった題目・副題・著者名・所属の段落。10 章の警告） |
 | `model.LostImage` / `LostNumber` / `TableProblem` | `pipeline.lost_images` / `lost_autonums` / `table_problems` | report（9 章・8 章・12 章と要対応） | XML に入らなかった画像、XML に番号が出なかった自動番号の段落（`src`・`number`・`location`・`where`〈文字を出した要素〉・`text`）、形の崩れた表（`tid`・`where`・`name`・`problems`） |
 | `fidelity.FidelityResult` | `fidelity.verify` / `final_check` | pipeline（Result.ok）, report（5 章） | `ok`、`mismatches`、`missing`、`duplicates`、`stray`、`conflicts`、`bad_excluded`、`final_ok`、`final_unreadable`（最終出力が XML として読めない・実体の宣言がある）、`final_differs`（最終出力の文字が検証済みの木と違う） |
 | `pdfmatch.PdfCheck` | `pdfmatch.check_pdf` | pdfdocx, report（13 章）, pipeline | `diffs`（TextDiff）、`unmatched`、`width`/`drops`/`numbers`（(A) の直し）、`drop_basis`（`drops` の空白の根拠の全角・半角の直しまたは番号）、`ignored_lines`、`case_srcs` |
@@ -150,7 +150,7 @@ XML の要素の ID は `structure.Classifier.assign_ids` が付ける: 図 `F1`
 | ファイル | 行 | 役割 | 入口 |
 |---|---|---|---|
 | `docx_reader.py` | 1020 | docx → `Document`。`Reader.read` が document.xml の `w:body` を `read_block` で順にたどる（段落 `read_paragraph`、表 `read_table`、`w:sdt`/`w:customXml` は `_children` で中身をたどる）。`_walk`/`_run` がランをアトムにし、ハイパーリンク・フィールド・変更履歴・隠し文字を扱う。`_graphic` が画像（DrawingML・VML・OLE）と図形（`_new_float`・`_new_textbox`。テキストボックスの中の段落・表は `_read_nested_*`）を記録し、Word のトリミング（`a:srcRect`、VML は `v:imagedata` の `crop*`）と回転・反転・色の変更などの加工を `ImageRef.crop`・`edits` に記録する（`_pic_edits`・`_vml_edits`。1 つの `w:drawing` に `pic` が複数あるときの大きさは `pic` の `a:xfrm/a:ext` にグループの縮尺を掛ける）。表は `w:gridSpan`（`_grid_span`。0・負・数でない値は 1）と行の `w:gridBefore`・`w:gridAfter`（`_grid_skip`）・行の番号を読む。`read_notes` が脚注・文末脚注。`read_styles`/`read_layout` | `read_docx(path) -> Document` |
-| `numbering.py` | 217 | numbering.xml から自動段落番号の表示文字列（`Numbering.label`）。`w:lvlOverride` の `w:lvl`（段の定義の上書き。書かれた子要素だけを abstractNum の段に重ねる）と `w:startOverride`（`_levels`）、ローマ数字・英字・漢数字。`w:numStyleLink` は styles.xml の番号付けスタイルをたどる（`Numbering(root, styles_root)`・`_follow_style_links`） | `Numbering`, `format_number` |
+| `numbering.py` | 248 | numbering.xml から自動段落番号の表示文字列（`Numbering.label`）。`w:lvlOverride` の `w:lvl`（段の定義の上書き。書かれた子要素だけを abstractNum の段に重ねる）、ローマ数字・英字・漢数字。数えは abstractNum ごと（同じ abstractNum を使う num は番号を共有する）で、`w:startOverride` はその num の初出で振り直す（`label`。C008）。削除された行を読み飛ばすときの数え方の退避と復元は `snapshot()`・`restore()`。`w:numStyleLink` は styles.xml の番号付けスタイルをたどる（`Numbering(root, styles_root)`・`_follow_style_links`） | `Numbering`, `format_number` |
 | `omml.py` | 407 | OMML → MathML 2.0（`OmmlConverter.convert`）。属性で表される記号は `jx:implicit`、順序が入れ替わる文字は `jx:o`。`math_plain`（数式の文字だけ）。根号は `m:deg` に文字があれば `degHide` でも `mroot`（`h_rad`） | `OmmlConverter`, `omml_to_mathml`, `math_plain` |
 
 ### 構造
@@ -228,7 +228,7 @@ XML の要素の ID は `structure.Classifier.assign_ids` が付ける: 図 `F1`
 2. **機械処理** `_mechanical`: `read_docx` → `classify` → `link`。構造の衝突があれば `StructureConflictError`、位置を決められない図表（`plan.unplaced_floats`）があり
    AI を使わない設定なら `AIRequiredError`（中止。終了コード 2。AI の方法にかかわらず AI を呼ぶ前に止め、手動モードでも `AI依頼文.txt` を書かない）。
    ルート2 でこの変換が補った docx を書いていれば、中止の前に消す（`_drop_fixed`。1 をすり抜けたときだけ）。
-3. **1 回目の組み立て** `build`（AI 依頼文を作るのに BuildInfo の `exclusions`・`unsplit_names` が要る）。
+3. **1 回目の組み立て** `build`（AI 依頼文を作るのに BuildInfo の `exclusions`・`unsplit_names`・`name_splits` が要る）。
 4. **AI 補完**（`opts.ai_mode` が api / manual）: `build_request` → API 呼び出し、または `AI依頼文.txt` の書き出しと `--ai-response` の読み取り。
    回答が読めたら `role_overrides`・`float_placements` を作り、**`_mechanical` をやり直して**（docx を読み直し、役割の指定と配置を渡して組み立て直す）、
    AI の set_role で構造の衝突ができたら、**2 段で組み直す**: 1 段目は衝突の範囲（`structure.conflict_overrides`）の set_role だけを、なお残れば 2 段目は set_role をすべて
@@ -310,6 +310,7 @@ app_after_refs, note_overlap, float_ref, fn_guess, newline、その後ろに `pd
 | `test_structure.py` / `test_article.py` | 領域の分け方、資料の見出し、囲み・注記、位置を決められない除外の知らせ（`excluded_unsure`・`abstract_missing`・冒頭部の装飾）、構造の衝突（K1・K2）の検出が不変性チェックの欠落と一致すること・空白だけの見出し・中止の文の直し方どおりに直した docx が合格すること、循環 import がない |
 | `test_floats.py` / `test_figure_body.py` | 浮動配置の図表の配置と組み方、仮の位置、表のセルの図 |
 | `test_links.py` / `test_refparse.py` / `test_notes.py` | リンクの規則（注・図表・引用）、注の書き方、Word の脚注・文末脚注、注の節の中の表（`<fn><p><table-wrap>`） |
+| `test_names.py` | 著者名の姓と名の分け方（`builder.split_eastern` の規則、字の間・前後の空白を落とすこと、要確認 `name_split`、AI の `split_name` との関係、ルート2 の `_name_shape`） |
 | `test_ai.py` | AI の回答の検証と適用、途中で切れた回答、4 社の呼び出し（偽のクライアント）、構造の衝突を作る set_role の不採用（2 段の組み直し） |
 | `test_pdfmatch.py` / `test_supplement.py` | PDF との照合、ルート2 の直し、組版で入る文字、補完の確かめ |
 | `test_pipeline.py` / `test_lost_images.py` / `test_jstage_rules.py` | 全体の流れ、ZIP の中身、終了コード（構造の衝突の中止は 2）、中止のとき補った docx を残さない（O7）、画像の出力漏れ、J-STAGE チェック |
@@ -336,6 +337,7 @@ fixture の docx は `tests/make_fixtures.py` が作る（架空の内容。`mak
 | 図表の配置（浮動配置）の規則を変える | `floats.at_anchor`（機械的に置ける条件）、`structure.place_floats`、`provisional_target` |
 | 囲み / 図の注記のしきい値を変える | `floats.textbox_kind` の定数（`BOX_CHARS` など）、`structure.place_boxes` |
 | リンクの規則（図表・注・引用）を変える | `linker.py`（`float_refs`、`float_numbers`〈重なる番号・枝番〉、`_sup_marks`、`note_style`）、`refparse.py`（引用）。枝番の定義は `structure.CAP_BRANCH_SEP`・`CAP_BRANCH_NUM`（builder の `RE_LABEL_SPLIT` と共有） |
+| 著者名の姓と名の分け方を変える | `builder.split_eastern`（和文。境目の推定の手がかりは `name_context`・`surname_hint`〈引用の形は `RE_CITE_AFTER`〉。AI の指定は `EasternSplit.how` が `ai`）と `Builder.person_name`（英文・落とす空白）。`pdfdocx._name_shape`（ルート2 の形の比べ）と `ai_assist.apply_ops` の `split_name`（`spaced_split`）も合わせる。知らせは `report._name_split_action` |
 | XML の要素・属性の出し方を変える | `builder.py`（要素の並び）、`emit.py`（文字・書式・リンク。`Ctx`） |
 | 文字を書く文脈の制限（例: 所属で使える書式）を変える | `emit.py` の `Ctx` 定数（TITLE・NAME・AFF・REF…）。`article.no_link_paras` も合わせる |
 | docx の新しい要素（例: 新しい種類のフィールド）に対応する | `ooxml.canonical_text`（検証）と `docx_reader._walk`/`_run`（読み取り）、`pdfdocx.paragraph_units`（ルート2）の 3 か所を同じ規則で。fixture を足す |

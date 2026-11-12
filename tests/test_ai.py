@@ -1389,7 +1389,7 @@ def test_english_one_word_name_is_listed_and_warned(journal, meta, tmp_path):
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     [warn] = [w for w in res.warnings if "英文の著者名" in w]
-    assert "「KENKYU」" in warn and "姓（surname）" in warn and "Word で" in warn
+    assert "「KENKYU」" in warn and "全体を姓として" in warn and "Word で" in warn
     assert any(d.category == "name" and "「KENKYU」" in d.message for d in res.build_notes)
     names = [ln for ln in res.prompt_path.read_text(encoding="utf-8").splitlines() if "姓と名の区切りがない氏名" in ln]
     assert len(names) == 1 and names[0].endswith("「KENKYU」") and "split_name は和文の氏名にだけ使える" in names[0]

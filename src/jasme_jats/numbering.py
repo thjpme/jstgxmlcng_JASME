@@ -112,7 +112,10 @@ class Numbering:
         """root は numbering.xml、styles_root は styles.xml（番号付けスタイル経由の定義 w:numStyleLink をたどるときに使う。なくてもよい）。"""
         self.abstract = {}   # abstractNumId -> {ilvl: dict}
         self.nums = {}       # numId -> (abstractNumId, {ilvl: startOverride})
-        self.counters = {}   # numId -> {ilvl: n}
+        self.counters = {}   # abstractNumId -> {ilvl: n}（Word は abstractNum ごとに数え、同じ abstractNum を使う num は番号を共有する）
+        self.restarts = {}   # abstractNumId -> {ilvl: n}（w:startOverride で振り直した段の、次に数え始めるときの開始番号。
+        # 数えの初期値と、上位の段が未出現のときの %n の値に使う。次の振り直しまで残る）
+        self._started = set()  # 最初の段落を数えた（w:startOverride を適用した）numId
         self.lvl_overrides = {}  # numId -> {ilvl: 書かれた子要素だけの段の定義}
         if root is None:
             return
@@ -172,26 +175,54 @@ class Numbering:
                 self.abstract[aid] = levels
 
     def _levels(self, num_id) -> dict:
-        """num の段の定義: abstractNum の段に、w:lvlOverride/w:lvl に書かれた子要素を重ね、w:startOverride で開始番号を置き換える。"""
-        aid, starts = self.nums[num_id]
+        """num の段の定義: abstractNum の段に、w:lvlOverride/w:lvl に書かれた子要素を重ねる。
+
+        w:startOverride は含めない（その num を最初に使った段落で、数えを振り直すだけ。`label`）。
+        """
+        aid = self.nums[num_id][0]
         base = self.abstract.get(aid, {})
         levels = dict(base)   # self.abstract の dict は共有されているので書き換えない
         for il, ov in self.lvl_overrides.get(num_id, {}).items():
             levels[il] = {**base.get(il, DEFAULT_LEVEL), **ov}
-        for il, st in starts.items():
-            if il in levels:
-                levels[il] = dict(levels[il], start=st)
         return levels
 
+    def snapshot(self):
+        """数え方（counters・restarts と、w:startOverride を適用済みの num）の写し。`restore` で戻す。"""
+        return ({a: dict(c) for a, c in self.counters.items()}, {a: dict(c) for a, c in self.restarts.items()},
+                set(self._started))
+
+    def restore(self, snap) -> None:
+        """`snapshot` の写しの状態に戻す（写しは書き換えない。何度戻してもよい）。"""
+        counters, restarts, started = snap
+        self.counters = {a: dict(c) for a, c in counters.items()}
+        self.restarts = {a: dict(c) for a, c in restarts.items()}
+        self._started = set(started)
+
     def label(self, num_id: str, ilvl: int) -> str:
-        """番号付き段落が1つ現れるたびに呼ぶ。表示される番号文字列を返す。"""
+        """番号付き段落が1つ現れるたびに呼ぶ。表示される番号文字列を返す。
+
+        Word と同じく、abstractNum ごとに数える（同じ abstractNum を使う num は番号を共有する）。w:startOverride は、その num を
+        最初に使った段落で、その段（と深い段）を振り直す（数えを消し、開始番号を `restarts` に置く。浅い段から処理する）だけで、後で元の num に戻った段落は、
+        振り直した後の続きになる。上位の段が未出現のときの %n は、`restarts` の開始番号（なければ段の start）。
+        """
         if num_id in (None, "0") or num_id not in self.nums:
             return ""
         levels = self._levels(num_id)
         if ilvl not in levels:
             return ""
-        cnt = self.counters.setdefault(num_id, {})
-        start = levels[ilvl]["start"]
+        aid, starts = self.nums[num_id]
+        key = aid if aid is not None else ("num", num_id)
+        cnt = self.counters.setdefault(key, {})
+        rst = self.restarts.setdefault(key, {})
+        if num_id not in self._started:
+            self._started.add(num_id)
+            # 浅い段から振り直す（書かれた順で結果を変えない）。その段と深い段の数えを消し、開始番号は次に数え始めるときの値にする
+            for il in sorted(starts):
+                for k in [k for k in list(cnt) + list(rst) if k >= il]:
+                    cnt.pop(k, None)
+                    rst.pop(k, None)
+                rst[il] = starts[il]
+        start = rst.get(ilvl, levels[ilvl]["start"])
         cnt[ilvl] = cnt.get(ilvl, start - 1) + 1
         for deeper in [k for k in cnt if k > ilvl]:
             del cnt[deeper]
@@ -204,7 +235,7 @@ class Numbering:
             token = f"%{k + 1}"
             if token in text:
                 if k in levels:
-                    n = cnt.get(k, levels[k]["start"])
+                    n = cnt.get(k, rst.get(k, levels[k]["start"]))
                     text = text.replace(token, format_number(n, levels[k]["fmt"]))
                 else:
                     text = text.replace(token, "")

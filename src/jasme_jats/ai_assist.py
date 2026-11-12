@@ -154,7 +154,7 @@ Python のプログラムがすでに機械的な変換を済ませています�
    資料の見出しにされた段落が、見出しではなく資料の中の文のときは p にしてください（前の資料の続きになります。前に資料がなければ、
    見出しのない資料の最初の段落になります）。
 4. formula_image: 画像として貼り付けられた数式を MathML（MathML 2.0、<math xmlns="http://www.w3.org/1998/Math/MathML"> を根要素とする）に書き起こす。元の画像は残したまま、読み取った数式を併記します。数式でない画像には提案しないでください。
-5. split_name: 姓と名の間に空白がない和文の著者名について、姓と名の境目を指定する（surname + given が氏名の文字列と完全に一致すること）。
+5. split_name: 姓と名の間に空白がない和文の著者名と、字の間に空白があり姓と名の境目をプログラムが決めた（いちばん長い空白で決めた、または推定した）和文の著者名について、姓と名の境目を指定する（surname + given が氏名の文字列と完全に一致すること。字の間に空白のある氏名は、空白を除いた文字で一致すればよい）。
 
 6. placements（図表の位置と組み合わせ）: 依頼文の「# 位置を決められなかった図表」に挙げた図形（s1 など）は、1 つ残らず、
    必ず placements に 1 件ずつ指定してください（省略できません）。これらは Word のテキストボックスやグループ図形に入った図表
@@ -263,13 +263,16 @@ def _spec_label(spec: LinkSpec) -> str:
     return spec.kind
 
 
-def build_request(plan: ArticlePlan, linker, build_exclusions=(), unsplit_names=()) -> tuple:
+def build_request(plan: ArticlePlan, linker, build_exclusions=(), unsplit_names=(), name_splits=()) -> tuple:
     """AI への依頼（本文の文字列と画像）を作る。戻り値: (テキスト, [画像: (image_id, media_type, bytes)])
 
     build_exclusions は書き出しの段階で出力しないと決めた段落（builder.BuildInfo.exclusions）、unsplit_names は姓と名を分けられ
     なかった氏名 [(段落の ID, 氏名, 言語 ja / en)]（builder.BuildInfo.unsplit_names）。英文の氏名も「姓と名の区切りがない氏名」に
     載せる（利用者の決定事項 17 で今までどおり載せる）が、AI の split_name は和文の氏名にしか使えない（apply_ops）ので、英文の行には
     split_name を提案しないことを添える（builder の 10 章の警告の「AI による補完では、英文の著者名は分けられません」と同じ言い分）。
+    name_splits は確かめてもらう和文の氏名の分け方 [(段落の ID, builder.EasternSplit)]（BuildInfo.name_splits）。字の間に空白があり、
+    いちばん長い空白か推定した境目で分けた氏名（how が longest / context / count）を、どう分けたかとともに載せ、split_name で
+    正しい境目を指定してもらう（AI の指定は機械の推定より優先する。apply_ops）。
     氏名の中の改行は「⏎」で示す（1 件を 1 行に書くため。氏名の文字は変えない）。
     """
     lines = []
@@ -342,6 +345,18 @@ def build_request(plan: ArticlePlan, linker, build_exclusions=(), unsplit_names=
         # 氏名の中の改行（Word の Shift+Enter。10 章と要確認で別に知らせる）は、行が分かれないよう「⏎」で示す（レポートの表と同じ）
         shown = text.replace("\n", "⏎")
         lines.append(f"- [{src}] 姓と名の区切りがない氏名{note}: 「{shown}」")
+    for src, sp in name_splits:
+        if sp.how not in ("longest", "context", "count"):
+            continue
+        why = {"longest": "字の間の空白のうち、いちばん長い空白で分けた",
+               "context": f"いちばん長い空白が 2 か所以上あって決められないので、論文の中の表記「{sp.hint}」から推定",
+               "count": "いちばん長い空白が 2 か所以上あって決められないので、字数だけから推定"}[sp.how].replace("\n", "⏎")
+        shown = sp.name.replace("\n", "⏎")
+        kind = ("字の間に空白があり、姓と名の境目を、いちばん長い空白で決めた氏名" if sp.how == "longest"
+                else "字の間に空白があり、姓と名の境目を推定した氏名")
+        basis = "決め方" if sp.how == "longest" else "推定"
+        lines.append(f"- [{src}] {kind}: 「{shown}」（{basis}: 姓「{sp.surname}」・"
+                     f"名「{sp.given}」。{why}）。英文の著者名・引用文献の表記などから、正しい境目を split_name で指定")
     images = []
     for f in plan.figures:
         for ip in f.image_paras:
@@ -1626,15 +1641,40 @@ def apply_ops(ops, plan: ArticlePlan, doc, outcome: AIOutcome, split: bool = Fal
             sur, giv = op["surname"], op["given"]
             core = text.strip(" \u3000\t")
             lead = len(text) - len(text.lstrip(" \u3000\t"))
-            if not sur or not giv or core != sur + giv:
-                outcome.rejected.append((op, f"姓「{sur}」と名「{giv}」をつなげても氏名「{core}」にならない"))
-                continue
-            a.split_ja = lead + len(sur)
+            if sur and giv and core == sur + giv:
+                a.split_ja = lead + len(sur)
+            else:
+                at = spaced_split(text, sur, giv)
+                if at is None:
+                    outcome.rejected.append((op, f"姓「{sur}」と名「{giv}」をつなげても氏名「{core}」にならない"))
+                    continue
+                a.split_ja = at
             d = plan.decide("ai", "name", src, f"氏名「{core}」を姓「{sur}」・名「{giv}」に分けた。{op['reason']}",
                             op["confidence"])
             outcome.accepted.append((op, d))
             continue
         outcome.rejected.append((op, f"未知の操作「{kind}」"))
+
+
+def spaced_split(text: str, sur: str, giv: str):
+    """字の間に空白のある和文の氏名（前後を除いた中に空白の連なりが 2 つ以上。「試　験　六　郎」）への split_name の位置: 空白を除いた
+    姓・名をつなげたものが、空白を除いた氏名と一致すれば、姓の最後の字の次の位置（text の上）。一致しなければ None。
+
+    空白が 1 か所以下の氏名には使わない（これまでどおり、空白も含めて完全に一致したときだけ受け付ける。C043）。"""
+    ws = " \u3000\t"
+    core_s, core_e = len(text) - len(text.lstrip(ws)), len(text.rstrip(ws))
+    if len(re.findall(r"[ \u3000\t]+", text[core_s:core_e])) < 2:
+        return None
+    s_n, g_n = re.sub(r"[ \u3000\t]+", "", sur or ""), re.sub(r"[ \u3000\t]+", "", giv or "")
+    if not s_n or not g_n or re.sub(r"[ \u3000\t]+", "", text[core_s:core_e]) != s_n + g_n:
+        return None
+    k = 0
+    for i in range(core_s, core_e):
+        if text[i] not in ws:
+            k += 1
+            if k == len(s_n):
+                return i + 1
+    return None
 
 
 def parse_mathml(s: str):

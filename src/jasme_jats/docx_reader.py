@@ -275,8 +275,8 @@ class Reader:
             shapes = (len(self.images), len(self.floats), len(self.textboxes))
             records = (len(self.joined), len(self.joins), len(self.deleted_rows), len(self.hidden), len(self.warnings),
                        len(self.style_hidden))
-            # 削除された行を読み飛ばすときに戻す、自動番号の数え方（Numbering.counters の写し）
-            counters = {n: dict(c) for n, c in self.numbering.counters.items()} if row_deleted else None
+            # 削除された行を読み飛ばすときに戻す、自動番号の数え方の写し（Numbering.snapshot）
+            numbering_state = self.numbering.snapshot() if row_deleted else None
             has_cell_del = False
             for c in _children(tr, (w("tc"),)):
                 tcpr = c.find(w("tcPr"))
@@ -302,7 +302,7 @@ class Reader:
                     # （行ごと記録する）、行の中で数えた自動番号は戻す（Word で承諾すると行ごと消え、後ろの番号が詰まる）
                     del (self.joined[records[0]:], self.joins[records[1]:], self.deleted_rows[records[2]:],
                          self.hidden[records[3]:], self.warnings[records[4]:], self.style_hidden[records[5]:])
-                    self.numbering.counters = counters
+                    self.numbering.restore(numbering_state)
                     continue
                 kept.append(k)
             if has_cell_del:

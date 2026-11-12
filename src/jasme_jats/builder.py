@@ -17,7 +17,7 @@ from .article import (ArticlePlan, BackSec, BoxNode, FigNode, FnNode, FormulaNod
                       Sec, TableNode, _para_text)
 from .config import ArticleMeta, JournalConfig, keyword_problem
 from .docx_reader import table_head, table_where
-from .model import Exclusion, Newline, Para
+from .model import OBJ, Exclusion, Newline, Para
 from .ooxml import is_ws
 from .structure import CAP_BRANCH_NUM, CAP_BRANCH_SEP
 from .tracking import AI, GEN, IMPLICIT, JX_NS, ORDER, SPAN
@@ -66,6 +66,209 @@ class BuildInfo:
     # 番号を XML に出さなかった題目・副題・著者名・所属の段落 [(段落 ID, 番号, 場所の名前, 段落の文字の冒頭 20 字)]
     # （10 章の警告。pipeline.lost_autonums は飛ばす）
     unshown_numbers: list = field(default_factory=list)
+    # 利用者に確かめてもらう和文の著者名の分け方 [(段落 ID, EasternSplit)]: 字の間の空白のいちばん長い所で分けたもの・境目を
+    # 推定して分けたもの・AI が分けたもの・分けられなかったもの（how が longest / context / count / ai / none。要確認 name_split。
+    # AI 依頼文）
+    name_splits: list = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------- 和文の著者名の姓と名（C010・C064・C072）
+NAME_WS = " \u3000\t"                           # 氏名の空白（AI の split_name の検証〈ai_assist.apply_ops〉と同じ）
+RE_NAME_WS = re.compile(r"[ \u3000\t]+")
+# 推定 a の手がかり（姓の候補の後ろに続く、引用の形）。年: 4 桁の数字（「2020a」も可。直後が数字なら年でない。直後が「年」なら日付なので除く）か
+# 「印刷中」「in press」。姓の後ろには、氏名らしい「・共著者」（漢字・かな・カナで 1〜4 字か、英字の姓。その後ろが年の括弧・コンマと年・
+# さらに「・共著者」・「ら」「他」「ほか」のどれかで続く）と、「ら」「他」「ほか」をはさんでよい。形は 2 つ: 「姓（2015）」「姓 (2015)」
+# （括弧の中が年で始まる。姓との間に空白があってもよい）と、「姓，2015」「姓, 2015」（コンマと年）。年でない数字（「中1」）や、ただの
+# 「・」「，」は手がかりにしない。閉じ括弧までの表記は surname_hint が足す
+_CITE_YEAR = r"(?:[0-9０-９]{4}(?![0-9０-９])[a-zａ-ｚ]?(?!年)|印刷中|[Ii]n press)"
+_CITE_YEAR_COMMA = r"[0-9０-９]{4}(?![0-9０-９年])[a-zａ-ｚ]?(?!年)"
+_CO_AUTHOR = r"(?:[ぁ-ゖァ-ヺーヽヾ㐀-䶿一-鿿豈-﫿々〆ヵヶー]{1,4}|[A-Za-zÀ-ÖØ-öø-ÿ]+)"
+RE_CITE_AFTER = re.compile(
+    r"(?:・" + _CO_AUTHOR + r")*(?:ら|他|ほか)?"
+    r"(?:[ \u3000]*[（(][ \u3000]*" + _CITE_YEAR + r"|[ \u3000]*[，,][ \u3000]*" + _CITE_YEAR_COMMA + r")")
+# 姓の候補の直後が「・」で、その後ろの語が学校種・学年などの一般の語（「小・中学校（2019）」「高・大接続（2019）」）なら、手がかりにしない。
+# 1 字の語（小・中・高・大・幼）は、語として終わっているとき（後ろが氏名の字でない）だけ。学校・学年を表す語で始まるもの、
+# 「学校」「接続」「連携」「一貫」を含むもの（「・」から次の区切りまで）も一般の語
+_GENERAL_ONE = "小中高大幼"
+RE_GENERAL_AFTER_DOT = re.compile(
+    r"(?:[" + _GENERAL_ONE + r"](?![ぁ-ゖァ-ヺーヽヾ㐀-䶿一-鿿豈-﫿々〆ヵヶA-Za-z])"
+    r"|学校|学年|年生|中学|高校|高等|大学|小学|幼稚|幼児)"
+    r"|[^\s（()）,，、。・\n]*(?:学校|接続|連携|一貫)")
+# 姓の候補の前にあれば、別の語の一部（「小林（2019）」の「林」）とみなす文字
+CLOSE_REACH = 20      # 引用の表記を閉じ括弧まで示すときに、年の後ろを見る字数
+RE_NAME_BEFORE = re.compile(r"[㐀-䶿一-鿿豈-﫿々〆ヵヶ]")
+RE_LATIN = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ]")   # ローマ字（全角の英字は和文の字として扱う）
+# 落とした空白の理由（7 章）。姓と名の間の空白は、どう分けたかが分かるように書く
+NAME_GAP_REASONS = {"single": "姓と名の間の空白", "longest": "姓と名の間の空白（いちばん長い空白）",
+                    "context": "姓と名の間の空白（推定: いちばん長い空白が複数あるので、論文の中の表記から）",
+                    "count": "姓と名の間の空白（推定: いちばん長い空白が複数あるので、字数から）",
+                    "ai": "姓と名の間の空白（AI の指定）", "latin": "姓と名の間の空白", "western": "姓と名の間の空白"}
+NAME_INNER_REASON = "氏名の字間の空白"
+NAME_EDGE_REASON = "氏名の前後の空白"
+
+
+@dataclass
+class EasternSplit:
+    """和文の氏名の姓と名の分け方（split_eastern の結果）。
+
+    how: none（分けない。空白がない）・single（空白が 1 か所）・latin（ローマ字の氏名で空白が 2 か所以上。最初の空白で分け、ほかの
+    空白は残す）・longest（字の間に空白が 2 か所以上あり、いちばん長い空白が 1 か所で、そこで分けた）・
+    context（いちばん長い空白が 2 か所以上あって境目を決められず、論文の中の表記から推定した）・count（同じく、字数だけから推定した）・
+    ai（AI の指定。機械の分け方と同じ位置の指定は ai にせず、機械の how のままにする）。
+    name は前後の空白を除いた氏名（Word の表示の文字。字の間の空白も含む）、surname・given は字の間の空白を除いた姓・名、
+    gap は姓と名の間の空白の範囲（氏名の段落の文字の上。AI の指定で空白のない位置なら開始 = 終了。分けないなら None）、
+    hint は推定 context の根拠にした論文の中の表記（引用の括弧と年まで）、
+    machine は how が ai のとき、AI の指定がなければ機械がどう分けたか（EasternSplit）。"""
+    how: str
+    name: str = ""
+    surname: str = ""
+    given: str = ""
+    gap: tuple = None
+    hint: str = ""
+    machine: "EasternSplit" = None
+
+    @property
+    def guessed(self) -> bool:
+        return self.how in ("context", "count")
+
+    def describe(self) -> str:
+        """機械の分け方（how が ai 以外）の文。AI が分けたときに、AI の指定がなければどう分けていたかを書くのに使う（4 章の記録と
+        要確認 name_split の文）。"""
+        to = f"{self.surname}／{self.given}"
+        return {"none": "空白がなく分けられなかった",
+                "single": f"空白の位置で {to} に分けていた",
+                "latin": f"最初の空白で {to} に分けていた",
+                "longest": f"いちばん長い空白で {to} に分けていた",
+                "context": f"論文の中の表記「{self.hint}」から {to} と推定していた",
+                "count": f"字数だけから {to} と推定していた"}[self.how]
+
+
+def _no_ws(s: str) -> str:
+    return RE_NAME_WS.sub("", s)
+
+
+def name_context(plan) -> str:
+    """推定 a（論文の中の表記）で見る文字: 著者名の段落を除くすべての段落（本文・注・引用文献など）の文字を、改行でつないだもの。"""
+    own = {p.src for a in plan.authors for p in (a.name_ja, a.name_en) if p is not None}
+    return "\n".join(p.text_only() for src, p in plan.paras.items() if src not in own)
+
+
+def surname_hint(chars: str, k: int, context: str) -> str:
+    """氏名（空白を除いた文字 chars）の先頭 k 文字が、論文の中に引用の形で「姓だけ」現れれば、その表記（例「（試験，2020）」）。なければ ""。
+
+    引用の形（RE_CITE_AFTER）: 姓の直後（「ら」「他」「ほか」「・共著者」をはさんでよい）が、「（」「(」（前に空白があってもよい）と年、
+    または「，」「,」と年。直前が漢字でないもの（「小林（2019）」の「林」は数えない）。同じ氏名の全体（空白なし）の一部として現れる
+    ものは数えない。年でない数字（「中1」）や、ただの「・」「，」は手がかりにしない。表記は、姓の前の開き括弧から、閉じ括弧まで（括弧の形で、閉じ括弧が近く〈CLOSE_REACH 字以内〉になければ年まで）。
+    姓の直後が「・」で、その後ろの語が学校種・学年などの一般の語（RE_GENERAL_AFTER_DOT）のとき、直前が「小・中」のような一般の語の
+    並びのときは、手がかりにしない。"""
+    sur = chars[:k]
+    for m in re.finditer(re.escape(sur), context):
+        i, j = m.start(), m.end()
+        if i and RE_NAME_BEFORE.match(context[i - 1]):
+            continue
+        if context.startswith(chars, i):
+            continue
+        if context.startswith("・", j) and RE_GENERAL_AFTER_DOT.match(context, j + 1):
+            continue                    # 「小・中学校（2019）」の「小」
+        if sur in _GENERAL_ONE and i >= 2 and context[i - 1] == "・" and context[i - 2] in _GENERAL_ONE:
+            continue                    # 「中・高（2019）」の「高」
+        cite = RE_CITE_AFTER.match(context, j)
+        if cite is None:
+            continue
+        start = i - 1 if i and context[i - 1] in "（(" else i
+        end = cite.end()
+        if context[start] in "（(" or re.search(r"[（(]", context[j:end]):
+            tail = context[end:end + CLOSE_REACH]       # 閉じ括弧が近くにあれば、そこまで（「（林，2019, p.3）」）
+            for n, ch in enumerate(tail):
+                if ch in "）)":
+                    end += n + 1
+                    break
+                if ch in "（(\n":
+                    break
+        return context[start:end]
+    return ""
+
+
+def _gap_width(text: str, s: int, e: int) -> int:
+    """空白の連なり text[s:e] の見た目の長さ: 全角の空白を半角 2 つ分、ほかの空白（半角・タブ）を 1 として数える。"""
+    return sum(2 if ch == "\u3000" else 1 for ch in text[s:e])
+
+
+def split_eastern(text: str, context: str = "", split=None) -> EasternSplit:
+    """和文の氏名（段落の文字 text）を姓と名に分ける規則（builder.Builder.person_name。pdfdocx._name_shape も同じ規則を使う）。
+
+    split は AI の指定の位置（article.Author.split_ja。前後の空白の内側にあるときだけ使い、機械の推定より優先する）。
+    AI の指定が機械の分け方と同じ位置で、機械の分け方が single・latin・longest なら、機械の結果をそのまま返す（AI は確かめただけ）。
+    それ以外の AI の指定は how が ai で、machine に機械の分け方を添える。
+    指定がなければ、氏名の中の空白の連なり（前後の空白と、氏名の後ろの注の参照とその前の空白を除く）で決める:
+    1 つなら、そこで分ける（single）。2 つ以上（字の間に空白を入れて揃えた氏名）で、いちばん長い連なりが 1 つだけなら、そこで
+    分ける（longest。長さは全角の空白を半角 2 つ分と数える）。いちばん長い連なりが 2 つ以上なら、その連なりのどれかを境目と推定する:
+    (a) 境目の前の文字（姓の候補）が、論文の中（context。name_context）に引用の形で「姓だけ」現れ（surname_hint）、そうなる候補が
+    ちょうど 1 つなら、そこ（context）。(b) 決まらなければ、字数から（空白を除いて 2 字なら 1 字目の後ろ、3 字以上なら姓を 2 字とする。
+    その位置に連なりがなければ、いちばん近い連なり。count）。空白がなければ分けない（none）。
+    同じ text・context・split なら、いつも同じ結果になる。"""
+    mech = _split_by_rule(text, context)
+    n = len(text)
+    core_s, core_e = n - len(text.lstrip(NAME_WS)), len(text.rstrip(NAME_WS))
+    if split is None or not core_s < split < core_e:
+        return mech
+    s = e = split
+    for m in RE_NAME_WS.finditer(text, core_s, core_e):
+        if m.start() <= split <= m.end():       # 指定の位置に接する空白は、姓と名の間の空白
+            s, e = m.start(), m.end()
+            break
+    name = text[core_s:core_e]
+    if mech.gap == (s, e) and mech.how in ("single", "latin", "longest"):
+        return mech
+    return EasternSplit("ai", name, _no_ws(text[core_s:s]), _no_ws(text[e:core_e]), (s, e), machine=mech)
+
+
+def _split_by_rule(text: str, context: str) -> EasternSplit:
+    """split_eastern の、AI の指定がないときの機械の分け方。"""
+    n = len(text)
+    core_s, core_e = n - len(text.lstrip(NAME_WS)), len(text.rstrip(NAME_WS))
+    if core_s >= core_e:
+        return EasternSplit("none")
+    name = text[core_s:core_e]
+    # 氏名の後ろの注の参照（OBJ）とその前の空白は、氏名の空白の数に数えない
+    end = max(len(text[:core_e].rstrip(NAME_WS + OBJ)), core_s)
+    runs = [(m.start(), m.end()) for m in RE_NAME_WS.finditer(text, core_s, end)]
+
+    def at(s, e, how, hint=""):
+        return EasternSplit(how, name, _no_ws(text[core_s:s]), _no_ws(text[e:core_e]), (s, e), hint)
+
+    if not runs:
+        return EasternSplit("none", name, name)
+    if len(runs) == 1:
+        return at(*runs[0], "single")
+    if RE_LATIN.search(name):
+        # ローマ字の氏名（和文の著者名の欄の「Taro Q SHIKEN」など）: 語の間の空白は字の間の空白ではないので、これまでどおり最初の空白で分け、
+        # ほかの空白は残す（latin。知らせない）
+        return at(*runs[0], "latin")
+    longest = max(_gap_width(text, s, e) for s, e in runs)
+    top = [(s, e) for s, e in runs if _gap_width(text, s, e) == longest]
+    if len(top) == 1:
+        return at(*top[0], "longest")
+    chars = _no_ws(name)
+    # 姓・名のどちらかが注の参照など（文字でないもの）だけになる境目は、候補にしない（すべてそうなら、すべてを候補にする）
+    real = [(s, e) for s, e in top if _no_ws(text[core_s:s]).strip(OBJ) and _no_ws(text[e:core_e]).strip(OBJ)]
+    cands = {len(_no_ws(text[core_s:s])): (s, e) for s, e in (real or top)}      # 姓の字数 -> 境目の空白
+    found = {k: h for k in sorted(cands) for h in [surname_hint(chars, k, context)] if h}
+    if len(found) == 1:
+        [(k, hint)] = found.items()
+        return at(*cands[k], "context", hint)
+    want = 1 if len(chars) <= 2 else 2
+    k = min(cands, key=lambda c: (abs(c - want), c))
+    return at(*cands[k], "count")
+
+
+def name_split_note(sp: EasternSplit) -> str:
+    """4 章の記録（機械的な判断）の文。how が longest / context / count / ai のもの（要確認 name_split の文は report._name_split_line）。"""
+    why = {"longest": "字の間の空白がいちばん長い所を境目とした",
+           "context": f"いちばん長い空白が 2 か所以上あって境目を決められないので、論文の中の表記「{sp.hint}」から推定した",
+           "count": f"いちばん長い空白が 2 か所以上あって境目を決められないので、字数だけから推定した（姓を {len(sp.surname)} 字とした）",
+           "ai": f"AI の指定。AI の指定がなければ、{sp.machine.describe()}" if sp.machine is not None else "AI の指定"}[sp.how]
+    return f"氏名「{sp.name}」を姓「{sp.surname}」・名「{sp.given}」に分けた（{why}）。字の間の空白は XML から落とした（7 章）"
 
 
 def _overlaps(owner, col, span) -> bool:
@@ -105,6 +308,7 @@ class Builder:
                 fn.number = fn.number or marks[fn.word_id][0]
                 fn_numbers[fn.word_id] = (fn.fid, plan.pdf_numbers.get(("fnref", fn.word_id), marks[fn.word_id][1]))
         self.marks = marks
+        self._name_ctx = None
         self.em = E.Emitter(self.name_image, fn_numbers, plan.moved_images)
 
     def autonum(self, p) -> str:
@@ -443,66 +647,89 @@ class Builder:
                 self.unshown_number(p, "所属")
                 self.em.span(inst, p, E.AFF)
 
+    def names_context(self) -> str:
+        """推定 a で見る論文の文字（name_context。1 回の組み立てで 1 度だけ作る）。"""
+        if self._name_ctx is None:
+            self._name_ctx = name_context(self.plan)
+        return self._name_ctx
+
     def person_name(self, parent, p: Para, style, lang, split):
-        """氏名を姓と名に分ける。分ける位置の空白だけを落とす（検証のため記録する）。"""
+        """氏名を姓と名に分ける。落とすのは空白だけ（姓と名の間の空白、和文の氏名の字の間の空白、氏名の前後の空白。検証のため記録する）。
+
+        和文の氏名の分け方は split_eastern。字の間の空白のいちばん長い所で分けたもの・境目を推定したもの・AI が分けたもの
+        〈機械の分け方と同じ位置の指定を除く〉・分けられなかったものは BuildInfo.name_splits に入れ（要確認 name_split）、4 章にも
+        記録する。"""
         self.unshown_number(p, "著者名")
         nm = _lang(_sub(parent, "name", name_style=style), lang)
         text = p.plain()
         n = len(text)
-        lead = len(text) - len(text.lstrip(" \u3000\t"))
-        trail = n - len(text.rstrip(" \u3000\t"))
-        core_s, core_e = lead, n - trail
-        pieces = None   # [(kind, s, e)]
-        if split is not None and core_s < split < core_e:
-            pieces = [("surname", 0, split), ("given", split, n)] if style == "eastern" else None
-            if style == "western":
-                pieces = [("given", 0, split), ("surname", split, n)]
+        core_s, core_e = n - len(text.lstrip(NAME_WS)), len(text.rstrip(NAME_WS))
+        core = text[core_s:core_e]
+        if core_s >= core_e:            # 空白だけの氏名（ここには来ない）: 今までどおり全体を姓に入れる
+            self.em.span(_sub(nm, "surname"), p, E.NAME)
+            return
+        gap, first, how = None, "surname", "western"
+        if style == "eastern":
+            sp = split_eastern(text, self.names_context(), split)
+            gap, how = sp.gap, sp.how
+            if how in ("longest", "context", "count", "ai"):
+                self.info.name_splits.append((p.src, sp))
+                self.info.notes.append(("name", p.src, name_split_note(sp)))
+            elif how == "none":
+                self.info.name_splits.append((p.src, sp))
+        elif split is not None and core_s < split < core_e:
+            gap, first = (split, split), "given"
         else:
-            core = text[core_s:core_e]
-            ws = [m for m in re.finditer(r"[ \u3000\t]+", core)]
-            if style == "eastern" and len(ws) >= 1:
-                m = ws[0]
-                pieces = [("surname", 0, core_s + m.start()), ("drop", core_s + m.start(), core_s + m.end()),
-                          ("given", core_s + m.end(), n)]
-            elif style == "western" and len(ws) >= 1:
-                toks = [(t.start() + core_s, t.end() + core_s) for t in re.finditer(r"[^ \u3000\t]+", core)]
+            toks = [(t.start(), t.end()) for t in re.finditer(r"[^ \u3000\t]+", text[:core_e])]
+            if len(toks) >= 2:
                 caps = [k for k, (s, e) in enumerate(toks) if re.fullmatch(r"[A-ZÀ-Ý][A-ZÀ-Ý'’\-]+", text[s:e])]
                 if len(caps) == 1 and caps[0] in (0, len(toks) - 1):
                     k = caps[0]
                 else:
                     k = len(toks) - 1
                 if k == len(toks) - 1:
-                    s_sur = toks[k][0]
-                    gap_s = toks[k - 1][1]
-                    pieces = [("given", 0, gap_s), ("drop", gap_s, s_sur), ("surname", s_sur, n)]
+                    gap, first = (toks[k - 1][1], toks[k][0]), "given"
                 else:  # 姓が先頭（SUGAKU Taro）
-                    e_sur = toks[0][1]
-                    g_s = toks[1][0]
-                    pieces = [("surname", 0, e_sur), ("drop", e_sur, g_s), ("given", g_s, n)]
-        if pieces is None:
-            sn = _sub(nm, "surname")
-            self.em.span(sn, p, E.NAME)
+                    gap = (toks[0][1], toks[1][0])
+        if gap is None:
             self.info.notes.append(("name", p.src,
-                                    f"氏名「{text.strip()}」に姓と名の区切り（空白）がないため、全体を姓（surname）として出力"))
-            core = text.strip(" \u3000\t")     # AI の split_name の検証（ai_assist.apply_ops）と同じ空白の扱い
-            self.info.unsplit_names.append((p.src, core, lang))
+                                    f"氏名「{core}」に姓と名の区切り（空白）がないため、全体を姓として出力"))
+            self.info.unsplit_names.append((p.src, core, lang))     # AI の split_name の検証（ai_assist.apply_ops）と同じ空白の扱い
             if lang == "en":
                 # 英文の氏名は AI の split_name でも分けられない（和文の氏名だけ）ので、利用者に知らせる（10 章。決定事項 17）
                 self.info.warnings.append(
-                    f"英文の著者名「{core}」（段落 {p.src}）に姓と名の区切り（空白）がないため、全体を姓（surname）として"
+                    f"英文の著者名「{core}」（段落 {p.src}）に姓と名の区切り（空白）がないため、全体を姓として"
                     "出力しました。名もある氏名なら、Word で姓と名の間に空白を入れて保存してから変換し直してください"
                     "（AI による補完では、英文の著者名は分けられません）。")
-            return
-        order = {"surname": 0, "given": 1}
-        holders = {}
-        for kind in sorted({k for k, _, _ in pieces if k != "drop"}, key=order.get):
-            holders[kind] = _sub(nm, "surname" if kind == "surname" else "given-names")
-        for seq, (kind, s, e) in enumerate(pieces):
-            if kind == "drop":
-                self.em.drop(holders.get("surname", nm), p, s, e, seq, "姓と名の間の空白")
-                self.info.drops.append((p.src, text[s:e], "姓と名の間の空白"))
+            parts = [("surname", core_s, core_e)]
+        else:
+            second = "given" if first == "surname" else "surname"
+            parts = [(first, core_s, gap[0]), ("gap", gap[0], gap[1]), (second, gap[1], core_e)]
+        holders = {kind: _sub(nm, "surname" if kind == "surname" else "given-names")
+                   for kind in ("surname", "given") if any(k == kind for k, _, _ in parts)}
+        # 書き出す順（docx の順）: (書き込む要素, 開始, 終了, 落とす理由〈空なら文字を書く〉)
+        pieces = [(holders[parts[0][0]], 0, core_s, NAME_EDGE_REASON)]
+        for kind, s, e in parts:
+            if kind == "gap":
+                pieces.append((holders["surname"], s, e, NAME_GAP_REASONS[how]))
+                continue
+            pos = s
+            if style == "eastern" and how != "latin":   # 和文の氏名の字の間の空白は落とす（ローマ字の名の語の間の空白〈Taro Jiro〉は残す）
+                for m in RE_NAME_WS.finditer(text, s, e):
+                    pieces += [(holders[kind], pos, m.start(), ""), (holders[kind], m.start(), m.end(), NAME_INNER_REASON)]
+                    pos = m.end()
+            pieces.append((holders[kind], pos, e, ""))
+        pieces.append((holders[parts[-1][0]], core_e, n, NAME_EDGE_REASON))
+        seq = 0
+        for holder, s, e, reason in pieces:
+            if s >= e:
+                continue
+            if reason:
+                self.em.drop(holder, p, s, e, seq, reason)
+                self.info.drops.append((p.src, text[s:e], reason))
             else:
-                self.em.span(holders[kind], p, E.NAME, start=s, end=e, seq=seq)
+                self.em.span(holder, p, E.NAME, start=s, end=e, seq=seq)
+            seq += 1
 
     # ------------------------------------------------------------------ 本文
     def nodes(self, parent, nodes, top=False):

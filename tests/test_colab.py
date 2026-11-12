@@ -176,7 +176,9 @@ def test_result_boxes_follow_actions(journal, tmp_path, monkeypatch):
     html = result_boxes(res)
     assert "#dc2626" in html and "J-STAGE のアップロード時チェックで問題が 1 件あります（要対応）" in html
     assert "EMSGM106E" in html and "手順 3" in html
-    assert result_boxes(res, level="要確認") == ""
+    # 要確認は、空白のない和文の著者名（d11「研究次郎」）の name_split だけ（C064）
+    assert result_boxes(res, level="要確認", skip=("name_split",)) == ""
+    assert "著者名の姓と名の分け方を確かめてください（要確認）" in result_boxes(res, level="要確認")
     res.dtd_valid, res.dtd_errors = False, ["31_1.xml:3: Element body content does not follow the DTD"]
     html = result_boxes(res)
     assert "J-STAGE 指定の DTD による検証が不合格です（1 件。要対応）" in html and "Element body content" in html
@@ -203,7 +205,7 @@ def test_result_boxes_before_answer_in_manual_mode(journal, meta, tmp_path):
     from jasme_jats.colab import result_boxes
     from jasme_jats.pipeline import Options, convert
     res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", convert_metafiles=False))
-    assert result_boxes(res, skip=("ai_pending",)) == ""
+    assert result_boxes(res, skip=("ai_pending", "name_split")) == ""     # name_split は d11「研究次郎」（C064）
     html = result_boxes(res, level="要対応")
     assert "AI の回答をまだ反映していません（手動モード）" in html and "手順 6" in html
 

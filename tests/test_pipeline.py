@@ -847,7 +847,8 @@ def test_fidelity_failure_is_needs_action(journal, meta, tmp_path):
     """不変性チェックが不合格なら、冒頭に今と同じ文で知らせ、要対応にする（決定事項 5(d)）。"""
     from jasme_jats.report import actions, render
     res = convert(FULL, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
-    assert actions(res) == [] and not res.needs_action
+    # 要確認の name_split（空白のない和文の著者名 d11「研究次郎」。C064）だけ
+    assert [a.key for a in actions(res)] == ["name_split"] and not res.needs_action
     res.fidelity.ok = False
     assert res.needs_action and not res.ok
     head = render(res).split("## 2.")[0]
@@ -868,7 +869,7 @@ def test_manual_mode_before_answer_is_needs_action(journal, meta, tmp_path, caps
     from jasme_jats.cli import main
     from jasme_jats.report import actions
     res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "a", ai_mode="manual", convert_metafiles=False))
-    assert [a.key for a in actions(res)] == ["ai_pending"] and res.needs_action
+    assert [a.key for a in actions(res)] == ["ai_pending", "name_split"] and res.needs_action
     report = res.report_path.read_text(encoding="utf-8")
     assert "手動モード: 「AI依頼文.txt」をチャット" in report.split("## 2.")[0]
     assert "AI の回答をまだ反映していない" in report.split("## 14.")[1]

@@ -210,6 +210,8 @@ class Result:
     joined: list = field(default_factory=list)          # 段落記号の削除でつないだ段落 [(最初の段落の ID, [段落の ID, …])]（6 章）
     deleted_rows: list = field(default_factory=list)    # 変更履歴で削除された、文字のない表の行（model.DeletedRow。読み飛ばした。6 章）
     newlines: list = field(default_factory=list)        # 段落の中の改行（model.Newline。段落ごと。10 章と、題目などは要確認）
+    # 確かめてもらう和文の著者名の分け方 [(段落 ID, builder.EasternSplit)]（BuildInfo.name_splits。要確認 name_split）
+    name_splits: list = field(default_factory=list)
     route: str = "docx"
     docx_fix: Optional[DocxFix] = None                  # ルート2: 出版版 PDF で補った docx と、補った箇所・直さなかった箇所
     # ルート2 の補完の確かめ（fidelity.SupplementResult。補った docx が元の docx から、組版の違いと報告した校正の直し以外に
@@ -534,7 +536,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
 
     # ---------------------------------------------------------------- AI 補完
     if opts.ai_mode in ("api", "manual"):
-        req_text, req_images = build_request(plan, linker, info.exclusions, info.unsplit_names)
+        req_text, req_images = build_request(plan, linker, info.exclusions, info.unsplit_names, info.name_splits)
         blocks = image_blocks(doc, req_images)
         if opts.ai_mode == "api":
             outcome = call_provider(opts.ai_provider, req_text, blocks, model=opts.ai_model, api_key=opts.ai_api_key)
@@ -750,7 +752,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         lost_autonums=lost_numbers, unshown_numbers=list(info.unshown_numbers),
         table_problems=table_issues, tables_checked=tables_checked, zip_issues=zip_problems(zip_path, journal, meta),
         not_zipped=unzipped_files(out_dir, journal, meta, zip_path), joined=doc.joined, deleted_rows=doc.deleted_rows,
-        newlines=info.newlines, style_hidden=doc.style_hidden,
+        newlines=info.newlines, name_splits=list(info.name_splits), style_hidden=doc.style_hidden,
         style_hidden_images=[img.image_id for img in doc.images if img.hidden_style])
     report_path = out_dir / f"{aid}_変換レポート.md"
     report_path.write_text(render(res), encoding="utf-8")
