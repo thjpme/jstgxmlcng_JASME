@@ -283,6 +283,46 @@ class LostImage:
 
 
 @dataclass
+class SymbolReplaced:
+    """記号フォント（Symbol・Wingdings 系）の私用領域の符号 1 か所の扱い（docx_reader が記録する）。置き換えたもの（to がある）は要確認
+    symbol_replaced の対象（known でないもの）。置き換えなかったもの（to が空。表にない符号・記号フォントでないフォントの私用領域の文字）は、守り
+    pipeline.pua_chars が最終の XML で見つけたときに、フォントを添えるために使う。"""
+    src: str        # 段落の ID
+    kind: str       # "bullet"（箇条書きの記号。Word が付ける生成文字）| "sym"（w:sym。docx の文字）| "text"（ランの w:t。docx の文字）
+    font: str       # 記号フォントの名前（Symbol・Wingdings など。置き換えなかったものは書かれたフォント名。分からなければ空）
+    code: int       # 元の符号（U+F0xx）
+    to: str         # 置き換えた文字（置き換えなかったときは空）
+    # この記号の置き換えは、0.31.1 までの変換でもしていた（箇条書きの古い 6 つの対応・w:sym の Symbol フォント）。出力が変わらず、
+    # 実際の原稿で確かめ済みなので、要確認では知らせず、8 章の全件の表にだけ載せる
+    known: bool = False
+
+
+@dataclass
+class ResultlessField:
+    """結果を持たないまま終わるフィールドのうち、Word では表示のあるもの（ooxml.FIELD_DRAWN。EQ の囲い文字など）1 か所
+    （docx_reader が記録する。要確認 resultless_field）。表示はコードから Word が描くもので docx の文字ではないので、XML には出ない。"""
+    src: str        # 段落の ID（表のセル・脚注の中なら、その中の段落の ID）
+    kind: str       # フィールドの名前（EQ・SYMBOL・FORMCHECKBOX など。大文字）
+    code: str       # フィールドコード（前後の空白を除いたもの）
+    pos: int        # 段落の文字（Para.text_only）の中の、フィールドの位置（文字数）
+    text: str = ""  # 段落の文字（Para.text_only。pos の前後の抜粋に使う）
+
+
+@dataclass
+class PuaChar:
+    """最終の XML に残った私用領域（U+E000–U+F8FF）の文字（pipeline.pua_chars。要対応 pua_left）。J-STAGE の画面では読めない
+    文字（豆腐）になる。同じ段落・同じ符号・同じ種類は 1 件にまとめる。"""
+    src: str            # 段落の ID（段落の文字・生成文字でなければ空）
+    code: int           # 符号（U+E000–U+F8FF）
+    generated: bool     # Word が付けた生成文字（箇条書きの記号・番号）か（False は docx の文字、または段落に結び付かない文字）
+    font: str           # 分かるときのフォント名（記号フォントのラン・w:sym・箇条書きの書式。分からなければ空）
+    where: str          # 文字がある XML の要素
+    count: int = 1      # その段落の中の個数
+    location: str = ""  # 段落の場所（plan.locations。なければ領域の名前）
+    text: str = ""      # 段落の文字の冒頭 20 字（Word で探す手がかり）
+
+
+@dataclass
 class LostNumber:
     """Word の自動番号のある段落で、段落の文字は XML に出したのに番号を出さなかったもの（pipeline.lost_autonums。要対応）。
 
@@ -360,6 +400,8 @@ class Document:
     hidden_text: list = field(default_factory=list)   # [(src, text)]
     # hidden_text のうち、スタイル・既定の書式の設定で隠したもの [(src, text)]（ooxml.HiddenRule.run_hidden_by が "style"。要確認）
     style_hidden: list = field(default_factory=list)
+    resultless_fields: list = field(default_factory=list)   # ResultlessField（結果を持たないフィールドで、Word では表示のあるもの。docx_reader）
+    symbols: list = field(default_factory=list)        # SymbolReplaced（記号フォントの私用領域の符号の扱い。出力しない段落のものも含む。docx_reader）
     deleted_note_refs: set = field(default_factory=set)   # 変更履歴で削除された脚注・文末脚注の参照の note_key（docx_reader）
     tracked_changes: int = 0
     comments: int = 0

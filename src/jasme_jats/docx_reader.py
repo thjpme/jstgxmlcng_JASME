@@ -12,11 +12,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .model import (IMAGE_EDITS, Atom, Cell, DeletedRow, Document, Float, ImageRef, JoinInfo, Layout, Para, Row, Table, TextBox,
-                    note_key)
+from .model import (IMAGE_EDITS, Atom, Cell, DeletedRow, Document, Float, ImageRef, JoinInfo, Layout, Para, ResultlessField, Row, SymbolReplaced,
+                    Table, TextBox, note_key)
 from .numbering import Numbering
-from .ooxml import (A_NS, BR_TEXT_TYPES, O_NS, PIC_NS, R_NS, V_NS, WP_NS, WPS_NS, DocxPackage, HiddenRule, canonical_text,
-                    joined_paragraphs, m, on_off, paragraph_ids, sym_char, unjoined_deleted_marks, w, wval)
+from .ooxml import (A_NS, BR_TEXT_TYPES, FONT_DISPLAY, LEGACY_BULLETS, O_NS, PIC_NS, R_NS, SYMBOL_ADDED, V_NS, WP_NS, WPS_NS, DocxPackage, HiddenRule,
+                    canonical_text, is_pua, joined_paragraphs, m, on_off, paragraph_ids, resultless_field_kind, run_font, sym_char, sym_code,
+                    symbol_char,
+                    unjoined_deleted_marks, w, w_t_text, wval)
 
 WPG_NS = "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"
 WPC_NS = "http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas"
@@ -132,6 +134,12 @@ class Reader:
         # 隠し文字のうち、スタイル・既定の書式の設定で隠したもの（ooxml.HiddenRule.run_hidden_by が "style"。規則が暫定なので
         # 要確認で知らせる。report._style_hidden_action）。self.hidden の一部
         self.style_hidden = []
+        # 記号フォントの私用領域の符号を、普通の Unicode の文字に置き換えたもの（model.SymbolReplaced。箇条書きの記号・w:sym・
+        # 記号フォントのランの w:t。要確認で知らせる。report._symbol_action）
+        self.symbols = []
+        # 結果を持たないまま終わるフィールドのうち、Word では表示のあるもの（model.ResultlessField。EQ の囲い文字など。表示は docx の
+        # 文字ではないので XML には出さず、要確認で知らせる。report._resultless_field_action）
+        self.resultless = []
         # 削除の変更履歴の中の脚注・文末脚注の参照の注の鍵（参照として数えない。structure.Classifier.attach_word_notes が除外の理由に使う）
         self.deleted_note_refs = set()
         self._img_count = 0
@@ -186,6 +194,7 @@ class Reader:
         comments = sum(1 for _ in root.iter(w("commentRangeStart")))
         doc = Document(blocks=blocks, footnotes=footnotes, endnotes=endnotes, media=self.media,
                        styles=self.styles, warnings=self.warnings, hidden_text=self.hidden, style_hidden=self.style_hidden,
+                       symbols=self.symbols, resultless_fields=self.resultless,
                        tracked_changes=tracked, comments=comments,
                        images=self.images, floats=self.floats, textboxes=self.textboxes, layout=read_layout(root, self.pkg),
                        deleted_note_refs=self.deleted_note_refs, joined=self.joined, joins=self.joins,
@@ -274,7 +283,7 @@ class Reader:
             row_deleted = trpr is not None and trpr.find(w("del")) is not None
             shapes = (len(self.images), len(self.floats), len(self.textboxes))
             records = (len(self.joined), len(self.joins), len(self.deleted_rows), len(self.hidden), len(self.warnings),
-                       len(self.style_hidden))
+                       len(self.style_hidden), len(self.symbols), len(self.resultless))
             # 削除された行を読み飛ばすときに戻す、自動番号の数え方の写し（Numbering.snapshot）
             numbering_state = self.numbering.snapshot() if row_deleted else None
             has_cell_del = False
@@ -301,7 +310,8 @@ class Reader:
                     # 読み飛ばした行の中でつないだ段落・読み飛ばした入れ子の表の行・隠し文字・警告は、出力した段落の記録から外し
                     # （行ごと記録する）、行の中で数えた自動番号は戻す（Word で承諾すると行ごと消え、後ろの番号が詰まる）
                     del (self.joined[records[0]:], self.joins[records[1]:], self.deleted_rows[records[2]:],
-                         self.hidden[records[3]:], self.warnings[records[4]:], self.style_hidden[records[5]:])
+                         self.hidden[records[3]:], self.warnings[records[4]:], self.style_hidden[records[5]:], self.symbols[records[6]:],
+                         self.resultless[records[7]:])
                     self.numbering.restore(numbering_state)
                     continue
                 kept.append(k)
@@ -325,6 +335,7 @@ class Reader:
         """
         src = self.pids.get(p, "?")
         chain = self.chains.get(p, [p])
+        first_resultless = len(self.resultless)
         fp = p if len(chain) == 1 else next((q for q in chain if canonical_text(q, self.hidden_rule) != ""), chain[-1])
         ppr = fp.find(w("pPr"))
         sid = ""
@@ -350,6 +361,8 @@ class Reader:
                     float_id=self._float.fid if self._float else "", textbox_id=self._textbox.xid if self._textbox else "")
         if para.numbering:
             para.autonum = self.numbering.label(*para.numbering)
+            self._note_symbols(src, "bullet", self.numbering.font, [(f, o, n) for f, o, n in self.numbering.replaced],
+                               para.autonum)
         if len(chain) > 1:
             self._record_join(chain, para)
         self._extra = []
@@ -360,6 +373,11 @@ class Reader:
             self._walk(q, para, fmt={}, href=None, hidden="", deleted=False)
         extra = self._extra
         self._extra = []
+        # 結果を持たないフィールドの記録に、段落の文字（位置の前後の抜粋に使う）を添える（入れ子の段落の記録は、その段落の読み取りで添えた）
+        text = para.text_only()
+        for rec in self.resultless[first_resultless:]:
+            if rec.src == para.src:
+                rec.text = text
         return para, extra
 
     def _record_join(self, chain, para):
@@ -380,6 +398,27 @@ class Reader:
 
     def _in_code(self):
         return any(f["code_mode"] for f in self._fields)
+
+    @staticmethod
+    def _shown(para):
+        """段落にこれまでに入れたアトムの量（アトムの数と文字数）。フィールドの結果が空かの判定に使う。"""
+        return len(para.atoms), sum(len(a.text) for a in para.atoms)
+
+    def _note_resultless(self, para, code, pos):
+        """結果を持たないまま終わったフィールドが、Word では表示のある種類（ooxml.resultless_field_kind）なら記録する（self.resultless）。"""
+        kind = resultless_field_kind(code)
+        if kind:
+            self.resultless.append(ResultlessField(para.src, kind, " ".join(code.split()), pos))
+
+    def _note_symbols(self, src, kind, font, replaced, shown):
+        """記号フォントの私用領域の符号の扱いを記録する（self.symbols）。replaced: 置き換えたもの [(フォントの名前, 元の文字,
+        置き換えた文字)]。shown: 段落に入れる文字。そこに私用領域の文字が残っていれば（表にない符号・記号フォントでないフォント）、
+        置き換えていないもの（SymbolReplaced.to が空）として記録する（font は書かれたフォント名）。"""
+        self.symbols += [SymbolReplaced(src, kind, f, ord(old), new,
+                                        known=(kind == "bullet" and LEGACY_BULLETS.get(old) == new)
+                                        or (kind == "sym" and f == "Symbol" and (ord(old) & 0xFF) not in SYMBOL_ADDED))
+                         for f, old, new in replaced]
+        self.symbols += [SymbolReplaced(src, kind, font, ord(c), "") for c in shown if is_pua(c)]
 
     def _add_text(self, para, text, fmt, href):
         if not text:
@@ -413,7 +452,10 @@ class Reader:
             if tag == w("fldSimple"):
                 instr = ch.get(w("instr"), "")
                 mm = re.search(r'HYPERLINK\s+"([^"]+)"', instr)
+                shown, pos = self._shown(para), len(para.text_only())
                 self._walk(ch, para, fmt, mm.group(1) if mm else href, hidden, deleted)
+                if not (deleted or hidden or self._in_code()) and self._shown(para) == shown:
+                    self._note_resultless(para, instr, pos)     # 結果の子がない（または空の）フィールド
                 continue
             if tag == w("r"):
                 self._run(ch, para, fmt, href, hidden or self.hidden_rule.run_hidden_by(ch, self._pstate), deleted)
@@ -449,11 +491,17 @@ class Reader:
             if tag == w("fldChar"):
                 t = ch.get(w("fldCharType"))
                 if t == "begin":
-                    self._fields.append({"code": "", "code_mode": True})
+                    # skip: 削除・隠し文字の中、または別のフィールドのコードの中のフィールドは、表示されないので数えない
+                    self._fields.append({"code": "", "code_mode": True, "shown": None, "pos": len(para.text_only()),
+                                         "skip": bool(deleted or hidden or self._in_code())})
                 elif t == "separate" and self._fields:
                     self._fields[-1]["code_mode"] = False
+                    self._fields[-1]["shown"] = self._shown(para)
                 elif t == "end" and self._fields:
-                    self._fields.pop()
+                    f = self._fields.pop()
+                    # separate がない、または結果が空のまま終わったフィールド
+                    if not f["skip"] and (f["shown"] is None or f["shown"] == self._shown(para)):
+                        self._note_resultless(para, f["code"], f["pos"])
                 continue
             if tag == w("instrText"):
                 if self._fields and self._fields[-1]["code_mode"]:
@@ -493,7 +541,12 @@ class Reader:
                         self.style_hidden.append((para.src, txt))
                 continue
             if tag == w("t"):
-                self._add_text(para, ch.text or "", fmt, h)
+                text, replaced = w_t_text(ch)
+                if replaced or any(is_pua(c) for c in text):
+                    font = run_font(ch.getparent(), keep_case=True)
+                    self._note_symbols(para.src, "text", font, [(FONT_DISPLAY.get(font.lower(), font), o, n) for o, n in replaced],
+                                       text)
+                self._add_text(para, text, fmt, h)
             elif tag in (w("tab"), w("ptab")):
                 self._add_text(para, "\t", fmt, h)
             elif tag == w("br"):
@@ -506,7 +559,15 @@ class Reader:
             elif tag == w("softHyphen"):
                 self._add_text(para, "\u00ad", fmt, h)
             elif tag == w("sym"):
-                self._add_text(para, sym_char(ch), fmt, h)
+                text = sym_char(ch)
+                font = (ch.get(w("font")) or "").strip()
+                n = sym_code(ch)
+                if n is not None and (symbol_char(font, n) or is_pua(text)):
+                    code = chr(0xF000 + (n & 0xFF)) if n < 0x100 else chr(n)
+                    new = symbol_char(font, n)
+                    self._note_symbols(para.src, "sym", font, [(FONT_DISPLAY.get(font.lower(), font), code, new)] if new else [],
+                                       text)
+                self._add_text(para, text, fmt, h)
             elif tag == w("ruby"):
                 base = ch.find(w("rubyBase"))
                 rt = ch.find(w("rt"))
@@ -976,7 +1037,7 @@ def _plain_of_run_child(ch) -> str:
     """隠し文字のランの子の文字（レポートの 6 章の隠し文字の一覧に載せる。文字ポリシーの「含める」もの）。"""
     tag = ch.tag
     if tag == w("t"):
-        return ch.text or ""
+        return w_t_text(ch)[0]
     if tag in (w("tab"), w("ptab")):
         return "\t"
     if tag == w("br"):

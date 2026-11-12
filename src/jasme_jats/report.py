@@ -19,6 +19,7 @@ from .docx_reader import table_where
 from .linker import body_paragraphs, linked_ids
 from .images import crop_text
 from .model import note_key, note_label
+from .ooxml import FIELD_DRAWN
 from .package import article_dir
 from .pdfmatch import (DISPLACED_WHY, EDGE_WHY, FORMULA_MARK, HEAD_WHY, LINE_MARK, LONG_WHY, MATH_WHY, RE_PAGE_NO, TYPESET_KINDS,
                        UNSURE_WHY, WHOLE_WHY, diff_parts, typeset_pair)
@@ -1403,6 +1404,153 @@ def lost_autonum_action(r):
              + "\n".join(f"  {ln.src}: 「{ln.number}」…" for ln in lost)))
 
 
+SYMBOL_KIND_JA = {"bullet": "箇条書きの記号", "sym": "本文の記号", "text": "本文の記号"}
+SYMBOL_SAMPLES = 5      # 記号の置き換えの要確認に並べる段落の数（全件はレポートの 8 章）
+SYMBOL_CONTEXT = 10     # 本文の記号の抜粋の、記号の前後の文字数
+
+# 箇条書きの記号は、Word の箇条書きの設定が付ける記号で、本文の文字ではないので、打ち直せない（設定で選び直す）
+BULLET_HOW = ("Word で、その箇条書きを選び、［ホーム］の箇条書きの▼にある［新しい行頭文字の定義］で、普通の記号に選び直してください")
+BODY_HOW = "Word でその記号を普通の文字（［挿入］の［記号と特殊文字］から Unicode の記号）に打ち直してください"
+
+
+def _para_ref(plan, src, mark: str = "") -> str:
+    """要確認・要対応に並べる段落の指し方: 段落の ID（場所）「文字の抜粋」。場所は plan.locations（ほかの知らせと同じ）。
+    mark があれば、段落の文字の中のその文字の前後の抜粋（なければ冒頭）。"""
+    place = plan.locations.get(src, "") if plan is not None and getattr(plan, "locations", None) else ""
+    para = plan.paras.get(src) if plan is not None and getattr(plan, "paras", None) else None
+    text = para.plain() if para is not None else ""
+    if text.strip():
+        i = text.find(mark) if mark else -1
+        if i >= 0:
+            n = SYMBOL_CONTEXT
+            text = ("…" if i > n else "") + text[max(0, i - n):i + len(mark) + n] + ("…" if len(text) > i + len(mark) + n else "")
+        else:
+            text = esc(text.strip(), 15)
+    return f"{src}{'（' + esc(place) + '）' if place else ''}" + (f"「{esc(text)}」" if text.strip() else "")
+
+
+def symbol_groups(r) -> list:
+    """記号フォントの記号の置き換え（Result.symbols_replaced）のうち、要確認で知らせるもの（SymbolReplaced.known でない。0.31.1 までは
+    置き換えていなかったもの）を、種類（箇条書きの記号・本文の記号）・フォント・置き換えた文字ごとにまとめたもの
+    [(種類, フォント, 置き換えた文字, 個数, [段落の ID])]（文書の順。段落の ID は重ねない）。"""
+    groups = {}
+    for s in getattr(r, "symbols_replaced", None) or []:
+        if s.known:
+            continue
+        kind = SYMBOL_KIND_JA[s.kind]
+        g = groups.setdefault((kind, s.font, s.to), [0, []])
+        g[0] += 1
+        if s.src not in g[1]:
+            g[1].append(s.src)
+    return [(k, f, to, n, srcs) for (k, f, to), (n, srcs) in groups.items()]
+
+
+def _symbol_line(g, plan=None, with_paras=True) -> str:
+    kind, font, to, n, srcs = g
+    paras = ""
+    if with_paras and kind != SYMBOL_KIND_JA["bullet"]:
+        paras = "。段落 " + "・".join(_para_ref(plan, x, to) for x in srcs[:SYMBOL_SAMPLES]) + ("ほか" if len(srcs) > SYMBOL_SAMPLES else "")
+    return f"{kind}（{font}）を「{to}」に置き換えました（{n} か所{paras}）"
+
+
+def _symbol_action(r):
+    """記号フォント（Symbol・Wingdings 系）の私用領域の符号を、対応する普通の Unicode の文字に置き換えたもの（pipeline.symbols_replaced）。
+    なければ None。置き換えた記号が正しいかは機械では確かめられないので、要確認として 1 件にまとめて知らせる（PDF を指定した変換では
+    出版版 PDF の記号と、指定していない変換では Word の表示と、同じか確かめてもらう）。"""
+    groups = symbol_groups(r)
+    if not groups:
+        return None
+    n = sum(g[3] for g in groups)
+    plan = getattr(r, "plan", None)
+    ref = "出版版 PDF の記号" if getattr(r, "has_pdf", False) else "Word の表示"
+    fixes = []
+    if any(g[0] == SYMBOL_KIND_JA["bullet"] for g in groups):
+        fixes.append(f"箇条書きの記号なら、{BULLET_HOW}")
+    if any(g[0] != SYMBOL_KIND_JA["bullet"] for g in groups):
+        fixes.append(f"本文の記号なら、{BODY_HOW}")
+    how = f"置き換えた記号が、{ref}と同じか確かめてください。違っていれば、" + "。".join(fixes) + "。そのうえで変換し直してください"
+    lines = [_symbol_line(g, plan) for g in groups]
+    return Action(
+        TO_CHECK, "symbol_replaced",
+        top="\n".join([f"> **要確認: 記号フォント（Wingdings・Symbol など）の記号を、対応する普通の文字に置き換えました（{n} か所。8 章）。** "
+                        f"{how}。", ">"] + [f"> - {esc(x)}" for x in lines]),
+        checklist=f"- [ ] **記号フォントの記号を普通の文字に置き換えたもの {n} か所**（8 章）: {ref}と同じか確かめる",
+        box_title=f"記号フォントの記号を普通の文字に置き換えました（{n} か所。要確認）",
+        box_detail=(f"{how}（Word で直した docx を{step('docx')}でアップロードし直し、そこから順にやり直す。"
+                    "レポートの冒頭と 8 章）。\n" + "\n".join(f"・{x}" for x in lines)),
+        cli=(f"要確認: 記号フォントの記号を普通の文字に置き換えた（{n} か所。レポートの冒頭と 8 章）。{how}。\n"
+             + "\n".join(f"  {x}" for x in lines)))
+
+
+PUA_KIND_JA = {True: "箇条書きの記号", False: "本文の文字"}
+PUA_SAMPLES = 5         # 読めない文字の要対応に並べる段落の数（全件はレポートの 8 章）
+
+
+def pua_groups(r) -> list:
+    """XML に残った私用領域の文字（Result.pua_chars）を、種類（箇条書きの記号か本文の文字か）・フォント・符号ごとにまとめたもの
+    [(箇条書きの記号か, フォント, 符号, 個数, [PuaChar])]（文書の順）。"""
+    groups = {}
+    for pc in getattr(r, "pua_chars", None) or []:
+        g = groups.setdefault((bool(pc.generated), pc.font or "", pc.code), [0, []])
+        g[0] += pc.count
+        g[1].append(pc)
+    return [(k[0], k[1], k[2], v[0], v[1]) for k, v in groups.items()]
+
+
+def pua_label(g, plan=None) -> str:
+    """XML に残った私用領域の文字 1 グループ（pua_groups）の 1 行。例: 箇条書きの記号（Wingdings の U+F0B1）が 12 か所残っています。
+    段落 d95（本文 > 3．方法）「番号付きの質問」・…ほか"""
+    gen, font, code, n, pcs = g
+    kind = PUA_KIND_JA[gen]
+    head = f"{kind}（{font or 'フォント不明'}の U+{code:04X}）が {n} か所残っています"
+    refs, seen = [], set()
+    for pc in pcs:
+        if pc.src and pc.src not in seen:
+            seen.add(pc.src)
+            refs.append(pc)
+    if not refs:
+        return head + "（段落に結び付かない文字）"
+    shown = "・".join(_pua_ref(pc) for pc in refs[:PUA_SAMPLES])
+    return f"{head}。段落 {shown}" + (f"ほか {len(refs) - PUA_SAMPLES} 段落" if len(refs) > PUA_SAMPLES else "")
+
+
+def _pua_ref(pc) -> str:
+    place = f"（{esc(pc.location)}）" if pc.location else ""
+    return f"{pc.src}{place}" + (f"「{esc(pc.text)}」" if pc.text else "")
+
+
+PUA_WHY = ("私用領域の文字は J-STAGE の画面では読めない文字（豆腐）になります。Word の記号フォント（Wingdings など）で打たれた記号が、"
+           "この変換ツールの対応表にない記号のままです。")
+
+
+def pua_how(r) -> str:
+    """読めない文字（要対応 pua_left）の直し方。箇条書きの記号は Word の設定で選び直し、本文の文字は打ち直す。"""
+    kinds = {g[0] for g in pua_groups(r)}
+    fixes = ([f"箇条書きの記号は、{BULLET_HOW}"] if True in kinds else []) + ([f"本文の文字は、{BODY_HOW}"] if False in kinds else [])
+    return "。".join(fixes) + "。そのうえで変換し直してください"
+
+
+def _pua_left_action(r):
+    """最終の XML に残った私用領域の文字（pipeline.pua_chars）。なければ None。種類・フォント・符号ごとの件数でまとめる。"""
+    groups = pua_groups(r)
+    if not groups:
+        return None
+    n = sum(g[3] for g in groups)
+    plan = getattr(r, "plan", None)
+    how = pua_how(r)
+    lines = [pua_label(g, plan) for g in groups]
+    return Action(
+        NEEDS_ACTION, "pua_left",
+        top="\n".join([f"> **要対応: XML に、J-STAGE の画面で読めない文字（私用領域の文字）が {n} 個残っています（8 章）。** {PUA_WHY}"
+                        f"{how}。", ">"] + [f"> - {esc(x)}" for x in lines]),
+        checklist=f"- [ ] **XML に残った読めない文字（私用領域の文字）{n} 個**（8 章）: {how}",
+        box_title=f"XML に、読めない文字（私用領域の文字）が {n} 個残っています（要対応）",
+        box_detail=(f"{PUA_WHY}{how}（Word で直した docx を{step('docx')}でアップロードし直し、そこから順にやり直す。"
+                    "レポートの冒頭と 8 章）。\n" + "\n".join(f"・{x}" for x in lines)),
+        cli=(f"要対応: XML に読めない文字（私用領域の文字）が {n} 個残っている（レポートの冒頭と 8 章）。{how}。\n"
+             + "\n".join(f"  {x}" for x in lines)))
+
+
 def _image_crop_action(r):
     """Word でトリミングした画像を、表示される範囲に切り取って出力したもの（ImageResult.crop）。なければ None。"""
     imgs = [i for i in r.images if i.crop and i.status == "converted"]
@@ -1514,6 +1662,74 @@ def _style_hidden_action(r):
         box_detail=f"{head}。{how}（レポートの冒頭と 6 章）\n対象: {samples}",
         cli=(f"要確認: {head}（レポートの冒頭と 6 章）。Word で表示されないことを確かめ、表示されるものがあれば"
              "開発者に知らせること"))
+
+
+RESULTLESS_MARK = "［ここ］"     # 段落の文字の抜粋で、結果のないフィールドがある位置の印（レポートの表示だけ。XML には入れない）
+RESULTLESS_SEGMENTS = 3         # 要確認に並べる抜粋の数（1 段落あたり。全件はレポートの 6 章）
+RESULTLESS_LINES = 5            # 要確認に並べる段落の数（ほかは「ほか N 段落」。全件はレポートの 6 章）
+RESULTLESS_CONTEXT = 12         # 抜粋の、印の前後の文字数
+
+
+def _resultless_by_para(r) -> list:
+    """結果を持たないフィールドで Word では表示のあるもの（Result.resultless_fields）を段落ごとにまとめたもの [(段落 ID, [ResultlessField])]
+    （文書の順）。"""
+    per = {}
+    for f in getattr(r, "resultless_fields", None) or []:
+        per.setdefault(f.src, []).append(f)
+    return list(per.items())
+
+
+def _resultless_excerpt(f) -> str:
+    """段落の文字の抜粋。フィールドのある位置に印（RESULTLESS_MARK）を入れる（どこが抜けているかが分かるように）。"""
+    n = RESULTLESS_CONTEXT
+    head = f.text[max(0, f.pos - n):f.pos]
+    tail = f.text[f.pos:f.pos + n]
+    return esc(("…" if f.pos > n else "") + head + RESULTLESS_MARK + tail + ("…" if len(f.text) > f.pos + n else ""))
+
+
+def _resultless_line(src, fs, plan=None) -> str:
+    """1 段落ぶんの 1 行: 段落の ID（と場所）、種類、個数、抜粋。"""
+    place = plan.locations.get(src, "") if plan is not None and getattr(plan, "locations", None) else ""
+    kinds = []
+    for f in fs:
+        label = FIELD_DRAWN[f.kind] if f.kind in FIELD_DRAWN else f.kind
+        if label not in kinds:
+            kinds.append(label)
+    excerpts = " ／ ".join(_resultless_excerpt(f) for f in fs[:RESULTLESS_SEGMENTS]) + (" ／ ほか" if len(fs) > RESULTLESS_SEGMENTS else "")
+    return f"{src}{'（' + esc(place) + '）' if place else ''}: {'・'.join(kinds)} {len(fs)} か所「{excerpts}」"
+
+
+def _resultless_field_action(r):
+    """結果を持たないまま終わるフィールドのうち、Word では表示のあるもの（EQ の囲い文字・分数・ルビ、SYMBOL、フォームのチェックボックスなど。
+    docx_reader が記録する）。なければ None。
+
+    表示は Word がフィールドコードから描くもので docx の文字ではないので、XML には出ない（読み取りも検証も同じに捨てるため、不変性チェック
+    は合格する）。囲い文字を合成して文字を作ることはしない（docx にない文字を作らない）。元の論文が特殊な作り方をしているときなので、要確認として
+    1 件にまとめて知らせ、取れる行動は「Word で普通の文字か数式に打ち直して変換し直す」の 1 つだけにする。"""
+    paras = _resultless_by_para(r)
+    if not paras:
+        return None
+    n = sum(len(fs) for _, fs in paras)
+    plan = getattr(r, "plan", None)
+    lines = [_resultless_line(src, fs, plan) for src, fs in paras[:RESULTLESS_LINES]]
+    if len(paras) > RESULTLESS_LINES:
+        lines.append(f"ほか {len(paras) - RESULTLESS_LINES} 段落（全件はレポートの 6 章）")
+    what = "Word では表示されるのに、XML に出せていないかもしれない文字（囲い文字など）があります"
+    why = ("Word のフィールドというしくみ（囲い文字・分数・根号・ルビなど）で描いている文字は、docx に文字として入っていないため、"
+           "XML には出ません。")
+    if getattr(r, "route", "docx") == "pdf":
+        why += "出版版 PDF で補った docx では、PDF から別の文字として補われていることがあります。"
+    how = ("XML のその位置に文字があるかを確かめ、なければ、Word で、その部分を普通の文字（③ など）か Word の数式に打ち直して、"
+           "変換し直してください。直さなければ、その文字は XML で抜けたままになります")
+    mark = f"対象（{RESULTLESS_MARK}は、文字のある位置の印です。レポートの表示だけで、XML には入りません）:"
+    return Action(
+        TO_CHECK, "resultless_field",
+        top="\n".join([f"> **要確認: {what}（{n} か所。6 章）。** {why}{how}。", ">", f"> {mark}"] + [f"> - {x}" for x in lines]),
+        checklist=f"- [ ] **Word では表示されるのに XML に出せていないかもしれない文字（囲い文字など）{n} か所**（6 章）: XML に文字があるか確かめ、なければ Word で普通の文字か数式に打ち直す",
+        box_title=f"Word では表示されるのに、XML に出せていないかもしれない文字があります（{n} か所。要確認）",
+        box_detail=(f"{why}{how}（Word で直した docx を{step('docx')}でアップロードし直し、そこから順にやり直す。"
+                    f"レポートの冒頭と 6 章）。\n{mark}\n" + "\n".join(f"・{x}" for x in lines)),
+        cli=(f"要確認: {what}（{n} か所。レポートの冒頭と 6 章）。{how}。\n{mark}\n" + "\n".join(f"  {x}" for x in lines)))
 
 
 def _abstract_ja_action(r):
@@ -2124,7 +2340,7 @@ def actions(r) -> list:
                            _upload_action, _ai_error_action, _ai_pending_action,
                            _partial_action, _forced_action, figure_body_action, _textbox_undecided_action,
                            _textbox_place_action, _textbox_figure_text_action, _unplaced_action, images_action,
-                           lost_action, lost_autonum_action, _abstract_missing_action, _image_crop_action, _image_edits_action, _style_hidden_action, _abstract_ja_action, _app_after_refs_action, _note_overlap_action, _float_ref_action,
+                           lost_action, lost_autonum_action, _pua_left_action, _abstract_missing_action, _image_crop_action, _image_edits_action, _style_hidden_action, _resultless_field_action, _symbol_action, _abstract_ja_action, _app_after_refs_action, _note_overlap_action, _float_ref_action,
                            _fn_guess_action, _name_split_action, _newline_action)]
     return [a for a in head if a is not None] + pdf_actions(r)
 
@@ -2342,6 +2558,12 @@ def render(r) -> str:
                  + ([f"画像 {'・'.join(r.style_hidden_images)}"] if r.style_hidden_images else []))
         other.append("上の隠し文字のうち、文字に直接付けた隠し文字ではなく、スタイル（段落スタイル・文字スタイル）や既定の書式の設定で"
                      "隠し文字になっているもの（Word の表示と同じかの判定は暫定。要確認）: " + "、".join(items))
+    if getattr(r, "resultless_fields", None):
+        items = [f"［{f.src}］{FIELD_DRAWN.get(f.kind, f.kind)}（Word のフィールドの中身: `{f.code.replace('`', '')[:40]}`）{_resultless_excerpt(f)}"
+                 for f in r.resultless_fields]
+        other.append("Word では表示されるが、XML に出せない文字（囲い文字・分数・ルビなど。Word が、フィールドというしくみで描いている文字で、"
+                     "docx に文字としては入っていません。出版版 PDF で補った docx では、PDF から別の文字として補われていることもあります。要確認。"
+                     f"段落の文字の抜粋の{RESULTLESS_MARK}が、その文字のある位置です）: " + "、".join(items))
     if r.tracked_changes:
         other.append(f"変更履歴が {r.tracked_changes} 箇所あります。挿入は反映し、削除は出力していません（Word で表示される最終版と同じ）。")
     if r.joined:
@@ -2411,6 +2633,26 @@ def render(r) -> str:
         L.append("")
         L.append(table(["段落", "場所", "Word の番号", "XML の要素", "段落の書き出し"],
                        [(ln.src, ln.location, ln.number, ln.where, ln.text) for ln in lost_nums]))
+        L.append("")
+    pua_left = getattr(r, "pua_chars", None) or []
+    if pua_left:
+        L.append("XML に残った私用領域（U+E000–U+F8FF）の文字（要対応。J-STAGE の画面で読めない文字になります）:")
+        L.append("")
+        L.append(table(["段落", "場所", "符号", "フォント", "種類", "XML の要素", "個数", "段落の書き出し"],
+                       [(pc.src or "（段落なし）", pc.location, f"U+{pc.code:04X}", pc.font or "不明",
+                         PUA_KIND_JA[bool(pc.generated)], pc.where, pc.count, pc.text)
+                        for pc in pua_left]))
+        L.append("")
+    sym_done = getattr(r, "symbols_replaced", None) or []
+    if sym_done:
+        L.append("記号フォント（Symbol・Wingdings 系）の私用領域の符号を、対応する普通の文字に置き換えた記号（全件）。置き換えは表に載っている"
+                 "確かな対応だけです。箇条書きの記号は Word の箇条書きの設定が付ける記号、本文の記号は本文に入れた記号です。「要確認」のものは、"
+                 "出版版 PDF（なければ Word の表示）の記号と同じか確かめてください。「従来どおり」は、よく使う記号（Wingdings の●・➢・▪・✓・❖、Symbol の箇条書きの記号と矢印・ギリシャ文字などの記号。Symbol の数字・€・®・©・™ は含みません）で、"
+                 "以前の版から同じ文字にしていて実際の原稿で確かめ済みなので、冒頭では知らせません:")
+        L.append("")
+        L.append(table(["段落", "場所", "種類", "フォント", "元の符号", "置き換えた文字", "知らせ"],
+                       [(sy.src, plan.locations.get(sy.src, ""), SYMBOL_KIND_JA[sy.kind], sy.font or "不明", f"U+{sy.code:04X}", sy.to,
+                         "従来どおり" if sy.known else "要確認") for sy in sym_done]))
         L.append("")
     note_rows = word_note_rows(r)
     if note_rows:

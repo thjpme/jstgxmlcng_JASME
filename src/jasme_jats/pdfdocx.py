@@ -48,8 +48,8 @@ from pathlib import Path
 from lxml import etree
 
 from .model import OBJ
-from .ooxml import (BR_TEXT_TYPES, MC_NS, M_NS, NO_RULE, HiddenRule, joined_paragraphs, paragraph_ids,
-                    paragraph_mark_deleted, parse_xml, preprocess, sym_char, w)
+from .ooxml import (BR_TEXT_TYPES, MC_NS, M_NS, NO_RULE, HiddenRule, choose_alternate, joined_paragraphs,
+                    paragraph_ids, paragraph_mark_deleted, parse_xml, preprocess, sym_char, w, w_t_text)
 
 XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
 # 書き込む変更履歴の作成者名（組版の違いと校正の直しで分けない。利用者の判断、2026-11）。ルート2 の補完の確かめ（fidelity）も、
@@ -287,10 +287,11 @@ def raw_paragraph_ids(root, prefix: str) -> dict:
 
 
 def _dropped_by_preprocess(el) -> bool:
+    """前処理（ooxml.preprocess）が捨てる側（mc:AlternateContent の採らない Choice・Fallback）の中にあるか。"""
     for a in el.iterancestors():
-        if a.tag == f"{{{MC_NS}}}Fallback":
+        if a.tag in (f"{{{MC_NS}}}Choice", f"{{{MC_NS}}}Fallback"):
             ac = a.getparent()
-            if ac is not None and ac.find(f"{{{MC_NS}}}Choice") is not None:
+            if ac is not None and ac.tag == f"{{{MC_NS}}}AlternateContent" and choose_alternate(ac) is not a:
                 return True
     return False
 
@@ -313,7 +314,8 @@ def paragraph_units(p, hidden=None) -> list:
 
     直せるのは w:t の文字と、Word の改行なしハイフン（w:noBreakHyphen。要素そのものと位置 0。要素ごと変更履歴の削除にして、
     PDF の「-」を足せる）だけ（タブ・改行・記号・フィールドの結果・数式・脚注番号などは None）。
-    図形・ルビを含む段落は _Complex。hidden は隠し文字の判定（ooxml.HiddenRule。None なら NO_RULE）。段落記号の削除による
+    図形・ルビを含む段落は _Complex（ランの中の mc:AlternateContent は、前処理が採る側の中身を読む。w:t の文字は直せない単位、
+    図形は読まない〈今までどおり。図形の文字は別の段落〉）。hidden は隠し文字の判定（ooxml.HiddenRule。None なら NO_RULE）。段落記号の削除による
     つながりは見ない（write_fixed_docx が、連鎖の段落ごとの単位を連結する）。
     """
     out = []
@@ -352,8 +354,20 @@ def paragraph_units(p, hidden=None) -> list:
             elif len(ch):
                 walk(ch, deleted, hidden)
 
-    def run(r, deleted, hidden):
+    def run_children(r):
+        """ランの子。mc:AlternateContent は、前処理（ooxml.preprocess）が採る側の子に置き換える（採らない側は読まない）。
+        採る側の子は (子, True) で返す（Fallback の w:t だけを直しても、Word は採らない Choice〈記号の挿入の w16se:symEx など〉
+        を表示するので、直さない）。"""
         for ch in r:
+            if ch.tag == f"{{{MC_NS}}}AlternateContent":
+                chosen = choose_alternate(ch)
+                for c in (chosen if chosen is not None else ()):
+                    yield c, True
+            else:
+                yield ch, False
+
+    def run(r, deleted, hidden):
+        for ch, alt in run_children(r):
             tag = ch.tag
             if not isinstance(tag, str):
                 continue
@@ -375,15 +389,21 @@ def paragraph_units(p, hidden=None) -> list:
             if tag in (w("footnoteRef"), w("endnoteRef")):
                 out.append((OBJ, None, 0))
                 continue
+            if alt and tag in (w("drawing"), w("pict"), w("object"), w("ruby")):
+                continue        # 代替内容の図形（テキストボックスなど）の文字は別の段落。この段落の文字には入らない
             if tag in (w("drawing"), w("pict"), w("object")) and deleted:
                 continue        # 削除の変更履歴の中の図形は、承諾すると消える（読み取りも読まない）
             if tag in (w("drawing"), w("pict"), w("object"), w("ruby")):
                 raise _Complex
             if deleted or in_code() or hidden:
                 continue
-            editable = not fields       # フィールドの結果の文字は直さない（フィールドを更新すると戻るため）
+            # フィールドの結果の文字と、mc:AlternateContent の中の文字は直さない
+            # （フィールドを更新すると戻る。代替内容は、採る側を直しても Word が別の側を表示するかもしれない）
+            editable = not fields and not alt
             if tag == w("t"):
-                out.extend((c, ch if editable else None, k) for k, c in enumerate(ch.text or ""))
+                # 記号フォントのランの w:t の私用領域の文字は、Unicode にした文字を読む（ooxml.w_t_text。1 文字が 1 文字なので、
+                # 文字の位置 k は元の w:t のまま）。この文字を直す (A)(B) の直しは、直した文字で置き換える
+                out.extend((c, ch if editable else None, k) for k, c in enumerate(w_t_text(ch, r)[0]))
             elif tag in (w("tab"), w("ptab")):
                 out.append(("\t", None, 0))
             elif tag == w("br"):

@@ -15,7 +15,9 @@
   8. J-STAGE 指定 DTD で検証する（validate）
   9. docx の画像のうち XML に出力しなかったもの（画像を置けない場所・出力しなかった段落の中の画像）を調べる（lost_images）。
      あわせて、出力した表の形（行ごとの列の数・セルの重なり・縦の結合の範囲・セルのない行）を調べる（table_problems）。
-     Word の自動番号のある段落で、文字を出したのに番号を出していないものも調べる（lost_autonums）
+     Word の自動番号のある段落で、文字を出したのに番号を出していないものも調べる（lost_autonums）。
+     最終の XML に私用領域の文字（読めない文字）が残っていないかも調べ（pua_chars）、記号フォントの符号を普通の文字に置き換えた
+     記号を集める（symbols_replaced）
  10. J-STAGE のアップロード時のチェックのうち XML だけで判定できるものを再現する（jstage_rules。画像の名前を使うので、
      11 の画像の書き出しの後、ZIP を作る前に、出力した画像の名前で行う）
  11. 画像の書き出し、J-STAGE のフォルダ構成と ZIP（今回の XML・PDF・出力できた画像だけを入れ、読み直して確かめる）、
@@ -50,7 +52,7 @@ from .fidelity import SupplementResult, final_check, supplement_targets, verify,
 from .images import ImageResult, export_images, user_image
 from .jstage_rules import check as jstage_check
 from .linker import cited_refs, link
-from .model import Decision, LostImage, LostNumber, TableProblem
+from .model import Decision, LostImage, LostNumber, PuaChar, TableProblem
 from .package import article_dir, make_zip, unzipped_files, write_package, zip_image_names, zip_problems
 from .pdfdocx import DocxFix, make_fixed_docx, same_file
 from .pdfmatch import PdfCheck, check_pdf
@@ -58,6 +60,7 @@ from .report import (BOX_PENDING_NOTE, NEEDS_ACTION, actions, figure_body_detail
                      render_ai_only, step, structure_conflict_text)
 from .report import pdf_fallback as report_pdf_fallback
 from .structure import classify, conflict_overrides, float_caption, float_targets
+from .ooxml import is_pua
 from .tracking import GEN, SPAN
 from .validate import validate
 
@@ -198,6 +201,8 @@ class Result:
     pdf_check: Optional[PdfCheck] = None                # 出版版 PDF との照合（PDF がなければ None）。ルート2 では補った docx との照合
     lost_images: list = field(default_factory=list)     # docx にあるのに XML に出力しなかった画像（LostImage。要対応）
     lost_autonums: list = field(default_factory=list)   # Word の自動番号があるのに XML に番号を出さなかった段落（model.LostNumber。要対応）
+    pua_chars: list = field(default_factory=list)       # 最終の XML に残った私用領域の文字（model.PuaChar。要対応 pua_left）
+    symbols_replaced: list = field(default_factory=list)  # 記号フォントの私用領域の符号を置き換えた記号（model.SymbolReplaced。要確認 symbol_replaced。8 章）
     unshown_numbers: list = field(default_factory=list)  # 番号を出さなかった題目・副題・著者名・所属の段落（BuildInfo.unshown_numbers。10 章）
     table_problems: list = field(default_factory=list)  # 出力した XML の表の形の崩れ（TableProblem。要対応 table_shape）
     tables_checked: int = 0                             # 形を確かめた表の数（12 章。すべての行が削除された空の表は数えない）
@@ -206,6 +211,7 @@ class Result:
     hidden_images: list = field(default_factory=list)   # 隠し文字の中の画像の ID（Word で表示されないので出力しない）
     # 隠し文字のうち、スタイル・既定の書式の設定で隠した文字 [(src, text)] と画像の ID（規則が暫定なので要確認。6 章）
     style_hidden: list = field(default_factory=list)
+    resultless_fields: list = field(default_factory=list)   # 結果を持たないフィールドで、Word では表示のあるもの（model.ResultlessField。要確認 resultless_field。6 章）
     style_hidden_images: list = field(default_factory=list)
     joined: list = field(default_factory=list)          # 段落記号の削除でつないだ段落 [(最初の段落の ID, [段落の ID, …])]（6 章）
     deleted_rows: list = field(default_factory=list)    # 変更履歴で削除された、文字のない表の行（model.DeletedRow。読み飛ばした。6 章）
@@ -424,6 +430,57 @@ def lost_autonums(plan, root, info) -> list:
         out.append(LostNumber(src, number, _place(plan, src), parent.tag if parent is not None else "",
                               p.text_only().strip()[:20]))
     return out
+
+
+def pua_chars(plan, root, doc) -> list:
+    """最終の XML に残った私用領域（U+E000–U+F8FF）の文字（model.PuaChar）。J-STAGE の画面では読めない文字（豆腐）になる。
+
+    読み取りの置き換え（ooxml の記号の表）や builder の判断には頼らず、組み立ての XML（最終の XML と文字が同じ。目印が残っているもの）
+    の文字・属性の値だけを見る。docx の文字（jx:span の中）か Word が付けた生成文字（jx:gen の中。箇条書きの記号・番号）かは目印で、
+    フォントは読み取りの記録（doc.symbols。分かるときだけ）で添える。同じ段落・同じ符号・同じ種類は 1 件にまとめる。"""
+    fonts = {(s.src, s.code): s.font for s in doc.symbols if not s.to}
+    found = {}      # (段落の ID, 符号, 生成文字か, 要素) -> 個数（出現順）
+
+    def note(el, text, owner):
+        for c in text or "":
+            if is_pua(c):
+                src = owner.get("src") or "" if owner is not None else ""
+                where = el.getparent().tag if el.tag in (GEN, SPAN) and el.getparent() is not None else el.tag
+                key = (src, ord(c), owner is not None and owner.tag == GEN, where if isinstance(where, str) else "")
+                found[key] = found.get(key, 0) + 1
+
+    def walk(el, owner):
+        if not isinstance(el.tag, str):
+            return
+        if el.tag in (GEN, SPAN):
+            owner = el
+        note(el, el.text, owner)
+        for v in el.attrib.values():
+            note(el, v, None)
+        for ch in el:
+            walk(ch, owner)
+            note(el, ch.tail, owner)
+
+    walk(root, None)
+    out = []
+    for (src, code, gen, where), n in found.items():
+        p = plan.paras.get(src)
+        out.append(PuaChar(src=src, code=code, generated=gen, font=fonts.get((src, code), ""), where=where.rsplit("}", 1)[-1], count=n,
+                           location=_place(plan, src) if src else "", text=p.text_only().strip()[:20] if p is not None else ""))
+    return out
+
+
+def symbols_replaced(plan, root, doc) -> list:
+    """記号フォントの私用領域の符号を Unicode の文字に置き換えたもの（model.SymbolReplaced。置き換えたものだけ）のうち、XML に
+    出力したもの。箇条書きの記号は、XML に生成文字（jx:gen kind autonum、src が段落）として出し、その中に置き換えた文字があるもの
+    （ルート2 で番号を PDF の字形に合わせたときは、置き換えた文字が残らないので除く）、w:sym・w:t の記号は、段落の文字を XML に出した
+    （jx:span がある）もの。文書の順。"""
+    spans = {sp.get("src") for sp in root.iter(SPAN)}
+    gens = {}
+    for g in root.iter(GEN):
+        if g.get("kind") == "autonum":
+            gens[g.get("src")] = gens.get(g.get("src"), "") + (g.text or "")
+    return [s for s in doc.symbols if s.to and (s.to in gens.get(s.src, "") if s.kind == "bullet" else s.src in spans)]
 
 
 def table_problems(root, info) -> tuple:
@@ -665,6 +722,9 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     table_issues, tables_checked = table_problems(root, info)
     # 自動番号の出力漏れ（番号は docx の文字ではないので、不変性チェックは見ない）
     lost_numbers = lost_autonums(plan, root, info)
+    # 私用領域の文字の守り（最終の XML に読めない文字が残っていないか）と、記号フォントの符号の置き換えの記録
+    pua_left = pua_chars(plan, root, doc)
+    symbols = symbols_replaced(plan, root, doc)
 
     # ---------------------------------------------------------------- 出力
     adir = article_dir(out_dir, journal, meta)
@@ -749,10 +809,10 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         comments=doc.comments, has_pdf=has_pdf, output_note=output_note, xml_path=flat_xml, zip_path=zip_path,
         prompt_path=prompt_path, forced_floats=forced_floats, pdf_check=pdf_check, route=opts.route, docx_fix=docx_fix,
         supplement=supplement, lost_images=lost, hidden_images=hidden_images,
-        lost_autonums=lost_numbers, unshown_numbers=list(info.unshown_numbers),
+        lost_autonums=lost_numbers, unshown_numbers=list(info.unshown_numbers), pua_chars=pua_left, symbols_replaced=symbols,
         table_problems=table_issues, tables_checked=tables_checked, zip_issues=zip_problems(zip_path, journal, meta),
         not_zipped=unzipped_files(out_dir, journal, meta, zip_path), joined=doc.joined, deleted_rows=doc.deleted_rows,
-        newlines=info.newlines, name_splits=list(info.name_splits), style_hidden=doc.style_hidden,
+        newlines=info.newlines, name_splits=list(info.name_splits), style_hidden=doc.style_hidden, resultless_fields=doc.resultless_fields,
         style_hidden_images=[img.image_id for img in doc.images if img.hidden_style])
     report_path = out_dir / f"{aid}_変換レポート.md"
     report_path.write_text(render(res), encoding="utf-8")

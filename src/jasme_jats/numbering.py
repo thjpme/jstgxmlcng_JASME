@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from .ooxml import w, wval
+from .ooxml import FONT_DISPLAY, LEGACY_BULLETS, SYMBOL_TABLES, map_symbol_text, w, wval
 
 _CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
 _PAREN = "⑴⑵⑶⑷⑸⑹⑺⑻⑼⑽⑾⑿⒀⒁⒂⒃⒄⒅⒆⒇"
@@ -82,15 +82,28 @@ def format_number(n: int, fmt: str) -> str:
 DEFAULT_LEVEL = {"start": 1, "fmt": "decimal", "text": ""}
 
 
+def _lvl_font(lvl):
+    """段の番号・記号の書式（w:lvl/w:rPr/w:rFonts）のフォント名（ascii か hAnsi）。なければ None。"""
+    rf = lvl.find(f"{w('rPr')}/{w('rFonts')}")
+    if rf is None:
+        return None
+    return (rf.get(w("ascii")) or rf.get(w("hAnsi")) or "").strip()
+
+
 def _level(lvl) -> dict:
-    """abstractNum の段の定義（w:lvl）。子要素がなければ既定値（DEFAULT_LEVEL と同じ）。"""
-    return {"start": int(wval(lvl.find(w("start")), "1") or 1),
-            "fmt": wval(lvl.find(w("numFmt")), "decimal"),
-            "text": wval(lvl.find(w("lvlText")), "")}
+    """abstractNum の段の定義（w:lvl）。子要素がなければ既定値（DEFAULT_LEVEL と同じ）。番号の書式のフォント（w:rPr/w:rFonts）が
+    書かれていれば "font" も入る（箇条書きの記号の表を決める）。"""
+    out = {"start": int(wval(lvl.find(w("start")), "1") or 1),
+           "fmt": wval(lvl.find(w("numFmt")), "decimal"),
+           "text": wval(lvl.find(w("lvlText")), "")}
+    font = _lvl_font(lvl)
+    if font:
+        out["font"] = font
+    return out
 
 
 def _level_present(lvl) -> dict:
-    """num の w:lvlOverride/w:lvl の、書かれている子要素（start・numFmt・lvlText）だけの dict。"""
+    """num の w:lvlOverride/w:lvl の、書かれている子要素（start・numFmt・lvlText・番号の書式のフォント）だけの dict。"""
     out = {}
     el = lvl.find(w("start"))
     if el is not None:
@@ -101,10 +114,30 @@ def _level_present(lvl) -> dict:
     el = lvl.find(w("lvlText"))
     if el is not None:
         out["text"] = wval(el, "")
+    font = _lvl_font(lvl)
+    if font is not None:
+        out["font"] = font
     return out
 
 
-_BULLET_MAP = {"\uf0b7": "•", "\uf0a7": "▪", "\uf076": "❖", "\uf0d8": "➢", "\uf0fc": "✓", "\uf06c": "●", "o": "o"}
+def bullet_text(font: str, text: str):
+    """箇条書きの記号 text（w:lvlText）を、表示される文字にする。戻り値: (文字, [(フォントの名前, 元の文字, 置き換えた文字)])。
+
+    段の書式のフォントが記号フォント（Symbol・Wingdings 系。ooxml.SYMBOL_TABLES）なら、そのフォントの表（ooxml.symbol_char と同じ）で
+    私用領域の符号を Unicode にする。フォントが記号フォントでない（指定がない・Arial など）ときは、古い対応（ooxml.LEGACY_BULLETS。
+    よく使う 6 つの符号。フォントを見ずに置き換える）にする。表にない符号はそのまま（私用領域の文字が残れば守りが知らせる）。
+    """
+    if SYMBOL_TABLES.get((font or "").strip().lower()) is not None:
+        new, pairs = map_symbol_text(font, text)
+        name = FONT_DISPLAY[font.strip().lower()]
+        return new, [(name, old, to) for old, to in pairs]
+    out, rep = [], []
+    for c in text:
+        to = LEGACY_BULLETS.get(c)
+        out.append(to or c)
+        if to:
+            rep.append(((font or "").strip(), c, to))
+    return "".join(out), rep
 
 
 class Numbering:
@@ -117,6 +150,9 @@ class Numbering:
         # 数えの初期値と、上位の段が未出現のときの %n の値に使う。次の振り直しまで残る）
         self._started = set()  # 最初の段落を数えた（w:startOverride を適用した）numId
         self.lvl_overrides = {}  # numId -> {ilvl: 書かれた子要素だけの段の定義}
+        # 直前の label が、箇条書きの記号を置き換えたもの [(フォントの名前, 元の文字, 置き換えた文字)]（docx_reader が記録する）
+        self.replaced = []
+        self.font = ""      # 直前の label の段の書式のフォント名（箇条書きのとき。書かれたまま）
         if root is None:
             return
         for an in root.findall(w("abstractNum")):
@@ -205,6 +241,8 @@ class Numbering:
         最初に使った段落で、その段（と深い段）を振り直す（数えを消し、開始番号を `restarts` に置く。浅い段から処理する）だけで、後で元の num に戻った段落は、
         振り直した後の続きになる。上位の段が未出現のときの %n は、`restarts` の開始番号（なければ段の start）。
         """
+        self.replaced = []
+        self.font = ""
         if num_id in (None, "0") or num_id not in self.nums:
             return ""
         levels = self._levels(num_id)
@@ -228,8 +266,9 @@ class Numbering:
             del cnt[deeper]
         lv = levels[ilvl]
         if lv["fmt"] == "bullet":
-            t = lv["text"]
-            return "".join(_BULLET_MAP.get(c, c) for c in t)
+            self.font = lv.get("font", "")
+            shown, self.replaced = bullet_text(self.font, lv["text"])
+            return shown
         text = lv["text"]
         for k in range(9):
             token = f"%{k + 1}"

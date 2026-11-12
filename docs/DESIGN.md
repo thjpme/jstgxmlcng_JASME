@@ -134,8 +134,24 @@ AI を呼ぶ前に確かめる（API の費用をかけず、手動モードで�
 実装で行う（規則を共有するので、規則そのものの誤りは不変性チェックでは見つからない。規則は `tests/test_reader.py` の単体テストで確かめ、
 LibreOffice で変更を承諾・表示した結果と比べた。LibreOffice と違う形は 7 章）。
 
-- 含める: `w:t`、数式中の `m:t`、タブ（`w:tab`・`w:ptab` → タブ文字）、改行（`w:br`, `w:cr` → 改行文字）、`w:noBreakHyphen`、`w:softHyphen`、`w:sym`（Symbol フォントは Unicode に対応付け）
-- 含めない: 削除された変更履歴（`w:del`・`w:moveFrom`）、フィールドコード、隠し文字、ページ区切り、ルビの読み、テキストボックス内の段落（別の段落として扱う。
+- 含める: `w:t`、数式中の `m:t`、タブ（`w:tab`・`w:ptab` → タブ文字）、改行（`w:br`, `w:cr` → 改行文字）、`w:noBreakHyphen`、`w:softHyphen`、`w:sym`（記号フォント〈Symbol・Wingdings・Wingdings 2・3〉は Unicode に対応付け）、記号フォントのランの `w:t` にある私用領域の文字（下の「記号フォントの記号」）
+- 記号フォントの記号（C011。`ooxml.SYMBOL_TABLES`・`symbol_char()`・`map_symbol_text()`・`w_t_text()`。読み取り・検証・ルート2 が共有）: Word は Symbol・Wingdings 系の
+  フォントの記号を、私用領域の符号（U+F020–F0FF。下位 1 バイトが字の番号）で持つ。J-STAGE の画面では読めない文字（豆腐）になるので、フォントごとの表で普通の
+  Unicode の文字にする。表は「Unicode に同じ意味の文字があるもの」だけの確かな対応で、あいまいなものは入れない（Wingdings の公式の対応は Unicode 7.0 以降の
+  新しい記号が多く、画面のフォントにない恐れがあるので、同じ形・意味の古くからある文字〈●■□・○➢➔✗☒☑ など〉にした。公式の文字と形が違うもの〈Wingdings の 0xB2 は公式が ✧ とは別の U+2BCE〉は表から外した）。出どころは、Symbol が Unicode Consortium の Symbol.txt、Wingdings・Wingdings 2・3 が Unicode Consortium の対応（L2/11-344 と Unicode 7.0 での符号化）で、全項目を突き合わせ済み（各表の直前のコメントに、公式と同じもの・古い文字にしたものの一覧がある）。フォントを取り違えない（Wingdings の符号を Symbol
+  の表で読まない）。w:sym は `w:font` の表で、`w:t` は **ランの直接の書式の rFonts（ascii か hAnsi）が記号フォントのときだけ**、その中の私用領域の文字
+  （F020–F0FF）を同じ表で置き換える（1 文字が 1 文字なので文字の位置は変わらない。ルート2 の直す単位の位置もそのまま。直さない文字は docx のまま残る）。
+  スタイル（文字スタイル・段落スタイル）で指定されたフォントは見ない。記号フォントでないフォントの私用領域の文字・表にない符号・記号フォントの ASCII
+  （Symbol フォントで打った「a」が α に見える形。私用領域ではないので別の問題）は置き換えない。置き換えたことは要確認 `symbol_replaced`、表にない私用領域の文字が
+  最終の XML に残ったことは要対応 `pua_left`（4.3）で知らせる
+- `mc:AlternateContent`（`ooxml.choose_alternate()`。前処理 `preprocess()` で採る側の中身に置き換える。読み取り・検証・ルート2 が共有）: MCE の規則どおり、
+  `mc:Choice` の `Requires` の接頭辞を名前空間に解決し、すべてが読める名前空間（`UNDERSTOOD_NS`。実際の原稿で確かめた wps・wpg・wpc と、
+  wpi・w14・wp14・a14）である最初の Choice を採り、なければ `mc:Fallback` を採る（Fallback がなければ最初の Choice。Word は読めても本ツールが知らない
+  名前空間かもしれないので、文字を落とさない側に倒す）。テキストボックス・図形（wps・wpg の Choice）は今までどおり Choice を採り、記号の挿入
+  （Word 2016 以降。丸数字など。`w16se:symEx`）は Fallback の `w:t` の文字を採る（0.31.1 までは、Choice を必ず採るため文字が落ちていた。C012）。
+  ルート2 は、ランの中の `mc:AlternateContent` の採る側の `w:t` の文字を「直せない単位」にする（Fallback だけ直しても Word は Choice を表示するため。
+  PDF の同じ字を (B) で足して二重にしない）。採らない側の段落は数えない（`pdfdocx.raw_paragraph_ids()`）
+- 含めない: 削除された変更履歴（`w:del`・`w:moveFrom`）、フィールドコード（結果を持たないまま終わる EQ・SYMBOL などのフィールドを Word がコードから描く表示も、docx の文字ではないので含めない。下の「結果を持たないフィールド」）、隠し文字、ページ区切り、ルビの読み、テキストボックス内の段落（別の段落として扱う。
   ただし削除の変更履歴の中の図形の段落は欠番にする。`ooxml.in_deleted_run`。読み取り・検証・ルート2 の `paragraph_units` で同じ。0.29.0 より前は、
   検証が数えて読み取りが読まない形で偽の不合格になった）
 - 隠し文字（`ooxml.HiddenRule`。その docx の word/styles.xml から作る。修正計画〈`docs/FIX_PLAN.md`〉の G の規則）: スタイルと既定の書式の
@@ -153,6 +169,16 @@ LibreOffice で変更を承諾・表示した結果と比べた。LibreOffice �
   `"style"`。読み取りが `Document.style_hidden`・`ImageRef.hidden_style` に記録する）は、レポートの 6 章に一覧を出し、要確認
   （`report._style_hidden_action`。空白だけの文字は数えない）で知らせる（Word で表示されないことを利用者に確かめてもらう）。
   ランの直接の指定だけで隠した文字は、0.25.0 までと同じく 6 章に載せるだけ。
+- 結果を持たないフィールド（C013）: `fldChar` の begin → end の間に `separate` がない（Word の「囲い文字」機能の正規の形）、または結果が空のまま終わる
+  フィールドのうち、Word がコードの中身から文字・図を描いて表示する種類（`ooxml.FIELD_DRAWN`。EQ の囲い文字・分数・根号・ルビ、SYMBOL、QUOTE、
+  フォームのチェックボックス・ドロップダウン・入力欄など）は、表示が docx の文字ではないので XML に出さない（フィールドコードの文字は今までどおり出さない。
+  囲い文字を合成して ③ のような文字を作ることもしない。docx にない文字を作らない）。読み取りと検証が同じに捨てるので不変性チェックは合格し、規則の誤りも
+  見つからないため、読み取りが `Document.resultless_fields`（`model.ResultlessField`）に記録し、レポートの 6 章に全件を出して要確認
+  （`report._resultless_field_action`。元の論文が特殊な作り方をしているときなので要対応にはしない）で知らせる。直し方は 1 つ: Word でその部分を
+  普通の文字か Word の数式に打ち直して変換し直す（直さなければ XML で抜けたまま）。表示のない種類（XE・TC・TA・RD・SET・ASK・ADDIN・PRIVATE）と、Word が結果を
+  作る種類（PAGE・REF・HYPERLINK など。結果が空でも）、削除・隠し文字の中のフィールド、別のフィールドのコードの中のフィールドは記録しない。段落をまたぐフィールドは
+  扱わない（フィールドの状態は `w:p` ごと）。`w:fldSimple` の形も同じ。ルート2 で PDF から読んだ中身の文字（「3+i」など）を校正の直しとして docx に足す動きは、
+  この知らせでは変えていない（校正の直しの書き込みの見直しで扱う）。
 - 段落の区切り（`ooxml.joined_paragraphs()`）: 段落記号が変更履歴で削除された段落（`w:pPr/w:rPr` の `w:del`・`w:moveFrom`）は、承諾した状態と
   同じく、同じ親の中で次の兄弟の `w:p`（間のしおり・コメントの範囲などの中身のない目印は飛ばす）とつないで 1 段落にする（3 段落以上の連鎖も）。
   段落の ID は連鎖の最初の段落のもので、後ろの段落の ID は欠番（読み取りの段落も、検証の文字もない）。次が表・コンテンツコントロール・カスタム XML
@@ -247,6 +273,17 @@ LibreOffice で変更を承諾・表示した結果と比べた。LibreOffice �
   要対応 `autonum_lost`（8 章に表。変換ツールの不具合の可能性として開発者に知らせる。手で番号を補う逃げ道は書かない）で知らせる。
   調べないもの: 文字を出していない段落（除外・空白だけ・画像だけ・段落記号の削除でつないだ後ろの段落）、番号が空白だけの段落、`unshown_numbers` の段落。
   守りは最後の組み立ての木と `BuildInfo` を使う（DTD に合わない数式を取り消して組み立て直したとき・ルート2 で番号を PDF に合わせたときも）。
+- 箇条書きの記号の文字（C011）: `numbering.bullet_text()` が、段の書式（`w:lvl/w:rPr/w:rFonts` の ascii か hAnsi）のフォントの表（`ooxml.SYMBOL_TABLES`）で、
+  `w:lvlText` の私用領域の符号を普通の Unicode の文字にする（Wingdings の F09F は「•」。実際の原稿は引用文献の `<label>`）。フォントが記号フォントでない（指定がない・Arial など）
+  ときは、古い 6 つの対応（`ooxml.LEGACY_BULLETS`。フォントを見ずに置き換える）を使う。自動番号は docx の文字ではないので、置き換えても「1 文字も変えない」原則に触れない。
+  置き換えは `Numbering.replaced` に残り、読み取りが `Document.symbols`（`model.SymbolReplaced`）に記録する。
+  **私用領域の文字の守り**（`pipeline.pua_chars()`。`lost_autonums` と同じ並び）: 組み立ての木（最終の XML と文字が同じ）の文字・属性の値に U+E000–U+F8FF があれば、
+  段落 ID・符号・フォント・生成文字（`jx:gen`）か docx の文字（`jx:span`）かを `Result.pua_chars`（`model.PuaChar`）に記録し、要対応 `pua_left`（種類〈箇条書きの記号か本文の文字か〉・フォント・符号ごとに件数でまとめ、段落は先頭の数件。全件は 8 章の表。箇条書きの記号は Word の［新しい行頭文字の定義］で選び直し、本文の文字は
+  普通の文字に打ち直して、変換し直す）で知らせる。builder や読み取りの判断には頼らず木だけを見る（フォントだけは読み取りの記録を添える）。置き換えた記号は
+  `pipeline.symbols_replaced()`（XML に出したものだけ。箇条書きは生成文字の中に置き換えた文字があるもの。ルート2 で番号を PDF の字形に合わせたら除く）が
+  `Result.symbols_replaced` に集め、要確認 `symbol_replaced`（種類・フォント・置き換えた文字ごとに件数でまとめた 1 件。全件は 8 章の表）で知らせる。
+  ただし、0.31.1 までも同じ文字にしていた置き換え（`SymbolReplaced.known`: 箇条書きの古い 6 つの対応〈Wingdings の●・➢・▪・✓・❖、Symbol の「•」〉と、`w:sym` の Symbol フォント）は、
+  出力が変わらず実際の原稿で確かめ済みなので〈Symbol に後から足した数字・€・®©™〔`ooxml.SYMBOL_ADDED`〕は含まない〉冒頭では知らせず（実際の原稿 28 論文のうち 7 論文で毎回黄色い枠が出てしまうため。警告は最小限）、8 章の全件の表に「従来どおり」として載せる。
 - 表の縦の結合（`w:vMerge`）は `rowspan` にする（`builder.Builder.table`）。結合元は「開始列 → (セル, 幅)」で覚えて行ごとに作り直し、
   継続は開始列と幅（横に結合した列の数）が結合元と同じときだけ結合する（幅が違えば結合せず別のセルにして、10 章の警告）。HTML の表では
   `rowspan` を行グループ（`thead`/`tbody`）の外に延ばせないので、見出し行から本文の行へは結合を延ばさない（本文の 1 行目で止め、10 章の警告。

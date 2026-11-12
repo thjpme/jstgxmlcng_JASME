@@ -10,8 +10,12 @@
   検証（canonical_text・canonical_texts。fidelity.source_texts）・ルート2（pdfdocx.paragraph_units・write_fixed_docx）の 3 か所は、
   ここに置く規則（段落のつながり joined_paragraphs と、隠し文字の判定 HiddenRule）を共有し、文字の取り出しはそれぞれ別の実装で行う。
   含める: w:t, m:t（数式中の文字）, w:tab / w:ptab（タブ文字）, 改行 w:br / w:cr（改行文字）,
-          w:noBreakHyphen（U+2011）, w:softHyphen（U+00AD）, w:sym（記号フォントは Unicode に対応付け）
-  含めない: 削除された変更履歴（w:del, w:moveFrom）, フィールドコード, 隠し文字（HiddenRule。ランの直接の w:vanish・w:specVanish、
+          w:noBreakHyphen（U+2011）, w:softHyphen（U+00AD）, w:sym（記号フォント〈Symbol・Wingdings 系。SYMBOL_TABLES〉は Unicode に
+          対応付け）, 記号フォントのランの w:t にある私用領域の文字（F020–F0FF。w:sym と同じ表で Unicode にする。w_t_text。
+          フォントはランの直接の rFonts だけを見る）, mc:AlternateContent は採る側の中身（choose_alternate。MCE の規則: Requires の名前空間が本ツールの読める一覧
+          UNDERSTOOD_NS だけの Choice を採り、なければ Fallback。記号の挿入 w16se:symEx は読めないので Fallback の w:t の文字）
+  含めない: 削除された変更履歴（w:del, w:moveFrom）, フィールドコード（結果を持たないまま終わる EQ・SYMBOL などのフィールドを Word が
+          コードから描く表示も、docx の文字ではないので含めない。読み取りが記録して要確認で知らせる。FIELD_DRAWN）, 隠し文字（HiddenRule。ランの直接の w:vanish・w:specVanish、
           文字スタイル・段落スタイル〈w:basedOn をたどる〉と既定の書式〈w:docDefaults〉の w:vanish）,
           ページ区切り・段区切り, テキストボックス内の段落（別の段落として扱う。削除の変更履歴の中の図形の段落は欠番）, ルビの読み（w:rt）,
           Word が自動生成する文字（脚注番号・自動段落番号。これらは XML では「生成文字」として区別する）
@@ -82,21 +86,51 @@ def parse_xml(data: bytes):
     return etree.fromstring(data, PARSER)
 
 
-def preprocess(root):
-    """mc:AlternateContent を mc:Choice の中身に置き換える（mc:Fallback は捨てる）。
+# 本ツールが読める mc:Choice の Requires の名前空間。実際の原稿で確かめたのは wps・wpg・wpc（テキストボックス・図形の組・キャンバス）。
+# wpi・w14・wp14・a14 は Word が図形・描画の補助に使う名前空間で、Choice の中身を読む。これ以外（w16se〈記号の挿入〉など）の
+# Choice は読まず、Fallback を採る
+UNDERSTOOD_NS = frozenset({
+    "http://schemas.microsoft.com/office/word/2010/wordprocessingShape",       # wps
+    "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup",       # wpg
+    "http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas",      # wpc
+    "http://schemas.microsoft.com/office/word/2010/wordprocessingInk",         # wpi
+    "http://schemas.microsoft.com/office/word/2010/wordml",                    # w14
+    "http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing",     # wp14
+    "http://schemas.microsoft.com/office/drawing/2010/main",                   # a14
+})
 
-    テキストボックスなどは同じ内容が Choice（DrawingML）と Fallback（VML）の両方に入っているため、
-    片方だけを残さないと文字が二重に数えられる。
+
+def choose_alternate(ac):
+    """mc:AlternateContent の中で採る側（mc:Choice または mc:Fallback の要素。どちらもなければ None）。
+
+    MCE（ECMA-376 Part 3）の規則: Choice の Requires（空白区切りの接頭辞）を名前空間に解決し、すべてが本ツールの読める名前空間
+    （UNDERSTOOD_NS）である最初の Choice を採る。なければ Fallback を採る。接頭辞が宣言されていなければ読めない名前空間とみなす。
+    Fallback がなく、読める Choice もないときは、最初の Choice を採る（Word は読めても本ツールが知らない名前空間かもしれない。
+    文字を落とさない側に倒す）。読み取り・検証・ルート2 が前処理（preprocess）と _dropped_by_preprocess で共有する。
+    """
+    choices = ac.findall(f"{{{MC_NS}}}Choice")
+    for ch in choices:
+        prefixes = (ch.get("Requires") or "").split()
+        if prefixes and all(ch.nsmap.get(p) in UNDERSTOOD_NS for p in prefixes):
+            return ch
+    fb = ac.find(f"{{{MC_NS}}}Fallback")
+    if fb is not None:
+        return fb
+    return choices[0] if choices else None
+
+
+def preprocess(root):
+    """mc:AlternateContent を、採る側（choose_alternate）の中身に置き換える（採らない側は捨てる）。
+
+    テキストボックスなどは同じ内容が Choice（DrawingML）と Fallback（VML）の両方に入っているため、片方だけを残さないと文字が
+    二重に数えられる。記号の挿入（w16se:symEx）のように本ツールが読めない Choice は、Fallback の中身（w:t の文字）を残す。
     """
     for ac in list(root.iter(f"{{{MC_NS}}}AlternateContent")):
         parent = ac.getparent()
         if parent is None:
             continue
-        choice = ac.find(f"{{{MC_NS}}}Choice")
-        repl = list(choice) if choice is not None else []
-        if choice is None:
-            fb = ac.find(f"{{{MC_NS}}}Fallback")
-            repl = list(fb) if fb is not None else []
+        chosen = choose_alternate(ac)
+        repl = list(chosen) if chosen is not None else []
         idx = parent.index(ac)
         tail = ac.tail
         parent.remove(ac)
@@ -159,8 +193,12 @@ def paragraph_ids(root, prefix: str) -> dict:
     return {p: f"{prefix}{i}" for i, p in enumerate(root.iter(w("p")), 1)}
 
 
-# Symbol フォントの私用領域コード（F020–F0FF）→ Unicode（よく使われる記号のみ）
+# Symbol フォントの私用領域コード（F020–F0FF）→ Unicode（よく使われる記号のみ）。
+# 出どころ: Unicode Consortium の Symbol.txt（https://www.unicode.org/Public/MAPPINGS/VENDORS/ADOBE/symbol.txt。Adobe Symbol Encoding to Unicode）と
+# 全項目を突き合わせ済み（C011 の点検）。一致しないのは 0xD2–0xD4・0xE2–0xE4 だけで、公式は私用領域（Corporate Use Subarea の ®©™ の
+# セリフ体・サンセリフ体）だが、同じ記号なので普通の ®（U+00AE）・©（U+00A9）・™（U+2122）にする
 _SYMBOL = {
+    0x30: "0", 0x31: "1", 0x32: "2", 0x33: "3", 0x34: "4", 0x35: "5", 0x36: "6", 0x37: "7", 0x38: "8", 0x39: "9",
     0x20: " ", 0x21: "!", 0x22: "∀", 0x23: "#", 0x24: "∃", 0x25: "%", 0x26: "&", 0x27: "∋",
     0x28: "(", 0x29: ")", 0x2A: "∗", 0x2B: "+", 0x2C: ",", 0x2D: "−", 0x2E: ".", 0x2F: "/",
     0x3A: ":", 0x3B: ";", 0x3C: "<", 0x3D: "=", 0x3E: ">", 0x3F: "?", 0x40: "≅",
@@ -172,6 +210,7 @@ _SYMBOL = {
     0x69: "ι", 0x6A: "ϕ", 0x6B: "κ", 0x6C: "λ", 0x6D: "μ", 0x6E: "ν", 0x6F: "ο", 0x70: "π",
     0x71: "θ", 0x72: "ρ", 0x73: "σ", 0x74: "τ", 0x75: "υ", 0x76: "ϖ", 0x77: "ω", 0x78: "ξ",
     0x79: "ψ", 0x7A: "ζ", 0x7B: "{", 0x7C: "|", 0x7D: "}", 0x7E: "∼",
+    0xA0: "€", 0xD2: "®", 0xD3: "©", 0xD4: "™", 0xE2: "®", 0xE3: "©", 0xE4: "™",
     0xA2: "′", 0xA3: "≤", 0xA5: "∞", 0xA7: "♣", 0xA8: "♦", 0xA9: "♥", 0xAA: "♠", 0xAB: "↔",
     0xAC: "←", 0xAD: "↑", 0xAE: "→", 0xAF: "↓", 0xB0: "°", 0xB1: "±", 0xB2: "″", 0xB3: "≥",
     0xB4: "×", 0xB5: "∝", 0xB6: "∂", 0xB7: "•", 0xB8: "÷", 0xB9: "≠", 0xBA: "≡", 0xBB: "≈",
@@ -182,19 +221,130 @@ _SYMBOL = {
 }
 
 
-def sym_char(sym_el) -> str:
-    """w:sym を Unicode 文字に変換する。Symbol フォント以外はコードをそのまま文字にする。"""
-    code = sym_el.get(w("char"), "0")
-    font = (sym_el.get(w("font")) or "").lower()
+# Symbol の対応のうち、0.31.1 までの変換にはなく、後から足したもの（下位 1 バイト）。数字・€・®©™。これらの置き換えは「従来どおり」ではない
+# （要確認で知らせる。docx_reader の SymbolReplaced.known）
+SYMBOL_ADDED = frozenset([*range(0x30, 0x3A), 0xA0, 0xD2, 0xD3, 0xD4, 0xE2, 0xE3, 0xE4])
+
+
+# Wingdings の私用領域コード（F020–F0FF の下位 1 バイト）→ Unicode。確かな対応（Unicode に同じ意味の文字がある記号）だけ。
+# 出どころ: Unicode Consortium の Wingdings・Wingdings 2・Wingdings 3 の対応（L2/11-344 の提案と、Unicode 7.0 での符号化。
+# 符号ごとの対応は https://en.wikipedia.org/wiki/Wingdings の表が公式の符号化をそのまま載せている）と全項目を突き合わせ済み（C011 の点検）。
+# 公式と同じ文字のもの: 0x71 0x72 0x74 0x75 0x76 0x9F 0xA7 0xAB 0xEF–0xF2 0xFC と、0x9E（公式は U+2219 BULLET OPERATOR）。
+# 公式の文字が新しいために古い似た文字にしたもの（形と意味が同じ）: 0x6C（公式 U+26AB）→●、0x6E（U+25FC）→■、0x6F（U+1F78F）→□、
+# 0xA1（U+2B58）→○、0xD8（U+2B9A）→➢、0xDF–0xE2（U+1F868–1F86B）→←→↑↓、0xE8（U+1F87A）→➔、0xFB（U+1F5F6）→✗、0xFD（U+1F5F7）→☒、
+# 0xFE（U+1F5F9）→☑。0xB2 は公式が U+2BCE WHITE FOUR POINTED CUSP で、✧（U+2727 WHITE FOUR POINTED STAR）とは別の文字なので、表から外した
+# 公式の対応（Unicode 7.0 以降の記号）の符号が新しく、J-STAGE の画面のフォントにない恐れがあるものは、同じ形・意味の古くからある文字にした
+# （●■□・○・➢・➔・矢印・✗☒☑）。表にないもの（F0B1 など）は置き換えず、最終の XML に残れば守り（pipeline.pua_chars）が要対応で知らせる
+_WINGDINGS = {
+    0x6C: "●", 0x6E: "■", 0x6F: "□", 0x71: "❑", 0x72: "❒", 0x74: "⧫", 0x75: "◆", 0x76: "❖",
+    0x9E: "∙", 0x9F: "•", 0xA1: "○", 0xA7: "▪", 0xAB: "★", 0xD8: "➢",
+    0xDF: "←", 0xE0: "→", 0xE1: "↑", 0xE2: "↓", 0xE8: "➔", 0xEF: "⇦", 0xF0: "⇨", 0xF1: "⇧", 0xF2: "⇩",
+    0xFB: "✗", 0xFC: "✓", 0xFD: "☒", 0xFE: "☑",
+}
+# Wingdings 2・3（箇条書き・本文でよく使う、同じ意味の普通の文字があるものだけ。出どころは Wingdings と同じ。ここの全項目は公式の符号化と同じ文字）
+_WINGDINGS2 = {0x52: "☑", 0x54: "☒", 0x69: "⓪", 0x98: "●", 0x99: "○", 0xA2: "■", 0xA3: "□", 0xF8: "※",
+               **{0x6A + k: c for k, c in enumerate("①②③④⑤⑥⑦⑧⑨⑩")}}
+_WINGDINGS3 = {0x70 + k: c for k, c in enumerate("▲▼△▽◀▶◁▷")}
+# 記号フォント（小文字の名前）→ 対応表。ここにないフォントの私用領域の文字は置き換えない
+SYMBOL_TABLES = {"symbol": _SYMBOL, "wingdings": _WINGDINGS, "wingdings 2": _WINGDINGS2, "wingdings 3": _WINGDINGS3}
+
+# 古い箇条書きの対応（フォントが分からない・記号フォントでないときの、箇条書きの記号だけ。numbering が使う）
+LEGACY_BULLETS = {"\uf0b7": "•", "\uf0a7": "▪", "\uf076": "❖", "\uf0d8": "➢", "\uf0fc": "✓", "\uf06c": "●"}
+
+
+def is_pua(ch: str) -> bool:
+    """私用領域（U+E000–U+F8FF）の文字か。"""
+    return "\ue000" <= ch <= "\uf8ff"
+
+
+def symbol_char(font: str, n: int):
+    """記号フォント font のコード n（F0xx か、00xx）の Unicode の文字。表にない・記号フォントでなければ None。"""
+    table = SYMBOL_TABLES.get((font or "").strip().lower())
+    if table is None:
+        return None
+    low = n - 0xF000 if n >= 0xF000 else n
+    return table.get(low)
+
+
+def sym_code(sym_el):
+    """w:sym の w:char のコード（整数）。読めなければ None。"""
     try:
-        n = int(code, 16)
+        return int(sym_el.get(w("char"), "0"), 16)
     except ValueError:
+        return None
+
+
+def sym_char(sym_el) -> str:
+    """w:sym を Unicode 文字に変換する。記号フォント（Symbol・Wingdings 系）は表（SYMBOL_TABLES）で対応付け、
+    それ以外と表にない符号はコードをそのまま文字にする（私用領域の文字が残れば、守り pipeline.pua_chars が知らせる）。"""
+    n = sym_code(sym_el)
+    if n is None:
         return "�"
-    if font == "symbol":
-        low = n - 0xF000 if n >= 0xF000 else n
-        if low in _SYMBOL:
-            return _SYMBOL[low]
-    return chr(n)
+    return symbol_char(sym_el.get(w("font")) or "", n) or chr(n)
+
+
+# 記号フォント（小文字）→ レポートに書く名前
+FONT_DISPLAY = {"symbol": "Symbol", "wingdings": "Wingdings", "wingdings 2": "Wingdings 2", "wingdings 3": "Wingdings 3"}
+
+
+def run_font(r, keep_case: bool = False) -> str:
+    """ラン r の直接の書式（w:rPr/w:rFonts）の ascii か hAnsi のフォント名（小文字。keep_case なら書かれたまま。なければ空）。
+    スタイル（文字スタイル・段落スタイル）で指定されたフォントは見ない（表にない・見つからない私用領域の文字は守りが知らせる）。"""
+    rf = r.find(f"{w('rPr')}/{w('rFonts')}") if r is not None else None
+    if rf is None:
+        return ""
+    name = (rf.get(w("ascii")) or rf.get(w("hAnsi")) or "").strip()
+    return name if keep_case else name.lower()
+
+
+def map_symbol_text(font: str, text: str):
+    """記号フォント font の文字列 text の私用領域の文字（F020–F0FF）を、表で Unicode にする。1 文字が 1 文字になる
+    （文字の位置は変わらない）。戻り値: (置き換えた文字列, [(元の文字, 置き換えた文字)]。出現順)。
+    私用領域でない文字（記号フォントでも）と、表にない文字はそのまま。"""
+    if not text or SYMBOL_TABLES.get((font or "").strip().lower()) is None or not any("\uf020" <= c <= "\uf0ff" for c in text):
+        return text, []
+    out, rep = [], []
+    for c in text:
+        new = symbol_char(font, ord(c)) if "\uf020" <= c <= "\uf0ff" else None
+        if new:
+            out.append(new)
+            rep.append((c, new))
+        else:
+            out.append(c)
+    return "".join(out), rep
+
+
+def w_t_text(t_el, run=None):
+    """w:t の文字（読み取り・検証・ルート2 が共有する規則）。記号フォント（Symbol・Wingdings 系）のランの w:t にある
+    私用領域の文字は、w:sym と同じ表で Unicode にする（map_symbol_text）。戻り値: (文字, [(元の文字, 置き換えた文字)])。
+    run: w:t の属するラン。省略すれば w:t の親。前処理（preprocess）をしていない木で mc:AlternateContent の中の w:t を読むとき
+    （ルート2 の pdfdocx.paragraph_units）は、前処理後に w:t がランの子になるので、そのランを渡す。"""
+    text = t_el.text or ""
+    if not any("\uf020" <= c <= "\uf0ff" for c in text):
+        return text, []
+    parent = run if run is not None else t_el.getparent()
+    return map_symbol_text(run_font(parent) if parent is not None and parent.tag == w("r") else "", text)
+
+
+# 結果を持たないまま終わるフィールド（fldChar の begin → end の間に separate がない、または結果が空）のうち、Word がコードの中身から
+# 文字・図を描いて表示する種類（フィールドの名前 -> 利用者に知らせるときの呼び方）。表示は docx の文字（w:t）ではないので XML には出さず、
+# 読み取りが記録して要確認で知らせる（docx_reader.Reader.resultless。report._resultless_field_action）。
+# XE・TC・TA・RD・SET・ASK・ADDIN・PRIVATE のような表示のない種類と、PAGE・REF・HYPERLINK のように Word が結果を作る種類は、含めない。
+FIELD_DRAWN = {
+    "EQ": "囲い文字・分数など", "SYMBOL": "記号", "QUOTE": "引用の文字", "MACROBUTTON": "ボタンの文字", "BARCODE": "バーコード",
+    "DISPLAYBARCODE": "バーコード", "FORMTEXT": "入力欄", "FORMCHECKBOX": "チェックボックス", "FORMDROPDOWN": "ドロップダウン"}
+
+
+def field_name(code: str) -> str:
+    """フィールドコード（instrText をつないだもの）の、フィールドの名前（大文字。コードが空なら空）。"""
+    mm = re.match(r"\s*([A-Za-z]+)", code or "")
+    return mm.group(1).upper() if mm else ""
+
+
+def resultless_field_kind(code: str):
+    """結果を持たないまま終わるフィールドが、Word では表示のある種類（FIELD_DRAWN）ならフィールドの名前、そうでなければ None。"""
+    name = field_name(code)
+    return name if name in FIELD_DRAWN else None
 
 
 class HiddenRule:
@@ -419,7 +569,9 @@ def canonical_text(p, hidden=None) -> str:
                 elif len(ch):
                     walk(ch, hid, deleted)
                 continue
-            if tag == w("t") or tag == m("t"):
+            if tag == w("t"):
+                out.append(w_t_text(ch)[0])
+            elif tag == m("t"):
                 out.append(ch.text or "")
             elif tag in (w("tab"), w("ptab")):
                 out.append("\t")
