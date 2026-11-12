@@ -29,6 +29,7 @@ INITIAL = r"[A-ZÀ-ÖØ-Þ]"
 LATIN_PARTICLE = (r"(?:of|the|for|and the|de|du|da|del|van|von|der|den|la|le"
                   r"|school|university|institute|department|ministry|association|society|council|committee|center|centre)")
 RE_YEAR_PAREN = re.compile(rf"\(\s*({Y})\s*\)", re.I)
+RE_YEAR_ONLY = re.compile(Y, re.I)
 RE_NUM_START = re.compile(r"^\s*(?:\[(\d{1,3})\]|(\d{1,3})[.)])\s*\S")
 RE_DOI = re.compile(r"(?:https?://(?:dx\.)?doi\.org/|doi:\s*)?(10\.\d{4,9}/[^\s\"<>]+)", re.I)
 RE_URL = re.compile(r"https?://[^\s<>\"]+")
@@ -133,11 +134,9 @@ def parse_entry(raw, numeric=False):
     m = RE_YEAR_PAREN.search(t)
     if m:
         d["year"] = m.group(1)
-        d["year_span_nfkc"] = (m.start(1), m.end(1))
         auth, rest = t[:m.start()], t[m.end():]
     else:
         d["year"] = None
-        d["year_span_nfkc"] = None
         mm = re.search(r"[「『]", t)
         auth, rest = (t[:mm.start()], t[mm.start():]) if mm else (t.split(".")[0], t[len(t.split(".")[0]):])
     d.update(parse_authors(auth))
@@ -383,16 +382,20 @@ def tag_reference(r):
     p = r.para
     plain = p.plain()
     mp = Mapped(plain)
-    ys = r.parsed.get("year_span_nfkc")
-    if ys:
-        span = mp.orig(*ys)
-        if span:
-            _apply(p, span, LinkSpec(kind="year"))
+    # 年の位置は、ここで mp.n（文字ごとの NFKC）の上で探し直して元の文字列に戻す。
+    # parse_entry は文献全体の NFKC の上で探しており、結合文字や半角カナの濁点・手で打った番号があると座標が合わない。
+    m = RE_YEAR_PAREN.search(mp.n) if r.parsed.get("year") else None
+    span = mp.orig(*m.span(1)) if m else None
+    if not span:
+        return
+    if not RE_YEAR_ONLY.fullmatch(nfkc(plain[span[0]:span[1]])):
+        return   # 守り: 年の形でないものを囲まない（論文名・誌名も付けない）
+    _apply(p, span, LinkSpec(kind="year"))
     # 和文の「論文名」『誌名・書名』: 年の直後に「 や 『 が来る書き方のときだけタグを付ける
     groups = bracket_groups(plain)
-    if not groups or not ys:
+    if not groups:
         return
-    year_end = span[1] if span else 0
+    year_end = span[1]
     g0 = groups[0]
     between = plain[year_end:g0["start"]]
     if not re.fullmatch(r"[\s\u3000)）.．,，:：]*", between) or g0["end"] >= len(plain):

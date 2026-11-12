@@ -385,14 +385,15 @@ class ArticlePlan:
         text = _para_text(para)
         self.exclusions.append(Exclusion(src=para.src, reason=reason, text=text))
 
-    def exclude_blank(self, para: Para):
-        """空白だけの段落を、理由「空白のみの段落」で除外に記録する（文字がまったくない段落は記録しない）。
+    def exclude_blank(self, para: Para, reason: str = "空白のみの段落"):
+        """空白だけの段落を、理由 reason（既定は「空白のみの段落」）で除外に記録する（文字がまったくない段落は記録しない）。
 
-        理由「空白のみの段落」の除外は、ここだけで作る（blank=True を付ける）。不変性チェック（fidelity.verify）は、blank の除外の
+        reason を変えるのは、画像だけの段落を、画像の知らせに添える理由（structure.REF_IMAGE_EXCLUDED など）で除外するときだけ
+        （文字は 1 文字もないので、どの理由でも blank の除外）。blank の除外は、ここだけで作る（blank=True を付ける）。不変性チェック（fidelity.verify）は、blank の除外の
         docx の文字が本当に空白だけかを確かめる（空白以外の文字があれば、変換ツールの不具合として不合格）。
         """
         if para.plain():
-            self.exclusions.append(Exclusion(src=para.src, reason="空白のみの段落", text=_para_text(para), blank=True))
+            self.exclusions.append(Exclusion(src=para.src, reason=reason, text=_para_text(para), blank=True))
 
 
 def _para_text(para: Para) -> str:

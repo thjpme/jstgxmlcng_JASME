@@ -263,6 +263,11 @@ def _spec_label(spec: LinkSpec) -> str:
     return spec.kind
 
 
+# 依頼文の見出しの行（依頼文を回答の欄に貼ったと見分ける目印。build_request・manual_prompt が書き、_misuse が行頭の見出しの行としてだけ照合する）
+REQUEST_HEADING = "# 論文の段落一覧"
+MANUAL_ANSWER_HEADING = "## 回答の書き方（必ず守ってください）"
+
+
 def build_request(plan: ArticlePlan, linker, build_exclusions=(), unsplit_names=(), name_splits=()) -> tuple:
     """AI への依頼（本文の文字列と画像）を作る。戻り値: (テキスト, [画像: (image_id, media_type, bytes)])
 
@@ -276,7 +281,7 @@ def build_request(plan: ArticlePlan, linker, build_exclusions=(), unsplit_names=
     氏名の中の改行は「⏎」で示す（1 件を 1 行に書くため。氏名の文字は変えない）。
     """
     lines = []
-    lines.append("# 論文の段落一覧")
+    lines.append(REQUEST_HEADING)
     lines.append("各行は [段落ID]（現在の役割 / 位置 / Word のスタイル名）本文。«文字→ID» はすでにリンク済みの箇所。")
     lines.append("⟦数式: …⟧ は数式、⟦画像 imgN: …⟧ は画像を表す（これらは文字ではないのでリンクの text に含めない）。\n")
     for src, p in plan.paras.items():
@@ -929,7 +934,7 @@ def manual_prompt(request_text, images) -> str:
         img_note = (f"\n\n（この依頼には画像が {len(images)} 枚あります。出力フォルダの「AI添付画像」にある {names} を"
                     "このメッセージに添付してください。ファイル名が画像 ID です。）")
     return (f"{system}{img_note}\n\n"
-            "## 回答の書き方（必ず守ってください）\n"
+            f"{MANUAL_ANSWER_HEADING}\n"
             "- 回答は、```json で始まり ``` で終わるコードブロック 1 つだけにしてください。コードブロックの前後には何も書かないでください。\n"
             "- アーティファクトやファイルにはせず、この会話の中にコードブロックとして書いてください。\n"
             "- 文字列はすべて半角の二重引用符（\"）で囲んでください。飾りの引用符（“ ” ‘ ’）は使わないでください。\n"
@@ -963,6 +968,58 @@ OPS_NOT_LIST_MSG = "JSON の operations が一覧（[ ]）になっていませ�
 DEEP_MSG = "JSON の入れ子（[ ] や { } の中の [ ] や { }）が深すぎて読めません。" + ASK_AGAIN
 
 
+# 断る文は、画面（ノートブック・1 画面版・コマンドライン）に共通の言い方で書く（ai_error の案内と同じ。error の文は、レポートの冒頭と
+# コマンドラインの標準エラーにもそのまま出るので、手順番号・欄の名前・ファイル名は書かない）
+PASTED_REQUEST_MSG = ("AI の回答ではなく、AI に送る依頼文が貼られています。依頼文をチャットの AI に送り、"
+                      "返ってきた回答のコードブロックをコピーして貼り付けてください")
+MANY_BLOCKS_MSG = ("回答の中に {{ で始まるコードブロックが {n} つあり、どれが回答か決められません。チャットで使っているときは、"
+                   "AI に「回答の書き方の見本の形で、```json のコードブロック 1 つだけで出し直してください」と頼み、"
+                   "返ってきたコードブロック 1 つをコピーして貼ってください")
+SAMPLE_COPIED_MSG = ("回答の中に、依頼文の見本と同じ内容の項目が {n} 件あります。見本ではなく、この論文についての回答を"
+                     "貼り付けてください")
+RE_REQUEST_HEADING = re.compile(rf"^[ \t]*(?:{re.escape(REQUEST_HEADING)}|{re.escape(MANUAL_ANSWER_HEADING)})[ \t]*$", re.MULTILINE)
+
+
+def _sample_keys() -> tuple:
+    """依頼文の見本（MANUAL_EXAMPLE）の項目の印。戻り値: (operations の (op, src, reason) の集合, placements の (float, reason) の集合)。"""
+    m = RE_FENCE.search(MANUAL_EXAMPLE)
+    data = json.loads(m.group(1))
+    return ({(o["op"], o["src"], o["reason"]) for o in data["operations"]},
+            {(p["float"], p["reason"]) for p in data["placements"]})
+
+
+def _copied_sample(data) -> int:
+    """回答 data にある、見本と同じ項目（operations は op・src・reason、placements は float・reason が一致）の件数。"""
+    if not isinstance(data, dict):
+        return 0
+    ops, pls = _sample_keys()
+    n = 0
+    for key, keys, fields in (("operations", ops, ("op", "src", "reason")), ("placements", pls, ("float", "reason"))):
+        items = data.get(key)
+        for it in items if isinstance(items, list) else []:
+            vals = tuple(it.get(f) for f in fields) if isinstance(it, dict) else ()
+            if vals and all(isinstance(v, str) for v in vals) and vals in keys:     # 文字列でない値（一覧など）は見本と同じではない
+                n += 1
+    return n
+
+
+def _misuse(text: str) -> str:
+    """回答として貼られたものが、依頼文そのもの・コードブロックの複数並びなら、断る理由の文。そうでなければ ""。
+
+    依頼文の見出しの行（行頭だけ。JSON の文字列は改行を含められないので、回答の中身には現れない）があれば依頼文。
+    回答が { で始まる（コードブロックの中身だけをコピーした）ときは、コードブロックを数えない。{ で始まるコードブロックが
+    2 つ以上あるときは、どれを読むか推測しない（見本を引用してから答えた回答など）。
+    """
+    if RE_REQUEST_HEADING.search(text):
+        return PASTED_REQUEST_MSG
+    t = text.strip()
+    if not t.startswith("{"):
+        n = len(RE_FENCE.findall(t))
+        if n >= 2:
+            return MANY_BLOCKS_MSG.format(n=n)
+    return ""
+
+
 def _top_level_array(t: str) -> bool:
     """回答の JSON の最上位が一覧（[ ]）か。最初の { の直前（空白を除く）が [ なら、一覧の最初の要素とみなす。"""
     if t.startswith("{"):
@@ -980,6 +1037,9 @@ def parse_response(text: str) -> dict:
     最上位が一覧（[ ]）の回答は読まない（回答全体を一覧で囲んだ [{placements, operations, notes}] も読まない）。
     operations は必須（操作がなくても []）。入れ子が深すぎて読めない回答は、読めない回答（ValueError）とする。
     """
+    why = _misuse(text)
+    if why:
+        raise ValueError(why)
     t, _ = _json_text(text)
     if _top_level_array(t):
         raise ValueError(TOP_ARRAY_MSG)
@@ -1014,6 +1074,9 @@ def parse_response(text: str) -> dict:
         raise ValueError(OPS_NOT_LIST_MSG)
     if not isinstance(data.get("placements", []), list):
         raise ValueError("JSON の placements が一覧（[ ]）になっていません")
+    copied = _copied_sample(data)
+    if copied:
+        raise ValueError(SAMPLE_COPIED_MSG.format(n=copied))
     data["notes"] = _notes_list(data.get("notes", []))
     return data
 
@@ -1114,6 +1177,8 @@ def parse_cut_response(text: str):
     入れ子が深すぎる回答と、最上位が一覧の回答は、読まない（None）。
     戻り値: {"placements": [...], "operations": [], "notes": []}
     """
+    if _misuse(text):
+        return None                    # 依頼文・複数のコードブロック（parse_response が断る。読めた一部を使わない）
     t, closed = _json_text(text)
     i = t.find("{")
     if i < 0 or closed or _top_level_array(t):
@@ -1162,8 +1227,8 @@ def parse_cut_response(text: str):
             k = ws(k + 1)
     except (json.JSONDecodeError, RecursionError):
         pass
-    if not found:
-        return None
+    if not found or _copied_sample({"placements": found}):
+        return None                    # 見本と同じ項目（parse_response と同じく、見本の写しは使わない）
     return {"placements": found, "operations": [], "notes": []}
 
 

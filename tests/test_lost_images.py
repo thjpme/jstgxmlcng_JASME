@@ -13,6 +13,7 @@ from lxml import etree
 import make_fixtures as mf
 from conftest import DATA, FLOAT, FLOAT_TEXT, FULL, PDFCHECK, PDFCHECK_PDF
 from jasme_jats.pipeline import AIRequiredError, Options, convert
+from jasme_jats.structure import FN_IMAGE_EXCLUDED, REF_IMAGE_EXCLUDED
 
 S = mf.S
 CM = 360000
@@ -74,7 +75,12 @@ def test_image_in_reference_is_reported(refs, text, journal, meta, tmp_path):
     li = res.lost_images[0]
     assert li.image_id == "img2" and li.source.startswith("word/media/")
     assert li.location.startswith("引用文献") and res.plan.region[li.src] == "refs"
-    assert li.reason.startswith("引用文献の段落の中にある（引用文献には画像を出力できない）")
+    if text:
+        assert li.reason.startswith("引用文献の段落の中にある（引用文献には画像を出力できない）")
+    else:
+        # 文字のない段落（画像だけ）は中身のない <ref> にせず、空白の除外に記録する。画像は今までどおり要対応で知らせる
+        assert li.reason == REF_IMAGE_EXCLUDED
+        assert all("".join(r.itertext()).strip() for r in load(res).iter("ref")) and len(res.plan.refs) == 2
     assert li.text == text            # 段落の文字の冒頭（Word で探す手がかり）
     report = res.report_path.read_text(encoding="utf-8")
     top, ch9, ch14 = chapters(report)
@@ -115,7 +121,7 @@ def test_cli_exits_1_and_reports_lost_images(journal, tmp_path, capsys):
     assert main([str(path), "--meta", str(meta), "--out", str(tmp_path / "out"), "--no-metafile-conversion"]) == 1
     err = capsys.readouterr().err
     assert "要対応: XML に入らなかった画像 1 件" in err and "本文の段落に移して" in err
-    assert "img2（段落 d" in err and "引用文献の段落の中にある" in err
+    assert "img2（段落 d" in err and REF_IMAGE_EXCLUDED in err
 
 
 def test_lost_images_box(journal, meta, tmp_path):
@@ -311,3 +317,54 @@ def test_cli_shows_textbox_notices(journal, tmp_path, capsys):
     err = capsys.readouterr().err
     assert "要確認: 囲みか図の注記か決められなかったテキストボックス 1 件の文字を XML に出力していません" in err
     assert "--ai manual か --ai api で AI による補完を使うか" in err and "テキストボックスの中の文字" not in err
+
+
+def test_textless_reference_paragraph_is_not_a_ref(journal, meta, tmp_path):
+    """引用文献の節の、文字のない段落（画像だけ・空白と画像だけ）は、中身のない <ref> にせず、空白の除外に記録する。画像は
+    XML に入らなかった画像として知らせ続ける。<ref> の ID は詰まり、本文からのリンク先は引用文献の文字に合ったまま。"""
+    def body(b):
+        return [mf.para(S["sec1"], "１．はじめに"),
+                mf.para(S["body"], "検証（2023）と試験（2024）を引用する。")]
+
+    def refs(b):
+        r1 = b.add_image("r1.png", mf.png_bytes("ref one"))
+        r2 = b.add_image("r2.png", mf.png_bytes("ref two"))
+        return [mf.para(S["ref"], mf.drawing(r1, 1800000, 1000000, 611)),
+                mf.para(S["ref"], "検証次郎（2023）．「別の論文」．『架空誌』，第3巻，pp.1-2．"),
+                mf.para(S["ref"], "　", mf.drawing(r2, 1800000, 1000000, 612))]
+
+    path = tmp_path / "textless.docx"
+    mf.make_article(path, "文字のない引用文献の検証用文書", body, refs=refs)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    root = load(res)
+    refs_ = list(root.iter("ref"))
+    assert [r.get("id") for r in refs_] == ["B1", "B2"] and all("".join(r.itertext()).strip() for r in refs_)
+    assert not root.xpath("//mixed-citation[not(normalize-space())]")
+    # 本文からのリンクは、引用文献の文字に合ったまま
+    target = {r.get("id"): "".join(r.itertext()) for r in refs_}
+    links = {"".join(x.itertext()): target[x.get("rid")] for x in root.iter("xref") if x.get("ref-type") == "bibr"}
+    assert set(links) == {"2023", "2024"}
+    assert links["2023"].startswith("検証次郎（2023）") and links["2024"].startswith("試験六郎（2024）")
+    # 2 つの画像は、どちらも XML に入らなかった画像として知らせる
+    assert sorted(li.image_id for li in res.lost_images) == ["img1", "img2"] and res.needs_action
+    assert {li.reason for li in res.lost_images} == {REF_IMAGE_EXCLUDED}
+    assert [li.location for li in res.lost_images if li.image_id == "img1"] == ["引用文献 1件目の後ろ"]
+    assert [li.location for li in res.lost_images if li.image_id == "img2"] == ["引用文献 2件目の後ろ"]
+
+
+def test_textless_note_paragraph_before_first_note_is_not_a_note(journal, meta, tmp_path):
+    """注の節の、注が始まる前の文字のない段落（画像だけ）は、中身のない注にしない。画像は知らせ続ける。"""
+    def body(b):
+        rid = b.add_image("n1.png", mf.png_bytes("note image"))
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "試験（2024）を引用する。"),
+                mf.para(S["fn_head"], "注"), mf.para(S["fn_body"], mf.drawing(rid, 1800000, 1000000, 621)),
+                mf.para(S["fn_body"], "1) 注の内容である。")]
+
+    path = tmp_path / "note.docx"
+    mf.make_article(path, "文字のない注の検証用文書", body)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    assert [[x.plain() for x in fn.paras] for fn in res.plan.fns] == [["1) 注の内容である。"]]
+    assert [li.image_id for li in res.lost_images] == ["img1"] and res.needs_action
+    assert res.lost_images[0].reason == FN_IMAGE_EXCLUDED and res.lost_images[0].location == "注（見出しの後ろ、1件目の前）"

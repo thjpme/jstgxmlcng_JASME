@@ -1,6 +1,6 @@
 """引用の抽出と照合（年の部分だけをリンクにする）。"""
 from jasme_jats.model import Atom, Para
-from jasme_jats.refparse import Mapped, extract_citations, match_citation, parse_entry
+from jasme_jats.refparse import Mapped, extract_citations, match_citation, parse_entry, tag_reference
 from jasme_jats.structure import RefNode
 
 
@@ -129,3 +129,46 @@ def test_same_year_two_candidates_unchanged():
     assert kind == "exact" and ref.rid == "B2"
     ref, kind, _ = _match_one("Alpha and Beta（2001）は", refs)
     assert kind == "exact" and ref.rid == "B1"
+
+
+# ---------------------------------------------------------------- 文献の <year> などのタグ位置（C017）
+def tagged(text, numeric=False, parsed=None):
+    """文献の段落に tag_reference を呼び、タグが付いた範囲の文字を {種類: 文字列} で返す。"""
+    r = RefNode(para=Para(src="r1", atoms=[Atom(kind="text", text=text)]), rid="B1")
+    r.parsed = parsed if parsed is not None else parse_entry(text, numeric)
+    tag_reference(r)
+    assert "".join(a.plain() for a in r.para.atoms) == text   # 文字は変えない
+    return {a.link.kind: a.text for a in r.para.atoms if a.link}
+
+
+def test_year_tag_after_combining_characters():
+    # o + 結合アクセント（NFKC で合成されるが、1 文字ずつの正規化では合成されない）が年より前にある
+    text = "Gasco\u0301n, J., & Nicola\u0301s, P. (2019). What is a tag? Journal of Tests, 1, 1-2."
+    assert tagged(text) == {"year": "2019"}
+
+
+def test_year_tag_after_halfwidth_katakana_voiced_mark():
+    text = "\uff8c\uff9e\uff99\uff70\uff85\uff70, J. S.\uff081963\uff09\u300e\u30c6\u30b9\u30c8\u306e\u672c\u300f\uff0e"
+    assert tagged(text) == {"year": "1963", "source": "\u30c6\u30b9\u30c8\u306e\u672c"}
+
+
+def test_year_tag_with_manual_number_prefix():
+    assert tagged("[2] Smith, J. (2020). A title. Journal of Tests, 1, 1-2.", numeric=True) == {"year": "2020"}
+    assert tagged("1) \u8a66\u9a13\u516d\u90ce\uff082024\uff09\u300c\u8a66\u9a13\u306e\u8ad6\u6587\u300d\u300e\u8a66\u9a13\u8a8c\u300f\u7b2c1\u5dfb\uff0e", numeric=True) == {
+        "year": "2024", "article-title": "\u8a66\u9a13\u306e\u8ad6\u6587", "source": "\u8a66\u9a13\u8a8c"}
+
+
+def test_year_tag_unchanged_for_plain_references():
+    assert tagged("Polya, G. (1945). How to solve it. Princeton University Press.") == {"year": "1945"}
+    assert tagged("\u4e2d\u539f\u5fe0\u7537\uff081995\uff09\uff0e\u300e\u7b97\u6570\u306e\u7814\u7a76\u300f\uff0e\u8056\u6587\u793e\uff0e") == {
+        "year": "1995", "source": "\u7b97\u6570\u306e\u7814\u7a76"}
+    assert tagged("Smith, J. (2020a). A title. Journal of Tests, 1, 1-2.") == {"year": "2020a"}
+
+
+def test_year_tag_guard_skips_when_range_is_not_a_year(monkeypatch):
+    # 位置の戻しが別の理由でずれても、年でない文字を囲まず、論文名・誌名のタグも付けない
+    text = "\u8a66\u9a13\u516d\u90ce\uff082024\uff09\u300c\u8a66\u9a13\u306e\u8ad6\u6587\u300d\u300e\u8a66\u9a13\u8a8c\u300f\u7b2c1\u5dfb\uff0e"
+    assert set(tagged(text)) == {"year", "article-title", "source"}
+    real = Mapped.orig
+    monkeypatch.setattr(Mapped, "orig", lambda self, ns, ne: (lambda o: (o[0] - 1, o[1] - 1) if o else o)(real(self, ns, ne)))
+    assert tagged(text) == {}

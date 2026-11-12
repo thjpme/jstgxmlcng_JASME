@@ -255,9 +255,9 @@ def test_guard_uses_final_tree_after_dtd_retraction(journal, meta, tmp_path, mon
     monkeypatch.setattr(pipeline, "build", spy_build)
     orig_validate, calls = pipeline.validate, []
 
-    def validate(xml):
+    def validate(xml, where=None):
         calls.append(1)
-        return (False, ["強制的な不適合"]) if len(calls) == 1 else orig_validate(xml)
+        return (False, ["強制的な不適合"]) if len(calls) == 1 else orig_validate(xml, where)
     monkeypatch.setattr(pipeline, "validate", validate)
     res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=RESPONSE, convert_metafiles=False))
     assert len(built) >= 2 and len(calls) == 2           # 取り消して組み立てをやり直した

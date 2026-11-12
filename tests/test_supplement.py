@@ -290,8 +290,9 @@ def test_supplement_number_edits(new, ok, tmp_path):
 
 
 # ---------------------------------------------------------------------------- 17. 照合の述語と同じ答え
+# 「İ」は大文字・小文字の対で lower() が 2 文字になる（C056）
 PAIR_CHARS = ([chr(c) for c in range(0x20, 0x7F)] + [chr(c) for c in range(0xFF01, 0xFF5F)]
-              + list(pdfmatch.HYPHENS + pdfmatch.DASHES) + list("\"“”'’‘＂＇") + list("●・〜～…"))
+              + list(pdfmatch.HYPHENS + pdfmatch.DASHES) + list("\"“”'’‘＂＇") + list("●・〜～…") + list("İı"))
 
 
 def test_supplement_pairs_agree_with_pdfmatch():

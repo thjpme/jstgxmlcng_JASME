@@ -23,6 +23,7 @@ from .ooxml import FIELD_DRAWN
 from .package import article_dir
 from .pdfmatch import (DISPLACED_WHY, EDGE_WHY, FORMULA_MARK, HEAD_WHY, LINE_MARK, LONG_WHY, MATH_WHY, RE_PAGE_NO, TYPESET_KINDS,
                        UNSURE_WHY, WHOLE_WHY, diff_parts, typeset_pair)
+from .validate import group_errors
 from .structure import (AUTHOR_TABLE_OTHER_EXCLUDED, BACK_OTHER_EXCLUDED, BACK_TABLE_EXCLUDED, EN_AUTHOR_TABLE_OTHER_EXCLUDED,
                         EN_OTHER_EXCLUDED, EN_TABLE_EXCLUDED, FRONT_OTHER_EXCLUDED, FRONT_TABLE_EXCLUDED, NO_LINK_KINDS,
                         TEXTBOX_TEXT_EXCLUDED, UNPLACED_EXCLUSIONS, abstract_missing_srcs, appendix_heading)
@@ -850,22 +851,67 @@ def _supplement_action(r):
 DTD_SHOWN = 5       # 赤い枠とコマンドラインに並べる DTD のエラーの数（全件はレポートの 12 章）
 
 
+DTD_PLACES_SHOWN = 3  # 赤い枠とコマンドラインに、同じエラーの場所を並べる数（全件はレポートの 12 章）
+APP_TITLE_TOP = "引用文献などの後ろに、資料の見出しと思われる段落があります"      # 要確認 app_after_refs の見出し（レポートの冒頭）
+APP_TITLE_BOX = "引用文献などの後ろに資料があるかもしれません"                      # 同じ要確認の Colab・1 画面版の枠の見出し
+
+
+def dtd_app_hint(title: str) -> str:
+    """DTD の不合格が、引用文献の後ろの資料が原因の可能性があるときの直し方。title: 同じ原因の要確認の見出し（画面ごとに違う）。"""
+    return ("引用文献などの後ろに資料があり、その中の数式などが引用文献の中に入ったことが原因の可能性があります（要確認の"
+            f"「{title}」と同じ原因）。Word で資料を英文要旨の後ろ（論文の最後）に移して、変換し直してください。")
+
+
+DTD_APP_HINT_CLI = "引用文献などの後ろの資料が原因の可能性がある。docx で資料を英文要旨の後ろに移して変換し直すこと。"
+
+
+def _dtd_group_line(g, shown=DTD_PLACES_SHOWN) -> str:
+    """同じ DTD エラーのまとまり 1 つの 1 行: 文（2 件以上なら件数）と、原因の場所（引用文献 B129（段落 d123「…」）など）。"""
+    text = g.message + (f"（{g.count} 件）" if g.count > 1 else "")
+    if g.places:
+        more = f" ほか {len(g.places) - shown} 件" if len(g.places) > shown else ""
+        text += "。場所: " + "、".join(g.places[:shown]) + more
+    return text
+
+
+def _dtd_app_hint(r) -> bool:
+    """DTD の不合格が、引用文献の後ろの資料（要確認 app_after_refs）が原因の可能性があるか。
+
+    資料の見出しと思われる段落があり、エラーの場所が引用文献（または場所が分からない）のとき。エラーがすべて引用文献の外
+    （表など）と分かっているときは勧めない。
+    """
+    if not r.plan.app_after_refs:
+        return False
+    return any(not g.kinds or "ref" in g.kinds for g in group_errors(r.dtd_errors))
+
+
 def _dtd_action(r):
     if r.dtd_valid:
         return None
     n = len(r.dtd_errors)
-    errs = list(r.dtd_errors[:DTD_SHOWN]) + ([f"…ほか {n - DTD_SHOWN} 件"] if n > DTD_SHOWN else [])
+    groups = group_errors(r.dtd_errors)
+    lines = [_dtd_group_line(g) for g in groups[:DTD_SHOWN]]
+    rest = sum(g.count for g in groups[DTD_SHOWN:])
+    if rest:
+        lines.append(f"…ほか {rest} 件")
+    places = groups[0].places if groups else []
+    where = (f"エラーの場所は、たとえば{places[0]}{'ほか' if len(places) > 1 else ''}です（全件は 12 章）。" if places else "")
+    hint = _dtd_app_hint(r)
+    top_tail = where + (dtd_app_hint(APP_TITLE_TOP) if hint else "12 章のエラーを確認してください（変換ツールの不具合の可能性があります）。")
+    box_tail = (dtd_app_hint(APP_TITLE_BOX) if hint else "変換ツールの不具合の可能性があります。レポートの 12 章のエラーを確認し、変換レポートを添えて"
+                "開発者に知らせてください。")
+    cli_tail = "。" + DTD_APP_HINT_CLI if hint else "（変換ツールの不具合の可能性がある）。"
+    check_tail = ("引用文献などの後ろの資料を英文要旨の後ろに移して変換し直す（12 章に場所）" if hint else
+                  "12 章のエラーを確かめる（変換ツールの不具合の可能性がある）")
     return Action(
         NEEDS_ACTION, "dtd",
         top=(f"> **要対応: J-STAGE 指定の DTD による検証が不合格です（{n} 件、12 章）。** この XML は J-STAGE にアップロード"
-             "できません。12 章のエラーを確認してください（変換ツールの不具合の可能性があります）。"),
-        checklist=(f"- [ ] **DTD 検証が不合格**（12 章、{n} 件）: この XML は J-STAGE にアップロードできない。12 章のエラーを"
-                   "確かめる（変換ツールの不具合の可能性がある）"),
+             f"できません。{top_tail}"),
+        checklist=(f"- [ ] **DTD 検証が不合格**（12 章、{n} 件）: この XML は J-STAGE にアップロードできない。{check_tail}"),
         box_title=f"J-STAGE 指定の DTD による検証が不合格です（{n} 件。要対応）",
-        box_detail=("この XML は J-STAGE にアップロードできません。変換ツールの不具合の可能性があります。レポートの 12 章の"
-                    "エラーを確認し、変換レポートを添えて開発者に知らせてください。\n" + "\n".join(f"・{e}" for e in errs)),
+        box_detail=(f"この XML は J-STAGE にアップロードできません。{box_tail}\n" + "\n".join(f"・{e}" for e in lines)),
         cli=(f"要対応: J-STAGE 指定の DTD による検証が不合格です（{n} 件。レポートの冒頭と 12 章）。この XML は J-STAGE に"
-             "アップロードできない（変換ツールの不具合の可能性がある）。\n" + "\n".join(f"  {e}" for e in errs)))
+             f"アップロードできない{cli_tail}\n" + "\n".join(f"  {e}" for e in lines)))
 
 
 TABLE_SHAPE_WHY = ("行ごとの列の数がそろわない・縦の結合が見出し行や本文の行の外にはみ出すなど、docx の表と違う形で出力しました"
@@ -1766,12 +1812,12 @@ def _app_after_refs_action(r):
     samples = _para_samples([(s, plan.paras[s].text_only()) for s in plan.app_after_refs])
     return Action(
         TO_CHECK, "app_after_refs",
-        top=("> **要確認: 引用文献などの後ろに、資料の見出しと思われる段落があります（10 章）。** 今の版では、引用文献などの後ろの"
+        top=(f"> **要確認: {APP_TITLE_TOP}（10 章）。** 今の版では、引用文献などの後ろの"
              "資料は資料（付録）として扱わず、引用文献などの段落のまま出力しています。資料なら、Word で英文要旨の後ろ（論文の最後）に"
              f"移して、変換し直してください。対象の段落: {samples}"),
         checklist=(f"- [ ] **引用文献などの後ろの資料の見出し**（{n} 件。10 章）: 資料なら、Word で英文要旨の後ろに移して"
                    "変換し直す"),
-        box_title="引用文献などの後ろに資料があるかもしれません（要確認）",
+        box_title=APP_TITLE_BOX + "（要確認）",
         box_detail=("引用文献・注・付記・謝辞の中に、資料の見出しと思われる段落があります。今の版では資料として扱わず、引用文献などの"
                     "段落のまま出力しています。資料なら、Word でその見出しと中身を英文要旨の後ろ（論文の最後）に移してから、変換し直して"
                     f"ください（レポートの冒頭と 10 章）。\n対象の段落: {samples}"),
@@ -2745,8 +2791,17 @@ def render(r) -> str:
     if r.dtd_valid:
         L.append("J-STAGE 指定の DTD（https://www.jstage.jst.go.jp/dtds/1.1/JATS-journalpublishing1.dtd と同一の同梱版）で検証し、エラーはありませんでした。")
     else:
-        for e in r.dtd_errors[:100]:
-            L.append(f"- {esc(e)}")
+        if _dtd_app_hint(r):
+            L.append(dtd_app_hint(APP_TITLE_TOP))
+            L.append("")
+        room = 100          # 場所の行の数の上限（全体。超えた分は件数で知らせる）
+        for g in group_errors(r.dtd_errors):
+            L.append(f"- {esc(g.message)}" + (f"（{g.count} 件）" if g.count > 1 else ""))
+            for place in g.places[:room]:
+                L.append(f"  - {esc(place)}")
+            if len(g.places) > room:
+                L.append(f"  - …ほか {len(g.places) - room} 件")
+            room = max(0, room - len(g.places))
     L.append("")
     L.append("### J-STAGE のアップロード時チェック")
     L.append("")

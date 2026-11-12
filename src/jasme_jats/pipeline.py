@@ -59,7 +59,7 @@ from .pdfmatch import PdfCheck, check_pdf
 from .report import (BOX_PENDING_NOTE, NEEDS_ACTION, actions, figure_body_detail, images_to_prepare, render,
                      render_ai_only, step, structure_conflict_text)
 from .report import pdf_fallback as report_pdf_fallback
-from .structure import classify, conflict_overrides, float_caption, float_targets
+from .structure import FN_IMAGE_EXCLUDED, REF_IMAGE_EXCLUDED, classify, conflict_overrides, float_caption, float_targets
 from .ooxml import is_pua
 from .tracking import GEN, SPAN
 from .validate import validate
@@ -324,6 +324,8 @@ def lost_images(doc, plan, root, info, exclusions) -> tuple:
             continue
         if any(places.get(p.src, [])):
             reason = next(x for x in places[p.src] if x)
+        elif excluded.get(p.src) in (REF_IMAGE_EXCLUDED, FN_IMAGE_EXCLUDED):
+            reason = excluded[p.src]            # 画像だけの段落の除外の理由が、そのまま画像の知らせの理由（原因と場所の手がかり）
         elif p.src in excluded:
             reason = f"XML に出力しなかった段落（理由「{excluded[p.src]}」）の中にある"
         elif p.src in places:
@@ -515,6 +517,35 @@ def table_problems(root, info) -> tuple:
     return found, checked
 
 
+def dtd_places(plan) -> dict:
+    """DTD 検証のエラーの場所（validate の where）。{XML の id: 場所の文}。
+
+    引用文献（B 番号）・表（T 番号。キャプションの段落）・注（fn 番号）。短く「引用文献 129件目（B129）「冒頭の文字」」の形にする
+    （件目は plan.locations と同じ書き方）。文字のない段落（数式だけの引用文献など）は、文字の代わりに、直前の文字のある段落の冒頭を
+    添える（Word で探す手がかり）。
+    """
+    order = list(plan.paras)
+    index = {src: i for i, src in enumerate(order)}
+
+    def head(p):
+        t = p.text_only().strip()
+        return f"{t[:15]}{'…' if len(t) > 15 else ''}"
+
+    def at(p, name):
+        if head(p):
+            return f"{name}「{head(p)}」"
+        prev = next((head(plan.paras[s]) for s in reversed(order[:index.get(p.src, 0)]) if head(plan.paras[s])), "")
+        return f"{name}の、文字のない段落 {p.src}" + (f"（直前は「{prev}」）" if prev else "")
+
+    def named(p, kind, xid):
+        loc = _place(plan, p.src)
+        return f"{loc}（{xid}）" if loc.startswith(kind) else f"{kind} {xid}"
+    places = {r.rid: at(r.para, named(r.para, "引用文献", r.rid)) for r in plan.refs if r.rid}
+    places.update({t.tid: at(t.caption, f"表 {t.tid}") for t in plan.tables if t.tid and t.caption is not None})
+    places.update({f.fid: at(f.paras[0], named(f.paras[0], "注", f.fid)) for f in plan.fns if f.fid and f.paras})
+    return places
+
+
 def _mechanical(docx_path, journal, overrides=None, placements=None):
     doc = read_docx(docx_path)
     plan = classify(doc, journal, overrides, placements)
@@ -689,7 +720,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     final_root = finalize(root)
     xml_bytes = serialize(final_root)
     final_check(root, xml_bytes, fid)
-    valid, errors = validate(xml_bytes)
+    valid, errors = validate(xml_bytes, dtd_places(plan))
     if not valid and any(getattr(f, "formula", None) is not None for f in plan.figures):
         # AI が書き起こした MathML が DTD に合わない場合は取り消して作り直す
         for f in plan.figures:
@@ -703,7 +734,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         final_root = finalize(root)
         xml_bytes = serialize(final_root)
         final_check(root, xml_bytes, fid)
-        valid, errors = validate(xml_bytes)
+        valid, errors = validate(xml_bytes, dtd_places(plan))
 
     # 補完の確かめ（ルート2 で補った docx を作ったときだけ）: 補った docx が元の docx から、組版の違い（(A)）と 13.1 に報告した
     # 校正の直し（(B)）以外に変わっていないか。AI の再変換・DTD 検証の作り直しで docx は変わらないので、1 回でよい

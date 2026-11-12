@@ -1699,8 +1699,9 @@ CONFLICT_DOCS = {
     "K1_ack_ack_style": dict(back=[_p("ack_head", "謝辞"), _p("body", "先の謝辞の本文。"), _p("ack_head", "謝辞"),
                                    _p("body", "後の謝辞の本文。"), _p("ref_head", "引用文献"), _REF]),
     # 前の謝辞の見出しが空白だけ（中身あり）: 見出しは空白の除外に記録され、lost は中身だけ
-    "K1_ack_blankhead_ack": dict(back=[_p("ack_head", "　"), _p("body", "先の謝辞の本文。"), _p("ack_head", "謝辞"),
-                                       _p("body", "後の謝辞の本文。"), _p("ref_head", "引用文献"), _REF]),
+    # （後付けの始まりは引用文献の見出し。本文の途中の空白だけの見出しは領域を切り替えない〈C041〉ので、その見出しは使わない）
+    "K1_ack_blankhead_ack": dict(back=[_p("ref_head", "引用文献"), _REF, _p("ack_head", "　"), _p("body", "先の謝辞の本文。"),
+                                       _p("ack_head", "謝辞"), _p("body", "後の謝辞の本文。")]),
     "K1_ack_ack_text": dict(body=[_p("body", "謝辞"), _p("body", "先の謝辞の本文。"), _p("body", "謝辞"), _p("body", "後の謝辞の本文。")]),
     "K1_notes_notes": dict(back=[_p("notes_head", "付記"), _p("body", "先の付記。"), _p("ref_head", "引用文献"), _REF,
                                  _p("notes_head", "付記"), _p("body", "後の付記。")]),
@@ -2014,3 +2015,116 @@ def test_advice_delete_only_misplaces_paragraphs_between_sections(journal, meta,
                   meta, journal, Options(out_dir=tmp_path / "b", convert_metafiles=False))
     assert res.fidelity.ok and [c.para.plain() for c in res.plan.notes.children] == ["先の付記。"]
     assert [r.para.plain() for r in res.plan.refs] == [_REF_TEXT, "後の付記。"]          # 付記の本文が引用文献の 2 件目になる
+
+
+# ----------------------------------------------------------------------------- 空白だけの段落は領域を切り替えない（C041）
+def _midbody(style, tail_text="原稿の続きである。"):
+    """本文の途中に、スタイルが後付け・英文要旨の見出しの、空白だけの段落を置き、後ろに章見出しと本文を続ける。"""
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "本文の前半である（試験，2024）。"),
+                mf.para(S[style]),
+                mf.para(S["sec1"], "２．方法"), mf.para(S["body"], tail_text)]
+    return parts
+
+
+@pytest.mark.parametrize("style", ["ref_head", "fn_head", "notes_head", "ack_head", "abs"])
+def test_blank_paragraph_with_back_heading_style_does_not_switch_region(style, journal, meta, tmp_path):
+    """本文の途中の、空白だけで後付け・英文要旨の見出しのスタイルが付いた段落では、領域を切り替えない。後ろの章見出しと本文は
+    本文のまま残り、本物の引用文献だけが <ref>、本物の英文要旨だけが英文要旨になる。"""
+    path = tmp_path / "blank.docx"
+    mf.make_article(path, "空白の見出しスタイルの検証用文書", _midbody(style))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    got = outline(res)
+    assert got["sec"] == ["１．はじめに", "２．方法"] and got["ref"] == 1
+    assert got["trans-abstract"] == ["Small article abstract."] and not got["fn-group"]
+    root = load(res)
+    assert "原稿の続きである。" in text(root.find("body")) and root.find(".//back//notes") is None
+    assert "原稿の続きである。" not in "".join(text(r) for r in root.iter("ref"))
+    blank = next(p for p in res.plan.paras.values() if p.style_id == S[style] and not p.plain())
+    assert res.plan.region[blank.src] == "body"
+    assert not [a.key for a in actions(res) if a.level == NEEDS_ACTION]
+    assert not [a.key for a in actions(res) if a.key == "excluded_unsure"]
+
+
+def test_blank_sec1_after_guessed_note_does_not_return_notes_to_body(journal, meta, tmp_path):
+    """文字から注の見出しと推定した「注」と注の一覧の後ろの、空白だけの章見出しスタイルの段落は、注を本文に戻す合図にしない。"""
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "本文である（試験，2024）。"),
+                mf.para(S["body"], "注"), mf.para(S["body"], "1) 注の内容である。"), mf.para(S["sec1"])]
+    path = tmp_path / "note_blank.docx"
+    mf.make_article(path, "注の後ろの空白の検証用文書", parts)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    assert [fn.number for fn in res.plan.fns] == [1] and res.plan.fn_heading is not None
+    assert not any("本文に戻した" in d.message for d in res.plan.decisions)
+
+
+def test_blank_paragraph_switch_is_recorded_when_ignored(journal, meta, tmp_path):
+    """空白だけの見出しスタイルの段落を領域の切り替えに使わなかったことは、判断の一覧に記録する。"""
+    path = tmp_path / "blank.docx"
+    mf.make_article(path, "空白の見出しスタイルの検証用文書", _midbody("ref_head"))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert any("空白だけ" in d.message and "領域" in d.message for d in res.plan.decisions)
+
+
+# ----------------------------------------------------------------------------- 空白だけの見出しの後ろに中身が続くときは切り替える（C041 の例外）
+def test_blank_ref_heading_followed_by_references_still_switches(journal, meta, tmp_path):
+    """後付けの見出しのスタイルが空の段落の直後に、参考文献スタイルの文献が続くときは、今までどおり引用文献の節に切り替える
+    （本物の中身が本文の段落 <p> にならない）。"""
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "本文である（試験，2024）。"),
+                mf.para(S["ref_head"]), mf.para(S["ref"], _REF2_TEXT)]
+    path = tmp_path / "blank_ref.docx"
+    mf.make_article(path, "空の引用文献見出しの検証用文書", parts)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    assert [r.para.plain() for r in res.plan.refs] == [_REF2_TEXT, _REF_TEXT]
+    assert _REF2_TEXT not in text(load(res).find("body"))
+
+
+def test_blank_fn_heading_followed_by_notes_still_switches(journal, meta, tmp_path):
+    """空の注の見出しのスタイルの段落の直後に、注本文スタイルの注が続くときは、注の節に切り替える。"""
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "本文である（試験，2024）。"),
+                mf.para(S["fn_head"]), mf.para(S["fn_body"], "1) 注の内容である。")]
+    path = tmp_path / "blank_fn.docx"
+    mf.make_article(path, "空の注の見出しの検証用文書", parts)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    assert [[x.plain() for x in fn.paras] for fn in res.plan.fns] == [["1) 注の内容である。"]]
+    assert "注の内容である。" not in text(load(res).find("body"))
+
+
+def test_blank_heading_followed_by_body_text_does_not_switch(journal, meta, tmp_path):
+    """もとの C041 の形: 空の見出しスタイル（引用文献・注）の段落の後ろに本文が続くときは、切り替えない。"""
+    for style in ("ref_head", "fn_head"):
+        def parts(b, style=style):
+            return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "本文である（試験，2024）。"),
+                    mf.para(S[style]), mf.para(S["body"], "原稿の続きである。")]
+        path = tmp_path / f"blank_{style}.docx"
+        mf.make_article(path, "空の見出しの後ろの本文の検証用文書", parts)
+        res = convert(path, meta, journal, Options(out_dir=tmp_path / style, convert_metafiles=False))
+        assert res.fidelity.ok and res.dtd_valid
+        assert len(res.plan.refs) == 1 and not res.plan.fns
+        assert "原稿の続きである。" in text(load(res).find("body"))
+
+
+def test_blank_back_heading_inside_back_does_not_steal_following_references(journal, meta, tmp_path):
+    """後付けの中の、空白だけの謝辞の見出しのスタイルの段落は、後ろに参考文献スタイルの文献が続くなら節を切り替えない（文献が
+    謝辞にならない）。本物の謝辞の本文が続くときは、今までどおり謝辞の節に切り替える。"""
+    def refs(b):
+        return [mf.para(S["ack_head"]), mf.para(S["ref"], _REF2_TEXT)]
+    path = tmp_path / "back_ref.docx"
+    mf.make_article(path, "後付けの中の空白の見出しの検証用文書", lambda b: [mf.para(S["sec1"], "１．はじめに")], refs=refs)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "a", convert_metafiles=False))
+    assert res.fidelity.ok and res.dtd_valid
+    assert [r.para.plain() for r in res.plan.refs] == [_REF_TEXT, _REF2_TEXT] and res.plan.ack is None
+
+    def refs2(b):
+        return [mf.para(S["ack_head"]), mf.para(S["body"], "謝辞の本文である。")]
+    path = tmp_path / "back_ack.docx"
+    mf.make_article(path, "後付けの中の空白の見出しの検証用文書", lambda b: [mf.para(S["sec1"], "１．はじめに")], refs=refs2)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "b", convert_metafiles=False))
+    assert res.fidelity.ok and res.dtd_valid
+    assert [c.para.plain() for c in res.plan.ack.children] == ["謝辞の本文である。"] and len(res.plan.refs) == 1

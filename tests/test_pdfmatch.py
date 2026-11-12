@@ -3987,3 +3987,57 @@ def test_note_table_cells_are_not_targets(journal, tmp_path):
     assert node.caption.src in targets and not (cells & targets)
     where = {p.src: w for p, w in body_paragraphs(plan)}
     assert where[node.caption.src] == "caption" and {where[s] for s in cells} == {"cell"}
+
+
+
+def _c056_pages(body, ref, page_break=True):
+    """C056 の確かめの PDF の文字（架空。SMALL_EN は 2 ページに分ける。1 ページに全部あると、ページの端の行の扱いで
+    英文の見出しが照合されないため）。"""
+    first = ["（1）", *SMALL_FRONT, body, "引用および参考文献", SMALL_REF, ref, *SMALL_EN[:3]]
+    return ["\n".join(first), "\n".join(["（2）", *SMALL_EN[3:]])]
+
+
+def test_key_is_one_char_for_every_char():
+    """照合の鍵（key）は、どの文字も 1 文字を返す（文字数が変わらない）。「İ」（U+0130）は lower() が 2 文字（'i' と結合文字）に
+    なるので、そのまま返す。PdfStream.keys や照合の位置は「1 文字 = 1 キー」を前提にするので、ここが 2 文字だと位置がずれる。
+    全 Unicode の文字で確かめる（代用符号は文字列にできないので除く）。"""
+    from jasme_jats.pdfmatch import key, pdf_stream
+    assert all(len(key(chr(c))) == 1 for c in range(0x110000) if not 0xD800 <= c <= 0xDFFF)
+    assert key("İ") == "İ" and key("Ａ") == "a" and key("A") == "a" and key("ı") == "ı"
+    st = pdf_stream(["（1）\nİstanbul と Fictional\n"])
+    assert len(st.keys) == len(st.chars)
+
+
+def test_dotted_capital_i_in_both_does_not_break_comparison(journal, tmp_path):
+    """docx と PDF の両方に「İ」を含む参考文献があり、ほかにも違い（全角・半角の空白・引用文献の数字）があっても、例外なく照合し、
+    違いの直しは違いの場所だけ（後ろの段落の文字は動かない）。"""
+    docx_ref = "İnan, C.（2020）．Teaching fictional mathematics in İstanbul．Fictional Journal，5(2)，11-20．"
+    pdf_ref = "İnan, C.（2020）．Teaching fictional mathematics in İstanbul．Fictional Journal，5(2)，11-21．"
+    body = "本研究は架空（2020）の枠組みに基づいて１つの授業を分析するものである。"
+    pdf_body = body.replace("１つ", "1つ")
+    plan, src = small_article(tmp_path, journal, body, docx_ref)
+    pc = compare(plan, _c056_pages(pdf_body, pdf_ref))
+    assert not {src[body], src[docx_ref], src["Small article abstract."]} & set(pc.unmatched)
+    fixes = plan_fixes(plan, pc)
+    texts = {s: expected_text(plan.paras[s].plain(), [f for f in fixes if f.src == s])
+             for s in (src[body], src[docx_ref], src["Fictional University"], src["Small article abstract."])}
+    assert texts[src[body]] == pdf_body and texts[src[docx_ref]] == pdf_ref
+    assert texts[src["Fictional University"]] == "Fictional University"
+    assert texts[src["Small article abstract."]] == "Small article abstract."
+
+
+def test_dotted_capital_i_only_in_pdf_deletes_nothing_after(journal, tmp_path):
+    """PDF にだけ「İ」がある（docx は「I」）とき、照合の位置がずれず、後ろの段落（英文の所属「Fictional University」・要旨）の
+    先頭の文字を消す直しが出ない（0.31.1 までは「Fictional University」→「ctional University」になった）。"""
+    docx_ref = "Inan, C.（2020）．Teaching fictional mathematics in Istanbul．Fictional Journal，5(2)，11-20．"
+    pdf_ref = "İnan, C.（2020）．Teaching fictional mathematics in İstanbul．Fictional Journal，5(2)，11-20．"
+    body = "本研究は架空（2020）の枠組みに基づく。"
+    plan, src = small_article(tmp_path, journal, body, docx_ref)
+    pc = compare(plan, _c056_pages(body, pdf_ref))
+    fixes = plan_fixes(plan, pc)
+    for name in ("Fictional University", "Small article abstract.", "A Small Article"):
+        assert [f for f in fixes if f.src == src[name]] == []
+    # 「I」→「İ」は docx の参考文献の (B) の直し（1 文字の置き換え）として出る。それ以外の直しはない
+    ref_fixes = [f for f in fixes if f.src == src[docx_ref]]
+    assert ref_fixes and all((f.old, f.new) == ("I", "İ") for f in ref_fixes)
+    assert {f.src for f in fixes} == {src[docx_ref]}

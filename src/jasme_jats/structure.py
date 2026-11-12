@@ -96,6 +96,9 @@ TEXTBOX_TEXT_EXCLUDED = "テキストボックス内の文字（図の一部と�
 TEXTBOX_LABEL_EXCLUDED = "テキストボックス内の文字（図に重ねた注記とみなして本文から除外）"
 TEXTBOX_UNDECIDED_EXCLUDED = "テキストボックス内の文字（囲みか図の注記か決められないため本文から除外。要確認）"
 TEXTBOX_AI_LABEL_EXCLUDED = "テキストボックス内の文字（AI による補完で図に重ねた注記と判断し、本文から除外）"
+# 引用文献・注の節の、画像だけの段落（文字は 1 文字もない。blank の除外。画像は pipeline.lost_images が知らせる）を除外したときの理由
+REF_IMAGE_EXCLUDED = "画像だけの段落（引用文献の節の中。引用文献には画像を出力できない）"
+FN_IMAGE_EXCLUDED = "画像だけの段落（注の節の中。注が始まる前の段落は注にしない。注には画像を出力できない）"
 # 冒頭部の、テンプレートの装飾・誌名行の段落（意図した除外。知らせない。front_decoration で決める）
 FRONT_DECORATION_EXCLUDED = "冒頭部のテンプレート装飾・誌名行など（題目・著者以外の段落）"
 # 論文の中の位置（役割）を決められずに除いたときの理由。要確認 excluded_unsure（report._unplaced_action）で知らせる
@@ -527,6 +530,10 @@ class Classifier:
         和文の冒頭の最後の段落（セクション区切り）なら、切り替えた後の本文に入る（テンプレートの冒頭に図形はないので、本文の
         中身とみなす）。図形の中の題目の段落は「題目を見た」ことにする（題目をテキストボックスに入れた原稿でも、冒頭の最後の
         セクション区切りで本文に切り替えるため）。
+        図形の外の、空白だけの段落（画像のある段落は含まない）は、スタイルが後付けの見出し・英文要旨でも領域を切り替えず、注の節の推定
+        （fn_guess・fn_guess_span）も動かさず、その時点の領域に入れる（C041。本文から後付け・和文の冒頭から後付け・英文の部分へ切り替える
+        はずだったときは、判断の一覧に記録する）。ただし、後ろの最初の中身がその見出しの中身の役割（引用文献の見出しなら参考文献、
+        注の見出しなら注本文。blank_heading_leads）なら、今までどおり切り替える。後付けの中の節の切り替え（build_back）も同じ規則。
         本文の外の段落に結び付いた図形（self.outside。2 回目の組み立て）の中身は、その時点の領域にかかわらず、本文の最後に
         回す（docx の順。領域は変えない。修正計画の N7）。
         本文スタイルの「注」だけの段落（表の注の見出しなど）は、文字から注の見出しと推定して後付けに切り替える（back_heading_by_text）が、
@@ -552,13 +559,19 @@ class Classifier:
         # 文字から注の見出しと推定した「注」の段落 ID → その後ろが今、注の節の中か（その段落を「注見出し」スタイルにしたとき、
         # 後ろの段落が注の節に入るかを数えている間。plan.fn_guess_span。feed_fn_span）。英文の部分に切り替わると数えるのをやめる
         fn_open = {}
-        for b, role in flat:
+        for k, (b, role) in enumerate(flat):
+            # 図形の外の、空白だけの段落（画像のある段落は含まない）。スタイルが後付けの見出し・英文要旨でも領域を切り替えず、
+            # 注の節の推定（fn_guess）も動かさず、その時点の領域に入れる（C041。本文の途中の空行のスタイルで、後ろの本文が
+            # 引用文献・注・英文要旨になるのを防ぐ）。ただし、後ろの最初の中身がその見出しの中身の役割なら、今までどおり切り替える
+            # （後付けの見出しのスタイルが空の段落の直後に、参考文献スタイルの文献・注本文スタイルの注が続く原稿）
+            blank_para = (isinstance(b, Para) and b.is_blank and not in_shape(b)
+                          and not (self.blank_heading_leads(role, flat[k + 1:], False)))
             if fn_open and not in_shape(b):
-                self.feed_fn_span(fn_open, b, role)
+                self.feed_fn_span(fn_open, b, role, blank_para)
             if (state in ("body", "back") and isinstance(b, Para) and not in_shape(b) and role not in BACK_HEADINGS
                     and self.back_heading_by_text(b, role) == "fn_heading"):
                 self.plan.fn_guess_notes.append(b.src)        # 記録だけ（助言に添える。fn_guess_notes）
-            if fn_guess is not None and state == "back" and not in_shape(b):
+            if fn_guess is not None and state == "back" and not in_shape(b) and not blank_para:
                 if role in BACK_HEADINGS or (isinstance(b, Para) and self.back_heading_by_text(b, role) not in (None, "fn_heading")):
                     self.check_fn_guess(regions["back"][fn_guess:], f"後ろの後付けの見出し {block_id(b)}")    # 引用文献・付記・謝辞などの見出しが続く: 本当の注の節
                     fn_guess = None
@@ -594,7 +607,13 @@ class Classifier:
                 regions[state].append((b, role))
                 continue
             troles = self.table_roles(b) if isinstance(b, Table) else set()
-            if role in FRONT_EN_ROLES or troles & {"author_en", "aff_en"}:
+            if blank_para and (role in FRONT_EN_ROLES or (role in BACK_HEADINGS and state in ("front_ja", "body"))):
+                if state in ("front_ja", "body"):
+                    self.plan.decide(
+                        "mechanical", "style", b.src,
+                        f"空白だけの段落のスタイル「{b.style_name}」は、{'英文の部分' if role in FRONT_EN_ROLES else '後付け'}の"
+                        "始まりを示すが、空白だけの段落なので領域を切り替えなかった（後ろの段落は、今の領域のまま）")
+            elif role in FRONT_EN_ROLES or troles & {"author_en", "aff_en"}:
                 state = "front_en"
             elif state == "front_ja":
                 if role in FRONT_JA_ROLES or troles & FRONT_JA_ROLES:
@@ -626,7 +645,40 @@ class Classifier:
             self.check_fn_guess(regions["back"][fn_guess:], "文書の終わり")       # 後付けの見出しが続かないまま文書が終わった
         return regions
 
-    def feed_fn_span(self, fn_open, b, role):
+    def blank_heading_leads(self, role, rest, in_back) -> bool:
+        """空白だけの段落（役割 role。後付けの見出し・英文の部分の役割）の後ろ rest（[(段落・表, 役割)]）が、その見出しの中身で始まるか。
+
+        図形の外の、空白だけでない最初の段落（表なら最初の空白だけでない段落）の役割で決める: 引用文献の見出しなら参考文献の役割（ref）、
+        注の見出しなら注本文の役割（fn）、英文の部分の役割なら英文の部分の役割。付記・謝辞の見出しの中身には決まった役割がないので、
+        本文などの途中（in_back が偽）では切り替えない。後付けの中（in_back が真）では、ほかの節の中身の役割（ref・fn）でなければ
+        切り替える（後ろの文献が付記・謝辞に入るのを防ぐ）。見出しの役割でなければ偽。真のとき、空白だけの段落も、中身のある見出しと
+        同じに領域を切り替える（C041 の守りの例外）。
+        """
+        if role not in FRONT_EN_ROLES and role not in BACK_HEADINGS:
+            return False
+        nxt = None
+        for b, r in rest:
+            if in_shape(b):
+                continue
+            if isinstance(b, Table):
+                found = next((p for p in b.paragraphs() if not p.is_blank), None)
+                if found is None:
+                    continue
+                r = self.role_of(found)
+            elif b.is_blank:
+                continue
+            nxt = r
+            break
+        if nxt is None:
+            return False
+        if role in FRONT_EN_ROLES:
+            return nxt in FRONT_EN_ROLES
+        kind = BACK_HEADINGS[role]
+        if kind in ("refs", "fn"):
+            return nxt == {"refs": "ref", "fn": "fn"}[kind]
+        return in_back and nxt not in ("ref", "fn")
+
+    def feed_fn_span(self, fn_open, b, role, skip=False):
         """ブロック b（図形の外）を、文字から推定した「注」の段落（fn_open のキー）ごとの plan.fn_guess_span に足す。
 
         その「注」を「注見出し」スタイルにすると、後付けの領域は「注」から英文の部分まで続き、build_back が段落を分ける:
@@ -634,6 +686,8 @@ class Classifier:
         戻るだけで、注の一覧の段落には入らない。注の節の中の段落（空白だけの段落と表を除く）が、助言が言う「注の節に入る段落」。
         英文の部分に切り替わる段落・表からは数えない（fn_open を空にする）。
         """
+        if skip:
+            return          # 領域を切り替えない空白だけの段落（blank_para。split_regions）は、注の節の数え方も変えない
         if role in FRONT_EN_ROLES or (isinstance(b, Table) and self.table_roles(b) & {"author_en", "aff_en"}):
             fn_open.clear()
             return
@@ -1954,6 +2008,12 @@ class Classifier:
             children.append(PNode(b))
 
     @staticmethod
+    def textless(b) -> bool:
+        """段落 b に文字が 1 文字もないか: 空白と画像だけ（数式・脚注の参照・Word の自動番号があれば偽）。"""
+        return (isinstance(b, Para) and not b.autonum
+                and all(a.kind == "image" or (a.kind == "text" and not a.text.strip()) for a in b.atoms))
+
+    @staticmethod
     def node_paras(node):
         if isinstance(node, PNode):
             return [node.para]
@@ -2072,7 +2132,7 @@ class Classifier:
                         plan.exclude(p, BACK_TABLE_EXCLUDED)
             pending.clear()
 
-        for b, role in items:
+        for k, (b, role) in enumerate(items):
             key = self.outside_key(b) if in_shape(b) else ""
             if key:
                 # 本文の外（引用文献・注など）の段落に結び付いた図形の中身は、その領域の段落にしない（N7）。状態を変えずに飛ばし、
@@ -2114,6 +2174,13 @@ class Classifier:
                             plan.exclude_blank(p)
                         else:
                             plan.exclude(p, BACK_TABLE_EXCLUDED)
+                continue
+            if (isinstance(b, Para) and b.is_blank and not in_shape(b) and role in BACK_HEADINGS
+                    and not self.blank_heading_leads(role, items[k + 1:], True)):
+                # 空白だけの後付けの見出しのスタイルの段落は、後ろの最初の中身がその見出しの中身でなければ、節を切り替えない
+                # （後ろの文献が注・謝辞・付記になるのを防ぐ。C041。split_regions と同じ規則）。空白の除外に記録するだけ
+                plan.region[b.src] = state or "back"
+                plan.exclude_blank(b)
                 continue
             heading = role if role in BACK_HEADINGS else self.back_heading_by_text(b, role)
             if heading:
@@ -2170,6 +2237,19 @@ class Classifier:
                                      "段落として出力しました")
             if b.is_blank:
                 plan.exclude_blank(b)
+                continue
+            if state in ("refs", "fn") and self.textless(b) and (state == "refs" or current_fn is None):
+                # 引用文献の節の、文字が 1 文字もない段落（画像・図形を結び付けただけの段落）は、中身のない <ref> にせず、空白の
+                # 除外に記録する（注の節では、注がまだ始まっていない所の同じ形の段落だけ。続きの段落は注の中に残す）。文字は 1 文字も
+                # ないので blank の除外（不変性チェックが空白だけと確かめる）で、理由だけ画像用にする。画像は、XML に入らなかった画像
+                # として pipeline.lost_images が今までどおり知らせる（理由と場所は、その知らせの手がかりになる）
+                if state == "refs":
+                    plan.exclude_blank(b, REF_IMAGE_EXCLUDED)
+                    plan.locations[b.src] = (f"引用文献 {len(plan.refs)}件目の後ろ" if plan.refs
+                                             else "引用文献（見出しの後ろ、1件目の前）")
+                else:
+                    plan.exclude_blank(b, FN_IMAGE_EXCLUDED)
+                    plan.locations[b.src] = (f"注 {len(plan.fns)}件目の後ろ" if plan.fns else "注（見出しの後ろ、1件目の前）")
                 continue
             if state == "refs":
                 plan.refs.append(RefNode(para=b))

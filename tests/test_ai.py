@@ -20,6 +20,11 @@ RESPONSE = (DATA / "ai_response_sample_full.json").read_text(encoding="utf-8")
 FLOAT_RESPONSE = json.loads((DATA / "ai_response_sample_float.json").read_text(encoding="utf-8"))
 
 
+def example_block():
+    """依頼文の見本（MANUAL_EXAMPLE）のコードブロックの中身を JSON として読む（parse_response は見本そのものを断るので通さない）。"""
+    return json.loads(ai_assist.RE_FENCE.search(ai_assist.MANUAL_EXAMPLE).group(1))
+
+
 def load(res):
     return etree.fromstring(res.xml_path.read_bytes().split(b"\n", 2)[2])
 
@@ -51,7 +56,7 @@ def test_manual_mode_without_response_writes_prompt(journal, meta, tmp_path):
     assert res.fidelity.ok
     # チャットの AI が JSON を崩さないよう、回答の書き方（コードブロック 1 つ・半角の引用符）と見本を示す
     assert "## 回答の書き方" in prompt and "```json" in prompt
-    assert parse_response(ai_assist.MANUAL_EXAMPLE)["operations"]
+    assert example_block()["operations"]
 
 
 def test_parse_response_does_not_guess_on_curly_quotes():
@@ -447,7 +452,7 @@ def cut_cases():
 
 def test_response_format_puts_placements_first():
     """依頼文の見本・項目の説明・回答の書き方と、API の構造化出力のスキーマで、placements を回答の最初に書かせる。"""
-    assert list(parse_response(ai_assist.MANUAL_EXAMPLE)) == ["placements", "operations", "notes"]
+    assert list(example_block()) == ["placements", "operations", "notes"]
     schema = ai_assist.RESPONSE_SCHEMA
     assert list(schema["properties"]) == schema["required"] == ["placements", "operations", "notes"]
     assert "回答の最初に書く" in schema["properties"]["placements"]["description"]
@@ -1290,7 +1295,7 @@ def test_prompts_explain_box_and_label():
     assert "「# 図に重ねた注記とみなして除外したテキストボックス」に挙げたものは、変えるときだけ\nkind box で書く" in a.FIELD_GUIDE
     assert "kind を box（本文の囲み。問題文・ヒントなど）か label（図に重ねた注記。矢印のラベルなど）" in a.FIELD_GUIDE
     assert "- float: 図形の ID（s1 など）か、テキストボックスの ID（x1 など）" in a.FIELD_GUIDE
-    example = parse_response(a.MANUAL_EXAMPLE)
+    example = example_block()
     assert example["placements"][1]["float"] == "x2" and example["placements"][1]["items"][0]["kind"] == "box"
     assert "（kind は box か label）" in a.manual_prompt("依頼文", [])
     assert ("「# 図に重ねた注記とみなして除外したテキストボックス」に挙げたものは、本文の文章（問題文・ヒントなど）のときだけ、"
@@ -1643,7 +1648,7 @@ def test_parse_response_requires_operations():
         parse_response(json.dumps({"operations": {}}))
     assert parse_response(RESPONSE)["operations"]
     assert parse_response(json.dumps(_EMPTY_ANS))["operations"] == []
-    assert parse_response(ai_assist.MANUAL_EXAMPLE)["operations"]
+    assert example_block()["operations"]
 
 
 def test_manual_array_answer_is_ai_error(journal, meta, tmp_path):
@@ -1846,3 +1851,63 @@ def test_conflict_overrides_range(journal, tmp_path):
         assert not {_src_of(plan, t) for t in outside} & got, name
         assert all(plan.region.get(s) in ("front_ja", "authors", "excluded") for s in got) or not name.startswith("K2"), name
         assert conflict_overrides(plan, {s: r for s, r in every.items() if s not in got}) == set(), name
+
+
+# ---- C019: 依頼文・見本を回答の欄に貼ったときは、回答全体を断る
+def _real_answer_block():
+    d = {"placements": [], "operations": [dict(_OP1, reason="本物の回答の理由")], "notes": []}
+    return "```json\n" + json.dumps(d, ensure_ascii=False, indent=1) + "\n```"
+
+
+def test_pasted_request_is_refused(journal, meta, tmp_path):
+    first = convert(FULL, meta, journal, Options(out_dir=tmp_path / "a", ai_mode="manual", convert_metafiles=False))
+    prompt = first.prompt_path.read_text(encoding="utf-8")
+    with pytest.raises(ValueError, match="依頼文"):
+        parse_response(prompt)
+    assert ai_assist.parse_cut_response(prompt) is None
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "b", ai_mode="manual", ai_response=prompt,
+                                               convert_metafiles=False))
+    assert "依頼文" in res.ai.error and not res.ai.accepted
+    assert "ai_error" in {a.key for a in actions(res)} and res.needs_action
+    assert res.fidelity.ok
+    # 依頼文の見出しの行と同じ文字でも、行頭の見出しの行でなければ（notes や reason に引用しても）断らない
+    ok = json.loads(RESPONSE)
+    ok["notes"] = [ai_assist.REQUEST_HEADING + " の見出しは" + ai_assist.MANUAL_ANSWER_HEADING + "と同じ"]
+    assert parse_response(json.dumps(ok, ensure_ascii=False))["operations"]
+
+
+def test_several_code_blocks_are_refused():
+    # 見本のあとに本物の回答が続く回答も、どれを読むか推測せず断る
+    with pytest.raises(ValueError, match="2 つ"):
+        parse_response(f"見本はこうです。\n{ai_assist.MANUAL_EXAMPLE}\n\n回答です。\n{_real_answer_block()}\n")
+    # コードブロックが 1 つなら、前後の説明があっても今までどおり読む。{ で始まる回答（中身だけのコピー）も同じ
+    assert parse_response("回答です。\n" + _real_answer_block() + "\n以上")["operations"]
+    assert parse_response(_real_answer_block().split("\n", 1)[1].rsplit("\n", 1)[0])["operations"]
+
+
+def test_sample_items_in_answer_are_refused():
+    # 見本のコードブロックそのもの。断る文は件数だけを言い、内部の項目名・ID は出さない
+    ex = example_block()
+    n = len(ex["operations"]) + len(ex["placements"])
+    with pytest.raises(ValueError, match="見本") as ei:
+        parse_response(ai_assist.MANUAL_EXAMPLE)
+    msg = str(ei.value)
+    assert f"{n} 件" in msg and "operations" not in msg and "placements" not in msg and "link_" not in msg
+    assert not any(x["src"] in msg for x in ex["operations"]) and not any(x["float"] in msg for x in ex["placements"])
+    # 画面ごとの操作（手順番号・欄の名前・ファイル名）は書かない（レポート・コマンドラインにもそのまま出る文）
+    for m in (ai_assist.PASTED_REQUEST_MSG, msg):
+        assert "手順" not in m and "欄" not in m and ".txt" not in m
+    # 見本の操作が 1 件だけ入った回答（ほかは本物）
+    d = {"placements": [], "operations": [example_block()["operations"][1], dict(_OP1, reason="本物の回答の理由")], "notes": []}
+    with pytest.raises(ValueError, match="見本"):
+        parse_response(json.dumps(d, ensure_ascii=False))
+    # 見本の図表の位置が 1 件
+    d = {"placements": [example_block()["placements"][0]], "operations": [], "notes": []}
+    with pytest.raises(ValueError, match="見本"):
+        parse_response(json.dumps(d, ensure_ascii=False))
+    # 見本と ID だけが同じで理由の違うもの（本物の回答）は読む
+    d = {"placements": [], "operations": [dict(example_block()["operations"][1], reason="本物の理由")], "notes": []}
+    assert parse_response(json.dumps(d, ensure_ascii=False))["operations"]
+    # 途中で切れた回答から読む位置の指定でも、見本の写しは使わない
+    cut = json.dumps(example_block()["placements"][:1], ensure_ascii=False)
+    assert ai_assist.parse_cut_response('{"placements": ' + cut[:-1] + ', {"float": "s9"') is None
