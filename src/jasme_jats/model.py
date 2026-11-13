@@ -87,11 +87,6 @@ class Atom:
         return OBJ
 
 
-# Word の画像の加工のうち、書き出しで反映しないもの（ImageRef.edits の名前と順）
-IMAGE_EDITS = ("切り取り（読めない指定）", "余白", "並べて表示", "塗りつぶしの範囲", "回転", "左右反転", "上下反転",
-               "色の変更", "透明度", "図の効果", "アート効果")
-
-
 @dataclass
 class ImageRef:
     rel_id: str
@@ -103,13 +98,10 @@ class ImageRef:
     descr: str = ""
     ole_progid: str = ""
     shape_only: bool = False    # 画像ファイルを持たない Word 図形
-    export_name: str = ""       # 出力ファイル名（Graphics/ 配下）
     image_id: str = ""          # レポート・AI 用の識別子 (img1, img2, ...)
     float_id: str = ""          # 浮動配置の図形（Float）の中の画像なら、その図形の ID
     hidden: bool = False        # 隠し文字（w:vanish）のランの中の画像。段落のアトムにしない（XML に出力しない）
     hidden_style: bool = False  # hidden のうち、スタイル・既定の書式の設定で隠したもの（ランの直接の指定でない。要確認で知らせる）
-    crop: tuple | None = None   # Word のトリミング（左・上・右・下）。元の画像の幅・高さに対する割合（0 以上）。4 つとも 0 なら None
-    edits: tuple = ()           # 書き出しで反映しない Word の加工の名前（IMAGE_EDITS の順・重複なし）。9 章と要確認 image_edits
     # --- 画像の置き場所を決める手がかり（W1。docx の画像は、置き場所を決めるためにだけ読む）
     draw_id: str = ""           # 同じ w:drawing・w:pict・w:object の画像（グループ図形の中の複数の画像）は同じ値（g1, g2, …。部品をまたいで通し番号）
     digest: str = ""            # 画像の中身の SHA-1。画像ファイルがあればファイルの中身、なければ図形の XML（文字・位置・ID・名前を除く）
@@ -289,6 +281,20 @@ class LostImage:
     reason: str         # 出力しなかった理由の推定
     text: str = ""      # 段落の文字の冒頭（Word で探す手がかり。図形の中の画像なら、図形が結び付いている段落を reason に書く）
     source: str = ""    # docx の中のファイル（word/media/...）。Word の図形なら空
+
+
+@dataclass
+class Decoration:
+    """画像の位置に数えなかった飾りの図形 1 つ（ImageRef.decoration。pipeline.decorations が変換の後に集める。修正計画 W1 の 2.8）。
+
+    知らせにはしない（決定 6。記録だけ）。レポートの 9 章と図の確かめの一覧の末尾に出す。figure は、その飾りが図キャプションのある
+    図形の中にあり、その図形に図の置き場所があるときの幹（fig04 など）。そのときは「飾り」ではなく「図形で描いた図（図の本体）」として
+    分けて出し、その図の備考に「Word の図形で描いた図です」と書く（文字の図形だけのグループで描いた図。data10・data25 の形）。
+    """
+    image: ImageRef
+    kind: str           # frame（枠）/ mask（白い四角）/ line（線・矢印）/ textgroup（文字の図形だけのグループ）
+    where: str          # 場所の文（report.decoration_where）
+    figure: str = ""    # 図形で描いた図の置き場所の幹（なければ ""）
 
 
 @dataclass

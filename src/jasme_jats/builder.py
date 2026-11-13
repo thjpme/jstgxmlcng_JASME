@@ -313,7 +313,13 @@ class Builder:
                 fn_numbers[fn.word_id] = (fn.fid, plan.pdf_numbers.get(("fnref", fn.word_id), marks[fn.word_id][1]))
         self.marks = marks
         self._name_ctx = None
-        self.em = E.Emitter(self.name_image, fn_numbers, plan.moved_images)
+        # 任意の置き場所（結果のないフィールドの位置。修正計画 W1 の手順 15）: 段落の ID -> [(段落の文字の中の位置, 置き場所)]
+        self.optional_slots = {}
+        for s in plan.slots:
+            if s.kind == "optional":
+                self.optional_slots.setdefault(s.src, []).append((s.pos, s))
+        self.em = E.Emitter(self.name_image, fn_numbers, plan.moved_images,
+                            optional_fields=self.optional_slots.get, optional_namer=self.slot_name)
 
     def autonum(self, p) -> str:
         """段落の Word の自動番号（ルート2 では、全角・半角と字形を出版版 PDF に合わせたもの）。"""
@@ -355,16 +361,10 @@ class Builder:
         """画像の置き場所の名前（Graphics/ の中のファイル名）: 「{記事識別子}_{幹}.{拡張子}」（雑誌の設定 image_name_pattern）。
         この組み立てで出力する置き場所として info.slots に加える（同じ置き場所は 1 度だけ）。
 
-        拡張子は、置き場所の最初の画像（covers[0]）の docx の中のファイルの形式（png・jpg・gif。それ以外と画像のない置き場所は png）。
-        W1 の途中の姿で、docx の画像をそのまま書き出すため（手順 9 で、入れた画像の形式で決める形にする）。
+        拡張子はいつも png（置き場所をすべて書いた XML〈pipeline.Result.xml_base〉の名前。入れた画像の形式に合わせるのは
+        package.apply_images）。docx の画像は書き出さない（修正計画 W1）。
         """
-        first = slot.covers[0] if slot.covers else None
-        target = first.target if first is not None else ""
-        ext = (target.rsplit(".", 1)[-1].lower() if "." in target else "png")
-        ext = {"jpeg": "jpg", "jpg": "jpg", "png": "png", "gif": "gif"}.get(ext, "png")
-        name = f"{self.j.image_name_pattern.format(article_id=self.article_id, key=slot.key)}.{ext}"
-        if first is not None:
-            first.export_name = name        # W1 の途中の姿: images.export_images が、置き場所の最初の画像をこの名前で書き出す
+        name = f"{self.j.image_name_pattern.format(article_id=self.article_id, key=slot.key)}.png"
         if id(slot) not in self._named:
             self._named.add(id(slot))
             self.info.slots.append(slot)

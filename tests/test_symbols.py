@@ -63,7 +63,7 @@ def font_run(font, text):
 
 
 def run_convert(path, journal, meta, tmp_path, **kw):
-    return convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False, **kw))
+    return convert(path, meta, journal, Options(out_dir=tmp_path / "out", **kw))
 
 
 def keys(res):
@@ -236,7 +236,7 @@ def test_unknown_private_use_bullet_is_needs_action(journal, meta, tmp_path, cap
         assert "生成文字" not in text and "XML の label" not in text
     assert "新しい行頭文字の定義" in acts[0].top and "打ち直して" not in acts[0].top and "symbol_replaced" not in keys(res)
     assert "U+F0B1" in chapter8(res) and "XML に残った私用領域" in chapter8(res)
-    assert cli_main([str(path), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli"), "--no-metafile-conversion"]) == 1
+    assert cli_main([str(path), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli")]) == 1
     assert "U+F0B1" in capsys.readouterr().err
 
 

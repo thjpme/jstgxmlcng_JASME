@@ -62,7 +62,7 @@ def _convert(tmp_path, journal, meta, rows=None, header_rows=0, raw_rows=None, n
                 mf.para(mf.S["tab_cap"], "表1　検証用の表"), tbl, mf.para(mf.S["body"], "以上で終わる。")]
     path = tmp_path / "table.docx"
     mf.make_article(path, "表の検証用文書", parts)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid, (res.fidelity.missing, res.dtd_errors[:3])
     assert res.table_problems == [], [p.problems for p in res.table_problems]
     assert res.tables_checked >= 1
@@ -206,7 +206,7 @@ def test_reader_reads_grid_skips(journal, meta, tmp_path):
     t = next(b for b in doc.blocks if isinstance(b, Table) and any(p.plain() == "S0" for p in b.paragraphs()))
     assert [(r.grid_before, r.grid_after, r.number) for r in t.rows] == [(1, 0, 2), (0, 2, 3), (0, 0, 4), (0, 0, 5)]
     assert [x.gridspan for x in t.rows[3].cells] == [1, 1, 1]
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.table_problems == []
 
 
@@ -307,7 +307,7 @@ def test_table_shape_is_needs_action(journal, meta, tmp_path, broken_table, caps
                 mf.para(mf.S["tab_cap"], "表1　検証用の表"), mf.table([[c("A"), c("B")], [c("C"), c("D")]])]
     path = tmp_path / "broken.docx"
     mf.make_article(path, "表の検証用文書", parts)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.ok
     keys = [a.key for a in actions(res)]
     assert "table_shape" in keys and res.needs_action
@@ -319,7 +319,7 @@ def test_table_shape_is_needs_action(journal, meta, tmp_path, broken_table, caps
     assert "### 表の形の確かめ" in ch12 and "見つかった問題" in ch12 and "縦の結合（rowspan）" in ch12
     assert "表の形が崩れている 1 件" in report.split("## 14.")[1]
     assert cli_main([str(path), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli"),
-                     "--no-metafile-conversion"]) == 1
+                     ]) == 1
     err = capsys.readouterr().err
     assert "表" in err and "変換ツールの不具合の可能性" in err and "表 T1" in err
 
@@ -350,7 +350,7 @@ def test_table_problems_use_last_build(journal, meta, tmp_path, monkeypatch):
             return root, info
         monkeypatch.setattr(pipeline, "build", wrapped)
         res = convert(path, meta, journal, Options(out_dir=tmp_path / f"out-{which}", ai_mode="manual",
-                                                   ai_response=EMPTY_ANSWER, convert_metafiles=False))
+                                                   ai_response=EMPTY_ANSWER))
         return res, calls
     res, calls = run("plain")
     assert len(calls) == 2 and res.table_problems == []
@@ -366,7 +366,7 @@ def test_table_problems_use_last_build(journal, meta, tmp_path, monkeypatch):
             return root, info
         monkeypatch.setattr(pipeline, "build", wrapped)
         res = convert(path, meta, journal, Options(out_dir=tmp_path / f"out-{which}", ai_mode="manual",
-                                                   ai_response=EMPTY_ANSWER, convert_metafiles=False))
+                                                   ai_response=EMPTY_ANSWER))
         assert len(res.table_problems) == (0 if which == "first" else 1)
 
 
@@ -379,7 +379,7 @@ def test_private_manuscripts_have_no_table_shape_problems(journal, meta, tmp_pat
     """実際の原稿の表の形が崩れていない（原稿の文字・ファイル名は出さない）。"""
     bad = []
     for k, path in enumerate(PRIVATE):
-        res = convert(path, meta, journal, Options(out_dir=tmp_path / str(k), ai_mode="manual", convert_metafiles=False))
+        res = convert(path, meta, journal, Options(out_dir=tmp_path / str(k), ai_mode="manual"))
         if res.table_problems:
             bad.append(k)
     assert bad == [], f"表の形が崩れた原稿の番号: {bad}"

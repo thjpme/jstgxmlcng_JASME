@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 from lxml import etree
 
-from .model import (IMAGE_EDITS, Atom, Cell, DeletedRow, Document, Float, ImageRef, JoinInfo, Layout, Para, ResultlessField, Row, SymbolReplaced,
+from .model import (Atom, Cell, DeletedRow, Document, Float, ImageRef, JoinInfo, Layout, Para, ResultlessField, Row, SymbolReplaced,
                     Table, TextBox, note_key)
 from .numbering import Numbering
 from .ooxml import (A_NS, BR_TEXT_TYPES, FONT_DISPLAY, LEGACY_BULLETS, O_NS, PIC_NS, R_NS, SYMBOL_ADDED, V_NS, WP_NS, WPS_NS, DocxPackage, HiddenRule,
@@ -751,9 +751,8 @@ class Reader:
                         sx = _ratio(wext.get("cx"), ch.get("cx"))
                         sy = _ratio(wext.get("cy"), ch.get("cy"))
                     pcx, pcy = round(int(ext.get("cx", "0")) * sx), round(int(ext.get("cy", "0")) * sy)
-                crop, edits = _pic_edits(pic, el)
                 img = self._new_image(rid, "drawing", el=pic, cx_emu=pcx, cy_emu=pcy, inline=inline, descr=descr,
-                                      crop=crop, edits=edits, **hid)
+                                      **hid)
                 if not hidden:
                     para.atoms.append(Atom(kind="image", image=img))
             if not pics:
@@ -783,9 +782,8 @@ class Reader:
                 cx, cy = int(float(mw.group(1)) * 12700), int(float(mh.group(1)) * 12700)
         for d in imgdata:
             rid = d.get(f"{{{R_NS}}}id")
-            crop, edits = _vml_edits(d)
             img = self._new_image(rid, "ole" if el.tag == w("object") else "vml", el=d,
-                                  cx_emu=cx, cy_emu=cy, ole_progid=progid, crop=crop, edits=edits, **hid)
+                                  cx_emu=cx, cy_emu=cy, ole_progid=progid, **hid)
             if not hidden:
                 para.atoms.append(Atom(kind="image", image=img))
         has_tx = any(True for _ in el.iter(w("txbxContent")))
@@ -993,143 +991,6 @@ def _vml_cm(style, prop):
         return float(mm.group(1)) / 72.0 * 2.54
     except ValueError:
         return None
-
-
-def _pct(v):
-    """OOXML の ST_Percentage（"50000" = 50%。Strict は "50%"）を割合にする。None・空は 0.0、読めなければ None。"""
-    if v is None or str(v).strip() == "":
-        return 0.0
-    t = str(v).strip()
-    try:
-        if t.endswith("%"):
-            return float(t[:-1]) / 100.0
-        return int(t) / 100000.0
-    except ValueError:
-        return None
-
-
-def _vml_frac(v):
-    """VML の割合（"16384f" = 1/65536 単位、"25%"、"0.25"）。None・空は 0.0、読めなければ None。"""
-    if v is None or str(v).strip() == "":
-        return 0.0
-    t = str(v).strip().lower()
-    try:
-        if t.endswith("%"):
-            return float(t[:-1]) / 100.0
-        if t.endswith("f"):
-            return float(t[:-1]) / 65536.0
-        return float(t)
-    except ValueError:
-        return None
-
-
-def _crop_tuple(vals):
-    """4 つの割合（左・上・右・下。読めなければ None）から (crop, edits)。edits は名前の list（順は呼び出し側で整える）。"""
-    edits = []
-    out = []
-    for v in vals:
-        if v is None:
-            if "切り取り（読めない指定）" not in edits:
-                edits.append("切り取り（読めない指定）")
-            v = 0.0
-        elif v < 0:
-            if v < -0.001 and "余白" not in edits:
-                edits.append("余白")
-            v = 0.0
-        out.append(v)
-    return (tuple(out) if any(out) else None), edits
-
-
-def _xfrm_edits(xfrm, edits):
-    """a:xfrm の回転・反転を edits に足す。"""
-    if xfrm is None:
-        return
-    rot = xfrm.get("rot")
-    if rot not in (None, "", "0"):
-        try:
-            nonzero = int(rot) != 0
-        except ValueError:
-            nonzero = True
-        if nonzero:
-            edits.append("回転")
-    if (xfrm.get("flipH") or "").lower() in ("1", "true"):
-        edits.append("左右反転")
-    if (xfrm.get("flipV") or "").lower() in ("1", "true"):
-        edits.append("上下反転")
-
-
-def _ordered_edits(edits) -> tuple:
-    return tuple(n for n in IMAGE_EDITS if n in edits)
-
-
-_BLIP_COLOR = {"grayscl", "duotone", "biLevel", "clrChange", "clrRepl", "hsl", "tint", "lum"}
-_BLIP_ALPHA = {"alphaBiLevel", "alphaCeiling", "alphaFloor", "alphaInv", "alphaMod", "alphaModFix", "alphaRepl"}
-_BLIP_EFFECT = {"blur", "fillOverlay"}
-
-
-def _local(el) -> str:
-    tag = el.tag
-    return tag.rsplit("}", 1)[-1] if isinstance(tag, str) else ""
-
-
-def _pic_edits(pic, container):
-    """DrawingML の pic の (切り取り, 反映しない加工の名前の tuple)。"""
-    bf = pic.find(f"{{{PIC_NS}}}blipFill")
-    crop, edits = None, []
-    if bf is not None:
-        sr = bf.find(f"{{{A_NS}}}srcRect")
-        if sr is not None:
-            crop, edits = _crop_tuple([_pct(sr.get(k)) for k in ("l", "t", "r", "b")])
-        if bf.find(f"{{{A_NS}}}tile") is not None:
-            edits.append("並べて表示")
-        fr = bf.find(f"{{{A_NS}}}stretch/{{{A_NS}}}fillRect")
-        if fr is not None and any(_pct(fr.get(k)) != 0.0 for k in ("l", "t", "r", "b")):
-            edits.append("塗りつぶしの範囲")
-    _xfrm_edits(pic.find(f"{{{PIC_NS}}}spPr/{{{A_NS}}}xfrm"), edits)
-    for anc in pic.iterancestors():
-        if anc is container:
-            break
-        for ch in anc:
-            if _local(ch) == "grpSpPr":
-                _xfrm_edits(ch.find(f"{{{A_NS}}}xfrm"), edits)
-    blip = bf.find(f".//{{{A_NS}}}blip") if bf is not None else None
-    if blip is not None:
-        for d in blip.iterdescendants():
-            n = _local(d)
-            if n in _BLIP_COLOR:
-                edits.append("色の変更")
-            elif n in _BLIP_ALPHA:
-                edits.append("透明度")
-            elif n in _BLIP_EFFECT:
-                edits.append("図の効果")
-            elif n == "imgProps" and any(_local(a) == "ext" for a in d.iterancestors() if a is not blip):
-                edits.append("アート効果")
-    return crop, _ordered_edits(edits)
-
-
-def _vml_edits(imagedata):
-    """VML の v:imagedata の (切り取り, 反映しない加工の名前の tuple)。"""
-    crop, edits = _crop_tuple([_vml_frac(imagedata.get(k)) for k in ("cropleft", "croptop", "cropright", "cropbottom")])
-    if (any((imagedata.get(k) or "").strip() for k in ("gain", "blacklevel", "gamma", "chromakey"))
-            or any((imagedata.get(k) or "").strip().lower() in ("t", "true") for k in ("grayscale", "bilevel"))):
-        edits.append("色の変更")
-    parent = imagedata.getparent()
-    style = re.sub(r"\s", "", parent.get("style", "") if parent is not None else "").lower()
-    mm = re.search(r"(?:^|;)rotation:([^;]*)", style)
-    if mm:
-        try:
-            rotated = float(mm.group(1).rstrip("fd") or "0") != 0
-        except ValueError:
-            rotated = True
-        if rotated:
-            edits.append("回転")
-    mm = re.search(r"(?:^|;)flip:([^;]*)", style)
-    if mm:
-        if "x" in mm.group(1):
-            edits.append("左右反転")
-        if "y" in mm.group(1):
-            edits.append("上下反転")
-    return crop, _ordered_edits(edits)
 
 
 def _in_textbox(el, container) -> bool:

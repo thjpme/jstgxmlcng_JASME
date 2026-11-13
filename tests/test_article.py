@@ -62,7 +62,7 @@ def _convert_small(tmp_path, journal, meta, parts, **kw):
     from jasme_jats.pipeline import Options, convert
     path = tmp_path / "small.docx"
     mf.make_article(path, "後付けの検証用文書", parts, **kw)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     return res, etree.fromstring(res.xml_path.read_bytes().split(b"\n", 2)[2])
 

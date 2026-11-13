@@ -6,7 +6,7 @@
 新しく引き継いだ人向けの環境の作り方は `docs/HANDOFF.md`。
 正式リリース前の実地テスト（実際の原稿 28 論文）とソース点検の結果は `docs/FIELD_TEST_2026-11.md`（問題 C001〜C163 と決定事項）、
 その修正計画と、2026-11-12 の所有者の決定（校正後の docx を前提にする、校正の直しを docx に書き込まない、
-図・表の画像は作業する人が用意する、など。**上の「最優先の原則」のルート2 と画像の記述は、実装のときに書き直す**）は
+図・表の画像は作業する人が用意する、など。**上の「最優先の原則」のルート2 の記述は、実装のときに書き直す。画像の記述は W1 で書き直した**）は
 `docs/FIX_PLAN_RELEASE.md`。
 
 ## 最優先の原則
@@ -15,8 +15,13 @@
   構造はアトムに `LinkSpec` を付けるか段落の役割を変えることで表し、XML の段落の文字は必ず `Emitter.span()` を通して書く。
 - 出力しない段落は理由付きで記録し（`plan.exclude()` / `BuildInfo.exclusions`。空白だけの段落は `plan.exclude_blank()`）、
   落とせるのは空白だけ（`Emitter.drop()`）。出力した段落を除外にも記録すると、不変性チェックは不合格になる。
-- 不変性チェックは文字しか見ない。XML に入らなかった画像は `pipeline.lost_images()` が検出し、要対応として知らせる。
-- アップロード用 ZIP に入れるものは `package.upload_entries()` だけで決め（この記事の XML・今回の PDF・使える画像）、`package.zip_problems()` で読み直して確かめる。
+- 図・表の画像は作業する人が用意する。ツールは docx の中の画像を書き出さない（変換・切り取りもしない。AI にも渡さない）。XML には画像の置き場所
+  （`article.ImageSlot`。図キャプション 1 つに 1 枚、キャプションのない画像は docx の画像の位置ごとに 1 枚。表で組んだ図は例外で、表を文字で出す）だけを書き、
+  名前は図番号から決める（`Classifier.assign_slots`）。入れた画像は中身を変えずに入れ（`images.check_user_image`。`pipeline.add_images`）、変換し直したときは
+  同じ図だと確かめられた画像だけ入れ直し（`pipeline.kept_images`・`reapply_images`。別の図の画像を入れない）、XML は
+  `package.apply_images()` の 1 か所で作り直す（置き場所をすべて書いた XML は `Result.xml_base`）。不変性チェックは文字しか見ないので、
+  置き場所を作れなかった画像は `pipeline.lost_images()` が検出し、要対応として知らせる。
+- アップロード用 ZIP に入れるものは `package.upload_entries()` だけで決め（この記事の XML・今回の PDF・作業する人が入れた画像）、`package.zip_problems()` で読み直して確かめる。
   入れなかったファイルはレポートの 10 章で知らせる（`Result.not_zipped`）。
 - 作り方は 2 通り（`Options.route`。最初に利用者が選ぶ。Colab の初期値とコマンドラインの `--pdf` があるときの既定はルート2）。
   どちらも docx → XML の処理は同じで、上の原則はそのまま守る。
@@ -33,9 +38,9 @@
     足すか・消すかを PDF から決められない違いは直さず、理由（`TextDiff.why`）を付けて 13 章に出す。
 - 「docx の文字」は Word で表示される文字（変更履歴を承諾し、隠し文字を隠した状態）。段落のつながり（段落記号の削除。`ooxml.joined_paragraphs`）と
   隠し文字の判定（スタイルの `w:vanish`。`ooxml.HiddenRule`）の規則は、読み取り（`docx_reader`）・検証（`fidelity.source_texts`）・ルート2（`pdfdocx`）で共有する。
-- 利用者に知らせること（要対応・要確認）と、毎回の手順（`report.STEP`。必須と推奨の別を持つ。AI の仕上げは推奨）は
+- 利用者に知らせること（要対応・要確認）と、毎回の手順（`report.STEP`。必須と推奨の別を持つ。図の画像を入れるのは必須、AI の仕上げは推奨）は
   `report.actions()` に `Action` を足すだけで、レポートの冒頭・14 章・Colab の枠（要対応は赤、要確認は黄、手順は青）・コマンドラインの標準エラーに出る
-  （個別の表示を render・colab・cli・make_notebook.py に足さない。画面の操作は手順番号や欄の名前を直接書かず、目印 `report.step()` で書く）。
+  （個別の表示を render・colab・cli・app・make_notebook.py に足さない。画面の操作は手順番号や欄の名前を直接書かず、目印 `report.step()` で書く）。
   コマンドラインの終了コードは、0 が要対応も残っている必須の手順もなし、1 がどちらかあり（`Result.needs_action`。`report.blocking()`）、2 が中止。
   推奨の手順は、残っていても失敗しても終了コードに数えない。
 - 詳しくは `docs/DEVELOPMENT.md` の「守るべき原則」。

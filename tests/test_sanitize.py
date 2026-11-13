@@ -195,7 +195,7 @@ def test_sanitize_removes_personal_info_and_keeps_text(tmp_path, journal, meta):
                             assert v in ids, (n, k, v)
     assert tracked_counts(src) == tracked_counts(dst)
     assert source_texts(src) == source_texts(dst)
-    opts = lambda d: Options(out_dir=tmp_path / d, convert_metafiles=False)
+    opts = lambda d: Options(out_dir=tmp_path / d)
     a, b = convert(src, meta, journal, opts("o1")), convert(dst, meta, journal, opts("o2"))
     assert b.fidelity.ok
     xa, xb = (next((tmp_path / d).glob("*.xml")).read_bytes() for d in ("o1", "o2"))

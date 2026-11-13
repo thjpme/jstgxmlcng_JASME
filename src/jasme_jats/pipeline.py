@@ -11,18 +11,20 @@
      set_role を不採用（CONFLICT_ROLE_WHY。レポートの 2 章）にして組み直す（中止しない）
   5. XML を組み立てる（builder）
   6. 文字の不変性チェック（fidelity）… AI 補完を行った場合も、必ずこの最終段階で行う
-  7. 目印を取り除いた最終出力を作り、もう一度文字列を照合する（fidelity.final_check）
-  8. J-STAGE 指定 DTD で検証する（validate）
-  9. docx の画像のうち XML に出力しなかったもの（画像の置き場所〈ImageSlot〉に含まれず、画像を置けない場所・出力しなかった段落の中に
-     ある画像）を調べる（lost_images）。
+  7. 目印を取り除き、画像の置き場所をすべて書いた XML（Result.xml_base）を作り、入れた画像を反映した最終出力
+     （package.apply_images）で、もう一度文字列を照合する（fidelity.final_check）
+  8. J-STAGE 指定 DTD で検証する（validate。最終出力で）
+  9. docx の画像のうち、画像の置き場所（ImageSlot）を作れなかったもの（置き場所をすべて書いた XML〈xml_base〉に、その画像を含む
+     置き場所の名前が出ていないもの。画像を置けない場所・出力しなかった段落の中にある画像）を調べる（lost_images）。XML の画像の名前が
+     置き場所の一覧と合うかも調べる（image_problems。変換ツールの不具合の守り）。画像の位置に数えなかった飾りの図形を集める（decorations）。
      あわせて、出力した表の形（行ごとの列の数・セルの重なり・縦の結合の範囲・セルのない行）を調べる（table_problems）。
      Word の自動番号のある段落で、文字を出したのに番号を出していないものも調べる（lost_autonums）。
      最終の XML に私用領域の文字（読めない文字）が残っていないかも調べ（pua_chars）、記号フォントの符号を普通の文字に置き換えた
      記号を集める（symbols_replaced）
- 10. J-STAGE のアップロード時のチェックのうち XML だけで判定できるものを再現する（jstage_rules。画像の名前を使うので、
-     11 の画像の書き出しの後、ZIP を作る前に、出力した画像の名前で行う）
- 11. 画像の書き出し（置き場所ごとに最初の画像を置き場所の名前で。export_slot_images）、J-STAGE のフォルダ構成と ZIP
-     （今回の XML・PDF・出力できた画像だけを入れ、読み直して確かめる）、レポート（images, package, report）
+ 10. J-STAGE のアップロード時のチェックのうち XML だけで判定できるものを再現する（jstage_rules。画像の置き場所の名前で）
+ 11. J-STAGE のフォルダ構成と ZIP（今回の XML・PDF・作業する人が入れた画像だけを入れ、読み直して確かめる）、レポート
+     （package, report）。docx の中の画像は書き出さない（図・表の画像は作業する人が用意し、add_images で入れる。入れるたびに
+     XML を apply_images で作り直し、文字・DTD・J-STAGE のチェック・ZIP の確かめをやり直す。修正計画 W1 の 2.6）
 
 作り方は 2 通り（Options.route）:
   ルート1（docx）: docx から作る。docx の文字は 1 文字も変えない。記事の PDF があれば照合して、違いをレポートに載せるだけ（pdfmatch）
@@ -37,28 +39,30 @@ from __future__ import annotations
 
 import datetime as _dt
 import subprocess
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 from . import __version__
 from .ai_assist import (DEFAULT_MODEL, AIOutcome, apply_ops, build_request, call_provider, float_placements,
-                        image_blocks, manual_prompt, parse_cut_response, parse_response, retarget_ops, role_overrides,
+                        manual_prompt, parse_cut_response, parse_response, retarget_ops, role_overrides,
                         split_ops, target_keys)
 from .article import _para_text
 from .builder import build, finalize, serialize, word_note_marks
 from .config import ArticleMeta, JournalConfig
 from .docx_reader import read_docx
 from .fidelity import SupplementResult, final_check, supplement_targets, verify, verify_supplement
-from .images import ImageResult, export_images, user_image
+from .imagelist import write_check
+from .images import ChangedImage, DroppedImage, KeptImage, SlotImage, check_user_image
 from .jstage_rules import check as jstage_check
 from .linker import cited_refs, link
-from .model import Decision, LostImage, LostNumber, PuaChar, TableProblem
-from .package import article_dir, make_zip, unzipped_files, write_package, zip_image_names, zip_problems
+from .model import Decision, Decoration, LostImage, LostNumber, PuaChar, TableProblem
+from .package import (XLINK_HREF, apply_images, article_dir, make_zip, unzipped_files, write_package, zip_image_names,
+                      zip_problems)
 from .pdfdocx import DocxFix, make_fixed_docx, same_file
 from .pdfmatch import PdfCheck, check_pdf
-from .report import (BOX_PENDING_NOTE, actions, blocking, images_to_prepare, render,
-                     render_ai_only, step, structure_conflict_text)
+from .report import (BOX_PENDING_NOTE, actions, blocking, decoration_where, render, render_ai_only, slot_where, step,
+                     structure_conflict_text)
 from .report import pdf_fallback as report_pdf_fallback
 from .structure import FN_IMAGE_EXCLUDED, REF_IMAGE_EXCLUDED, classify, conflict_overrides, float_caption, float_targets
 from .ooxml import is_pua
@@ -171,7 +175,6 @@ class Options:
     ai_response: Optional[str] = None         # 手動モード: AI の回答（JSON）
     pdf_path: Optional[Path] = None
     route: str = "docx"                       # docx（ルート1: docx から作る）/ pdf（ルート2: docx から作り、出版版 PDF で補う）
-    convert_metafiles: bool = True
 
 
 @dataclass
@@ -189,7 +192,7 @@ class Result:
     jstage_issues: list
     link_counts: dict
     unresolved_after: list
-    images: list
+    images: list        # 画像の置き場所と入れた画像（images.SlotImage。XML の順）
     warnings: list
     ai: AIOutcome
     build_notes: list = field(default_factory=list)
@@ -200,7 +203,9 @@ class Result:
     output_note: str = ""
     forced_floats: list = field(default_factory=list)   # AI による補完でも位置が決まらず、仮の位置（アンカー段落の後ろ・本文の最後）に置いた図表の説明
     pdf_check: Optional[PdfCheck] = None                # 出版版 PDF との照合（PDF がなければ None）。ルート2 では補った docx との照合
-    lost_images: list = field(default_factory=list)     # docx にあるのに XML に出力しなかった画像（LostImage。要対応）
+    lost_images: list = field(default_factory=list)     # 画像を入れる場所（置き場所）を作れなかった docx の画像（LostImage。要対応 lost）
+    image_problems: list = field(default_factory=list)  # XML の画像の名前が置き場所の一覧と合わない（image_problems の文。要対応 image_names）
+    decorations: list = field(default_factory=list)     # 画像の位置に数えなかった飾りの図形（model.Decoration。9 章。知らせない）
     lost_autonums: list = field(default_factory=list)   # Word の自動番号があるのに XML に番号を出さなかった段落（model.LostNumber。要対応）
     pua_chars: list = field(default_factory=list)       # 最終の XML に残った私用領域の文字（model.PuaChar。要対応 pua_left）
     symbols_replaced: list = field(default_factory=list)  # 記号フォントの私用領域の符号を置き換えた記号（model.SymbolReplaced。要確認 symbol_replaced。8 章）
@@ -224,9 +229,13 @@ class Result:
     # ルート2 の補完の確かめ（fidelity.SupplementResult。補った docx が元の docx から、組版の違いと報告した校正の直し以外に
     # 変わっていないか）。ルート1 と、PDF の文字を読めずに補わなかったときは None
     supplement: Optional[SupplementResult] = None
+    xml_base: bytes = b""       # 画像の置き場所をすべて書いた XML（目印を除いた形。名前の拡張子は .png。最終の XML は apply_images で作る）
+    images_dropped: list = field(default_factory=list)  # 変換し直す前の画像のうち、入れ直さなかったもの（images.DroppedImage。手順 images と 9 章で知らせる）
+    images_changed: list = field(default_factory=list)  # キャプションが少し変わった図に入れ直した画像（images.ChangedImage。確かめてもらう）
     xml_path: Optional[Path] = None
     zip_path: Optional[Path] = None
     report_path: Optional[Path] = None
+    check_path: Optional[Path] = None       # 図の確かめの一覧（imagelist.write_check。出力フォルダの {記事識別子}_図の確かめ.html。ZIP には入らない）
     prompt_path: Optional[Path] = None
     ai_report_path: Optional[Path] = None
 
@@ -290,17 +299,28 @@ REGION_JA = {"front_ja": "和文の冒頭部", "authors": "著者表", "body": "
 NOTE_PARTS = {"f": "Word の脚注", "e": "Word の文末脚注"}
 
 
-def lost_images(doc, plan, root, info, exclusions) -> tuple:
-    """docx の画像のうち、XML に出力しなかったもの。戻り値: (LostImage の一覧, 隠し文字の中の画像の ID の一覧)。
+def xml_image_names(root) -> list:
+    """XML の木の <graphic>・<inline-graphic> の xlink:href（XML の順。重なりも残す）。"""
+    return [el.get(XLINK_HREF) or "" for el in root.iter("graphic", "inline-graphic")]
 
+
+def lost_images(doc, plan, root, info, exclusions, xml_base: bytes) -> tuple:
+    """docx の画像の位置のうち、画像の置き場所がないもの（修正計画 W1 の 2.9）。戻り値: (LostImage の一覧, 隠し文字の中の画像の ID の一覧)。
+
+    置き場所がないとは、どの置き場所（info.slots）の covers にも入っていないか、入っている置き場所の名前（info.slot_names）が
+    置き場所をすべて書いた XML（xml_base。Result.xml_base）の xlink:href に 1 度も出ていないこと。builder の記録ではなく XML の木で
+    調べる。xml_base で調べるので、作業する人が「入れない」とした置き場所と、入れていない任意の置き場所は「置き場所あり」になる
+    （最終の XML からは apply_images が取り除くが、ここでは数えない）。図 1 つに <graphic> 1 つで、図に含めた画像はすべてその 1 枚に
+    写るとみなす。
     不変性チェック（fidelity）は文字しか見ないので、画像を置けない文脈（題目・著者名・所属・引用文献・番号。emit の
-    images=False）の段落や、出力しなかった段落（除外）の中の画像は、ここで調べないと XML からも Graphics/ からも黙って消える。
-    root は組み立てた XML（jx:span の目印が残っているもの）、info はその組み立ての BuildInfo（出力した画像の置き場所は info.slots。
-    置き場所の covers の画像を、出力したものとする〈図 1 つに <graphic> 1 つで、図に含めた画像はすべてその 1 枚に写るとみなす〉）。
-    理由は、画像のある段落の文字を XML のどこに出力したか（jx:span の祖先の要素）と、除外の記録から推定する。
+    images=False）の段落や、出力しなかった段落（除外）の中の画像は、ここで調べないと XML からも ZIP からも黙って消える。
+    root は組み立てた XML（jx:span の目印が残っているもの）。理由は、画像のある段落の文字を XML のどこに出力したか（jx:span の
+    祖先の要素）と、除外の記録から推定する。飾りの図形（ImageRef.decoration）は画像の位置に数えない。
     隠し文字のランの中の画像（ImageRef.hidden）は、Word で表示されないので出力しない（隠し文字と同じ扱い）。別に返す。
     """
-    out = {img.image_id for slot in info.slots for img in slot.covers}
+    shown = {Path(name).stem for name in xml_image_names(_parse(xml_base))}
+    out = {img.image_id for slot in info.slots if Path(info.slot_names.get(slot.key, "")).stem in shown
+           for img in slot.covers}
     holder = {}                                  # 画像の ID -> その画像のアトムがある段落
     for p in plan.paras.values():
         for img in p.images:
@@ -334,7 +354,7 @@ def lost_images(doc, plan, root, info, exclusions) -> tuple:
         elif p.src in excluded:
             reason = f"XML に出力しなかった段落（理由「{excluded[p.src]}」）の中にある"
         elif p.src in places:
-            reason = "段落は XML に出力したが、画像を出力していない（変換ツールの不具合の可能性）"
+            reason = "段落は XML に出力したが、画像を入れる場所を XML に書いていない（変換ツールの不具合の可能性）"
         else:
             reason = "段落を XML に出力していない（変換ツールの不具合の可能性）"
         fl = floats.get(img.float_id or p.float_id)
@@ -349,6 +369,64 @@ def lost_images(doc, plan, root, info, exclusions) -> tuple:
         loc = _place(plan, p.src)
         lost.append(LostImage(img.image_id, p.src, loc, reason, text=p.text_only().strip()[:20], source=img.target))
     return lost, hidden
+
+
+def image_problems(xml_bytes: bytes, images) -> list:
+    """最終の XML（apply_images の後）の画像の名前が、画像の置き場所の一覧（images.SlotImage）と合わないところ（要対応 image_names。
+    変換ツールの不具合の守りで、ふつうは出ない。修正計画 W1 の 2.9）。戻り値: 内容の文の一覧。
+
+    (1) xlink:href に、置き場所にない名前がある。(2) 同じ名前が 2 回以上出る（同じ画像を 2 つの図が指す。C007 の形）。
+    (3) 状態が missing（まだ入れていない）か user（入れた）の置き場所の名前が、XML に出ていない（「入れない」〈skipped〉と、入れていない
+    任意〈unused〉の置き場所は、apply_images が要素ごと取り除くので数えない）。
+    """
+    names = xml_image_names(_parse(xml_bytes))
+    known = {i.name for i in images if i.name}
+    out = [f"XML の {name or '（名前なし）'} は、画像を入れる場所の一覧にない名前です" for name in dict.fromkeys(names)
+           if name not in known]
+    for name in dict.fromkeys(names):
+        n = names.count(name)
+        if n > 1:
+            out.append(f"XML に {name} が {n} 回出ています（同じ画像を 2 つ以上の図が指しています）")
+    shown = set(names)
+    out += [f"{i.key}（{i.name}）が XML に出ていません" for i in images
+            if i.status in ("missing", "user") and i.name not in shown]
+    return out
+
+
+def decorations(doc, plan, res) -> list:
+    """画像の位置に数えなかった飾りの図形（ImageRef.decoration。隠し文字の中のものを除く）の一覧（model.Decoration。docx の順）。
+    修正計画 W1 の 2.8。
+
+    figure は、その飾りが図キャプションのある図形の中にあるときの、その図形の図の置き場所の幹（文字の図形だけのグループで描いた図
+    〈data10・data25 の形〉の本体）。飾りの図形は FloatInfo.images に入らないので、図形は ImageRef.float_id で引き、図キャプションが
+    図形の中の段落（Para.float_id が同じ）にある図の置き場所を候補にする（キャプションだけの図形を figure_units が組んだ図も入る）。
+    候補が 2 つ以上なら、図形の中の docx の順で、その飾りの後ろにある最初の図キャプション（なければ最後の図キャプション）の図
+    （2.3 の B3 の covers と同じ決め方。図形そのものの飾りは、図形の中のどの段落よりも前とみなす）。
+    """
+    anchors = {fl.fid: fl.anchor_src for fl in doc.floats}
+    out = []
+    for img in doc.images:
+        if not img.decoration or img.hidden:
+            continue
+        out.append(Decoration(img, img.decoration, decoration_where(res, img, anchors.get(img.float_id, "")),
+                              _decoration_figure(plan, img)))
+    return out
+
+
+def _decoration_figure(plan, img) -> str:
+    """飾りの図形 img が図キャプションのある図形の中にあるときの、その図の置き場所の幹（なければ ""）。decorations の決め方。"""
+    if not img.float_id:
+        return ""
+    order = [src for src, p in plan.paras.items() if p.float_id == img.float_id]
+    cands = [s for s in plan.slots if s.kind == "fig" and s.caption is not None and s.caption.float_id == img.float_id]
+    if not cands:
+        return ""
+
+    def at(slot):
+        return order.index(slot.caption.src) if slot.caption.src in order else len(order)
+    pos = order.index(img.para_src) if img.para_src in order else -1
+    after = sorted((s for s in cands if at(s) > pos), key=at)
+    return (after[0] if after else max(cands, key=at)).key
 
 
 SECTION_JA = {"thead": "見出し行（thead）", "tbody": "本文の行（tbody）", "tfoot": "脚の行（tfoot）"}
@@ -629,10 +707,10 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
 
     # ---------------------------------------------------------------- AI 補完
     if opts.ai_mode in ("api", "manual"):
-        req_text, req_images = build_request(plan, linker, info.exclusions, info.unsplit_names, info.name_splits)
-        blocks = image_blocks(doc, req_images)
+        # docx の画像は AI に渡さない（図・表の画像は作業する人が用意する。修正計画 W1。call_provider の画像の引数は W8 が消す）
+        req_text, _ = build_request(plan, linker, info.exclusions, info.unsplit_names, info.name_splits)
         if opts.ai_mode == "api":
-            outcome = call_provider(opts.ai_provider, req_text, blocks, model=opts.ai_model, api_key=opts.ai_api_key)
+            outcome = call_provider(opts.ai_provider, req_text, [], model=opts.ai_model, api_key=opts.ai_api_key)
             if outcome.raw and (not outcome.error or outcome.cut):
                 try:
                     data = parse_response(outcome.raw)
@@ -643,12 +721,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
                         outcome.error = f"AI の回答を JSON として読めませんでした: {e}"
         else:
             prompt_path = out_dir / "AI依頼文.txt"
-            prompt_path.write_text(manual_prompt(req_text, blocks), encoding="utf-8")
-            if blocks:
-                img_dir = out_dir / "AI添付画像"
-                img_dir.mkdir(exist_ok=True)
-                for image_id, mt, data_ in blocks:
-                    (img_dir / f"{image_id}.{mt.split('/')[-1].replace('jpeg', 'jpg')}").write_bytes(data_)
+            prompt_path.write_text(manual_prompt(req_text), encoding="utf-8")
             if opts.ai_response and opts.ai_response.strip():
                 outcome.raw = opts.ai_response
                 try:
@@ -732,7 +805,9 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     # ---------------------------------------------------------------- 検証（最終段階）
     fid = verify(docx_path, root, plan.exclusions + info.exclusions)
     final_root = finalize(root)
-    xml_bytes = serialize(final_root)
+    xml_base = serialize(final_root)
+    images = slot_images(info)
+    xml_bytes = apply_images(xml_base, images)      # 最終の XML（入れていない任意の置き場所を取り除く）。確かめはこの XML で
     final_check(root, xml_bytes, fid)
     valid, errors = validate(xml_bytes, dtd_places(plan))
     if not valid and any(getattr(f, "formula", None) is not None for f in plan.figures):
@@ -746,7 +821,9 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         root, info = build(plan, meta, journal, split)
         fid = verify(docx_path, root, plan.exclusions + info.exclusions)
         final_root = finalize(root)
-        xml_bytes = serialize(final_root)
+        xml_base = serialize(final_root)
+        images = slot_images(info)
+        xml_bytes = apply_images(xml_base, images)
         final_check(root, xml_bytes, fid)
         valid, errors = validate(xml_bytes, dtd_places(plan))
 
@@ -762,7 +839,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
                                        plan.pdf_numbers, autonum_srcs)
 
     # 画像の出力漏れ（不変性チェックは文字しか見ない）
-    lost, hidden_images = lost_images(doc, plan, root, info, plan.exclusions + info.exclusions)
+    lost, hidden_images = lost_images(doc, plan, root, info, plan.exclusions + info.exclusions, xml_base)
     # 表の形の崩れ（不変性チェックは文字しか、DTD 検証は要素の並びしか見ない）
     table_issues, tables_checked = table_problems(root, info)
     # 自動番号の出力漏れ（番号は docx の文字ではないので、不変性チェックは見ない）
@@ -772,11 +849,10 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     symbols = symbols_replaced(plan, root, doc)
 
     # ---------------------------------------------------------------- 出力
-    adir = article_dir(out_dir, journal, meta)
-    images = export_slot_images(doc, info, adir / "Graphics", opts.convert_metafiles, out_dir / "要変換")
     aid = meta.article_id(journal)
-    jstage_issues = jstage_check(final_root, aid, [i.name for i in images if i.name])     # 置き場所の名前（画像がないものも）
-    # ZIP に入れるのは、今回の XML・今回指定した PDF・出力できた画像だけ（記事フォルダに残っている前回の変換の残りなどは入れない）
+    jstage_issues = jstage_check(_parse(xml_bytes), aid, [i.name for i in images if i.name])     # 置き場所の名前（画像がまだないものも）
+    # ZIP に入れるのは、今回の XML・今回指定した PDF・作業する人が入れた画像だけ（変換の直後は画像はない。記事フォルダに残っている
+    # 前回の変換の残りなどは入れない）
     zip_path, adir, has_pdf = write_package(out_dir, journal, meta, xml_bytes, opts.pdf_path, zip_image_names(images))
     flat_xml = out_dir / f"{aid}.xml"
     flat_xml.write_bytes(xml_bytes)
@@ -851,10 +927,16 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         prompt_path=prompt_path, forced_floats=forced_floats, pdf_check=pdf_check, route=opts.route, docx_fix=docx_fix,
         supplement=supplement, lost_images=lost, hidden_images=hidden_images,
         lost_autonums=lost_numbers, unshown_numbers=list(info.unshown_numbers), pua_chars=pua_left, symbols_replaced=symbols,
-        table_problems=table_issues, tables_checked=tables_checked, zip_issues=zip_problems(zip_path, journal, meta),
+        table_problems=table_issues, tables_checked=tables_checked, zip_issues=zip_problems(zip_path, journal, meta, images),
+        image_problems=image_problems(xml_bytes, images),
         not_zipped=unzipped_files(out_dir, journal, meta, zip_path), joined=doc.joined, deleted_rows=doc.deleted_rows,
         newlines=info.newlines, name_splits=list(info.name_splits), style_hidden=doc.style_hidden, resultless_fields=doc.resultless_fields,
-        style_hidden_images=[img.image_id for img in doc.images if img.hidden_style])
+        style_hidden_images=[img.image_id for img in doc.images if img.hidden_style], xml_base=xml_base)
+    slots = {slot.key: slot for slot in info.slots}
+    for im in res.images:
+        im.location = slot_where(res, slots[im.key])
+    res.decorations = decorations(doc, plan, res)
+    write_check(res)
     report_path = out_dir / f"{aid}_変換レポート.md"
     report_path.write_text(render(res), encoding="utf-8")
     res.report_path = report_path
@@ -864,26 +946,20 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     return res
 
 
-# 置き場所に docx の画像がない図（キャプションだけの図）の、画像の一覧の備考（images_to_prepare の理由にも使う）
-NO_DOCX_IMAGE = "docx の中にこの図の画像が見つからない（キャプションだけの図）。出版版 PDF などから図の画像を作って入れること"
+def slot_images(info) -> list:
+    """出力した画像の置き場所（info.slots。XML の順）ごとの images.SlotImage（変換の直後: 状態は missing、任意の置き場所は unused）。
+    名前は置き場所の名前（info.slot_names。拡張子は .png）。場所の文（location）は、Result を作った後に report.slot_where で入れる。"""
+    return [SlotImage(key=slot.key, name=info.slot_names[slot.key], kind=slot.kind, label=slot.label,
+                      caption=slot.caption.plain().strip() if slot.caption is not None else "",
+                      status="unused" if slot.kind == "optional" else "missing", note=slot.note)
+            for slot in info.slots]
 
 
-def export_slot_images(doc, info, gdir: Path, convert_metafiles, keep_dir: Path) -> list:
-    """W1 の途中の姿: 出力した画像の置き場所（info.slots。XML の順）ごとに、最初の画像（covers[0]）を置き場所の名前で
-    Graphics/ に書き出す（images.export_images。W1 の手順 9 で書き出しをやめる）。戻り値は置き場所ごとの images.ImageResult
-    （置き場所と同じ順。key は置き場所の幹）。docx に画像のない置き場所は、状態 missing・理由 NO_DOCX_IMAGE。"""
-    # 名前は置き場所ごと（同じ docx の画像が 2 つの置き場所の最初の画像のときも、それぞれの名前で書く。C007 の形）
-    firsts = [replace(slot.covers[0], export_name=info.slot_names[slot.key]) for slot in info.slots if slot.covers]
-    done = iter(export_images(doc, firsts, gdir, convert_metafiles=convert_metafiles, keep_dir=keep_dir))
-    out = []
-    for slot in info.slots:
-        if slot.covers:
-            r = next(done)
-            r.key = slot.key
-        else:
-            r = ImageResult("", info.slot_names[slot.key], "", "missing", NO_DOCX_IMAGE, key=slot.key)
-        out.append(r)
-    return out
+def _parse(xml_bytes: bytes):
+    """XML のバイト列を木にする（DTD・外部の実体を読まない）。"""
+    from lxml import etree
+    parser = etree.XMLParser(load_dtd=False, no_network=True, resolve_entities=False, huge_tree=True)
+    return etree.fromstring(xml_bytes, parser)
 
 
 def graphics_path(res: Result) -> Path:
@@ -891,45 +967,238 @@ def graphics_path(res: Result) -> Path:
     return article_dir(res.zip_path.parent, res.journal, res.meta) / "Graphics"
 
 
-def add_images(res: Result, supplied: dict, skip_unneeded: bool = False) -> list:
-    """利用者が用意した画像（Word の図形で描かれた図など、変換で画像ファイルを作れなかった図の画像）を Graphics/ に入れ、
-    アップロード用の ZIP とレポートを作り直す。
-
-    supplied: 出力ファイル名（25_77_fig01.png など）→ 画像（ファイルのパス、バイト列、または (元のファイル名, バイト列)）。
-      元のファイル名は何でもよい。PNG・JPEG・GIF など、または 1 ページの PDF を、出力ファイル名の形式にして入れる。
-    受け付けるのは、用意が必要な画像（report.images_to_prepare）の名前だけ。それ以外の名前と読めない画像は ValueError
-    （skip_unneeded なら、用意が不要な名前は黙って飛ばす。変換をやり直した後に、前に受け取った画像を入れ直すとき）。
-    戻り値: 入れた画像の出力ファイル名。
-    """
-    need = {name: why for name, _, why in images_to_prepare(res)}
+def _prepare_images(res: Result, supplied: dict) -> dict:
+    """入れる画像（add_images の supplied）を確かめ、{幹: (元のファイル名, バイト列, 形式, 大きさ)} にする。確かめだけで、何も書かない。"""
+    need = {i.key: i for i in res.images if i.status in ("missing", "user", "skipped", "unused")}
     prepared = {}
-    for name, src in supplied.items():
-        if name not in need:
-            if skip_unneeded:
-                continue
-            raise ValueError(f"{name} は、用意が必要な画像ではありません（必要なもの: {'、'.join(need) or 'なし'}）")
+    for key, src in supplied.items():
+        if key not in need:
+            names = "、".join(need) or "なし"
+            raise ValueError(f"{key} は、この論文の画像を入れる場所ではありません（この論文の画像の名前: {names}）")
         if isinstance(src, tuple):
             label, data = src
         elif isinstance(src, (bytes, bytearray)):
             label, data = "", bytes(src)
         else:
             label, data = Path(src).name, Path(src).read_bytes()
-        prepared[name] = (label, user_image(data, name, f"「{label}」" if label else ""))
+        data = bytes(data)
+        fmt, size = check_user_image(data, label or key)
+        prepared[key] = (label, data, fmt, size)
+    return prepared
+
+
+def _store_images(res: Result, prepared: dict, skip=()) -> None:
+    """確かめた画像を Graphics/ に書き、置き場所の状態を入れる（XML・ZIP・レポートは作り直さない。rebuild_outputs が行う）。
+    skip の置き場所（キャプションのない画像）は「入れない」にする（前に入れた画像があれば消す）。"""
+    import hashlib
     gdir = graphics_path(res)
     gdir.mkdir(parents=True, exist_ok=True)
-    for name, (label, data) in prepared.items():
-        (gdir / name).write_bytes(data)
-        k = next(k for k, i in enumerate(res.images) if i.name == name)
-        old = res.images[k]
-        res.images[k] = ImageResult(old.image_id, name, old.source, "user",
-                                    f"利用者が用意した画像{f'（{label}）' if label else ''}を入れた。変換のときの状態: {need[name]}",
-                                    key=old.key)
-        res.warnings = [w for w in res.warnings if not w.startswith(f"{old.image_id}:")]
-    if prepared:
-        out_dir = res.zip_path.parent
-        make_zip(out_dir, res.journal, res.meta, zip_image_names(res.images), res.has_pdf)
-        # ZIP の中身が変わったので、ZIP の確かめと、入れなかったファイルを計算し直す（変換のときの値を残さない）
-        res.zip_issues = zip_problems(res.zip_path, res.journal, res.meta)
-        res.not_zipped = unzipped_files(out_dir, res.journal, res.meta, res.zip_path)
-        res.report_path.write_text(render(res), encoding="utf-8")
+    by_key = {i.key: i for i in res.images}
+    for key in list(prepared) + list(skip):
+        im = by_key[key]
+        stem = Path(im.name).stem
+        for old in gdir.glob(f"{stem}.*"):         # 同じ置き場所の前の画像（別の拡張子のものも）
+            if old.is_file():
+                old.unlink()
+        im.name = f"{stem}.png"
+        im.source_name, im.format, im.size, im.bytes, im.sha1 = "", "", None, 0, ""
+        res.images_changed = [c for c in res.images_changed if c.key != key]     # 入れ直したので、前の画像の確かめは要らない
+    for key, (label, data, fmt, size) in prepared.items():
+        im = by_key[key]
+        im.name = f"{Path(im.name).stem}.{fmt}"
+        (gdir / im.name).write_bytes(data)
+        im.status, im.source_name, im.format, im.size = "user", label, fmt, size
+        im.bytes, im.sha1 = len(data), hashlib.sha1(data).hexdigest()
+    for key in skip:
+        by_key[key].status = "skipped"
+
+
+def _check_skip(res: Result, skip, supplied) -> list:
+    """「入れない」にする置き場所の確かめ（キャプションのない画像だけ。画像を入れる置き場所とは重ならない）。"""
+    keys = list(dict.fromkeys(skip or ()))
+    by_key = {i.key: i for i in res.images}
+    for key in keys:
+        im = by_key.get(key)
+        if im is None:
+            raise ValueError(f"{key} は、この論文の画像を入れる場所ではありません（この論文の画像の名前: {'、'.join(by_key) or 'なし'}）")
+        if im.kind != "nocap":
+            what = "図・表の画像" if im.kind in ("fig", "table") else "任意の画像"
+            raise ValueError(f"{key} は{what}なので、「入れない」にはできません（「入れない」にできるのは、キャプションのない画像だけです）")
+        if key in supplied:
+            raise ValueError(f"{key} は、画像を入れることと「入れない」を同時に指定できません")
+    return keys
+
+
+def add_images(res: Result, supplied: dict, skip=None) -> list:
+    """作業する人が用意した図・表の画像を Graphics/ に入れ、XML（apply_images）・アップロード用の ZIP・レポートを作り直す。
+
+    supplied: 画像の置き場所の幹（fig03・tab01・img3fa9c2 など。Result.images の key）→ 画像（ファイルのパス、バイト列、または
+      (元のファイル名, バイト列)）。元のファイル名は何でもよい。中身が PNG・JPEG・GIF の画像だけを受け付け（images.check_user_image）、
+      バイト列をそのまま「{記事識別子}_{幹}.{形式}」の名前で書く（向き・圧縮・透過を変えない）。同じ置き場所の、別の拡張子の
+      前の画像は消す。
+    skip: 「入れない」とするキャプションのない画像の置き場所の幹（出版版 PDF で見て、ほかの図に写っている・飾りだけ、のとき）。
+      その要素は XML から取り除き、手順 images の「全部で」から除く。図・表の幹は断る。
+    受け付けるのは、この結果の置き場所の幹だけ。それ以外の幹と、PNG・JPEG・GIF でない画像があれば、1 枚も入れずに ValueError。
+    入れた後の XML で、文字が変換のときの XML（xml_base）と同じこと（違えば最終出力の再チェックを不合格にする）・DTD・J-STAGE の
+    アップロード時チェック・ZIP の確かめをやり直す。戻り値: 入れた画像の幹の一覧（「入れない」にした幹は含めない）。
+    """
+    prepared = _prepare_images(res, supplied)
+    skipped = _check_skip(res, skip, supplied)
+    if not prepared and not skipped:
+        return []
+    _store_images(res, prepared, skipped)
+    rebuild_outputs(res)
     return list(prepared)
+
+
+# 持ち越しの照合（修正計画 W1 の 2.6）
+CARRY_RATIO = 0.8         # キャプションの本体がこの割合以上で同じなら、同じ図とみなす
+CARRY_WHERE = 20          # キャプションのない画像の場所を照らす、前の文字のある段落の先頭の字数
+WHY_NO_SLOT = "同じキャプションの図が見つかりません（図がなくなったのなら、何もしなくてかまいません）"
+WHY_NO_NOCAP = "同じ場所のキャプションのない画像が見つかりません（画像がなくなったのなら、何もしなくてかまいません）"
+WHY_NO_OPT = "同じ位置の、画像で補える文字（囲い文字など）が見つかりません（文字がなくなったのなら、何もしなくてかまいません）"
+WHY_WHERE = "画像のある場所の前の文章が変わっています"
+WHY_ARTICLE = "記事の巻・ページが変わった別の論文なので、前の画像は入れていません"
+
+
+def _body_key(text: str) -> str:
+    """キャプションの本体を比べる形: NFKC にして、空白と約物（記号を除く句読点・括弧など）を除いたもの。"""
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFKC", text or "") if not c.isspace() and not unicodedata.category(c).startswith("P"))
+
+
+def _body_key_plain(text: str) -> str:
+    """NFKC にして空白を除いた文字（キャプションのない画像の場所の照合に使う）。"""
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFKC", text or "") if not c.isspace())
+
+
+def _where_key(plan, slot) -> str:
+    """キャプションのない画像の場所を照らす文字: 前の文字のある段落の先頭 20 字（なければ章の見出しの先頭。NFKC・空白を除く）。"""
+    from .structure import text_before
+    heading, para = text_before(plan, slot.src, slot)
+    owner = para if para is not None else heading
+    text = owner.text_only().strip() if owner is not None else ""
+    return _body_key_plain(text)[:CARRY_WHERE]
+
+
+def kept_images(res: Result) -> dict:
+    """変換し直す前に、入れた画像と「入れない」の選択を覚える（修正計画 W1 の 2.6）。戻り値: {幹: images.KeptImage}。
+
+    変換し直すと出力フォルダが消えるので、画像の中身もここで読む。変換し直した後に reapply_images に渡す。
+    """
+    from .structure import caption_body
+    slots = {s.key: s for s in res.plan.slots} if res.plan is not None else {}
+    aid = res.meta.article_id(res.journal)
+    gdir = graphics_path(res) if res.zip_path is not None else None
+    out = {}
+    for im in res.images:
+        slot = slots.get(im.key)
+        if slot is None or im.status not in ("user", "skipped"):
+            continue
+        data = b""
+        if im.status == "user":
+            path = gdir / im.name if gdir is not None else None
+            if path is None or not path.is_file():
+                continue
+            data = path.read_bytes()
+        out[im.key] = KeptImage(
+            key=im.key, kind=slot.kind, source_name=im.source_name, data=data, caption=im.caption,
+            body=caption_body(slot.caption) if slot.caption is not None else "",
+            where=_where_key(res.plan, slot) if slot.kind == "nocap" else "", skipped=im.status == "skipped", article_id=aid)
+    return out
+
+
+def reapply_images(res: Result, kept: dict) -> list:
+    """変換し直した結果 res に、前の画像（kept_images）を、同じ図だと確かめられたものだけ入れ直す（修正計画 W1 の 2.6）。戻り値: 入れ直した幹の一覧。
+
+    同じ記事（記事識別子が同じ）で、図・表は同じ幹・同じ種類の置き場所があり、キャプションの本体（番号を除いた文字）が同じとみなせる（割合 0.8 以上）
+    ときだけ入れる。前の本体が今の別の図の本体と完全に同じなら（図が足されて番号がずれた形）入れない。キャプションのない画像は、
+    同じ幹で、場所（前の文字のある段落の先頭 20 字）も同じときだけ。任意の画像は同じ幹なら入れる。入れなかった画像は res.images_dropped に、
+    本体が少し変わった図に入れたものは res.images_changed に記録する。「入れない」も同じ規則で持ち越す。
+    """
+    import difflib
+    slots = {s.key: s for s in res.plan.slots}
+    by_key = {i.key: i for i in res.images}
+    aid = res.meta.article_id(res.journal)
+    from .structure import caption_body
+    bodies = {k: _body_key(caption_body(s.caption)) for k, s in slots.items() if s.caption is not None}
+    prepared, skip, dropped, changed = {}, [], [], []
+
+    def drop(k, why, suggest=""):
+        if not k.skipped:
+            dropped.append(DroppedImage(key=k.key, source_name=k.source_name, caption=k.caption, why=why, suggest=suggest))
+
+    for key, k in kept.items():
+        slot = slots.get(key)
+        if k.article_id != aid:
+            drop(k, WHY_ARTICLE)
+            continue
+        if k.kind in ("fig", "table"):
+            old = _body_key(k.body)
+            same = [x for x, b in bodies.items() if x != key and slots[x].kind == k.kind and b == old]
+            suggest = same[0] if len(same) == 1 else ""
+            if slot is None or slot.kind != k.kind:
+                drop(k, WHY_NO_SLOT, suggest)
+                continue
+            if old and same and bodies[key] != old:             # 別の図の本体と完全に同じ（この図は違う）: 著者が図を足して番号がずれた形
+                drop(k, WHY_NO_SLOT, suggest)
+                continue
+            ratio = difflib.SequenceMatcher(None, old, bodies[key]).ratio() if (old or bodies[key]) else 1.0
+            if ratio < CARRY_RATIO:
+                drop(k, WHY_NO_SLOT, suggest)
+                continue
+            if ratio < 1.0:
+                changed.append(ChangedImage(key=key, source_name=k.source_name, old_caption=k.caption, new_caption=by_key[key].caption))
+        elif k.kind == "nocap":
+            if slot is None or slot.kind != "nocap":
+                drop(k, WHY_NO_NOCAP)
+                continue
+            if _where_key(res.plan, slot) != k.where:
+                drop(k, WHY_WHERE)
+                continue
+        else:
+            if slot is None or slot.kind != k.kind:
+                drop(k, WHY_NO_OPT)
+                continue
+        if k.skipped:
+            skip.append(key)
+        else:
+            prepared[key] = (k.source_name, k.data) + tuple(check_user_image(k.data, k.source_name or key))
+    res.images_dropped = dropped
+    if not prepared and not skip:
+        return []
+    _store_images(res, prepared, skip)
+    res.images_changed = changed                                # _store_images が、入れ直した幹の前の記録を消すので、その後に入れる
+    rebuild_outputs(res)
+    return list(prepared)
+
+
+def rebuild_outputs(res: Result) -> None:
+    """入れた画像（res.images）を反映した最終の XML を作り直し（apply_images）、書き出して、確かめをやり直す（修正計画 W1 の 2.6）。
+
+    文字が変換のときの XML（xml_base）と同じか（違えば最終出力の再チェックを不合格にする。今の要対応 fidelity で知らせる）、DTD、
+    J-STAGE のアップロード時チェック、XML の画像の名前（image_problems）、ZIP を作り直して読み直した確かめ（画像は、置き場所にない
+    名前の画像と、入れたのに ZIP にない画像）と、ZIP に入れなかったファイル。最後にレポートを書き直す。
+    """
+    xml_bytes = apply_images(res.xml_base, res.images)
+    root = _parse(xml_bytes)
+    if "".join(root.itertext()) != "".join(_parse(res.xml_base).itertext()):
+        res.fidelity.final_ok = False
+        res.fidelity.final_differs = True
+        res.fidelity.final_detail = "画像を入れて作り直した XML の文字が、変換のときの XML と違う（変換ツールの不具合の可能性）"
+    res.dtd_valid, res.dtd_errors = validate(xml_bytes, dtd_places(res.plan))
+    aid = res.meta.article_id(res.journal)
+    res.jstage_issues = jstage_check(root, aid, [i.name for i in res.images if i.name])
+    res.image_problems = image_problems(xml_bytes, res.images)
+    out_dir = res.zip_path.parent
+    adir = article_dir(out_dir, res.journal, res.meta)
+    (adir / f"{aid}.xml").write_bytes(xml_bytes)
+    if res.xml_path is not None:
+        res.xml_path.write_bytes(xml_bytes)
+    make_zip(out_dir, res.journal, res.meta, zip_image_names(res.images), res.has_pdf)
+    # ZIP の中身が変わったので、ZIP の確かめと、入れなかったファイルを計算し直す（変換のときの値を残さない）
+    res.zip_issues = zip_problems(res.zip_path, res.journal, res.meta, res.images)
+    res.not_zipped = unzipped_files(out_dir, res.journal, res.meta, res.zip_path)
+    write_check(res)
+    res.report_path.write_text(render(res), encoding="utf-8")

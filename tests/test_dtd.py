@@ -70,7 +70,7 @@ def test_dtd_failure_names_ref_and_paragraph_and_suggests_moving_appendix(journa
     # 引用文献の後ろの資料（要確認 app_after_refs）に別行数式があると、引用文献の中に数式が入って DTD 不合格になる
     refs = [mf.para(S["sec1"], "資料　架空の授業プリント"),
             mf.para(S["ref"], mf.omathpara(mf.mr("x=1"))), mf.para(S["ref"], mf.omathpara(mf.mr("y=2")))]
-    res = convert(_article(tmp_path, refs, "a.docx"), meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(_article(tmp_path, refs, "a.docx"), meta, journal, Options(out_dir=tmp_path / "out"))
     assert not res.dtd_valid and res.plan.app_after_refs and len(res.dtd_errors) == 2
     bs = [r for r in res.plan.refs if not r.para.text_only()]            # 数式だけの引用文献 2 件
     assert len(bs) == 2
@@ -98,7 +98,7 @@ def test_dtd_failure_names_ref_and_paragraph_and_suggests_moving_appendix(journa
 def test_no_appendix_advice_without_app_after_refs(journal, meta, tmp_path):
     # 資料の見出しがない（app_after_refs がない）ときは、場所は付けるが、資料の移動は勧めない
     refs = [mf.para(S["ref"], mf.omathpara(mf.mr("x=1")))]
-    res = convert(_article(tmp_path, refs, "b.docx"), meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(_article(tmp_path, refs, "b.docx"), meta, journal, Options(out_dir=tmp_path / "out"))
     assert not res.dtd_valid and not res.plan.app_after_refs
     a = {a.key: a for a in actions(res)}["dtd"]
     for text in (a.top, a.box_detail, a.cli):
@@ -117,7 +117,7 @@ def test_error_in_section_without_id_names_the_section_title():
 def test_dtd_hint_uses_the_titles_of_the_app_after_refs_notice(journal, meta, tmp_path):
     from jasme_jats.report import APP_TITLE_BOX
     refs = [mf.para(S["sec1"], "資料　架空の授業プリント"), mf.para(S["ref"], mf.omathpara(mf.mr("x=1")))]
-    res = convert(_article(tmp_path, refs, "c.docx"), meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(_article(tmp_path, refs, "c.docx"), meta, journal, Options(out_dir=tmp_path / "out"))
     acts = {a.key: a for a in actions(res)}
     assert acts["app_after_refs"].box_title == APP_TITLE_BOX + "（要確認）"          # Colab・1 画面版の枠の題名
     assert f"「{APP_TITLE_BOX}」" in acts["dtd"].box_detail

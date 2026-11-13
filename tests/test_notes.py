@@ -52,7 +52,7 @@ def structure(journal, tmp_path_factory):
     """sample_structure.docx の変換結果（節「Word の脚注と文末脚注」を見る）。"""
     meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "lpage": "12", "pub_date": "2026-03-31",
                                   "received": "2025-06-01", "accepted": "2025-11-20", "peer_review": "あり"})
-    return convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path_factory.mktemp("structure"), convert_metafiles=False))
+    return convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path_factory.mktemp("structure")))
 
 
 @pytest.mark.parametrize("s, expect", [
@@ -66,7 +66,7 @@ def test_note_mark_forms(s, expect):
 
 
 def test_plain_note_marks_and_notes_after_refs(journal, meta, tmp_path):
-    res = convert(NOTES, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    res = convert(NOTES, meta, journal, Options(out_dir=tmp_path))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     root = load(res)
     fg = root.find(".//fn-group")
@@ -103,7 +103,7 @@ def test_ai_can_split_notes_and_link_to_the_new_note(journal, meta, tmp_path):
                            # 新しく分けた注は依頼文に ID がないので、その注の最初の段落の ID で指定する
                            _op(op="link_note", src=ref, text="※4", target=start)],
             "placements": [], "notes": []}
-    res = convert(NOTES, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", convert_metafiles=False,
+    res = convert(NOTES, meta, journal, Options(out_dir=tmp_path, ai_mode="manual",
                                                 ai_response=json.dumps(resp, ensure_ascii=False)))
     assert res.ai.rejected == []
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
@@ -118,13 +118,13 @@ def test_ai_cannot_split_word_footnotes(journal, meta, tmp_path):
     _, plan, _ = _mechanical(EDGE, journal)
     src = next(fn.paras[0].src for fn in plan.fns if fn.word_note)
     resp = {"operations": [_op(op="set_role", src=src, role="fn_start")], "placements": [], "notes": []}
-    res = convert(EDGE, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", convert_metafiles=False,
+    res = convert(EDGE, meta, journal, Options(out_dir=tmp_path, ai_mode="manual",
                                                ai_response=json.dumps(resp, ensure_ascii=False)))
     assert [why for _, why in res.ai.rejected] == [WORD_NOTE_ROLE]
 
 
 def test_word_footnotes_use_journal_mark_and_get_a_title(journal, meta, tmp_path):
-    res = convert(EDGE, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    res = convert(EDGE, meta, journal, Options(out_dir=tmp_path))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     root = load(res)
     fg = root.find(".//fn-group")
@@ -149,7 +149,7 @@ def test_word_footnotes_use_journal_mark_and_get_a_title(journal, meta, tmp_path
 
 def test_word_footnote_mark_and_title_follow_config(journal, meta, tmp_path):
     j = dataclasses.replace(journal, fn_mark="[{n}]", fn_title="")
-    res = convert(EDGE, meta, j, Options(out_dir=tmp_path, convert_metafiles=False))
+    res = convert(EDGE, meta, j, Options(out_dir=tmp_path))
     assert res.fidelity.ok and res.dtd_valid
     root = load(res)
     assert root.find(".//fn-group/title") is None
@@ -173,7 +173,7 @@ def test_endnotes_are_output_as_notes(journal, meta, tmp_path):
         return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "文末脚注", mf.endnote_ref(3), "が付いた文。")]
     path = tmp_path / "end.docx"
     mf.make_article(path, "文末脚注の検証用文書", parts, endnotes=[mf.endnote(3, " 文末脚注の本文である。")])
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
     root = load(res)
     assert root.find(".//fn-group/title").text == "注"
@@ -266,7 +266,7 @@ def test_blank_paragraphs_in_notes_pass_fidelity(journal, meta, tmp_path):
                                          mf.para(None, "文末脚注の後半。")),
                               mf.endnote(5, "\u3000", mf.para(None, " "))],
                     footnotes=[mf.footnote(4, " 参照のない脚注。", mf.para("a8", "\u3000"), mf.para("a8", " "))])
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     fid = res.fidelity
     assert fid.ok and fid.final_ok and res.dtd_valid, (fid.missing, fid.bad_excluded)
     assert fn_list(load(res)) == {"fn1": ["1) 文末脚注の前半。", "\u3000", " ", "文末脚注の後半。"]}
@@ -296,7 +296,7 @@ def test_note_referenced_only_from_excluded_paragraph(journal, meta, tmp_path):
     # XML に出力しない段落（誌名の行）の中の参照も参照として数え、注は出力する（本文からのリンクのない注）。
     # 判断の一覧（4 章）と 8 章の表で知らせる。1 章のリンクの数には数えない
     res = convert(_front_ref_article(tmp_path / "front.docx"), meta, journal,
-                  Options(out_dir=tmp_path / "out", convert_metafiles=False))
+                  Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     root = load(res)
     assert fn_list(root) == {"fn1": ["1) 誌名の行から参照される架空の文末脚注。"]} and fn_refs(root) == []
@@ -353,7 +353,7 @@ def test_notes_referenced_only_from_title_and_references_have_no_link(journal, m
         refs=[mf.para(S["ref"], "試験十郎（2024）．「別の題」．『架空誌』", fr(4), "．")],
         footnotes=[mf.footnote(n, f" 架空の脚注{n}。") for n in (2, 4, 6, 7)],
         endnotes=[mf.endnote(n, f" 架空の文末脚注{n}。") for n in (1, 3, 5)])
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
     plan, root = res.plan, load(res)
     word = {fn.word_id: fn for fn in plan.fns if fn.word_note}
@@ -400,7 +400,7 @@ def test_note_in_author_name_has_no_number(journal, meta, tmp_path):
     path = _refs_article(tmp_path / "name.docx", {"name": mf.endnote_ref(5), "name_en": mf.footnote_ref(5)},
                          body=[mf.para(S["body"], "本文の段落。")],
                          footnotes=[mf.footnote(5, " 英文の著者名の架空の脚注。")], endnotes=[mf.endnote(5, " 著者名の架空の文末脚注。")])
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
     assert "dtd" not in {a.key for a in actions(res)}
     root = load(res)
@@ -423,7 +423,7 @@ def test_title_footnote_is_listed_in_chapter8(journal, meta, tmp_path):
     path = _refs_article(tmp_path / "fnonly.docx", {"title": fr(1)},
                          body=[mf.para(S["body"], "本文の脚注", fr(2), "の文。")],
                          footnotes=[mf.footnote(1, " 本研究は架空の助成を受けた。"), mf.footnote(2, " 本文の架空の脚注。")])
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     assert fn_refs(load(res)) == [("fn2", "2)", True)]
     t = res.plan.title[0].src
@@ -444,7 +444,7 @@ def test_chapter8_excerpt_uses_first_paragraph_with_text(journal, meta, tmp_path
     path = tmp_path / "head.docx"
     mf.make_article(path, "注の書き出しの検証用文書", parts,
                     endnotes=[mf.endnote(3, "\u3000", mf.para(None, "二段落目から始まる架空の文末脚注の説明。"))])
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     ch8 = res.report_path.read_text(encoding="utf-8").split("## 8.")[1].split("## 9.")[0]
     assert "| fn1 | Word の文末脚注 3 | 1) | 二段落目から始まる架空の文末脚… | あり |" in ch8
@@ -505,7 +505,7 @@ def test_manual_and_word_notes_with_same_numbers_are_reported(journal, meta, tmp
     path = tmp_path / f"{kind}.docx"
     mf.make_article(path, "手で書いた注と Word の注の検証用文書", parts,
                     **({"endnotes": [note]} if kind == "endnote" else {"footnotes": [note]}))
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     root = load(res)
     assert fn_list(root) == {"fn1": ["1) 手で書いた架空の注。"], "fn2": ["1) Word の注の架空の文。"]}
@@ -541,7 +541,7 @@ def test_note_overlap_is_reported_only_for_same_numbers(journal, meta, tmp_path)
         path = tmp_path / f"{name}.docx"
         mf.make_article(path, "手で書いた注と Word の注の検証用文書", parts,
                         footnotes=[mf.footnote(3, " Word の脚注の架空の文。")], endnotes=[mf.endnote(4, " Word の文末脚注の架空の文。")])
-        return convert(path, meta, journal, Options(out_dir=tmp_path / name, convert_metafiles=False))
+        return convert(path, meta, journal, Options(out_dir=tmp_path / name))
     res = make("apart", "3)")
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     assert sorted((fn.word_note, fn.number) for fn in res.plan.fns) == [(False, 3), (True, 1), (True, 2)]
@@ -560,7 +560,7 @@ def test_ai_cannot_set_role_on_word_notes(journal, meta, tmp_path):
     unref = next(s for s, k in plan.note_of.items() if k == "footnote:9")
     ops = [_op(op="set_role", src=endnote, role="p"), _op(op="set_role", src=endnote, role="exclude"),
            _op(op="set_role", src=footnote, role="fn_start"), _op(op="set_role", src=unref, role="p")]
-    res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", convert_metafiles=False,
+    res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path, ai_mode="manual",
                                                     ai_response=json.dumps({"operations": ops, "placements": [], "notes": []},
                                                                            ensure_ascii=False)))
     assert [why for _, why in res.ai.rejected] == [WORD_NOTE_ROLE] * 4
@@ -596,7 +596,7 @@ def _note_table_article(tmp_path, journal, meta, notes, name="fn_table", body_te
                 mf.para(S["tab_cap"], "表1　本文の表"), mf.table([[mf.cell("本文の表"), mf.cell("1")]])] + list(notes)
     path = tmp_path / f"{name}.docx"
     mf.make_article(path, "注の表の検証用文書", parts, refs=(lambda b: list(after_refs)) if after_refs else None)
-    return convert(path, meta, journal, Options(out_dir=tmp_path / name, convert_metafiles=False, **opts))
+    return convert(path, meta, journal, Options(out_dir=tmp_path / name, **opts))
 
 
 def fn_children(root):
@@ -757,9 +757,9 @@ def test_image_in_note_table_is_output(journal, meta, tmp_path):
                 mf.para(S["fn_head"], "注"), mf.para(S["fn_body"], "1) 注の本文。"),
                 mf.table([[mf.cell(mf.para(S["body"], mf.drawing(rid, 900000, 500000, 802))), mf.cell("画像の説明")]])]
     mf.make_article(path, "注の表の画像の検証用文書", parts)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     _passes(res)
-    assert res.lost_images == [] and [i.image_id for i in res.images] == ["img1"]
+    assert res.lost_images == [] and [c.image_id for i in res.images for s in res.plan.slots if s.key == i.key for c in s.covers] == ["img1"]
     assert load(res).find(".//fn//table-wrap//inline-graphic") is not None
     assert "lost" not in [a.key for a in actions(res)]
 
@@ -779,7 +779,7 @@ def test_merged_and_numbered_cells_in_note_table(journal, meta, tmp_path, monkey
         return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "本文の表2を見よ。注1)と注2)。")] + notes
     path = tmp_path / "fn_merge.docx"
     mf.make_article(path, "注の表の結合の検証用文書", parts)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "r1", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "r1"))
     _passes(res)
     assert res.tables_checked >= 1 and res.needs_action is False
     root = load(res)
@@ -795,8 +795,7 @@ def test_merged_and_numbered_cells_in_note_table(journal, meta, tmp_path, monkey
     pages = ["\n".join(lines).replace("表2\u3000注の表", "表２\u3000注の表").replace("合計", "合 計")]
     monkeypatch.setattr(pdfmatch, "extract_pages", lambda path: pages)
     (tmp_path / "dummy.pdf").write_bytes(b"%PDF-1.4\n")
-    res2 = convert(path, meta, journal, Options(out_dir=tmp_path / "r2", pdf_path=tmp_path / "dummy.pdf", route="pdf",
-                                                convert_metafiles=False))
+    res2 = convert(path, meta, journal, Options(out_dir=tmp_path / "r2", pdf_path=tmp_path / "dummy.pdf", route="pdf"))
     _passes(res2)
     assert res2.supplement is not None and res2.supplement.ok, res2.supplement.problems
     assert [(f.src, f.old, f.new) for f in res2.docx_fix.applied] == [(cap, "2", "２")]

@@ -43,7 +43,7 @@ def after(seq, head, n=1):
 
 def test_ai_is_required_when_a_float_cannot_be_placed(journal, meta, tmp_path):
     with pytest.raises(AIRequiredError) as e:
-        convert(FLOAT, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+        convert(FLOAT, meta, journal, Options(out_dir=tmp_path))
     assert [f.float.fid for f in e.value.floats] == ["s1", "s2", "s3"]      # s4 は機械的に配置できる
     assert "AI による補完を「使わない」設定では変換できません" in str(e.value)
     assert not (tmp_path / "jasme.zip").exists()
@@ -93,12 +93,11 @@ def test_mechanical_placement_and_request(journal):
     assert "[s4]" in unplaced[1] and "変更不可" in text
     assert "行数による推定: 図の左上の直上の本文は段落 [d17]" in unplaced[0]       # d13 も d17 も 2 行、図は 3.6 行目
     assert "表 t3" in unplaced[0] and "[d19]⟦画像 img1" in unplaced[0]
-    assert {"img1", "img2", "img3"} <= {i.image_id for i in images}      # 図形の中の画像を AI に見せる
+    assert images == []      # docx の画像は AI に渡さない（修正計画 W1。図形の中の画像は依頼文に ID だけを書く）
 
 
 def test_ai_placements_are_validated_and_applied(journal, meta, tmp_path):
-    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=RESPONSE,
-                                                convert_metafiles=False))
+    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=RESPONSE))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
     assert res.plan.unplaced_floats == []
     root = load(res)
@@ -133,8 +132,7 @@ def test_link_targets_follow_figures_after_rebuild(journal, meta, tmp_path):
     data["operations"].append({"op": "link_figure", "src": "d23", "text": "教科書の見開きページ", "occurrence": 1,
                                "target": before, "role": "", "image": "", "mathml": "", "surname": "", "given": "",
                                "reason": "「教科書の見開きページ」は図2", "confidence": "中"})
-    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=json.dumps(data),
-                                                convert_metafiles=False))
+    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=json.dumps(data)))
     assert res.fidelity.ok and res.dtd_valid
     root = load(res)
     x = next(x for x in root.iter("xref") if x.text == "教科書の見開きページ")
@@ -145,8 +143,7 @@ def test_link_targets_follow_figures_after_rebuild(journal, meta, tmp_path):
 def test_missing_placement_is_reported_after_ai(journal, meta, tmp_path, capsys):
     data = json.loads(RESPONSE)
     data["placements"] = [p for p in data["placements"] if p["float"] != "s2"]
-    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=json.dumps(data),
-                                                convert_metafiles=False))
+    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=json.dumps(data)))
     assert res.fidelity.ok and res.dtd_valid and res.jstage_issues == []
     assert res.plan.unplaced_floats == ["s2"]
     assert any(u[0] == "float" and "手作業" in u[3] for u in res.unresolved_after)
@@ -184,8 +181,7 @@ def test_missing_placement_is_reported_after_ai(journal, meta, tmp_path, capsys)
 def test_unplaced_simple_float_is_paired_after_anchor(journal, meta, tmp_path):
     data = json.loads(RESPONSE)
     data["placements"] = [p for p in data["placements"] if p["float"] != "s1"]
-    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=json.dumps(data),
-                                                convert_metafiles=False))
+    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=json.dumps(data)))
     assert res.fidelity.ok and res.dtd_valid
     root = load(res)
     assert root.find("body")[0].tag == "sec"
@@ -196,7 +192,7 @@ def test_unplaced_simple_float_is_paired_after_anchor(journal, meta, tmp_path):
 
 
 def test_manual_mode_before_response_places_floats_after_anchor(journal, meta, tmp_path):
-    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", convert_metafiles=False))
+    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual"))
     assert res.fidelity.ok and res.dtd_valid
     assert res.forced_floats == []                          # AI の回答を反映する前は「手作業で直す」ではない
     assert "AI の回答を反映するまで、図が結び付いている段落（アンカー段落）のすぐ後ろ" in res.output_note
@@ -239,8 +235,7 @@ def test_placement_items_are_not_read(journal, meta, tmp_path, items):
         pl.pop("items")
     else:
         pl["items"] = items
-    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=json.dumps(data),
-                                                convert_metafiles=False))
+    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=json.dumps(data)))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     assert res.plan.floats["s1"].mode == "ai" and "s1" not in res.plan.unplaced_floats
     assert not any(op["src"] == "s1" for op, _ in res.ai.rejected)
@@ -258,7 +253,7 @@ def test_image_and_text_in_one_paragraph_of_a_float(journal, meta, tmp_path):
     （修正計画 W1 の 2.4。要確認 textbox_figure_text）。AI を使わない設定でも止まらない。キャプションのない図形（画像を直接
     持たないテキストボックス）は、これまでどおり画像も文字も 1 つの <p> に出す（本文の段落。除外しない）。"""
     from jasme_jats.structure import TEXTBOX_TEXT_EXCLUDED
-    res = convert(FLOAT_TEXT, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    res = convert(FLOAT_TEXT, meta, journal, Options(out_dir=tmp_path))
     fid = res.fidelity
     assert fid.ok and fid.final_ok and res.dtd_valid and res.jstage_issues == [], (fid.missing, fid.conflicts)
     mixed = next(p for p in res.plan.paras.values() if p.text_only().startswith("説明文：図1"))
@@ -305,7 +300,7 @@ def test_ai_placement_of_image_and_text_in_one_paragraph(journal, meta, tmp_path
     path = tmp_path / "float_text_down.docx"
     mf.make_float_text(path, down_cm=2)          # 図1 のテキストボックスをアンカー段落から 2 cm 下にずらす
     with pytest.raises(AIRequiredError):
-        convert(path, meta, journal, Options(out_dir=tmp_path / "none", convert_metafiles=False))
+        convert(path, meta, journal, Options(out_dir=tmp_path / "none"))
     doc, plan, _ = _mechanical(path, journal)
     paras = list(plan.paras.values())
     mixed = next(p for p in paras if p.text_only().startswith("説明文：図1"))
@@ -316,7 +311,7 @@ def test_ai_placement_of_image_and_text_in_one_paragraph(journal, meta, tmp_path
     resp = {"operations": [], "notes": [], "placements": [{"float": mixed.float_id, "after": anchor.src, "items": [
         {"kind": "fig", "caption": [cap.src], "body": body}], "reason": "試験", "confidence": "中"}]}
     res = convert(path, meta, journal, Options(out_dir=tmp_path / by, ai_mode="manual",
-                                               ai_response=json.dumps(resp, ensure_ascii=False), convert_metafiles=False))
+                                               ai_response=json.dumps(resp, ensure_ascii=False)))
     assert res.ai.rejected == [] and res.plan.unplaced_floats == []
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     assert [(e.src, e.reason) for e in res.plan.exclusions] == before
@@ -368,7 +363,7 @@ def place_response(journal, after_head, extra=()):
 def test_unplaced_floats_go_after_anchor_in_number_order(journal, meta, tmp_path):
     """手動モードで AI の回答を貼り戻す前: 位置を決められない図表はアンカー段落のすぐ後ろ。同じ段落に結び付いた図表は
     キャプションの番号順（docx の順は図3・図2）。空の段落に結び付いた図表は、前の文字のある段落の名前で示す。"""
-    res = convert(PLACE, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", convert_metafiles=False))
+    res = convert(PLACE, meta, journal, Options(out_dir=tmp_path, ai_mode="manual"))
     fid = res.fidelity
     assert fid.ok and fid.final_ok and res.dtd_valid and res.jstage_issues == [] and res.lost_images == []
     plan = res.plan
@@ -412,7 +407,7 @@ def test_unplaced_float_does_not_split_list_or_quote(journal, meta, tmp_path, va
     画像と文字が同じ段落の項目は、箇条書きの項目として数える。AI が指定した位置はずらさない。"""
     path = tmp_path / f"place_{variant}.docx"
     mf.make_b3_place(path, variant=variant)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.lost_images == []
     assert res.plan.unplaced_floats == ["s1", "s2", "s3", "s4"] and res.plan.floats["s1"].where == "anchor"
     body = load(res).find("body")
@@ -433,8 +428,7 @@ def test_unplaced_float_does_not_split_list_or_quote(journal, meta, tmp_path, va
     imgs = [q.src for q in first.floats["s1"].paras if q.images]
     resp = json.dumps({"placements": [{"float": "s1", "after": anchor, "items": [{"kind": "fig", "caption": [cap], "body": imgs}],
                                        "reason": "試験の回答", "confidence": "低"}], "operations": [], "notes": []})
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "ai", ai_mode="manual", ai_response=resp,
-                                               convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "ai", ai_mode="manual", ai_response=resp))
     assert res.plan.floats["s1"].mode == "ai" and res.fidelity.ok and res.dtd_valid
     if variant != "blank_list":
         # 指定された段落の直後に置くので、アンカー段落が箇条書き・引用の途中なら 2 つに分かれる（今までどおり。other_list の
@@ -445,7 +439,7 @@ def test_unplaced_float_does_not_split_list_or_quote(journal, meta, tmp_path, va
 def test_float_row_location_for_empty_anchor(journal, meta, tmp_path):
     """3 章の「図表の位置」の場所の欄: アンカー段落が空の段落（出力しないので場所がない）なら、その前の段落の場所を示す
     （段落の ID をそのまま出さない）。"""
-    res = convert(PLACE, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", convert_metafiles=False))
+    res = convert(PLACE, meta, journal, Options(out_dir=tmp_path, ai_mode="manual"))
     plan = res.plan
     anchor = plan.floats["s4"].float.anchor_src
     assert not plan.locations.get(anchor)
@@ -479,8 +473,7 @@ def test_ai_placement_after_back_matter_goes_to_body_end(journal, meta, tmp_path
     """AI が本文の外（注・引用文献・英文の部分）の段落の後ろを指定した図表: 指定は今までどおり採用しないが、図表は
     本文の冒頭ではなく本文の最後（最後の章の最後）に仮に置き、要対応として知らせる。"""
     resp, first = place_response(journal, head)
-    res = convert(PLACE, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=resp,
-                                                convert_metafiles=False))
+    res = convert(PLACE, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=resp))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.lost_images == []
     fi, after_src = res.plan.floats["s1"], src_of(first, head)
     assert fi.mode == "unplaced" and (fi.where, fi.end_why, fi.end_after) == ("end", "ai", after_src)
@@ -501,8 +494,7 @@ def test_ai_placement_after_back_matter_goes_to_body_end(journal, meta, tmp_path
 def test_ai_placement_after_title_or_shape_stays_after_anchor(journal, meta, tmp_path, head):
     """AI が題目（和文の冒頭）や図形の中の段落の後ろを指定した図表は、本文の最後ではなく、アンカー段落の後ろに仮に置く。"""
     resp, _ = place_response(journal, head)
-    res = convert(PLACE, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=resp,
-                                                convert_metafiles=False))
+    res = convert(PLACE, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=resp))
     assert res.fidelity.ok and res.dtd_valid
     fi = res.plan.floats["s1"]
     assert fi.mode == "unplaced" and fi.where == "anchor" and fi.end_why == ""
@@ -514,8 +506,7 @@ def test_ai_placement_after_title_or_shape_stays_after_anchor(journal, meta, tmp
 def test_correct_placement_after_back_matter_one_is_used(journal, meta, tmp_path):
     """同じ図形に、注の段落の後ろの指定と、正しい指定が続くときは、正しい指定を採用する（本文の最後には置かない）。"""
     resp, _ = place_response(journal, "1) 架空の注", extra=["図2と図3は同じ段落"])
-    res = convert(PLACE, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=resp,
-                                                convert_metafiles=False))
+    res = convert(PLACE, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=resp))
     assert res.plan.floats["s1"].mode == "ai" and "s1" not in res.plan.unplaced_floats
     [why] = [w for op, w in res.ai.rejected if op["src"] == "s1"]
     assert "本文の段落ではない" in why and "本文の最後" not in why
@@ -529,9 +520,9 @@ def test_float_anchored_outside_body_becomes_unplaced(journal, meta, tmp_path):
     path = tmp_path / "outside.docx"
     mf.make_b3_place(path, outside=True)
     with pytest.raises(AIRequiredError) as e:
-        convert(path, meta, journal, Options(out_dir=tmp_path / "none", convert_metafiles=False))
+        convert(path, meta, journal, Options(out_dir=tmp_path / "none"))
     assert "s5" in [f.float.fid for f in e.value.floats] and "図形が本文の外（注）の段落に結び付いている" in str(e.value)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == [] and res.lost_images == []
     fi = res.plan.floats["s5"]
     assert res.plan.unplaced_floats == ["s1", "s2", "s3", "s4", "s5"]
@@ -551,14 +542,12 @@ def test_float_anchored_outside_body_becomes_unplaced(journal, meta, tmp_path):
         return json.dumps({"placements": [{"float": "s5", "after": src_of(first, head), "items": [
             {"kind": "fig", "caption": [cap], "body": body}], "reason": "試験の回答", "confidence": "低"}],
             "operations": [], "notes": []}, ensure_ascii=False)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "ai", ai_mode="manual", ai_response=answer("以上のように，図の"),
-                                               convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "ai", ai_mode="manual", ai_response=answer("以上のように，図の")))
     assert res.plan.floats["s5"].mode == "ai" and res.fidelity.ok and res.dtd_valid and res.lost_images == []
     assert ("place_float", "s5") in [(op["op"], op["src"]) for op, _ in res.ai.accepted]
     assert after(captions_sequence(load(res)), "以上のように，図の") == ["図5"]
     # 注の段落の後ろを指定したものは採用せず、本文の最後に仮に置く（手作業で移す要対応）
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "fn", ai_mode="manual", ai_response=answer("1) 架空の注"),
-                                               convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "fn", ai_mode="manual", ai_response=answer("1) 架空の注")))
     fi = res.plan.floats["s5"]
     assert (fi.mode, fi.where, fi.end_why) == ("unplaced", "end", "ai") and res.fidelity.ok and res.dtd_valid
     [why] = [w for op, w in res.ai.rejected if op["src"] == "s5"]
@@ -571,11 +560,11 @@ def test_shapes_outside_body(journal, meta, tmp_path):
     """sample_outside: 引用文献・注・英文要旨の段落に結び付いた図形（修正計画の N7）。図表の入った図形（図3・表1）は位置を
     決められない図表として本文の最後に仮に置き、文字だけの囲みは本文の最後の boxed-text（位置を推定。要確認）にする。
     どれも引用文献・注・英文要旨には入れない。資料の中の囲みは今までどおり資料の中に出す。引用文献の段落そのものにある画像は、
-    今までどおり XML に入らなかった画像（要対応。修正計画の N1）として知らせる。"""
+    今までどおり 画像を入れる場所を作れなかった画像（要対応。修正計画の N1）として知らせる。"""
     with pytest.raises(AIRequiredError) as e:
-        convert(OUTSIDE, meta, journal, Options(out_dir=tmp_path / "none", convert_metafiles=False))
+        convert(OUTSIDE, meta, journal, Options(out_dir=tmp_path / "none"))
     assert sorted(f.float.fid for f in e.value.floats) == ["s1", "s3"]
-    res = convert(OUTSIDE, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False))
+    res = convert(OUTSIDE, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
     plan = res.plan
     assert {fid: (fi.mode, fi.where, fi.end_why) for fid, fi in plan.floats.items()} == {
@@ -602,7 +591,7 @@ def test_shapes_outside_body(journal, meta, tmp_path):
     # 資料の中の囲みは、今までどおり資料の中に出す（本文の外として扱わない）
     app = "".join(root.find(".//app").itertext())
     assert "資料の囲み：架空のワークシートの問いである。" in app and root.find(".//app//boxed-text") is None
-    # XML に入らなかった画像は、引用文献の段落そのものにある行内の画像だけ（図3 の画像は図に入る）
+    # 画像を入れる場所を作れなかった画像は、引用文献の段落そのものにある行内の画像だけ（図3 の画像は図に入る）
     assert [(li.location, li.text[:4]) for li in res.lost_images] == [("引用文献 3件目", "試験八郎")]
     # 本文の最後の図3 に画像の置き場所があり、備考に理由を書く。図・表の一覧では、どちらの図形の図表も「本文の最後」
     [slot] = [s for s in plan.slots if s.float_id == "s1"]
@@ -632,11 +621,11 @@ def _refs_group(path, inner):
 
 def test_group_shape_on_reference_keeps_its_image(journal, meta, tmp_path):
     """引用文献の段落に結び付いたグループ図形の画像は、アンカー段落（引用文献の段落）から集めて図に入れる（修正計画の N7。
-    XML に入らなかった画像にしない）。画像と図キャプションのグループ図形は、AI の回答の前でも本文の最後の図（画像あり）に仮に
+    画像を入れる場所を作れなかった画像にしない）。画像と図キャプションのグループ図形は、AI の回答の前でも本文の最後の図（画像あり）に仮に
     置く。画像と注記のグループ図形を AI が図として組んだときは、注記の段落は図の後ろに 1 回だけ出る（図表の入った図形の中の
     テキストボックスは、文字だけのテキストボックスとして別に扱わない。Classifier.text_only）。"""
     path = _refs_group(tmp_path / "cap.docx", mf.para(mf.S["fig_cap"], "図2　架空のグループの図"))
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "cap", ai_mode="manual", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "cap", ai_mode="manual"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.lost_images == []
     assert res.plan.unplaced_floats == ["s1"] and len(res.images) == 1
     fig = load(res).find("body")[-1][-1]
@@ -648,8 +637,7 @@ def test_group_shape_on_reference_keeps_its_image(journal, meta, tmp_path):
     resp = json.dumps({"placements": [{"float": "s1", "after": src_of(first, "以上である。"), "items": [
         {"kind": "fig", "caption": [], "body": [img.image_id]}], "reason": "試験の回答", "confidence": "低"}],
         "operations": [], "notes": []}, ensure_ascii=False)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "label", ai_mode="manual", ai_response=resp,
-                                               convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "label", ai_mode="manual", ai_response=resp))
     fid = res.fidelity
     assert fid.ok and fid.final_ok and fid.conflicts == [] and res.dtd_valid and res.lost_images == []
     assert res.plan.floats["s1"].mode == "ai" and res.plan.textboxes == {}
@@ -749,8 +737,7 @@ def test_cut_response_applies_only_finished_placements(journal, meta, tmp_path):
     アンカー段落の後ろに仮に置いて、要対応として知らせる。operations と notes は使わない。出し直しの案内は、最初から
     出し直してもらい、続きだけを貼り付けない（貼り付けても読めない）こと。"""
     resp = cut_float_response(lambda t: t.index('"float": "s2"') + 30)
-    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=resp,
-                                                convert_metafiles=False))
+    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=resp))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.lost_images == []
     assert res.ai.error == "" and "最後まで書かれていた 1 件だけを読み取って反映しました" in res.ai.partial
     assert "同じ形式で最初から出し直してください" in res.ai.partial and "続きだけを貼り付けても読めません" in res.ai.partial
@@ -779,8 +766,7 @@ def test_cut_response_placements_are_validated(journal, meta, tmp_path, capsys):
     （operations と notes を使っていない）で、コマンドラインは 1 を返す（0.23.0 では 0。修正計画 D）。"""
     from jasme_jats.report import NEEDS_ACTION, actions
     resp = cut_float_response(lambda t: t.index('"reason"', t.index('"operations"')) + 15)
-    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=resp,
-                                                convert_metafiles=False))
+    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=resp))
     assert res.fidelity.ok and res.dtd_valid and res.ai.error == ""
     assert "最後まで書かれていた 4 件だけ" in res.ai.partial and res.plan.unplaced_floats == []
     assert [op["src"] for op, _ in res.ai.rejected] == ["s4"] and "機械的に決めた" in res.ai.rejected[0][1]
@@ -797,8 +783,7 @@ def test_unreadable_cut_response_is_reported(journal, meta, tmp_path):
     """最初の placements の要素の途中（文字列の途中）で切れた回答: 読める指定がないので反映せず、「途中で切れている可能性」を
     案内する。位置を決められない図表は、アンカー段落の後ろに仮に置き、AI の回答を反映できなかったことを 3 章に書く。"""
     resp = cut_float_response(lambda t: t.index('"reason"') + 15)
-    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=resp,
-                                                convert_metafiles=False))
+    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=resp))
     assert res.fidelity.ok and res.dtd_valid and res.ai.partial == ""
     assert "Unterminated string" in res.ai.error and "回答が途中で切れている可能性があります" in res.ai.error
     assert res.plan.unplaced_floats == ["s1", "s2", "s3"]
@@ -818,8 +803,7 @@ def test_h1_falsy_caption_body_of_float_items_do_not_stop(key, val, journal, met
         item.pop(key)
     else:
         item[key] = val
-    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=json.dumps(data),
-                                                convert_metafiles=False))
+    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=json.dumps(data)))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     assert not any(op["src"] == "s1" for op, _ in res.ai.rejected)
     assert "s1" not in res.plan.unplaced_floats and res.plan.floats["s1"].mode == "ai"

@@ -10,7 +10,7 @@ import pytest
 from lxml import etree
 
 from jasme_jats.article import ImageSlot
-from jasme_jats.pipeline import NO_DOCX_IMAGE, Options, convert
+from jasme_jats.pipeline import Options, convert
 from jasme_jats.structure import figure_rows, slot_keys
 
 XLINK = "http://www.w3.org/1999/xlink"
@@ -20,7 +20,7 @@ HREF = f"{{{XLINK}}}href"
 def run(tmp_path, kind, variant, meta, journal):
     path = tmp_path / f"{kind}_{variant}.docx"
     getattr(mf, f"make_{kind}")(path, variant)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     fid = res.fidelity
     assert fid.ok and fid.final_ok and res.dtd_valid and res.lost_images == [], (fid.missing, fid.conflicts)
     return res, etree.fromstring(res.xml_path.read_bytes().split(b"\n", 2)[2])
@@ -133,7 +133,7 @@ def test_figure_caption_in_cell_without_image_above_keeps_other_image_nocap(jour
     g = list(root.iter("inline-graphic"))[1]
     assert g.getparent().tag == "td" and (g.tail or "").startswith("図1")
     [slot] = [s for s in res.plan.slots if s.kind == "fig"]
-    assert slot.label == "図1" and slot.note == "同じセルにも、同じ列の上のセルにも、この図のものと決められる画像がない"
+    assert slot.label == "図1" and slot.note == "docx でこの図の画像を見つけられませんでした。同じセルにも、同じ列の上のセルにも、この図のものと決められる画像がない"
     assert any("画像を docx で見つけられなかった" in d.message for d in res.plan.decisions)
 
 
@@ -159,12 +159,17 @@ def test_floating_image_on_cell_caption_yields_to_image_above(journal, meta, tmp
     assert all(g.getparent().tag == "td" for g in root.iter("inline-graphic")) and root.find(".//fig") is None
     fig1 = res.plan.slots[0]
     assert "どの図のものか決められない" in fig1.note
-    from jasme_jats.report import images_to_prepare
-    why = {name.split("_", 2)[2]: w for name, _, w in images_to_prepare(res)}
+    from jasme_jats.report import actions, image_rows
     fig2 = res.plan.slots[2]
-    assert fig2.note == ("同じセルにも、同じ列の上のセルにも、この図のものと決められる画像がない。図1 のキャプションの段落に結び付いた、"
-                         "キャプションのない画像がこの図の画像かもしれない。そうなら、その画像をこの図の名前で入れ、キャプションなしの置き場所は外す")
-    assert why["fig02.png"] == f"{NO_DOCX_IMAGE}（{fig2.note}）" and why["fig02.png"].count("（") == 2   # 理由の中のかっこは 1 段だけ
+    assert fig2.note == ("docx でこの図の画像を見つけられませんでした。同じセルにも、同じ列の上のセルにも、この図のものと決められる画像がない。"
+                         "図1 のキャプションの段落に結び付いた、キャプションのない画像がこの図の画像かもしれない。そうなら、その画像を"
+                         "この図の名前で入れ、キャプションなしの置き場所は外す")
+    # 置き場所の備考は、図の画像の一覧の備考と、手順 images の行の括弧にそのまま出す（修正計画 W1 の 4.1・4.3）
+    notes = {row.key: row.note for row in image_rows(res)}
+    assert notes["fig02"] == f"未。{fig2.note}"
+    [step] = [a for a in actions(res) if a.key == "images"]
+    line = next(x for x in step.box_detail.split("\n") if x.startswith("・fig02:"))
+    assert line.endswith(f"（{fig2.note}）") and line.count("（") == 1            # 理由の中のかっこは 1 段だけ
     rows = figure_rows(res.plan)
     assert [(r.kind, r.label, r.key) for r in rows if r.kind == "fig"] == [
         ("fig", "図1", "fig01"), ("fig", "図2", "fig02"), ("fig", "図3", "fig03")]

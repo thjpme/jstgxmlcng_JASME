@@ -55,7 +55,7 @@ def test_gradio_notebook_is_up_to_date_and_cells_compile():
     compile(codes[0], "cell", "exec")
     cell = codes[0]
     assert "jasme-jats[ai,images,colab,gui]" in cell and "DONE" not in cell and "手順 2" not in cell and "手順 1" not in cell
-    assert cell.index("LO_PROC = subprocess.Popen") < cell.index('"pip", "install"')      # LibreOffice を先に裏で始める
+    assert "LibreOffice" not in cell and "LO_PROC" not in cell and "CONVERT_EMF" not in cell      # LibreOffice は使わない（図の画像は作業する人が入れる）
     assert "from jasme_jats.app import launch" in cell and "_app = launch()" in cell
     # 2 回目（ツールが読み込み済み）は入れ直さずに画面を開き直す
     assert "if loaded_before:\n    print(" in cell and "_app.close()" in cell
@@ -138,10 +138,10 @@ def test_step9_resets_for_next_article(monkeypatch):
     assert "前の論文（first.docx）の値が残っています" in shown[-1] and "開き直して" in shown[-1]
     # ダウンロード済み（手順 8 を実行済み）なら、1 回で進む
     ns.update(DONE={1, 2, 3, 4, 5, 8}, docx_path=Path("second.docx"), meta_input={"volume": "31", "fpage": "13"},
-              USER_IMAGES={"31_1_fig01.png": ("a.png", b"")})
+              KEPT={"fig01": object()})
     exec(src, ns)
     assert ns["DONE"] == {1} and ns["PREVIOUS"]["docx"] == "second.docx"
-    assert "USER_IMAGES" not in ns                  # 前の論文の画像は持ち越さない
+    assert "KEPT" not in ns                         # 前の論文の画像は持ち越さない
 
 
 def _png(size=(120, 80)):
@@ -157,33 +157,72 @@ def _template_result(tmp_path):
     from jasme_jats.config import ArticleMeta, JournalConfig
     from jasme_jats.pipeline import Options, convert
     meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり"})
-    # EMF を変換しない設定では、テンプレートの図 1 の画像を用意できない
-    return convert(TEMPLATE, meta, JournalConfig.load(), Options(out_dir=tmp_path / "output", convert_metafiles=False))
+    # 図・表の画像は作業する人が入れる（修正計画 W1）: 変換の直後は、テンプレートの図 1 の画像はまだない
+    return convert(TEMPLATE, meta, JournalConfig.load(), Options(out_dir=tmp_path / "output"))
 
 
-def test_step7_uploads_missing_images_one_by_one(monkeypatch, tmp_path):
-    """手順 7: 用意できなかった図ごとにアップロードを求め、正しい名前で入れて ZIP とレポートを作り直す。"""
+def _step7_ns(res, uploads):
     import types
+    return {"DONE": {1, 2, 3, 4, 5}, "res": res, "files": types.SimpleNamespace(upload=lambda: uploads.pop(0))}
+
+
+def test_step1_has_no_libreoffice_and_step7_form():
+    """手順 1 に LibreOffice の準備（CONVERT_EMF・LO_PROC）がない。手順 7 の題と NO_IMAGE の欄。"""
+    for title in ("#@title 1. 準備",):
+        src = cell_source(title)
+        assert "LibreOffice" not in src and "CONVERT_EMF" not in src and "LO_PROC" not in src and "soffice" not in src
+    src7 = cell_source("#@title 7.")
+    assert src7.startswith("#@title 7. 図の画像を入れる") and 'NO_IMAGE = ""  #@param {type:"string"}' in src7
+    assert "まとめてアップロード" in src7 and "名前で合わせます" in src7
+    assert "あと" not in src7 and "全部で" not in src7        # 残りの枚数の文はセルに書かず、手順 images の progress を使う
+    assert "LibreOffice" not in "".join("".join(c["source"]) for c in json.loads(mk.render())["cells"] if c["cell_type"] == "code")
+
+
+def test_step7_bulk_then_one_by_one(monkeypatch, tmp_path, capsys):
+    """手順 7: まとめてアップロード（名前で合わせる）→ 合わなかったファイルを挙げ、残りを図ごとに選ぶ → 確かめの一覧 → 残りは青い枠。"""
     import zipfile
     shown = fake_display(monkeypatch)
     res = _template_result(tmp_path)
-    uploads = [{}, {"なんでもよい名前.png": _png()}]       # 1 回目はキャンセル（飛ばす）、2 回目は画像を選ぶ
-    files = types.SimpleNamespace(upload=lambda: uploads.pop(0))
-    ns = {"DONE": {1, 2, 3, 4, 5}, "res": res, "files": files, "USER_IMAGES": {}}
+    uploads = [{}, {}]                              # まとめて・図ごと、どちらもキャンセル
+    ns = _step7_ns(res, uploads)
     src = cell_source("#@title 7.")
-    exec(src, ns)                                   # キャンセル: 何も入れずに、まだ足りないことを赤い枠で示す
-    assert ns["USER_IMAGES"] == {} and "画像ファイルを用意できなかった図が 1 件" in shown[-1]
     exec(src, ns)
-    assert list(ns["USER_IMAGES"]) == ["31_1_fig01.png"] and ns["DONE"] == {1, 2, 3, 4, 5, 7}
-    assert shown[-1]["filename"].endswith("Graphics/31_1_fig01.png")      # 入れた画像を表示して確かめられる
+    assert "図の画像を入れてください（あと 1 枚／全部で 1 枚）" in shown[-1] and "<iframe" in shown[0]      # 一覧を出し、残りを青い枠で示す
+    assert uploads == [] and not [i for i in res.images if i.status == "user"]
+    assert "選ばれなかったので飛ばします" in capsys.readouterr().out
+    # まとめて入れた名前が合わなければ挙げ、その図は図ごとに選ぶ
+    uploads = [{"なんでもよい名前.png": _png()}, {"選び直し.png": _png()}]
+    ns = _step7_ns(res, uploads)
+    exec(src, ns)
+    out = capsys.readouterr().out
+    assert "「なんでもよい名前.png」に合う図がありません" in out and "▼ 図1" in out
+    assert [i.key for i in res.images if i.status == "user"] == ["fig01"] and ns["DONE"] == {1, 2, 3, 4, 5, 7}
     assert "jasme/31/1/31_1/Graphics/31_1_fig01.png" in zipfile.ZipFile(res.zip_path).namelist()
-    assert "要対応: 画像ファイル" not in res.report_path.read_text(encoding="utf-8")
-    exec(src, ns)                                   # 足りない画像がなければ何もしない
+    assert "- [x] 図の画像 1 枚を入れた" in res.report_path.read_text(encoding="utf-8")
+    assert "1 枚をすべて入れました。上の一覧で、図番号・キャプションと画像が合っているか確かめてから、手順 8 に進んでください。" in out
+    assert "<iframe" in shown[-1] and "data:image/png;base64" in shown[-1]      # 入れた画像の確かめの一覧（画像を埋め込む）
+    exec(src, ns)                                   # 残りがなければ何も求めない
     assert uploads == []
 
 
+def test_step7_matches_names_and_skips(monkeypatch, tmp_path, capsys):
+    """手順 7: fig01.png のような名前は図ごとの選択なしで合う。NO_IMAGE の名前はキャプションのない画像だけ（図の幹は 1 枚も入れずに断る）。"""
+    shown = fake_display(monkeypatch)
+    res = _template_result(tmp_path)
+    ns = _step7_ns(res, [{"fig01.png": _png(), "x.txt": b"x"}])
+    exec(cell_source("#@title 7."), ns)
+    out = capsys.readouterr().out
+    assert [i.key for i in res.images if i.status == "user"] == ["fig01"] and "「x.txt」に合う図がありません" in out
+    # NO_IMAGE に図の幹を書くと、1 枚も入れずに断る（赤い枠）
+    res2 = _template_result(tmp_path / "again")
+    ns = _step7_ns(res2, [{}, {}])
+    exec(cell_source("#@title 7.").replace('NO_IMAGE = ""', 'NO_IMAGE = "fig01, img999999"'), ns)      # 欄の値を書き換える
+    assert any("画像を入れられませんでした" in x and "#dc2626" in x for x in shown)
+    assert not [i for i in res2.images if i.status in ("user", "skipped")]
+
+
 def test_step8_stops_once_when_images_are_missing(monkeypatch, tmp_path):
-    """手順 8: 用意できなかった画像が残っていれば、ダウンロードの前に一度止めて手順 7 を案内する。"""
+    """手順 8: 図の画像が残っていれば、ダウンロードの前に一度止めて手順 7 を案内する。"""
     import shutil
     import types
     fake_display(monkeypatch)
@@ -192,9 +231,9 @@ def test_step8_stops_once_when_images_are_missing(monkeypatch, tmp_path):
     ns = {"DONE": {1, 2, 3, 4, 5}, "res": res, "files": types.SimpleNamespace(download=downloaded.append),
           "shutil": shutil, "Path": Path, "WORK": tmp_path, "OUT": tmp_path / "output", "docx_path": Path("a.docx")}
     src = cell_source("#@title 8.")
-    with pytest.raises(SystemExit, match="手順 7 で画像をアップロード"):
+    with pytest.raises(SystemExit, match="残っていることが 1 件あります（上の枠: 図の画像を入れてください（あと 1 枚／全部で 1 枚））。図の画像は、手順 7 で入れてから、もう一度この ▶ を押してください。"):
         exec(src, ns)
-    assert downloaded == []
+    assert downloaded == [] and "images" not in src.split("blocking")[0].replace("images_", "")        # 止める条件は report.blocking だけ
     exec(src, ns)                                   # もう一度押すと、画像なしでダウンロードする
     assert len(downloaded) == 1 and ns["DONE"] == {1, 2, 3, 4, 5, 8}
 
@@ -212,13 +251,15 @@ def test_step8_stops_once_when_action_is_needed(monkeypatch, tmp_path):
     shown = fake_display(monkeypatch)
     meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり",
                                   "received": "2026-01-10", "accepted": "2025-11-20"})
-    res = convert(FULL, meta, JournalConfig.load(), Options(out_dir=tmp_path / "output", convert_metafiles=False))
+    from conftest import fill_images
+    res = convert(FULL, meta, JournalConfig.load(), Options(out_dir=tmp_path / "output"))
+    fill_images(res)                                # 図の画像の手順（必須）を済ませ、ほかの要対応だけを残す
     assert res.jstage_issues
     downloaded = []
     ns = {"DONE": {1, 2, 3, 4, 5}, "res": res, "files": types.SimpleNamespace(download=downloaded.append),
           "shutil": shutil, "Path": Path, "WORK": tmp_path, "OUT": tmp_path / "output", "docx_path": Path("a.docx")}
     src = cell_source("#@title 8.")
-    with pytest.raises(SystemExit, match="要対応が 1 件あります"):
+    with pytest.raises(SystemExit, match="残っていることが 1 件あります"):
         exec(src, ns)
     assert downloaded == [] and "J-STAGE のアップロード時チェックで問題が 1 件あります" in shown[-1]
     exec(src, ns)                                   # もう一度押すと、そのままダウンロードする
@@ -226,10 +267,11 @@ def test_step8_stops_once_when_action_is_needed(monkeypatch, tmp_path):
     assert "EMSGM106E" in shown[-1]                 # ダウンロードの後にも、残っている要対応の枠を出す
     # 同じ docx を書誌情報を直して変換し直し、別の要対応（開始ページがない EMSGM230E）が残ったときは、もう一度止める
     meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "peer_review": "あり"})
-    ns["res"] = res = convert(FULL, meta, JournalConfig.load(), Options(out_dir=tmp_path / "output", convert_metafiles=False))
+    ns["res"] = res = convert(FULL, meta, JournalConfig.load(), Options(out_dir=tmp_path / "output"))
+    fill_images(res)
     assert "EMSGM230E" in [mid for mid, _ in res.jstage_issues] and "EMSGM106E" not in [mid for mid, _ in res.jstage_issues]
     ns["DONE"] = {1, 2, 3, 4, 5}
-    with pytest.raises(SystemExit, match="要対応が 1 件あります"):
+    with pytest.raises(SystemExit, match="残っていることが 1 件あります"):
         exec(src, ns)
     assert len(downloaded) == 1 and "EMSGM230E" in shown[-1]
     exec(src, ns)
@@ -247,7 +289,9 @@ def test_step8_does_not_stop_without_action(monkeypatch, tmp_path):
     from jasme_jats.pipeline import Options, convert
     fake_display(monkeypatch)
     meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり"})
-    res = convert(FULL, meta, JournalConfig.load(), Options(out_dir=tmp_path / "output", convert_metafiles=False))
+    from conftest import fill_images
+    res = convert(FULL, meta, JournalConfig.load(), Options(out_dir=tmp_path / "output"))
+    fill_images(res)                                # 図の画像の手順（必須）を済ませる
     assert not res.needs_action
     downloaded = []
     ns = {"DONE": {1, 2, 3, 4, 5}, "res": res, "files": types.SimpleNamespace(download=downloaded.append),
@@ -271,7 +315,7 @@ def test_step8_does_not_stop_with_only_checks(monkeypatch, tmp_path):
     shown = fake_display(monkeypatch)
     meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり"})
     res = convert(PDFCHECK, meta, JournalConfig.load(), Options(out_dir=tmp_path / "output", pdf_path=PDFCHECK_PDF,
-                                                                route="docx", convert_metafiles=False))
+                                                                route="docx"))
     assert [a.key for a in actions(res)] == ["pdf_diff"] and {a.level for a in actions(res)} == {TO_CHECK}
     assert not res.needs_action
     downloaded = []
@@ -293,7 +337,7 @@ def test_step2_route_defaults_to_published_pdf():
 
 
 def test_steps5_and_6_show_result_boxes():
-    """要対応・要確認の枠（XML に入らなかった画像など）は、手順 5 と手順 6（AI の回答で再変換）で、report.actions から
+    """要対応・要確認の枠（画像を入れる場所を作れなかった画像など）は、手順 5 と手順 6（AI の回答で再変換）で、report.actions から
     まとめて出す（colab.result_boxes。個別の枠の表示を並べない。修正計画 D）。その後に結果の要約（summary_box）、
     レポート全文（report_details。畳んで出す）の順。要約の行を print で並べない。"""
     for prefix in ("#@title 5.", "AI_RESPONSE = r'''"):
@@ -437,7 +481,7 @@ def test_steps5_and_6_stop_on_structure_conflict(monkeypatch, tmp_path):
         assert "error_box(" not in src
     shown = fake_display(monkeypatch)
     path = conflict_doc(tmp_path, "K1_ref_ref")
-    base = {"AI": "manual", "PROVIDER": "claude", "API_MODEL": "x", "CONVERT_EMF": False, "WORK": tmp_path, "OUT": tmp_path / "output",
+    base = {"AI": "manual", "PROVIDER": "claude", "API_MODEL": "x", "WORK": tmp_path, "OUT": tmp_path / "output",
             "meta_input": {"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり"}, "docx_path": path, "pdf_path": None,
             "ROUTE_KEY": "docx", "SPLIT_LABELS": None, "journal": JournalConfig.load(),
             "meta": ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり"}),

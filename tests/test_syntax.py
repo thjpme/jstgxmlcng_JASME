@@ -82,8 +82,7 @@ def test_report_has_no_raw_tags_outside_code(journal, meta, tmp_path, split_labe
     """変換レポートの Markdown に、タグに見える文字を生で書かない（Markdown を HTML にすると、HTML のタグとして消える）。
     書誌情報の表（抄録の二次利用の説明）・図表番号の扱い・警告などの、ツールが書く文に限る。"""
     for k, docx in enumerate(ALL_DOCS):
-        res = convert(docx, meta, journal, Options(out_dir=tmp_path / f"o{k}", split_labels=split_labels,
-                                                   convert_metafiles=False))
+        res = convert(docx, meta, journal, Options(out_dir=tmp_path / f"o{k}", split_labels=split_labels))
         text = res.report_path.read_text(encoding="utf-8")
         assert raw_tags(text) == [], (docx.name, raw_tags(text)[:5])
 
@@ -111,7 +110,7 @@ def test_md_tag_leaves_angle_brackets_of_docx_text(journal, meta, tmp_path):
                 mf.table([[mf.cell(mf.para(S["body"], "表の", mf.br(), "セル"))]])]
     path = tmp_path / "h4.docx"
     mf.make_article(path, "x<y かつ z>w の検証用文書", parts, refs=lambda b: [mf.para(S["ref"], "x<y かつ z>w", mf.br(), "続き")])
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok
     [warn] = [w for w in res.warnings if "x<y かつ z>w" in w]
     report = res.report_path.read_text(encoding="utf-8")

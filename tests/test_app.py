@@ -3,7 +3,7 @@ import zipfile
 
 import pytest
 
-from conftest import FULL, TEMPLATE
+from conftest import FULL, TEMPLATE, fill_images
 from jasme_jats import app
 from jasme_jats.app import AppState, InputError, type_choices
 
@@ -49,6 +49,9 @@ def test_convert_shows_summary_and_download(tmp_path):
     assert res is st.res and not st.waiting_for_answer
     html = st.result_html()
     assert "結果の要約" in html and "AI による補完を「使わない」" in html      # AI を使わないときの注意も出る
+    # 図の画像を入れるまでは、必須の手順が残るのでダウンロードを止める（修正計画 W1）
+    assert st.needs_action and st.download()[0] is None and "図の画像を入れてください" in st.download()[1]
+    fill_images(st.res)
     path, note = st.download()
     assert not st.needs_action and note == ""
     assert path.endswith("変換結果_" + res.xml_path.stem + ".zip")
@@ -60,6 +63,7 @@ def test_manual_mode_waits_for_answer(tmp_path):
     st.set_inputs(ai_mode="manual")
     st.convert()
     assert st.waiting_for_answer
+    fill_images(st.res)             # 図の画像の手順（必須）を済ませる
     assert not st.needs_action      # 回答待ちは推奨の手順なので、要対応に数えない
     assert "AI の回答をまだ反映していません" not in st.result_html()    # 依頼文の欄があるので枠は出さない
     assert st.prompt_text()
@@ -88,83 +92,199 @@ def test_next_article_clears_only_per_article_items(tmp_path):
     assert st.res is None and st.result_html() == "" and not (st.work / "output").exists()
 
 
-def test_missing_images_are_filled_per_figure(tmp_path, monkeypatch):
-    import dataclasses
-    import io
-    from PIL import Image
-    real = app.convert
-    # EMF を変換しない設定にして、テンプレートの図の画像を用意できない状態にする（LibreOffice の有無に左右されない）
-    monkeypatch.setattr(app, "convert", lambda d, m, j, o: real(d, m, j, dataclasses.replace(o, convert_metafiles=False)))
+def png_file(path, k=0):
+    from conftest import key_png
+    path.write_bytes(key_png(k))
+    return path
+
+
+def test_missing_images_are_filled_per_figure(tmp_path):
+    from jasme_jats.report import images_action
+    # 図・表の画像は作業する人が入れる（修正計画 W1）: テンプレートの図の画像も、変換の直後はまだない
     st = filled(tmp_path, docx=TEMPLATE)
     st.convert()
     rows = st.missing_images()
-    assert rows and "必要です" in st.images_markdown() and rows[0][0] in st.images_markdown()
-    assert st.image_slots() == rows and st.needs_action
-    assert st.slot_label("a.png", "図1 x") == "図1 x（a.png）" and st.slot_label("a.png", "") == "a.png"
-    buf = io.BytesIO()
-    Image.new("RGB", (60, 40), "white").save(buf, "PNG")
-    pic = tmp_path / "z_any_name.png"                  # ファイル名は何でもよい。割り当ては名前の順ではなく、図ごとの指定
-    pic.write_bytes(buf.getvalue())
-    last = rows[0][0]                                  # テンプレートの足りない図は 1 つ（欄が複数のときも、選んだ欄だけを入れる）
-    added = st.add_images({last: str(pic), "31_1_99.png": None})       # 選んでいない欄（None）は飛ばす
-    assert added == [last] and last not in [r[0] for r in st.missing_images()]
-    assert len(st.missing_images()) == len(rows) - 1 and st.user_images[last][0] == "z_any_name.png"
+    assert rows and st.image_slots() == st.image_rows() == rows and st.needs_action
+    md = st.images_markdown()
+    assert md.startswith("### 図の画像（" + images_action(st.res).progress + "）")        # 見出しの進み具合は手順 images の progress
+    assert rows[0].key in md and "「図の画像」の欄" in md and "まとめて入れる" in md
+    assert st.slot_label(rows[0]) == f"{rows[0].caption.strip()[:30]}（{rows[0].key}）— 未"
+    pic = png_file(tmp_path / "z_any_name.png")        # ファイル名は何でもよい。割り当ては名前の順ではなく、図ごとの指定
+    last = rows[0].key                                 # テンプレートの足りない図は 1 つ（欄が複数のときも、選んだ欄だけを入れる）
+    added = st.add_images({last: str(pic), "fig99": None})       # 選んでいない欄（None）は飛ばす
+    assert added == [last] and last not in [r.key for r in st.missing_images()]
+    assert len(st.missing_images()) == len(rows) - 1 and next(i for i in st.res.images if i.key == last).source_name == "z_any_name.png"
+    assert st.slot_label(st.image_rows()[0]).endswith("— 入れた: z_any_name.png")
+    assert st.images_markdown().startswith("### 図の画像（1 枚をすべて入れました）")
     with pytest.raises(InputError, match="選ばれていません"):
         st.add_images({})
     with pytest.raises(InputError, match="選ばれていません"):
         st.add_images({last: None})
-    with pytest.raises(InputError, match="用意が必要な画像ではありません"):
-        st.add_images({last: str(pic)})                # 入れた図はもう必要ない
-    st.convert()                                       # 変換し直すと、前の画像は持ち越さない
-    assert len(st.missing_images()) == len(rows)
+    with pytest.raises(InputError, match="画像を入れる場所ではありません"):
+        st.add_images({"fig99": str(pic)})             # この論文にない置き場所
+    st.convert()                                       # 変換し直すと、同じ図（番号もキャプションも同じ）には入れ直す
+    assert len(st.missing_images()) == len(rows) - 1 and st.res.images_dropped == []
+
+
+def test_bulk_images_match_by_name(tmp_path):
+    """「まとめて入れる」: 名前（fig01.png・図1.png・記事識別子つき）で図に合わせる。合わないファイル・別の記事の名前・重なりは挙げる。"""
+    st = filled(tmp_path, docx=TEMPLATE)
+    st.convert()
+    key = st.missing_images()[0].key
+    num = int(key[3:])
+    aid = st.res.meta.article_id(st.res.journal)
+    d = tmp_path / "pics"
+    d.mkdir()
+    ok = png_file(d / f"図{num}.png")
+    other = png_file(d / "x_cover.png", 1)
+    foreign = png_file(d / f"99_99_{key}.png", 2)             # 別の記事の識別子つき
+    matched, unmatched, clashes = st.match_images([str(ok), str(other), str(foreign)])
+    assert matched == {key: ok} and sorted(unmatched) == ["99_99_" + key + ".png", "x_cover.png"] and clashes == []
+    both = png_file(d / f"{aid}_{key}.png", 3)                 # 同じ図に合うファイルが 2 つ: どちらも入れない
+    matched, unmatched, clashes = st.match_images([str(ok), str(both)])
+    assert matched == {} and unmatched == [] and clashes[0][0] == key and sorted(clashes[0][1]) == sorted([ok.name, both.name])
+    assert st.match_images([]) == ({}, [], [])
+    assert st.add_images(matched or {key: ok}) == [key]
+    assert st.missing_images() == []
+
+
+def test_skip_nocap_image_and_checkbox(tmp_path):
+    """キャプションのない画像の「入れない」: 手順の「全部で」から除かれ、行のラベルは「入れない」。"""
+    import test_image_carry as tic
+    from conftest import fill_images
+    docx = tmp_path / "nocap.docx"
+    tic.make(docx, ["三角形ABC"], nocaps=[("前の文章である。", "red")])
+    st = filled(tmp_path, docx=docx)
+    st.convert()
+    nocap = [r for r in st.image_rows() if r.kind == "nocap"]
+    assert len(nocap) == 1
+    key = nocap[0].key
+    assert st.slot_label(nocap[0]).startswith("キャプションのない画像（") and st.slot_label(nocap[0]).endswith(f"（{key}）— 未")
+    st.add_images({}, skip=[key])
+    assert st.slot_label(next(r for r in st.image_rows() if r.key == key)).endswith("— 入れない")
+    assert key not in [r.key for r in st.missing_images()]
+    assert st.images_markdown().startswith("### 図の画像（あと 1 枚／全部で 1 枚）")      # 「全部で」から除かれる（図 1 つ）
+    fill_images(st.res)
+    assert not st.needs_action and st.images_markdown().startswith("### 図の画像（1 枚をすべて入れました）")
+    # 画面のチェック: 入れない行は、チェックの入った状態で出る。図の行のチェックは見せない
+    demo = app.build_app(st, app.IO())
+    fns = {f.fn.__name__: f.fn for f in demo.fns.values()}
+    n = app.MAX_IMAGE_SLOTS
+    out = fns["on_images"](None, *[None] * n, *[False] * n)
+    checks = out[app.FIXED_VIEWS + n:]
+    rows = st.image_slots()
+    assert [c["visible"] for c in checks[:len(rows)]] == [r.kind == "nocap" for r in rows]
+    assert [c["value"] for c in checks[:len(rows)]] == [r.status == "skipped" for r in rows]
 
 
 def test_image_slots_in_view(tmp_path):
-    """build_app の画面更新: 足りない図の数だけ欄を見せ、ラベルは「キャプション（出力ファイル名）」。上限を超えた分は見せない。"""
+    """build_app の画面更新: 置き場所の数だけ行を見せる。ラベルは行（report.ImageRow）から作る。上限を超えた分は見せない。"""
     import types
     import gradio as gr
+    from jasme_jats.report import ImageRow
     st = AppState(tmp_path / "work")
     st.res = types.SimpleNamespace(needs_action=True)      # 模擬の結果（AI は使わない設定なので回答待ちにならない）
     st.set_inputs(ai_mode="none")
     st.result_html = lambda: ""
-    rows = [(f"31_1_{k:02d}.png", f"図{k} 架空の図" if k % 2 else "", "why") for k in range(1, app.MAX_IMAGE_SLOTS + 4)]
+    st.check_html = lambda: "<i>check</i>"
+
+    def row(k):
+        return ImageRow(key=f"fig{k:02d}" if k % 2 else f"img{k:06x}", name=f"x_fig{k:02d}.png", kind="fig" if k % 2 else "nocap",
+                        label=f"図{k}" if k % 2 else "", caption=f"図{k} 架空の図" if k % 2 else "", where="章1", place="", status="missing",
+                        detail="", note="")
+    rows = [row(k) for k in range(1, app.MAX_IMAGE_SLOTS + 4)]
     assert len(rows) > app.MAX_IMAGE_SLOTS
-    st.missing_images = lambda: rows
+    st.image_rows = lambda: rows
+    st.images_visible = lambda: True
     assert len(st.image_slots()) == app.MAX_IMAGE_SLOTS
-    assert f"{app.MAX_IMAGE_SLOTS} 件までです" in st.images_markdown()
-    assert st.slot_label(*rows[0][:2]) == "図1 架空の図（31_1_01.png）" and st.slot_label(*rows[1][:2]) == "31_1_02.png"
+    st.images_markdown = lambda: "md"
+    assert st.slot_label(rows[0]) == "図1 架空の図（fig01）— 未"
+    assert st.slot_label(rows[1]) == "キャプションのない画像（章1）（img000002）— 未"
     demo = app.build_app(st, app.IO())
     assert isinstance(demo, gr.Blocks)
     fns = {f.fn.__name__: f.fn for f in demo.fns.values()}
-    out = fns["on_images"](*[None] * app.MAX_IMAGE_SLOTS)                 # 何も選ばないとエラー（画面の更新の数は変わらない）
-    assert len(out) == 9 + app.MAX_IMAGE_SLOTS and "選ばれていません" in out[0]
-    slots = out[9:]
-    assert slots[0]["visible"] and slots[0]["label"] == "図1 架空の図（31_1_01.png）" and slots[0]["value"] is None
-    assert slots[1]["label"] == "31_1_02.png" and all(u["visible"] for u in slots)
-    st.missing_images = lambda: rows[:2]
-    slots = fns["on_images"](*[None] * app.MAX_IMAGE_SLOTS)[9:]
-    assert [u["visible"] for u in slots] == [True, True] + [False] * (app.MAX_IMAGE_SLOTS - 2)
+    n = app.MAX_IMAGE_SLOTS
+    out = fns["on_images"](None, *[None] * n, *[False] * n)               # 何も選ばないとエラー（画面の更新の数は変わらない）
+    assert len(out) == app.FIXED_VIEWS + 2 * n and "選ばれていません" in out[0] and out[9] == "<i>check</i>"
+    files = out[app.FIXED_VIEWS:app.FIXED_VIEWS + n]
+    checks = out[app.FIXED_VIEWS + n:]
+    assert files[0]["visible"] and files[0]["label"] == "図1 架空の図（fig01）— 未" and files[0]["value"] is None and all(u["visible"] for u in files)
+    assert [c["visible"] for c in checks[:3]] == [False, True, False]      # 「入れない」はキャプションのない画像の行だけ
+    st.image_rows = lambda: rows[:2]
+    out = fns["on_images"](None, *[None] * n, *[False] * n)
+    files = out[app.FIXED_VIEWS:app.FIXED_VIEWS + n]
+    assert [u["visible"] for u in files] == [True, True] + [False] * (n - 2)
 
 
-def test_io_reads_secrets_and_waits_for_libreoffice(monkeypatch):
+def test_on_images_bulk_skip_and_notes(tmp_path):
+    """画面の「画像を入れる」: まとめて入れる（名前で合わせる）・図ごとの行・「入れない」のチェック。合わないファイルは知らせる。"""
+    st = filled(tmp_path, docx=TEMPLATE)
+    demo = app.build_app(st, app.IO())
+    fns = {f.fn.__name__: f.fn for f in demo.fns.values()}
+    values = [st.inputs[k] for k in app.INPUT_NAMES]
+    out = fns["on_convert"](*values)
+    n = app.MAX_IMAGE_SLOTS
+    F = app.FIXED_VIEWS
+    key = st.missing_images()[0].key
+    assert out[4]["visible"] and out[5].startswith("### 図の画像（あと 1 枚") and "図の画像" in out[1] and "図の画像を入れてください" not in out[1]
+    pic = png_file(tmp_path / f"{key}.png")
+    stray = png_file(tmp_path / "stray.png", 1)
+    out = fns["on_images"]([str(pic), str(stray)], *[None] * n, *[False] * n)
+    assert st.missing_images() == [] and out[5].startswith("### 図の画像（1 枚をすべて入れました）")
+    assert "名前の合う図がなかったファイル: stray.png" in out[0] and "<iframe" in out[9]
+    assert out[F]["label"].endswith("— 入れた: " + pic.name) and out[8] is None
+    # 行で選んだ画像と、まとめて入れた画像が同じ図に合うときは、行の画像を使う
+    row_pic = png_file(tmp_path / "row.png", 2)
+    out = fns["on_images"]([str(pic)], row_pic.as_posix(), *[None] * (n - 1), *[False] * n)
+    assert next(i for i in st.res.images if i.key == key).source_name == "row.png"
+
+
+def test_images_stay_through_rebuild_and_reset(tmp_path):
+    """変換し直し・回答の反映の後も入れた画像が残る（同じ図）。「次の論文」で捨てる。残っているとダウンロードが止まり、チェックで通る。"""
+    st = filled(tmp_path, docx=TEMPLATE)
+    st.set_inputs(ai_mode="manual")
+    st.convert()
+    key = st.missing_images()[0].key
+    path, note = st.download()
+    assert path is None and "図の画像を入れてください" in note and "このままダウンロード" in note      # 歯止め
+    zpath, note = st.download(accept_todo=True)
+    assert zpath and note == ""                                                                      # チェックで通る
+    st.add_images({key: str(png_file(tmp_path / "a.png"))})
+    st.apply_answer(EMPTY_ANSWER)                                                                   # 回答の反映（変換し直し）
+    assert st.missing_images() == [] and next(i for i in st.res.images if i.key == key).status == "user"
+    st.convert()                                                                                    # 変換し直し
+    assert st.missing_images() == [] and st.images_markdown().startswith("### 図の画像（1 枚をすべて入れました）")
+    st.reset()
+    assert st.kept == {} and st.res is None and st.images_markdown() == "" and not st.images_visible()
+    assert st.image_slots() == [] and st.check_html() == ""
+
+
+def test_more_than_max_slots_points_to_bulk(tmp_path):
+    """行は MAX_IMAGE_SLOTS 個まで。31 個目からは「まとめて入れる」の案内を出し、まとめて入れれば全部入る。"""
+    import test_image_carry as tic
+    docx = tmp_path / "many.docx"
+    n = app.MAX_IMAGE_SLOTS + 2
+    tic.make(docx, [f"図の{k}" for k in range(1, n + 1)])
+    st = filled(tmp_path, docx=docx)
+    st.convert()
+    assert len(st.image_rows()) == n and len(st.image_slots()) == app.MAX_IMAGE_SLOTS
+    assert f"図ごとの行は {app.MAX_IMAGE_SLOTS} 個までです" in st.images_markdown() and "「まとめて入れる」で入れてください" in st.images_markdown()
+    d = tmp_path / "pics"
+    d.mkdir()
+    paths = [str(png_file(d / f"図{k}.png", k)) for k in range(1, n + 1)]
+    matched, unmatched, clashes = st.match_images(paths)
+    assert len(matched) == n and unmatched == [] and clashes == []
+    assert len(st.add_images(matched)) == n and st.missing_images() == []
+    assert "図ごとの行は" in st.images_markdown()                        # 行の数は変わらない（入れた行も残る）
+
+
+def test_io_reads_secrets(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     io = app.IO()
     assert io.read_secret(("ANTHROPIC_API_KEY",)) is None
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
     assert io.read_secret(("ANTHROPIC_API_KEY",)) == "key"
-    import __main__
-
-    class Proc:
-        waited = False
-
-        def poll(self):
-            return None
-
-        def wait(self):
-            Proc.waited = True
-    monkeypatch.setattr(__main__, "LO_PROC", Proc(), raising=False)
-    app.ColabIO().libreoffice_ready()
-    assert Proc.waited
+    assert not hasattr(app.IO, "libreoffice_ready") and not hasattr(app.ColabIO, "libreoffice_ready")      # LibreOffice は使わない
 
 
 def test_build_app_and_launch_never_share(tmp_path, monkeypatch):
@@ -198,20 +318,19 @@ def test_download_button_fetches_in_page():
 
 
 
-def test_images_box_uses_app_words(tmp_path, monkeypatch):
-    """足りない画像の知らせは、1 画面版では手順の番号ではなく欄の名前で書く（O2）。ノートブックの枠（既定）は手順 7 のまま。"""
-    import dataclasses
+def test_images_box_uses_app_words(tmp_path):
+    """図の画像の手順の枠は、1 画面版では手順の番号ではなく欄の名前で書く（O2）。ノートブックの枠（既定）は手順 7 のまま。"""
+    import re
     from jasme_jats.colab import missing_images_box, result_boxes
-    real = app.convert
-    monkeypatch.setattr(app, "convert", lambda d, m, j, o: real(d, m, j, dataclasses.replace(o, convert_metafiles=False)))
     st = filled(tmp_path, docx=TEMPLATE)
     st.convert()
-    html = st.result_html()
-    assert "「次の図の画像が必要です」の下に並ぶ、図ごとの欄（欄の名前は図のキャプションと出力ファイル名）で、図ごとにその図の画像を" in html
-    assert "\x00" not in html and "足りない図の画像" not in html
-    assert "手順" not in result_boxes(st.res, screen="app")       # レポート全文（畳んだ部分）には「ノートブックは手順 N」と両方の言い方がある
-    assert "手順 7「足りない画像をアップロード」で" in missing_images_box(st.res)
-    assert "次の図の画像が必要です" in st.images_markdown()          # 語の指す見出しが、実際の画面の欄の並びの見出しにある
+    md = st.images_markdown()
+    assert "「図の画像」の欄で入れてください" in md and "\x00" not in md and md.startswith("### 図の画像")     # 語の指す見出しが、実際の欄の見出し
+    assert "図の画像を入れてください" not in st.result_html()           # 手順 images は「図の画像」の欄に出し、結果の枠では重ねない
+    # レポート全文（畳んだ部分）には「ノートブックは手順 N」と両方の言い方がある。枠の見出しの前の「手順」は手順の区分の印
+    assert not re.search(r"手順 ?[0-9]", result_boxes(st.res, screen="app"))
+    assert "手順 7「図の画像を入れる」で入れてください" in missing_images_box(st.res)
+    assert "図の画像を入れてください" in result_boxes(st.res, screen="app")      # 結果の枠そのものは、手順 images も含む（app は skip する）
 
 
 def test_unexpected_error_is_shown_and_old_result_dropped(tmp_path, monkeypatch):
@@ -219,7 +338,7 @@ def test_unexpected_error_is_shown_and_old_result_dropped(tmp_path, monkeypatch)
     import types
     st = filled(tmp_path)
     st.convert()
-    zip_before, _ = st.download()
+    zip_before, _ = st.download(accept_todo=True)
     assert st.res is not None and zip_before
     st.set_inputs(ai_mode="manual")
 
@@ -249,7 +368,7 @@ def test_unexpected_error_is_shown_and_old_result_dropped(tmp_path, monkeypatch)
     st.res = types.SimpleNamespace(report_path=tmp_path / "ない.md", needs_action=False,
                                    xml_path=tmp_path / "a" / "x.xml")
     out = fns["on_download"](False)
-    assert "想定外のエラーで止まりました" in out[0] and out[8] == ""
+    assert "想定外のエラーで止まりました" in out[0] and out[7] == ""
     # 結果は画面に残っているが、出力フォルダ（変換レポートのファイル）がない: 「作られていません」と「画面に残っている」を並べず、
     # 画面の全文を添えて知らせ、同じ操作をもう一度しても止まることを案内する
     assert "変換レポートは作られていません" not in out[0] and "この画面の「変換レポートの全文を見る」の内容" in out[0]
@@ -286,7 +405,7 @@ def test_unexpected_error_in_apply_answer(tmp_path, monkeypatch):
     report.write_text("x", encoding="utf-8")
     html = st.crash(RuntimeError("y"), "images").html
     assert str(report) not in html and "変換レポートの全文を見る" in html
-    assert "入れた画像と変換の結果は、この画面に残っています" in html and "押すと、入れた画像が消えます" in html
+    assert "入れた画像と変換の結果は、この画面に残っています" in html and "入れた画像が消えます" not in html
     assert "「変換する」をもう一度押してください" not in html
     with pytest.raises(ValueError):
         st.crash(RuntimeError("y"), "other")
@@ -301,8 +420,8 @@ def test_download_crash_with_output_folder_gone(tmp_path):
     shutil.rmtree(st.out_dir)
     demo = app.build_app(st, app.IO())
     fns = {f.fn.__name__: f.fn for f in demo.fns.values()}
-    out = fns["on_download"](False)
-    assert out[8] == "" and "想定外のエラーで止まりました" in out[0]
+    out = fns["on_download"](True)        # 残っている手順（図の画像）があっても、このままダウンロードする
+    assert out[7] == "" and "想定外のエラーで止まりました" in out[0]
     assert "変換レポートは作られていません" not in out[0] and "結果はこの画面に残っています" not in out[0]
     assert "この画面の「変換レポートの全文を見る」" in out[0] and "同じ例外で止まります" in out[0]
     assert "「変換する」をもう一度押してください" in out[0]
@@ -336,6 +455,7 @@ def test_manual_fields_stay_for_repaste(tmp_path):
         # 枠が回答の貼り直しを案内している（途中で切れた回答の枠は「新しい回答を最初から最後まで貼り付けて変換し直します」）
         assert ("新しい回答を最初から最後まで貼り付けて" if key == "partial" else "貼り付け直して「反映」を押し") in boxes, key
     out = fns["on_apply"](json.dumps(FLOAT_RESPONSE, ensure_ascii=False))     # 貼り直した回答で決まれば、欄を隠す
+    fill_images(st.res)                                                       # 図の画像の手順（必須）を済ませる
     assert not st.needs_action and out[2]["visible"] is False and out[3] == ""
     # 変換の後に「AI による補完の方法」の欄を変えても判定は変わらない（O3）。この時点では貼り直す枠がないので欄は出ない
     st.set_inputs(ai_mode="none")
@@ -396,7 +516,8 @@ def test_app_words_match_the_real_labels(tmp_path):
     assert set(words) == set(STEP_NAMES)
     # 語の中の「…」で囲んだ名前は、画面のラベルにある（選択肢の名前を除く）。「AI の回答」だけの略は書かない
     quoted = {q for w in words.values() for q in re.findall(r"「([^」]+)」", w)}
-    choices = {"手動（チャットに貼り付け）", "API（Claude）", "docx から作り、出版版 PDF で補う", "次の図の画像が必要です"}
+    choices = {"手動（チャットに貼り付け）", "API（Claude）", "docx から作り、出版版 PDF で補う", "図の画像"}
+        # 「図の画像」は結果の下の欄の見出し（AppState.images_markdown の "### 図の画像"。test_images_box_uses_app_words で確かめる）
     assert quoted - choices <= labels, quoted - choices - labels
     assert "AI の回答" not in quoted
     # CRASH_ADVICE は語の表から組み立てている: 実際のラベルが入り、略した名前・直接書いた名前はない
@@ -516,23 +637,20 @@ def test_images_not_carried_to_changed_input(tmp_path, monkeypatch):
     from PIL import Image
     a, b = make_pair(tmp_path)
     real = app.convert
-    monkeypatch.setattr(app, "convert", lambda d, m, j, o: real(d, m, j, dataclasses.replace(o, convert_metafiles=False)))
+    monkeypatch.setattr(app, "convert", lambda d, m, j, o: real(d, m, j, dataclasses.replace(o)))
     st = filled(tmp_path, docx=TEMPLATE)
     st.set_inputs(ai_mode="manual")
     st.convert()
     rows = st.missing_images()
-    buf = io.BytesIO()
-    Image.new("RGB", (60, 40), "white").save(buf, "PNG")
-    pic = tmp_path / "pic.png"
-    pic.write_bytes(buf.getvalue())
-    st.add_images({rows[0][0]: str(pic)})
+    pic = png_file(tmp_path / "pic.png")
+    st.add_images({rows[0].key: str(pic)})
     st.set_inputs(docx=str(b))
-    for call in (lambda: st.add_images({rows[0][0]: str(pic)}), lambda: st.apply_answer(EMPTY_ANSWER)):
+    for call in (lambda: st.add_images({rows[0].key: str(pic)}), lambda: st.apply_answer(EMPTY_ANSWER)):
         with pytest.raises(InputError, match="入力が前回の変換から変わっています"):
             call()
-    assert st.user_images
     st.convert()
-    assert st.user_images == {} and "論文Bの題目" in xml_text(st.res)
+    # 別の原稿には、前の画像を入れない（図がないので記録に残る）
+    assert "論文Bの題目" in xml_text(st.res) and [d.key for d in st.res.images_dropped] == [rows[0].key]
 
 
 def test_ai_mode_change_after_convert_keeps_screen(tmp_path):
@@ -578,7 +696,7 @@ def test_new_paper_clears_answer_field(tmp_path):
     st.set_inputs(ai_mode="manual")
     demo = app.build_app(st, app.IO())
     fns = {f.fn.__name__: f.fn for f in demo.fns.values()}
-    n_views = 9 + app.MAX_IMAGE_SLOTS
+    n_views = app.FIXED_VIEWS + 2 * app.MAX_IMAGE_SLOTS
 
     def values(**kw):
         st.set_inputs(**kw)

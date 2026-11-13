@@ -174,7 +174,7 @@ CASES = {
 def test_spaced_japanese_names(case, journal, meta, tmp_path):
     name, body, (sur, giv), how, reasons = CASES[case]
     path = names_doc(tmp_path / "n.docx", name, body)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     fid = res.fidelity
     assert fid.ok and fid.final_ok and res.dtd_valid, (fid.mismatches, fid.final_detail, res.dtd_errors[:3])
     assert eastern(res) == ([("surname", sur), ("given-names", giv)] if giv else [("surname", sur)])
@@ -207,7 +207,7 @@ def test_count_guess_is_worded_more_strongly(journal, meta, tmp_path):
     """字数だけの推定は、論文の中の表記からの推定より強い言い方で知らせる（誤りやすいため）。"""
     def detail(body, out):
         res = convert(names_doc(tmp_path / f"{out}.docx", "試\u3000験\u3000六\u3000郎", body), meta, journal,
-                      Options(out_dir=tmp_path / out, convert_metafiles=False))
+                      Options(out_dir=tmp_path / out))
         return next(a for a in actions(res) if a.key == "name_split").box_detail
     weak, strong = detail("試験（2024）にならう。", "a"), detail("著者名を確かめる。", "b")
     assert "誤っていることがあります" in strong and "必ず" in strong
@@ -219,7 +219,7 @@ def test_estimates_are_marked_in_title_checklist_and_cli(journal, meta, tmp_path
     推定を含まない（いちばん長い空白で分けた・分けられなかった）ときは書かない。"""
     def action(name, body, out):
         res = convert(names_doc(tmp_path / f"{out}.docx", name, body), meta, journal,
-                      Options(out_dir=tmp_path / out, convert_metafiles=False))
+                      Options(out_dir=tmp_path / out))
         return next(a for a in actions(res) if a.key == "name_split")
     ctx = action("試\u3000験\u3000六\u3000郎", "試験（2024）にならう。", "ctx")
     cnt = action("試\u3000験\u3000六\u3000郎", "著者名を確かめる。", "cnt")
@@ -243,8 +243,8 @@ def test_estimates_are_marked_in_title_checklist_and_cli(journal, meta, tmp_path
 
 def test_same_docx_gives_same_xml(journal, meta, tmp_path):
     path = names_doc(tmp_path / "n.docx", "試\u3000験\u3000六\u3000郎", "試験（2024）にならう。")
-    a = convert(path, meta, journal, Options(out_dir=tmp_path / "1", convert_metafiles=False))
-    b = convert(path, meta, journal, Options(out_dir=tmp_path / "2", convert_metafiles=False))
+    a = convert(path, meta, journal, Options(out_dir=tmp_path / "1"))
+    b = convert(path, meta, journal, Options(out_dir=tmp_path / "2"))
     assert a.xml_path.read_bytes() == b.xml_path.read_bytes()
 
 
@@ -267,15 +267,14 @@ def test_ai_split_name_accepts_spaced_name(sur, giv, journal, meta, tmp_path):
     分けた氏名を AI が分けたときも、要確認 name_split に「AI が分けた」行として残し（確度つき）、4 章・7 章にも AI の指定と分かるように
     記録する。依頼文には推定で分けた氏名を載せる。"""
     path = names_doc(tmp_path / "n.docx", "試\u3000験\u3000六\u3000郎", "著者名を確かめる。")
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "m", ai_mode="manual", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "m", ai_mode="manual"))
     src = res.plan.authors[0].name_ja.src
     lines = [ln for ln in res.prompt_path.read_text(encoding="utf-8").splitlines() if ln.startswith(f"- [{src}]")]
     assert len(lines) == 1 and "推定" in lines[0] and "「試\u3000験\u3000六\u3000郎」" in lines[0]
     assert "姓「試験」・名「六郎」" in lines[0] and "字数" in lines[0] and "2 か所以上" in lines[0]
     assert "name_split" in [a.key for a in actions(res)]
     resp = json.dumps({"operations": [_split_op(src, sur, giv)]}, ensure_ascii=False)
-    res2 = convert(path, meta, journal, Options(out_dir=tmp_path / "m2", ai_mode="manual", ai_response=resp,
-                                                convert_metafiles=False))
+    res2 = convert(path, meta, journal, Options(out_dir=tmp_path / "m2", ai_mode="manual", ai_response=resp))
     fid = res2.fidelity
     assert fid.ok and fid.final_ok and res2.dtd_valid
     assert res2.ai.rejected == [] and len(res2.ai.accepted) == 1
@@ -299,8 +298,7 @@ def test_ai_split_name_on_unsplit_name_is_listed(journal, meta, tmp_path):
     _, plan, _ = _mechanical(path, journal)
     src = plan.authors[0].name_ja.src
     resp = json.dumps({"operations": [_split_op(src, "試験", "六郎")]}, ensure_ascii=False)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "m", ai_mode="manual", ai_response=resp,
-                                               convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "m", ai_mode="manual", ai_response=resp))
     assert eastern(res) == [("surname", "試験"), ("given-names", "六郎")]
     [act] = [a for a in actions(res) if a.key == "name_split"]
     assert "AI が境目を決めました（確度 高）" in act.box_detail and "空白がなく分けられなかった" in act.box_detail
@@ -313,13 +311,13 @@ def test_ai_split_name_on_longest_gap(journal, meta, tmp_path):
     path = names_doc(tmp_path / "n.docx", "試\u3000験\u3000\u3000洋", "著者名を確かめる。")
     _, plan, _ = _mechanical(path, journal)
     src = plan.authors[0].name_ja.src
-    same = convert(path, meta, journal, Options(out_dir=tmp_path / "a", ai_mode="manual", convert_metafiles=False,
+    same = convert(path, meta, journal, Options(out_dir=tmp_path / "a", ai_mode="manual",
                                                 ai_response=json.dumps({"operations": [_split_op(src, "試験", "洋")]},
                                                                        ensure_ascii=False)))
     [act] = [a for a in actions(same) if a.key == "name_split"]
     assert "いちばん長い" in act.box_detail and "AI が境目を決めました" not in act.box_detail and "推定を含みます" not in act.box_title
     assert len(same.ai.accepted) == 1
-    diff = convert(path, meta, journal, Options(out_dir=tmp_path / "b", ai_mode="manual", convert_metafiles=False,
+    diff = convert(path, meta, journal, Options(out_dir=tmp_path / "b", ai_mode="manual",
                                                 ai_response=json.dumps({"operations": [_split_op(src, "試", "験洋")]},
                                                                        ensure_ascii=False)))
     [act] = [a for a in actions(diff) if a.key == "name_split"]
@@ -333,8 +331,7 @@ def test_ai_split_name_on_single_space_name_is_unchanged(journal, meta, tmp_path
     _, plan, _ = _mechanical(path, journal)
     src = plan.authors[0].name_ja.src
     resp = json.dumps({"operations": [_split_op(src, "試験", "六郎")]}, ensure_ascii=False)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "m", ai_mode="manual", ai_response=resp,
-                                               convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "m", ai_mode="manual", ai_response=resp))
     assert res.ai.accepted == [] and len(res.ai.rejected) == 1
     assert eastern(res) == [("surname", "試験"), ("given-names", "六郎")]
 
@@ -344,8 +341,7 @@ def test_ai_split_name_rejects_other_letters(journal, meta, tmp_path):
     _, plan, _ = _mechanical(path, journal)
     src = plan.authors[0].name_ja.src
     resp = json.dumps({"operations": [_split_op(src, "試験", "七郎")]}, ensure_ascii=False)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "m", ai_mode="manual", ai_response=resp,
-                                               convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "m", ai_mode="manual", ai_response=resp))
     assert res.ai.accepted == [] and len(res.ai.rejected) == 1
     assert eastern(res) == [("surname", "試験"), ("given-names", "六郎")]       # 機械の推定のまま
     assert "name_split" in [a.key for a in actions(res)]
@@ -362,8 +358,7 @@ def test_route2_keeps_name_shape(journal, meta, tmp_path, monkeypatch):
     pages = ["\n".join(t.replace("試験(2024)", "試験（2024）") for t in texts if t.strip())]
     monkeypatch.setattr(pdfmatch, "extract_pages", lambda p: pages)
     (tmp_path / "dummy.pdf").write_bytes(b"%PDF-1.4\n")
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "pdf", pdf_path=tmp_path / "dummy.pdf", route="pdf",
-                                               convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "pdf", pdf_path=tmp_path / "dummy.pdf", route="pdf"))
     fid = res.fidelity
     assert fid.ok and fid.final_ok and res.dtd_valid
     assert res.supplement is not None and res.supplement.ok, res.supplement
@@ -378,7 +373,7 @@ def test_route2_keeps_name_shape(journal, meta, tmp_path, monkeypatch):
 def test_spaces_around_english_name_are_dropped(journal, meta, tmp_path):
     """英文の氏名の前後の空白も姓・名に入れずに落とす（C072）。名の語の間の空白（Rokuro Taro）は残す。"""
     path = names_doc(tmp_path / "n.docx", "試験　六郎", "著者名を確かめる。", en_name=" Rokuro Taro SHIKEN　")
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     fid = res.fidelity
     assert fid.ok and fid.final_ok and res.dtd_valid
     [nm] = [n for n in load(res).iter("name") if n.get("name-style") == "western"]

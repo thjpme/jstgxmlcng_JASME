@@ -7,7 +7,7 @@ import pytest
 from lxml import etree
 
 import make_fixtures as mf
-from conftest import ALL_DOCS, FULL, TEMPLATE
+from conftest import ALL_DOCS, FULL, TEMPLATE, fill_images, image_folder, others
 from jasme_jats.builder import build
 from jasme_jats.pipeline import Options, _mechanical, convert
 
@@ -18,7 +18,7 @@ XML_LANG = "{http://www.w3.org/XML/1998/namespace}lang"
 @pytest.mark.parametrize("split", [False, True], ids=["strict", "split"])
 @pytest.mark.parametrize("path", ALL_DOCS, ids=lambda p: p.name)
 def test_fidelity_and_dtd(path, split, journal, meta, tmp_path):
-    res = convert(path, meta, journal, Options(out_dir=tmp_path, split_labels=split, convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path, split_labels=split))
     fid = res.fidelity
     assert fid.ok, (fid.mismatches, fid.missing, fid.stray[:3])
     assert fid.final_ok, fid.final_detail
@@ -35,7 +35,7 @@ def load(res):
 
 
 def test_links_in_full_sample(journal, meta, tmp_path):
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path))
     root = load(res)
     bibr = [(x.text, x.get("rid")) for x in root.iter("xref") if x.get("ref-type") == "bibr"]
     # 引用は年の部分だけがリンクになる
@@ -77,11 +77,13 @@ def test_links_in_full_sample(journal, meta, tmp_path):
 
 
 def test_package_layout(journal, meta, tmp_path):
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path))
     assert res.zip_path.name == "jasme_31_1.zip"     # 論文ごとに名前が違う（{資料コード}_{記事識別子}.zip）
     assert res.zip_path.name.isascii()               # 日本語のファイル名は J-STAGE で弾かれる（EMSGM034E）
-    with zipfile.ZipFile(res.zip_path) as z:
-        names = set(z.namelist())
+    # 変換の直後は、画像はまだない（図・表の画像は作業する人が入れる。修正計画 W1）。入れると ZIP に入る
+    assert _names(res.zip_path) == ["jasme/31/1/31_1/31_1.xml"]
+    fill_images(res)
+    names = set(_names(res.zip_path))
     assert "jasme/31/1/31_1/31_1.xml" in names
     assert {"jasme/31/1/31_1/Graphics/31_1_fig01.png", "jasme/31/1/31_1/Graphics/31_1_fig02.png"} <= names
     assert res.report_path.exists()
@@ -90,7 +92,7 @@ def test_package_layout(journal, meta, tmp_path):
 
 
 def test_split_labels_moves_numbers_to_label(journal, meta, tmp_path):
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, split_labels=True, convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, split_labels=True))
     root = load(res)
     fig = root.find(".//fig[@id='F1']")
     assert fig.find("label").text == "図1"
@@ -98,40 +100,43 @@ def test_split_labels_moves_numbers_to_label(journal, meta, tmp_path):
     assert any(r == "番号と本文の間の空白" for _, _, r in res.fidelity.drops)
 
 
-def test_template_emf_conversion(journal, meta, tmp_path):
-    from jasme_jats.images import soffice_path
+def test_docx_images_are_not_exported(journal, meta, tmp_path):
+    """docx の中の画像は書き出さない（EMF の図も変換しない。修正計画 W1）。置き場所は、状態 missing・名前の拡張子 .png で、
+    Graphics/・要変換/ を作らない。"""
     res = convert(TEMPLATE, meta, journal, Options(out_dir=tmp_path))
-    img = res.images[0]
-    if soffice_path():
-        assert img.status == "converted"
-        assert (tmp_path / "jasme/31/1/31_1/Graphics" / img.name).exists()
-        # 変換した画像もアップロード用の ZIP に入る（修正計画 C）
-        assert f"jasme/31/1/31_1/Graphics/{img.name}" in _names(res.zip_path)
-        assert res.not_zipped == [] and res.zip_issues == []
-    else:
-        assert img.status == "failed"
+    assert [(i.key, i.name, i.status) for i in res.images] == [("fig01", "31_1_fig01.png", "missing")]
+    assert not (tmp_path / "jasme/31/1/31_1/Graphics").exists() and not (tmp_path / "要変換").exists()
+    assert _names(res.zip_path) == ["jasme/31/1/31_1/31_1.xml"] and res.not_zipped == [] and res.zip_issues == []
+    assert b"31_1_fig01.png" in res.xml_base and res.xml_path.read_bytes() == res.xml_base
 
 
-def test_images_to_prepare_are_listed_at_top_and_in_checklist(journal, meta, tmp_path):
-    from jasme_jats.images import ImageResult
-    from jasme_jats.report import images_to_prepare, render
-    # EMF を変換しない設定では、テンプレートの図は「要対応」になる
-    res = convert(TEMPLATE, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
-    assert [(n, c) for n, c, _ in images_to_prepare(res)] == [("31_1_fig01.png", "図1\u3000三角形ABC")]
+def test_images_step_in_summary_checklist_and_chapter9(journal, meta, tmp_path):
+    """図の画像を入れる手順（必須。修正計画 W1 の 4.1・4.4）: 冒頭の囲みには出さず、1 章の「画像」の行・14 章の先頭の行・9 章の表に出す。
+    全部入れると、14 章は済んだ行（[x]）になり、手順は止めない。"""
+    from jasme_jats.report import STEP, actions, render
+    res = convert(TEMPLATE, meta, journal, Options(out_dir=tmp_path))
+    [act] = [a for a in actions(res) if a.key == "images"]
+    assert (act.level, act.required, act.done, act.progress, act.top) == (STEP, True, False, "あと 1 枚／全部で 1 枚", "")
+    assert res.needs_action
     report = res.report_path.read_text(encoding="utf-8")
-    top = report.split("## 2.")[0]
-    assert "要対応: 画像ファイルを用意できなかった図が 1 件あります" in top
-    assert "jasme_31_1.zip の中の `jasme/31/1/31_1/Graphics/`" in top and "`31_1_fig01.png`: 図1\u3000三角形ABC" in top
-    checklist = report.split("## 14.")[1]
-    assert "- [ ] **画像ファイルを用意できなかった図 1 件**" in checklist and "`31_1_fig01.png`（図1\u3000三角形ABC）" in checklist
-    # Word の図形で描かれた図（画像ファイルがない）
-    res.images[0] = ImageResult(res.images[0].image_id, "31_1_fig01.png", "", "missing", "")
-    assert images_to_prepare(res)[0][2] == "Word の図形・グラフで描かれていて、docx に画像ファイルがない"
-    # 画像がすべて出力できたときは、チェックリストに済みとして載る
-    res.images[0] = ImageResult(res.images[0].image_id, "31_1_fig01.png", "word/media/x.emf", "converted")
-    assert images_to_prepare(res) == []
+    top, ch9, ch14 = report.split("## 2.")[0], report.split("## 9.")[1].split("## 10.")[0], report.split("## 14.")[1]
+    assert "| 画像 | 図の画像 0/1 枚を入れた（残り 1 枚。9 章） |" in top and "図の画像を入れてください" not in top
+    assert "- [ ] **図の画像を入れる（あと 1 枚／全部で 1 枚）**（9 章）: fig01（図1\u3000三角形ABC）" in ch14
+    assert ch14.index("図の画像を入れる") < ch14.index("著者名")          # 手順は 14 章の先頭（要確認の前）
+    assert "Word の原稿の中の画像は使いません" in ch9 and "| fig01 | 図1\u3000三角形ABC |" in ch9 and "| 未 |" in ch9
+    fill_images(res)
+    [act] = [a for a in actions(res) if a.key == "images"]
+    assert act.done and act.progress == "1 枚をすべて入れました" and not res.needs_action
     report = render(res)
-    assert "要対応: 画像ファイル" not in report and "- [x] 画像 1 件はすべて Graphics/ に入っている" in report
+    assert "| 画像 | 図の画像 1 枚をすべて入れた（9 章） |" in report and "- [x] 図の画像 1 枚を入れた（9 章）" in report
+    assert "| 31_1_fig01.png | fill.png・PNG・8×6 px・1 KB |" in report.split("## 9.")[1].split("## 10.")[0]
+
+
+def full_pics(tmp_path):
+    """sample_full.docx の画像の置き場所すべての 1 色の PNG を置いたフォルダ（コマンドラインの --images）。"""
+    from jasme_jats.config import JournalConfig
+    _, plan, _ = _mechanical(FULL, JournalConfig.load())
+    return image_folder(tmp_path / "full_pics", [s.key for s in plan.slots])
 
 
 def _image_bytes(fmt="PNG", mode="RGB", size=(120, 80)):
@@ -143,54 +148,63 @@ def _image_bytes(fmt="PNG", mode="RGB", size=(120, 80)):
 
 
 def test_add_images_puts_user_images_into_zip_and_report(journal, meta, tmp_path):
+    """入れた画像は、中身を変えずに「{記事識別子}_{幹}.{形式}」で Graphics/ と ZIP に入れ、XML の名前の拡張子を合わせる
+    （apply_images）。置き場所にない幹・PNG・JPEG・GIF でない画像は、1 枚も入れずに断る（修正計画 W1 の 2.6）。"""
     from jasme_jats.pipeline import add_images
-    from jasme_jats.report import images_to_prepare
-    res = convert(TEMPLATE, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
-    # 用意が必要でない名前・読めない画像・複数ページの PDF は受け付けない（何も入れない）
-    with pytest.raises(ValueError, match="用意が必要な画像ではありません"):
-        add_images(res, {"31_1_09.png": _image_bytes()})
-    with pytest.raises(ValueError, match="「x.png」を画像として読めません"):
-        add_images(res, {"31_1_fig01.png": ("x.png", b"not an image")})
-    assert add_images(res, {"31_1_09.png": _image_bytes()}, skip_unneeded=True) == []
-    assert images_to_prepare(res)
-    # JPEG（CMYK）を渡しても、出力ファイル名の形式（PNG）にして入れる
-    assert add_images(res, {"31_1_fig01.png": ("図1.jpg", _image_bytes("JPEG", "CMYK"))}) == ["31_1_fig01.png"]
-    assert images_to_prepare(res) == []
+    from jasme_jats.report import image_rows
+    res = convert(TEMPLATE, meta, journal, Options(out_dir=tmp_path))
+    with pytest.raises(ValueError, match="この論文の画像を入れる場所ではありません（この論文の画像の名前: fig01）"):
+        add_images(res, {"fig09": _image_bytes()})
+    with pytest.raises(ValueError, match="「x.png」は PNG・JPEG・GIF の画像ではありません"):
+        add_images(res, {"fig01": ("x.png", b"not an image")})
+    assert [row.status for row in image_rows(res)] == ["missing"] and not (tmp_path / "jasme/31/1/31_1/Graphics").exists()
+    # JPEG（CMYK）も、変換せずにそのまま .jpg で入れる。XML の名前も .jpg になる
+    jpeg = _image_bytes("JPEG", "CMYK")
+    assert add_images(res, {"fig01": ("図1.png", jpeg)}) == ["fig01"]
     with zipfile.ZipFile(res.zip_path) as z:
-        assert z.read("jasme/31/1/31_1/Graphics/31_1_fig01.png")[:4] == b"\x89PNG"
+        assert z.read("jasme/31/1/31_1/Graphics/31_1_fig01.jpg") == jpeg
+    xml = res.xml_path.read_bytes()
+    assert b'xlink:href="31_1_fig01.jpg"' in xml and b"31_1_fig01.png" not in xml and b"31_1_fig01.png" in res.xml_base
+    assert (tmp_path / "jasme/31/1/31_1/31_1.xml").read_bytes() == xml
+    assert res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == [] and res.zip_issues == []
+    [row] = image_rows(res)
+    assert (row.status, row.name, row.detail) == ("user", "31_1_fig01.jpg", "図1.png・JPEG・120×80 px・1 KB")
+    # 入れ直すと、前の画像（別の拡張子）は消え、XML の名前も合わせる
+    png = _image_bytes()
+    add_images(res, {"fig01": ("図1.png", png)})
+    gdir = tmp_path / "jasme/31/1/31_1/Graphics"
+    assert sorted(p.name for p in gdir.iterdir()) == ["31_1_fig01.png"] and (gdir / "31_1_fig01.png").read_bytes() == png
+    assert b'xlink:href="31_1_fig01.png"' in res.xml_path.read_bytes()
+    assert _names(res.zip_path) == ["jasme/31/1/31_1/31_1.xml", "jasme/31/1/31_1/Graphics/31_1_fig01.png"]
     report = res.report_path.read_text(encoding="utf-8")
-    assert "要対応: 画像ファイル" not in report and "- [x] 画像 1 件はすべて Graphics/ に入っている" in report
-    assert "| 利用者が用意 | 利用者が用意した画像（図1.jpg）を入れた。変換のときの状態: EMF/WMF の変換を行わない設定" in report
+    assert "- [x] 図の画像 1 枚を入れた（9 章）" in report and "| 31_1_fig01.png | 図1.png・PNG・120×80 px・1 KB |" in report
 
 
-def test_add_images_accepts_one_page_pdf(journal, meta, tmp_path):
-    pytest.importorskip("pypdfium2")
-    from jasme_jats.images import user_image
+def test_add_images_refuses_pdf_and_keeps_nothing(journal, meta, tmp_path):
+    """PDF は画像にせずに断る（J-STAGE が受け付けるのは jpg・gif・png。修正計画 W1 の 2.6）。2 枚のうち 1 枚でも断れば、1 枚も入れない。"""
+    from jasme_jats.pipeline import add_images
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path))
     pdf = _image_bytes("PDF", size=(300, 200))
-    assert user_image(pdf, "a.png")[:4] == b"\x89PNG"
-    with pytest.raises(ValueError, match="2 ページの PDF"):
-        import io
-        from PIL import Image
-        buf = io.BytesIO()
-        Image.new("RGB", (50, 50), "white").save(buf, "PDF", save_all=True,
-                                                  append_images=[Image.new("RGB", (50, 50), "white")])
-        user_image(buf.getvalue(), "a.png")
+    with pytest.raises(ValueError, match="「図2.pdf」は PNG・JPEG・GIF の画像ではありません（中身は PDF です）"):
+        add_images(res, {"fig01": ("図1.png", _image_bytes()), "fig02": ("図2.pdf", pdf)})
+    assert all(i.status == "missing" for i in res.images) and not (tmp_path / "jasme/31/1/31_1/Graphics").exists()
 
 
 def test_cli_images_option(journal, tmp_path, capsys):
     from jasme_jats.cli import main
     meta = tmp_path / "meta.toml"
     meta.write_text('[article]\nvolume = "31"\nissue = "1"\nfpage = "1"\npeer_review = "あり"\n', encoding="utf-8")
-    args = [str(TEMPLATE), "--meta", str(meta), "--no-metafile-conversion"]
-    assert main(args + ["--out", str(tmp_path / "a")]) == 1           # 画像が足りないのは要対応（修正計画 D）
-    assert "--images で指定するか" in capsys.readouterr().err
+    args = [str(TEMPLATE), "--meta", str(meta)]
+    assert main(args + ["--out", str(tmp_path / "a")]) == 1           # 図の画像を入れる手順（必須）が残る
+    assert "手順: 図の画像があと 1 枚要ります（全部で 1 枚）" in capsys.readouterr().err
     imgs = tmp_path / "imgs"
     imgs.mkdir()
-    (imgs / "31_1_fig01.jpg").write_bytes(_image_bytes("JPEG"))      # 拡張子は問わない
+    jpeg = _image_bytes("JPEG")
+    (imgs / "31_1_fig01.png").write_bytes(jpeg)      # 名前（幹か Graphics/ の名前）で合わせ、形式は中身で決める
     assert main(args + ["--out", str(tmp_path / "b"), "--images", str(imgs)]) == 0
     out = capsys.readouterr()
-    assert "画像を入れて ZIP とレポートを作り直した: 31_1_fig01.png" in out.out and "要対応" not in out.err
-    assert (tmp_path / "b/jasme/31/1/31_1/Graphics/31_1_fig01.png").exists()
+    assert "画像を入れて ZIP とレポートを作り直した: fig01" in out.out and "要対応" not in out.err and "手順:" not in out.err
+    assert (tmp_path / "b/jasme/31/1/31_1/Graphics/31_1_fig01.jpg").read_bytes() == jpeg
 
 
 def test_float_notes_list_unreferenced_and_uncaptioned(journal):
@@ -213,7 +227,7 @@ def test_ref_doi_as_uri(journal, meta, tmp_path):
     # 設定 ref_doi = "uri": 「https://doi.org/10.…」の文字全体を <uri> にする（文字はそのまま）
     import dataclasses
     j = dataclasses.replace(journal, ref_doi="uri")
-    res = convert(FULL, meta, j, Options(out_dir=tmp_path, convert_metafiles=False))
+    res = convert(FULL, meta, j, Options(out_dir=tmp_path))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     root = load(res)
     ref_uris = {"".join(u.itertext()): u.get(f"{{{XLINK}}}href") for r in root.iter("ref") for u in r.iter("uri")}
@@ -246,7 +260,7 @@ def test_peer_review_in_history(journal, tmp_path, peer_review, approved, expect
     from jasme_jats.config import ArticleMeta
     meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "pub_date": "2026-03-31",
                                   "peer_review": peer_review, "approved": approved})
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path))
     assert res.dtd_valid and res.jstage_issues == []
     root = load(res)
     dates = root.findall(".//article-meta/history/date")
@@ -257,7 +271,7 @@ def test_peer_review_in_history(journal, tmp_path, peer_review, approved, expect
 def test_peer_review_missing_or_invalid(journal, tmp_path):
     from jasme_jats.config import ArticleMeta
     meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1"})
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path))
     assert any("査読の有無が未入力" in w for w in res.warnings)
     assert load(res).find(".//history") is None
     with pytest.raises(ValueError, match="査読の有無"):
@@ -267,7 +281,7 @@ def test_peer_review_missing_or_invalid(journal, tmp_path):
 
 
 def test_categories_and_keywords(journal, meta, tmp_path):
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path))
     root = load(res)
     assert root.get("article-type") == "other"                       # 記事種別: その他
     subjects = [(g.get(XML_LANG), g.findtext("subject")) for g in root.iter("subj-group")]
@@ -297,7 +311,7 @@ def test_manuscript_type_choices(journal, tmp_path):
     # 「その他」（自由入力）
     meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "なし",
                                   "subject_ja": "資料", "subject_en": "Material"})
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path))
     subjects = [(g.get(XML_LANG), g.findtext("subject")) for g in load(res).iter("subj-group")]
     assert subjects == [("ja", "資料"), ("en", "Material")]
     assert not any("原稿種別" in w for w in res.warnings)
@@ -306,7 +320,7 @@ def test_manuscript_type_choices(journal, tmp_path):
 def test_textbox_figures_and_captions(journal, meta, tmp_path):
     # テキストボックスの中の表・画像を読み、本文スタイルの「図N」「表N」の段落をキャプションと推定する
     from conftest import EDGE
-    res = convert(EDGE, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    res = convert(EDGE, meta, journal, Options(out_dir=tmp_path))
     assert res.fidelity.ok and res.dtd_valid
     root = load(res)
     caps = {el.get("id"): ("".join(el.find("caption").itertext()) if el.find("caption") is not None else None,
@@ -328,7 +342,7 @@ def test_wrapped_rows_cells_and_textbox_paragraphs(journal, meta, tmp_path):
     # コンテンツコントロール（w:sdt）・w:customXml に包まれた表の行・セルとテキストボックスの段落も、
     # XML の表・図の中に、文書の順に入る（不変性チェックの合格だけでは、入った場所までは分からない）
     from conftest import READER
-    res = convert(READER, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    res = convert(READER, meta, journal, Options(out_dir=tmp_path))
     assert res.fidelity.ok and res.dtd_valid
     root = load(res)
 
@@ -370,7 +384,7 @@ def test_blank_paragraphs_in_textbox_and_endnote_are_excluded(journal, meta, tmp
     mf.make_article(path, "空白だけの段落の検証用文書", parts,
                     endnotes=[mf.endnote(4, " 文末脚注の本文。", mf.para(None, "\u3000"), mf.para(None, " ")),
                               mf.endnote(5, " 参照されていない文末脚注の本文。", mf.para(None, "\u3000"), mf.para(None, " "))])
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     fid = res.fidelity
     assert fid.ok and fid.final_ok and res.dtd_valid, (fid.missing, fid.bad_excluded)
     # 本文（テキストボックス）の段落 d… と、参照されていない文末脚注の段落 e… の、全角空白・半角空白だけの段落
@@ -410,7 +424,7 @@ def test_blank_paragraphs_in_front_and_back_tables_are_excluded(journal, meta, t
     english.insert(4, tbl("English table"))                                          # 英文の著者表の前の表
     path = tmp_path / "blank_tables.docx"
     b.save(path, body + english + mf.tail(b))
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     fid = res.fidelity
     assert fid.ok and fid.final_ok and res.dtd_valid, (fid.missing, fid.bad_excluded)
     assert fid.bad_excluded == [] and fid.conflicts == []
@@ -497,18 +511,15 @@ def _handmade_zip(path, entries):
 
 def test_upload_zip_has_only_this_article(journal, meta, tmp_path):
     from jasme_jats.pipeline import add_images
-    # EMF を変換できなかったとき: 元の画像は出力フォルダの直下の 要変換/ に置き、ZIP には入れない（EMSGM034E・074E）
-    res = convert(TEMPLATE, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    # 変換の直後は画像がない（docx の画像は書き出さない。要変換/ も作らない）。ZIP は XML だけ
+    res = convert(TEMPLATE, meta, journal, Options(out_dir=tmp_path))
     names = _names(res.zip_path)
     assert names == ["jasme/31/1/31_1/31_1.xml"]
     assert all(n.isascii() for n in names)
-    assert (tmp_path / "要変換" / "31_1_fig01.emf").exists()
-    assert not (tmp_path / "jasme/31/1/31_1/要変換").exists()
-    assert "要変換/31_1_fig01.emf" in res.images[0].message
-    assert res.images[0].message.startswith("EMF/WMF の変換を行わない設定")      # メッセージの先頭の理由は変えない
+    assert not (tmp_path / "要変換").exists() and not (tmp_path / "jasme/31/1/31_1/要変換").exists()
     assert res.jstage_issues == [] and res.zip_issues == [] and res.not_zipped == []
-    # 利用者が用意した画像を入れると、その画像だけが ZIP に加わる
-    add_images(res, {"31_1_fig01.png": _image_bytes()})
+    # 作業する人が入れた画像を入れると、その画像だけが ZIP に加わる
+    add_images(res, {"fig01": _image_bytes()})
     assert _names(res.zip_path) == ["jasme/31/1/31_1/31_1.xml", "jasme/31/1/31_1/Graphics/31_1_fig01.png"]
     assert res.zip_issues == [] and res.not_zipped == []
     # 手作りした ZIP: 記事フォルダの中の 要変換/ は、日本語のフォルダ名（EMSGM034E）と想定外の項目（EMSGM074E）
@@ -546,35 +557,23 @@ def test_zip_problems_on_handmade_zips(journal, meta, tmp_path):
 
 
 def test_zip_image_names_by_status():
-    from jasme_jats.images import ImageResult
+    from jasme_jats.images import SlotImage
     from jasme_jats.package import zip_image_names
-    # ZIP に入れるのは、そのまま出力（ok）・変換して出力（converted）・利用者が用意（user）の画像だけ
-    images = [ImageResult(f"rId{k}", f"31_1_0{k}.png", "", st) for k, st in
-              enumerate(["ok", "converted", "user", "failed", "missing"], 1)]
-    assert zip_image_names(images) == ["31_1_01.png", "31_1_02.png", "31_1_03.png"]
-    assert zip_image_names([ImageResult("rId9", "", "", "ok")]) == []         # 名前のない画像は入れない
-
-
-def test_missing_image_note_points_to_step7_and_images_option(tmp_path):
-    from types import SimpleNamespace
-
-    from jasme_jats.images import export_images
-    # Word の図形（画像ファイルがない）: 9 章の備考は、記事フォルダに手で置く案内ではなく、手順 7・--images を案内する
-    img = SimpleNamespace(image_id="rId1", export_name="31_1_01.png", shape_only=True, target="")
-    got = export_images(SimpleNamespace(media={}), [img], tmp_path / "Graphics", keep_dir=tmp_path / "要変換")
-    assert [(i.status, i.name) for i in got] == [("missing", "31_1_01.png")]
-    assert got[0].message.startswith("Word の図形・グラフなどで画像ファイルがない。")      # 先頭の理由は変えない
-    assert "手順 7" in got[0].message and "--images" in got[0].message and "ZIP には入らない" in got[0].message
+    # ZIP に入れるのは、作業する人が入れた画像（状態 user）だけ（修正計画 W1）
+    images = [SlotImage(f"fig0{k}", f"31_1_fig0{k}.png", status=st) for k, st in
+              enumerate(["missing", "user", "skipped", "unused"], 1)]
+    assert zip_image_names(images) == ["31_1_fig02.png"]
+    assert zip_image_names([SlotImage("fig09", "", status="user")]) == []         # 名前のない画像は入れない
 
 
 def test_pdf_stays_in_zip_after_add_images(journal, meta, tmp_path):
     from jasme_jats.pipeline import add_images
     pdf = tmp_path / "dummy.pdf"
     pdf.write_bytes(b"%PDF-1.4 dummy\n")                    # 写すだけ（ルート1。照合では読めず、変換は続ける）
-    res = convert(TEMPLATE, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False, pdf_path=pdf))
+    res = convert(TEMPLATE, meta, journal, Options(out_dir=tmp_path / "out", pdf_path=pdf))
     assert res.has_pdf and "jasme/31/1/31_1/31_1.pdf" in _names(res.zip_path)
     res.zip_issues = [("-", "変換のときの値")]               # add_images が計算し直すことを確かめる
-    add_images(res, {"31_1_fig01.png": _image_bytes()})
+    add_images(res, {"fig01": _image_bytes()})
     assert _names(res.zip_path) == ["jasme/31/1/31_1/31_1.xml", "jasme/31/1/31_1/31_1.pdf",
                                     "jasme/31/1/31_1/Graphics/31_1_fig01.png"]
     assert res.not_zipped == [] and res.zip_issues == []
@@ -586,23 +585,24 @@ def test_pdf_left_in_article_folder_can_be_given_again(journal, meta, tmp_path):
     pdf = tmp_path / "dummy.pdf"
     pdf.write_bytes(b"%PDF-1.4 dummy\n")
     out = tmp_path / "out"
-    convert(PDFCHECK, meta, journal, Options(out_dir=out, convert_metafiles=False, pdf_path=pdf))
+    convert(PDFCHECK, meta, journal, Options(out_dir=out, pdf_path=pdf))
     # 記事フォルダに残っている PDF をそのまま指定しても（--pdf out/jasme/31/1/31_1/31_1.pdf）、同じファイルなので写さずに使う
     left = out / "jasme/31/1/31_1/31_1.pdf"
-    res = convert(PDFCHECK, meta, journal, Options(out_dir=out, convert_metafiles=False, pdf_path=left))
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=out, pdf_path=left))
     assert res.has_pdf and left.read_bytes() == pdf.read_bytes()
     assert "jasme/31/1/31_1/31_1.pdf" in _names(res.zip_path) and res.not_zipped == [] and res.zip_issues == []
 
 
 def test_rerun_with_user_images_keeps_report_consistent(journal, meta, tmp_path):
-    from jasme_jats.pipeline import add_images
-    opts = Options(out_dir=tmp_path, convert_metafiles=False)
+    from jasme_jats.pipeline import add_images, kept_images, reapply_images
+    opts = Options(out_dir=tmp_path)
     png = _image_bytes()
     res = convert(TEMPLATE, meta, journal, opts)
-    add_images(res, {"31_1_fig01.png": png})
+    add_images(res, {"fig01": png})
+    kept = kept_images(res)
     res = convert(TEMPLATE, meta, journal, opts)            # 同じ出力フォルダで変換し直す（Colab の手順 5・6）
     assert res.not_zipped == ["Graphics/31_1_fig01.png"]       # 前に入れた画像は、入れ直すまで ZIP に入れない
-    add_images(res, {"31_1_fig01.png": png}, skip_unneeded=True)
+    assert reapply_images(res, kept) == ["fig01"]
     assert res.not_zipped == []                              # 入れ直した後は計算し直す
     tenth = res.report_path.read_text(encoding="utf-8").split("## 10.")[1].split("## 11.")[0]
     assert "ZIP に入れなかった" not in tenth
@@ -610,7 +610,7 @@ def test_rerun_with_user_images_keeps_report_consistent(journal, meta, tmp_path)
 
 
 def test_files_put_by_hand_are_not_zipped(journal, meta, tmp_path):
-    opts = Options(out_dir=tmp_path, convert_metafiles=False)
+    opts = Options(out_dir=tmp_path)
     convert(FULL, meta, journal, opts)
     (tmp_path / "jasme/31/1/31_1/memo.txt").write_text("手で置いたメモ", encoding="utf-8")
     res = convert(FULL, meta, journal, opts)
@@ -626,7 +626,7 @@ def test_empty_pdf_is_reported_by_zip_check(journal, meta, tmp_path):
     from conftest import PDFCHECK
     empty = tmp_path / "empty.pdf"
     empty.write_bytes(b"")
-    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False, pdf_path=empty))
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "out", pdf_path=empty))
     assert res.has_pdf and "EMSGM059E" in [mid for mid, _ in res.zip_issues]
     assert res.jstage_issues == []                          # XML のチェックとは分けて持つ
     report = res.report_path.read_text(encoding="utf-8")
@@ -639,7 +639,7 @@ def test_zip_of_second_article_in_same_out_dir(journal, tmp_path):
 
     def meta_of(fpage):
         return ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": fpage, "peer_review": "あり"})
-    opts = Options(out_dir=tmp_path, convert_metafiles=False)
+    opts = Options(out_dir=tmp_path)
     r1 = convert(FULL, meta_of("1"), journal, opts)
     before = r1.zip_path.read_bytes()
     r2 = convert(FULL, meta_of("13"), journal, opts)        # 同じ出力フォルダで 2 本目
@@ -658,10 +658,10 @@ def test_pdf_of_previous_run_is_not_zipped(journal, meta, tmp_path):
     pdf = tmp_path / "dummy.pdf"
     pdf.write_bytes(b"%PDF-1.4 dummy\n")                    # 写すだけ（照合では読めず、変換は続ける）
     out = tmp_path / "out"
-    r1 = convert(PDFCHECK, meta, journal, Options(out_dir=out, convert_metafiles=False, pdf_path=pdf))
+    r1 = convert(PDFCHECK, meta, journal, Options(out_dir=out, pdf_path=pdf))
     assert r1.has_pdf and "jasme/31/1/31_1/31_1.pdf" in _names(r1.zip_path)
     assert "- [x] PDF（31_1.pdf）がアップロード用の ZIP に入っている" in r1.report_path.read_text(encoding="utf-8")
-    r2 = convert(PDFCHECK, meta, journal, Options(out_dir=out, convert_metafiles=False))     # 同じ記事を PDF なしで
+    r2 = convert(PDFCHECK, meta, journal, Options(out_dir=out))     # 同じ記事を PDF なしで
     assert not r2.has_pdf and r2.not_zipped == ["31_1.pdf"]
     assert "jasme/31/1/31_1/31_1.pdf" not in _names(r2.zip_path)
     assert not any("31_1.pdf" in w for w in r2.warnings)     # 警告（10 章の箇条）ではなく not_zipped に持つ
@@ -676,7 +676,8 @@ def test_cli_prints_files_not_zipped(journal, tmp_path, capsys):
     from jasme_jats.cli import main
     meta = tmp_path / "meta.toml"
     meta.write_text('[article]\nvolume = "31"\nissue = "1"\nfpage = "1"\npeer_review = "あり"\n', encoding="utf-8")
-    args = [str(FULL), "--meta", str(meta), "--no-metafile-conversion", "--out", str(tmp_path / "o")]
+    args = [str(FULL), "--meta", str(meta), "--out", str(tmp_path / "o"),
+            "--images", str(full_pics(tmp_path))]
     assert main(args) == 0
     (tmp_path / "o/jasme/31/1/31_1/31_1.pdf").write_bytes(b"%PDF-1.4 dummy\n")     # 記事フォルダに手で置いた PDF
     capsys.readouterr()
@@ -717,7 +718,7 @@ def test_volume_issue_pages_are_normalized(journal):
 def test_full_width_volume_gives_ascii_zip(journal, tmp_path):
     from jasme_jats.config import ArticleMeta
     meta = ArticleMeta.from_dict({"volume": "３１", "issue": "１", "fpage": "１", "peer_review": "あり"})
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path))
     assert res.zip_path.name == "jasme_31_1.zip" and res.zip_issues == []
     assert all(n.startswith("jasme/31/1/31_1/") for n in _names(res.zip_path))
     eleventh = res.report_path.read_text(encoding="utf-8").split("## 11.")[1].split("## 12.")[0]
@@ -728,7 +729,8 @@ def test_cli_meta_input_errors_and_notes(tmp_path, capsys):
     from jasme_jats.cli import main
     meta = tmp_path / "meta.toml"
     meta.write_text('[article]\nvolume = "31巻"\nissue = "1"\nfpage = "1"\n', encoding="utf-8")
-    args = [str(FULL), "--meta", str(meta), "--no-metafile-conversion", "--out", str(tmp_path / "o")]
+    args = [str(FULL), "--meta", str(meta), "--out", str(tmp_path / "o"),
+            "--images", str(full_pics(tmp_path))]
     assert main(args) == 2                                     # 変換しない（トレースバックで落ちない）
     err = capsys.readouterr().err
     assert "書誌情報" in err and "巻「31巻」" in err and not (tmp_path / "o").exists()
@@ -771,7 +773,7 @@ def test_upload_issues_are_needs_action(journal, tmp_path):
     from jasme_jats.report import NEEDS_ACTION, actions
     meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "lpage": "12", "pub_date": "2026-03-31",
                                   "received": "2026-01-10", "accepted": "2025-11-20", "peer_review": "あり"})
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path))
     assert res.ok and res.needs_action                     # ok（不変性・DTD）の意味は変えない
     act = next(a for a in actions(res) if a.key == "upload")
     assert act.level == NEEDS_ACTION and "EMSGM106E" in act.box_detail and "EMSGM106E" in act.cli
@@ -787,25 +789,25 @@ def test_cli_exits_1_on_upload_issues(tmp_path, capsys):
     meta = tmp_path / "meta.toml"
     meta.write_text('[article]\nvolume = "31"\nissue = "1"\nfpage = "1"\npeer_review = "あり"\n'
                     'received = "2026-01-10"\naccepted = "2025-11-20"\n', encoding="utf-8")
-    assert main([str(FULL), "--meta", str(meta), "--out", str(tmp_path / "out"), "--no-metafile-conversion"]) == 1
+    assert main([str(FULL), "--meta", str(meta), "--out", str(tmp_path / "out")]) == 1
     err = capsys.readouterr().err
     assert "要対応: J-STAGE のアップロード時チェック" in err and "EMSGM106E" in err
     # --meta がないと開始ページがなく（EMSGM230E）、要対応で 1（README に明記）
-    assert main([str(FULL), "--out", str(tmp_path / "nometa"), "--no-metafile-conversion"]) == 1
+    assert main([str(FULL), "--out", str(tmp_path / "nometa")]) == 1
     assert "EMSGM230E" in capsys.readouterr().err
 
 
 def test_cli_template_needs_image_until_given(tmp_path, capsys):
-    """テンプレート（EMF を変換しない設定では図 1 の画像を用意できない）は 1、--images で画像を渡すと 0。"""
+    """図の画像を入れるまでは必須の手順が残るので 1、--images で画像を渡すと 0（修正計画 W1）。"""
     from conftest import META_EXAMPLE
 
     from jasme_jats.cli import main
-    args = [str(TEMPLATE), "--meta", str(META_EXAMPLE), "--no-metafile-conversion"]
+    args = [str(TEMPLATE), "--meta", str(META_EXAMPLE)]
     assert main(args + ["--out", str(tmp_path / "a")]) == 1
-    assert "--images で指定するか" in capsys.readouterr().err
+    assert "--images で指定して変換し直すこと: fig01（図1" in capsys.readouterr().err
     imgs = tmp_path / "imgs"
     imgs.mkdir()
-    (imgs / "31_1_fig01.png").write_bytes(_image_bytes())
+    (imgs / "fig01.png").write_bytes(_image_bytes())
     assert main(args + ["--out", str(tmp_path / "b"), "--images", str(imgs)]) == 0
     assert "要対応" not in capsys.readouterr().err
 
@@ -831,24 +833,26 @@ def test_cli_input_errors_exit_2(tmp_path, capsys):
         os.write(wfd, META_EXAMPLE.read_bytes())
         os.close(wfd)
         try:
-            assert main([str(FULL), "--meta", f"/dev/fd/{r}", "--no-metafile-conversion", "--out", str(tmp_path / "fd")]) == 0
+            assert main([str(FULL), "--meta", f"/dev/fd/{r}", "--out", str(tmp_path / "fd"),
+                         "--images", str(full_pics(tmp_path))]) == 0
         finally:
             os.close(r)
     imgs = tmp_path / "imgs"
     imgs.mkdir()
     (imgs / "31_1_fig01.png").write_bytes(b"not an image")     # 読めない画像
-    args = [str(TEMPLATE), "--meta", str(META_EXAMPLE), "--no-metafile-conversion", "--out", str(tmp_path / "a")]
+    args = [str(TEMPLATE), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "a")]
     assert main(args + ["--images", str(imgs)]) == 2
     assert "画像: " in capsys.readouterr().err
-    assert not (tmp_path / "a/jasme/31/1/31_1/Graphics/31_1_fig01.png").exists()
+    assert not (tmp_path / "a/jasme/31/1/31_1/Graphics").exists()
 
 
 def test_fidelity_failure_is_needs_action(journal, meta, tmp_path):
     """不変性チェックが不合格なら、冒頭に今と同じ文で知らせ、要対応にする（決定事項 5(d)）。"""
     from jasme_jats.report import actions, render
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path))
+    fill_images(res)                                       # 図の画像の手順（必須）を済ませる
     # 要確認の name_split（空白のない和文の著者名 d11「研究次郎」。C064）だけ
-    assert [a.key for a in actions(res)] == ["name_split"] and not res.needs_action
+    assert [a.key for a in others(res)] == ["name_split"] and not res.needs_action
     res.fidelity.ok = False
     assert res.needs_action and not res.ok
     head = render(res).split("## 2.")[0]
@@ -868,14 +872,15 @@ def test_manual_mode_before_answer_is_recommended_step(journal, meta, tmp_path, 
     14 章とコマンドラインで回答を貼り戻すよう知らせる。"""
     from jasme_jats.cli import main
     from jasme_jats.report import actions
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "a", ai_mode="manual", convert_metafiles=False))
-    assert [a.key for a in actions(res)] == ["ai_pending", "name_split"] and not res.needs_action
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "a", ai_mode="manual"))
+    keys = fill_images(res)                                # 図の画像の手順（必須）を済ませる
+    assert [a.key for a in others(res)] == ["ai_pending", "name_split"] and not res.needs_action
     report = res.report_path.read_text(encoding="utf-8")
     assert "手動モード: 「AI依頼文.txt」をチャット" in report.split("## 2.")[0]
     assert "AI の回答をまだ反映していない" in report.split("## 14.")[1]
     from conftest import META_EXAMPLE
     assert main([str(FULL), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "b"), "--ai", "manual",
-                 "--no-metafile-conversion"]) == 0
+                 "--images", str(image_folder(tmp_path / "pics", keys))]) == 0
     err = capsys.readouterr().err
     assert "手順（推奨）: 手動モードで、AI の回答をまだ反映していません" in err and "--ai manual --ai-response 回答のファイル を指定し" in err
 
@@ -916,7 +921,7 @@ def test_deleted_paragraph_mark_joins_paragraphs(journal, meta, tmp_path):
                 mf.para(S["body"], "見出しを消した本文。")]
     path = tmp_path / "pmark.docx"
     mf.make_article(path, "段落記号の削除の検証用文書", parts)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     root = load(res)
     ps = [text(p) for p in root.iter("p")]
@@ -937,7 +942,7 @@ def test_table_with_all_rows_deleted(journal, meta, tmp_path):
                 mf.table_of_rows([mf.deleted_row("全一", "全二"), mf.deleted_row("全三", "全四")], 2)]
     path = tmp_path / "allrows.docx"
     mf.make_article(path, "削除された行の検証用文書", parts)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     tw = load(res).find(".//table-wrap")
     assert "".join(tw.find("caption").itertext()) == "表1　すべての行を削除した表"
@@ -953,7 +958,7 @@ def test_line_breaks_in_cells(journal, meta, tmp_path):
     """表のセルの段落の中の改行（w:br）の前に <break/> を補う（改行の文字は <break/> の後ろに残す。書式の要素はいったん閉じる。
     リンクの中には入れない。修正計画の U3・決定事項 13(1)）。本文・題目・引用文献の改行は文字のまま。"""
     from conftest import READER
-    res = convert(READER, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    res = convert(READER, meta, journal, Options(out_dir=tmp_path))
     fid = res.fidelity
     assert fid.ok and fid.final_ok and res.dtd_valid and res.jstage_issues == []
     assert all(reason == "姓と名の間の空白" for _, _, reason in fid.drops)
@@ -1007,8 +1012,8 @@ def test_reader_report_and_notices(journal, meta, tmp_path, capsys):
 
     from jasme_jats.cli import main
     from jasme_jats.colab import result_boxes
-    from jasme_jats.report import TO_CHECK, actions
-    res = convert(READER, meta, journal, Options(out_dir=tmp_path / "a", convert_metafiles=False))
+    from jasme_jats.report import TO_CHECK, actions, blocking
+    res = convert(READER, meta, journal, Options(out_dir=tmp_path / "a"))
     report = res.report_path.read_text(encoding="utf-8")
     ch6, ch10, ch4 = chapter(report, 6), chapter(report, 10), chapter(report, 4)
     assert "変更履歴で段落記号（段落の区切り）が削除された段落を、次の段落とつないで 1 段落として出力しました（14 か所:" in ch6
@@ -1029,9 +1034,9 @@ def test_reader_report_and_notices(journal, meta, tmp_path, capsys):
     assert "本文などの段落の中の改行（Shift+Enter）1 か所は、XML では改行の文字のまま出力しました" in ch10
     assert ch4.count("変更履歴で段落記号が削除された") == 5 and "のスタイル「節見出し」にした" in ch4
     assert "この段落のスタイル〈見出しか本文かなど〉を確かめ、違えば、Word で承諾して保存してから変換し直す" in ch4
-    acts = {a.key: a for a in actions(res)}
+    acts = {a.key: a for a in others(res)}             # 図の画像を入れる手順のほかの知らせ
     assert list(acts) == ["style_hidden", "newline"] and {a.level for a in acts.values()} == {TO_CHECK}
-    assert not res.needs_action
+    assert [a.key for a in blocking(actions(res))] == ["images"]
     head = report.split("## 2.")[0]
     assert ("要確認: Word のスタイル（段落スタイル・文字スタイル）や既定の書式の設定で隠し文字になっている文字が 8 段落あり、XML に"
             "出力していません（6 章）") in head
@@ -1044,7 +1049,9 @@ def test_reader_report_and_notices(journal, meta, tmp_path, capsys):
     boxes = result_boxes(res)
     assert "スタイルの設定で隠し文字になっている文字を出力していません（要確認）" in boxes
     assert "題目・著者・所属・引用文献の中に改行があります（要確認）" in boxes
-    assert main([str(READER), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "b"), "--no-metafile-conversion"]) == 0
+    keys = [i.key for i in res.images]
+    assert main([str(READER), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "b"),
+                 "--images", str(image_folder(tmp_path / "pics", keys))]) == 0
     err = capsys.readouterr().err
     assert "要確認: Word のスタイル（段落スタイル・文字スタイル）や既定の書式の設定で隠し文字になっている文字が 8 段落あり" in err
     assert "要確認: 題目・著者・所属・引用文献の段落の中に、改行（Shift+Enter）が 2 か所あります" in err
@@ -1083,7 +1090,7 @@ def test_body_line_break_is_only_listed(journal, meta, tmp_path):
     from conftest import EDGE
 
     from jasme_jats.report import actions
-    res = convert(EDGE, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    res = convert(EDGE, meta, journal, Options(out_dir=tmp_path))
     report = res.report_path.read_text(encoding="utf-8")
     ch10 = chapter(report, 10)
     assert "本文などの段落の中の改行（Shift+Enter）1 か所は、XML では改行の文字のまま出力しました" in ch10
@@ -1104,7 +1111,7 @@ def test_route2_rerun_on_its_own_fixed_docx_keeps_input(journal, meta, tmp_path)
     from jasme_jats import pdfdocx
     from jasme_jats.pipeline import fixed_docx_path
     out = tmp_path / "out"
-    opts = Options(out_dir=out, pdf_path=PDFCHECK_PDF, route="pdf", convert_metafiles=False)
+    opts = Options(out_dir=out, pdf_path=PDFCHECK_PDF, route="pdf")
     first = convert(PDFCHECK, meta, journal, opts)
     fixed = first.docx_fix.path
     assert fixed.name == "31_1_PDFで補完した原稿.docx" and fixed.parent == out
@@ -1142,7 +1149,7 @@ def test_structure_conflict_aborts_conversion(name, ai_mode, journal, meta, tmp_
     from test_structure import conflict_doc
     out = tmp_path / "out"
     with pytest.raises(_structure_error()) as e:
-        convert(conflict_doc(tmp_path, name), meta, journal, Options(out_dir=out, ai_mode=ai_mode, convert_metafiles=False))
+        convert(conflict_doc(tmp_path, name), meta, journal, Options(out_dir=out, ai_mode=ai_mode))
     assert e.value.plan.structure_conflicts and e.value.conflicts == e.value.plan.structure_conflicts
     assert "変換を中止しました" in str(e.value) and "step:docx" in str(e.value)
     assert list(out.iterdir()) == []
@@ -1166,9 +1173,9 @@ def test_structure_conflict_comes_before_ai_required(journal, meta, tmp_path):
                     data = xml.replace(m.group(0), m.group(0) + m.group(0), 1).encode("utf-8")
                 zo.writestr(item, data)
     with pytest.raises(AIRequiredError):
-        convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "a", convert_metafiles=False))      # 対照: 元の sample_float
+        convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "a"))      # 対照: 元の sample_float
     with pytest.raises(_structure_error()):
-        convert(both, meta, journal, Options(out_dir=tmp_path / "b", convert_metafiles=False))
+        convert(both, meta, journal, Options(out_dir=tmp_path / "b"))
 
 
 def test_structure_conflict_route2_stops_before_fixed_docx(journal, meta, tmp_path):
@@ -1179,7 +1186,7 @@ def test_structure_conflict_route2_stops_before_fixed_docx(journal, meta, tmp_pa
     out = tmp_path / "out"
     with pytest.raises(_structure_error()):
         convert(conflict_doc(tmp_path, "K1_ref_ref"), meta, journal,
-                Options(out_dir=out, pdf_path=PDFCHECK_PDF, route="pdf", convert_metafiles=False))
+                Options(out_dir=out, pdf_path=PDFCHECK_PDF, route="pdf"))
     assert list(out.iterdir()) == []
 
 
@@ -1191,7 +1198,7 @@ def test_ai_required_route2_leaves_no_fixed_docx(journal, meta, tmp_path):
     from jasme_jats.pipeline import AIRequiredError
     out = tmp_path / "out"
     with pytest.raises(AIRequiredError):
-        convert(FLOAT, meta, journal, Options(out_dir=out, pdf_path=PDFCHECK_PDF, route="pdf", convert_metafiles=False))
+        convert(FLOAT, meta, journal, Options(out_dir=out, pdf_path=PDFCHECK_PDF, route="pdf"))
     assert not list(out.glob("*PDFで補完した原稿*"))
 
 
@@ -1216,7 +1223,7 @@ def test_cli_structure_conflict_exit_code_2(tmp_path, capsys):
 
     from jasme_jats.cli import main
     out = tmp_path / "out"
-    code = main([str(conflict_doc(tmp_path, "K1_ref_ref")), "--meta", str(META_EXAMPLE), "--no-metafile-conversion", "--out", str(out)])
+    code = main([str(conflict_doc(tmp_path, "K1_ref_ref")), "--meta", str(META_EXAMPLE), "--out", str(out)])
     err = capsys.readouterr().err
     assert code == 2
     assert "変換を中止しました" in err and "docx の指定から" in err and "引用文献の見出しが 2 つあります" in err

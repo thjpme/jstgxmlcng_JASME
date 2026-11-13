@@ -56,7 +56,7 @@ ANTHROPIC_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml 
 OPENAI_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai api --ai-provider openai --ai-model モデル名
 GEMINI_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai api --ai-provider gemini --ai-model モデル名
 SAKANA_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai api --ai-provider sakana --ai-model モデル名
-python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --images 画像フォルダ   # 用意できなかった図の画像（25_77_fig01.png など）を入れる
+python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --images 画像フォルダ   # 図・表の画像（fig01.png・25_77_fig01.png など。PNG・JPEG・GIF）を入れる
 python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --pdf 記事.pdf               # docx から作り、出版版 PDF で補う
 python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --pdf 記事.pdf --route docx  # docx から作る（PDF とは照合だけ）
 ```
@@ -65,7 +65,7 @@ python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --pdf 記
 
 コマンドラインの終了コードは、**0 が要対応なし、1 が要対応あり、2 が変換の中止**です（要対応・要確認・手順の一覧は標準エラーに出します。
 要確認や推奨の手順だけなら 0）。次の場合も 1 になります: `--meta` を指定しない（開始ページがないので、J-STAGE のアップロード時チェックの EMSGM230E
-で要対応になる）、画像を用意できなかった図がある（docx に画像の見つからない図も。`--images` で入れると 0）、AI の回答が途中で切れていた（位置を決められない図表が残らなくても）。手動モードの最初の実行（依頼文を作る実行。AI の回答をまだ反映していない）は、標準エラーに「手順（推奨）: …」と出して、終了コードは 0 です
+で要対応になる）、図・表の画像をまだ入れていない（必須の手順「図の画像を入れる」。docx の画像は使わないので、画像の要る図・表があれば毎回。`--images` で全部入れると 0）、AI の回答が途中で切れていた（位置を決められない図表が残らなくても）。手動モードの最初の実行（依頼文を作る実行。AI の回答をまだ反映していない）は、標準エラーに「手順（推奨）: …」と出して、終了コードは 0 です
 （スクリプトから呼ぶときは、依頼文ができていれば次に進んでください。以前は 1 でした）。
 書誌情報の誤り（巻・号・ページの英数字以外の文字、読めない日付など）、AI による補完が必要な原稿を `--ai none` で変換したとき、
 `--ai api` で API キー（環境変数）がないとき、`--ai manual` でないのに `--ai-response` を指定したとき（`--ai` の既定は none で、回答のファイルは読まれない）、指定したファイル・フォルダ（docx・`--meta`・`--pdf`・`--ai-response`・`--images`）が

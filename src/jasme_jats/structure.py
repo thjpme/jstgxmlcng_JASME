@@ -215,6 +215,9 @@ ABSTRACT_JA_RATIO = 0.3        # 英文要旨の段落のうち、かな・漢�
 # 図キャプションの近く（Classifier.near_images。修正計画 W1 の 2.3 の A4）: 本体の付かなかった図キャプションの前（上に置く原稿では
 # 後ろ）この数の要素以内にある、画像のある段落の画像を、その図に含める
 NEAR_FIGURE = 3
+# 表のセルの図キャプションで、docx に画像を見つけられなかった図の、画像の置き場所の備考（ImageSlot.note）の書き出し
+# （図の画像の一覧の備考と、手順 images の行の括弧。cell_figures_in）
+NO_FIGURE_IMAGE = "docx でこの図の画像を見つけられませんでした"
 # 引用文献などの後ろの資料の見出しと思われる段落を知らせるときの、後付けの節の名前（build_back。決定事項 8(b) は暫定で警告だけ）
 APP_PLACE = {"refs": "引用文献", "fn": "注", "notes": "付記", "ack": "謝辞"}
 # 注の番号をリンクにしない段落の種類（ArticlePlan.no_link_paras。判断の一覧と、レポートの 8 章の表で知らせる）
@@ -259,6 +262,8 @@ def slot_keys(slots, order, images) -> list:
     AI の回答で図の位置や XML の順が変わっても、ほかの画像を足しても消しても、同じ図・画像の幹は変わらない。
     """
     def where(slot):
+        if slot.kind == "optional":
+            return (2, order.get(slot.src, len(order)), slot.pos)
         if slot.caption is not None:
             return (0, order.get(slot.caption.src, len(order)), 0)
         first = slot.covers[0] if slot.covers else None
@@ -267,7 +272,9 @@ def slot_keys(slots, order, images) -> list:
     base = {}
     unread = []
     for slot in slots:
-        if slot.kind in ("fig", "table") and slot.caption is not None:
+        if slot.kind == "optional":
+            base[id(slot)] = "opt" + hashlib.sha1((slot.code or "").encode("utf-8")).hexdigest()[:6]
+        elif slot.kind in ("fig", "table") and slot.caption is not None:
             stem = "fig" if slot.kind == "fig" else "tab"
             n, branch = slot_number(slot.caption, RE_FIGCAP if slot.kind == "fig" else RE_TABCAP)
             if n is None:
@@ -368,6 +375,79 @@ def plan_figures(plan):
             yield from walk([t])
 
 
+def caption_body(para: Para) -> str:
+    """図・表のキャプションの段落の、番号（RE_FIGCAP・RE_TABCAP が当たる所と、そのすぐ後ろの枝番）と、番号の後ろの空白・区切りを
+    除いた文字（NFKC 後）。番号のないキャプションは、段落の文字をそのまま（NFKC 後・前後の空白を除く）。
+
+    持ち越しの照合（修正計画 W1 の 2.6。番号は幹で照らすので、比べる文字に入れない）が使う。表示には使わない（NFKC 後の文字なので）。
+    """
+    t = nfkc(_para_text(para)).strip()
+    m = RE_FIGCAP.match(t) or RE_TABCAP.match(t)
+    if not m:
+        return t
+    end = m.end(1)
+    b = re.match(rf"[{CAP_BRANCH_SEP}]{CAP_BRANCH_NUM}", t[end:])
+    if b:
+        end += b.end()
+    return t[end:].lstrip(" 　\t:：.．")
+
+
+def _is_heading(plan, p) -> bool:
+    """段落 p が章の見出し（本文の節・付記・謝辞・注・引用文献・資料・英文要旨の見出し）か。compute_locations などが
+    plan.locations に「…（見出し）」と付ける段落。"""
+    return plan.locations.get(p.src, "").endswith("（見出し）")
+
+
+def _has_text(p) -> bool:
+    return bool(p.text_only().strip())
+
+
+def text_before(plan, src, slot=None) -> tuple:
+    """段落 src の場所を人に示すための (章の見出しの段落か None, 文字のある段落か None)。
+
+    文字のある段落は、src 自身に文字があれば src 自身、なければ plan_figures の順にさかのぼって最も近い文字のある段落（空白だけ・
+    画像だけの段落と、図形の中の段落は飛ばす。章の見出しまでさかのぼったら None）。章の見出しは、その位置の前にある最も近い章の
+    見出し（なければ None）。plan_figures は図の画像だけの段落（FigNode.image_paras）を段落として返さないので、src が段落として
+    なければ、その置き場所を持つ図・表の節（slot.src が src か、image_paras に src がある節）の位置からさかのぼる（図形の中身から組んだ
+    図は XML の位置）。slot（article.ImageSlot）を渡すと、その置き場所を持つ節の位置を先に探す（図形の中身から組んだ図は、
+    src〈画像の結び付いたアンカー段落〉の段落ではなく、図を置いた位置からさかのぼる。機械的な配置ではアンカー段落の前）。
+    見つからなければ (None, src の段落に文字があればそれ)。修正計画 W1 の 2.8。
+    """
+    seq = list(plan_figures(plan))
+
+    def owns(kind, x):
+        if kind == "para":
+            return x.src == src
+        if kind in ("fig", "table"):
+            slot = getattr(x, "slot", None)
+            return (slot is not None and slot.src == src) or any(q.src == src for q in getattr(x, "image_paras", ()))
+        return False
+    k = None
+    if slot is not None:
+        k = next((i for i, (kind, x) in enumerate(seq) if kind in ("fig", "table") and getattr(x, "slot", None) is slot), None)
+    if k is None:
+        k = next((i for i, (kind, x) in enumerate(seq) if kind == "para" and x.src == src), None)
+    if k is None:
+        k = next((i for i, (kind, x) in enumerate(seq) if owns(kind, x)), None)
+    if k is None:
+        p = plan.paras.get(src)
+        return None, (p if p is not None and _has_text(p) else None)
+
+    def heading_at(i):
+        return next((x for kind, x in reversed(seq[:i + 1]) if kind == "para" and _is_heading(plan, x)), None)
+    kind, x = seq[k]
+    if kind == "para" and _has_text(x):
+        return heading_at(k), x
+    for i in range(k - 1, -1, -1):
+        kind, x = seq[i]
+        if kind != "para" or x.float_id or x.in_textbox or not _has_text(x):
+            continue
+        if _is_heading(plan, x):
+            return x, None
+        return heading_at(i), x
+    return None, None
+
+
 def node_float_ids(node) -> list:
     """図・表の節（FigNode・TableNode）の中身の図形の ID（docx の順。重ねない）: キャプション・キャプションの続き・画像だけの段落・
     含めた画像・本体の表の float_id。図形の外の要素だけなら []。本文の図キャプションの図に含めた図形（B6）は、含めた画像の図形。"""
@@ -409,7 +489,7 @@ def figure_rows(plan) -> list:
     """
     inline = {}
     for slot in plan.slots:
-        if slot.place == "inline":
+        if slot.place == "inline" and slot.kind != "optional":
             inline.setdefault(slot.src, []).append(slot)
     rows, seen = [], set()
     for kind, x in plan_figures(plan):
@@ -2899,7 +2979,7 @@ class Classifier:
             if state in ("refs", "fn") and self.textless(b) and (state == "refs" or current_fn is None):
                 # 引用文献の節の、文字が 1 文字もない段落（画像・図形を結び付けただけの段落）は、中身のない <ref> にせず、空白の
                 # 除外に記録する（注の節では、注がまだ始まっていない所の同じ形の段落だけ。続きの段落は注の中に残す）。文字は 1 文字も
-                # ないので blank の除外（不変性チェックが空白だけと確かめる）で、理由だけ画像用にする。画像は、XML に入らなかった画像
+                # ないので blank の除外（不変性チェックが空白だけと確かめる）で、理由だけ画像用にする。画像は、画像を入れる場所を作れなかった画像
                 # として pipeline.lost_images が今までどおり知らせる（理由と場所は、その知らせの手がかりになる）
                 if state == "refs":
                     plan.exclude_blank(b, REF_IMAGE_EXCLUDED)
@@ -3450,7 +3530,7 @@ class Classifier:
 
         def empty(cap, why):
             slot = ImageSlot(key="", kind="fig", label=slot_label(cap), caption=cap, src=cap.src, covers=[],
-                             float_id=cap.float_id, place="inline", how="cell", note=why)
+                             float_id=cap.float_id, place="inline", how="cell", note=f"{NO_FIGURE_IMAGE}。{why}")
             out.append(slot)
             plan.decide("mechanical", "figure", cap.src,
                         f"表のセルの図キャプション「{_para_text(cap).strip()[:20]}」の画像を docx で見つけられなかった（{why}）。"
@@ -3550,6 +3630,9 @@ class Classifier:
             for img in slot.covers:
                 plan.slot_of.setdefault(img.image_id, slot)
 
+        resultless = {}          # 段落の ID -> 結果を持たないフィールド（docx_reader が記録したもの。docx の順）
+        for f in self.doc.resultless_fields:
+            resultless.setdefault(f.src, []).append(f)
         cell_slots = {}          # 表のセルの図の置き場所（cell_figures_in が作る）: covers の画像の ID -> 置き場所
         cell_empty = {}          # 同じく、covers の空の置き場所: キャプションの段落の ID -> 置き場所（キャプションの段落の先頭に書く）
 
@@ -3575,6 +3658,9 @@ class Classifier:
                     continue
                 add(ImageSlot(key="", kind="nocap", src=p.src, covers=imgs, float_id=imgs[0].float_id or p.float_id,
                               place="inline", note=self.float_note(imgs[0].float_id or p.float_id)))
+            # 結果のないフィールド（囲い文字など。Word では表示のあるもの）の位置: 任意の置き場所（画像を入れたときだけ XML に残る）
+            for f in resultless.get(p.src, ()):
+                add(ImageSlot(key="", kind="optional", src=p.src, float_id=p.float_id, place="inline", pos=f.pos, code=f.code))
 
         def fig(node):
             covers = [i for ip in node.image_paras for i in ip.images] + list(node.extra_images)
@@ -3584,7 +3670,9 @@ class Classifier:
                 src = node.caption.src if node.caption is not None else (
                     node.image_paras[0].src if node.image_paras else (covers[0].para_src if covers else ""))
                 fl = next((i.float_id for i in covers if i.float_id), "") or next(iter(node_float_ids(node)), "")
-                note = "。".join(x for x in (node.note, self.float_note(fl)) if x)
+                # docx に画像の見つからない図（A5）は、備考の先頭にそのことを書く（図の画像の一覧の備考と、手順 images の行の括弧）
+                missing = NO_FIGURE_IMAGE if node.caption is not None and not covers else ""
+                note = "。".join(x for x in (missing, node.note, self.float_note(fl)) if x)
                 node.slot = ImageSlot(key="", kind="fig" if node.caption is not None else "nocap", caption=node.caption,
                                       src=src, covers=covers, float_id=fl, place="fig", how=node.how, note=note)
                 add(node.slot)
@@ -3622,7 +3710,7 @@ class Classifier:
         for slot, key in zip(slots, slot_keys(slots, order, images)):
             slot.key = key
             if slot.caption is not None:
-                slot.label = slot_label(slot.caption)
+                slot.label = table_label(slot.caption) if slot.kind == "table" else slot_label(slot.caption)
         plan.slots = slots
 
 

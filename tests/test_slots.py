@@ -10,7 +10,7 @@ import zipfile
 
 import make_fixtures as mf
 import pytest
-from conftest import ALL_DOCS, DATA, FLOAT
+from conftest import ALL_DOCS, DATA, FLOAT, fill_images
 from lxml import etree
 
 from jasme_jats import pdfmatch
@@ -97,7 +97,7 @@ def checks_pass(res):
 
 def test_slot_keys(journal, meta, tmp_path):
     path, data = slots_doc(tmp_path)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     checks_pass(res)
     got = [(s.key, s.kind, s.place, s.label) for s in res.plan.slots]
     assert got == [("fig01", "fig", "fig", "図1"), ("fig02-1", "fig", "fig", "図2-1"), ("fig02-2", "fig", "fig", "図2-2"),
@@ -122,7 +122,7 @@ def test_slot_keys(journal, meta, tmp_path):
 
 def test_one_graphic_for_a_figure_with_two_images(journal, meta, tmp_path):
     """図キャプションの図に docx の画像が 2 枚あっても（グループ図形の画像だけの段落）、<graphic> は 1 つで、名前は図番号から。
-    ほかの画像は XML に入らなかった画像として知らせない（同じ 1 枚に写るとみなす）。"""
+    ほかの画像は 画像を入れる場所を作れなかった画像として知らせない（同じ 1 枚に写るとみなす）。"""
     def body(b):
         r1 = b.add_image("two_a.png", mf.png_bytes("Two A"))
         r2 = b.add_image("two_b.png", mf.png_bytes("Two B"))
@@ -133,7 +133,7 @@ def test_one_graphic_for_a_figure_with_two_images(journal, meta, tmp_path):
                 mf.para(mf.S["body"], "以上で終わる。本文の段落としての長さを持たせるための、架空の説明の文である。")]
     path = tmp_path / "two.docx"
     mf.make_article(path, "二つの画像の図の検証用文書", body)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     checks_pass(res)
     [slot] = res.plan.slots
     assert slot.key == "fig03" and len(slot.covers) == 2 and res.plan.figures[0].slot is slot
@@ -145,7 +145,7 @@ def test_one_graphic_for_a_figure_with_two_images(journal, meta, tmp_path):
 def test_names_are_unique_in_fixtures(journal, meta, tmp_path, path):
     """どの fixture でも、XML の画像の名前は 2 回出ず、図 1 つに <graphic> は 1 つまで。名前は「記事識別子_幹」で、出力した
     置き場所と同じ。"""
-    res = convert(path, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path))
     root = load(res)
     names = hrefs(root)
     assert len(set(names)) == len(names)
@@ -157,8 +157,8 @@ def test_names_are_unique_in_fixtures(journal, meta, tmp_path, path):
 
 def test_names_do_not_change_with_ai_placement(journal, meta, tmp_path):
     """AI の位置の指定で図の位置と XML の順が変わっても、図ごとの名前は変わらない（名前は図番号から決める）。"""
-    before = convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "a", ai_mode="manual", convert_metafiles=False))
-    after = convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "b", ai_mode="manual", convert_metafiles=False,
+    before = convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "a", ai_mode="manual"))
+    after = convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "b", ai_mode="manual",
                                                   ai_response=(DATA / "ai_response_sample_float.json").read_text(encoding="utf-8")))
     assert before.plan.unplaced_floats and not after.plan.unplaced_floats
     a, b = fig_names(load(before)), fig_names(load(after))
@@ -172,14 +172,13 @@ def test_names_are_the_same_in_route2(journal, meta, tmp_path, monkeypatch):
     """ルート2（出版版 PDF で補った docx）でも、置き場所と名前はルート1 と同じ（全角の図番号を半角に直しても同じ幹。画像の中身の
     要約値も同じ）。"""
     path, _ = slots_doc(tmp_path, wide=True)
-    r1 = convert(path, meta, journal, Options(out_dir=tmp_path / "r1", convert_metafiles=False))
+    r1 = convert(path, meta, journal, Options(out_dir=tmp_path / "r1"))
     texts = [p.plain().replace(OBJ, "").strip() for p in read_docx(path).all_paragraphs()]
     table = str.maketrans("０１２３４５６７８９－", "0123456789-")
     pub = [t.translate(table) if t.startswith("図") else t for t in texts if t]
     monkeypatch.setattr(pdfmatch, "extract_pages", lambda p: ["\n".join(pub)])
     (tmp_path / "dummy.pdf").write_bytes(b"%PDF-1.4\n")
-    r2 = convert(path, meta, journal, Options(out_dir=tmp_path / "r2", pdf_path=tmp_path / "dummy.pdf", route="pdf",
-                                              convert_metafiles=False))
+    r2 = convert(path, meta, journal, Options(out_dir=tmp_path / "r2", pdf_path=tmp_path / "dummy.pdf", route="pdf"))
     checks_pass(r1)
     checks_pass(r2)
     assert r2.docx_fix is not None and any(f.src for f in r2.docx_fix.fixes)     # 図番号を半角に直した docx から変換した
@@ -193,7 +192,7 @@ def test_names_are_the_same_in_route2(journal, meta, tmp_path, monkeypatch):
 
 def test_each_slot_is_written_under_its_own_name(journal, meta, tmp_path):
     """同じ docx の画像が 2 つの置き場所の最初の画像になる形（グループ図形を文字のない段落に結び付けた図。C007 の形）でも、
-    XML の名前は 2 回出ず、XML のどの名前の画像も ZIP に入る（置き場所ごとの名前で書き出す。W1 の途中の姿）。"""
+    XML の名前は 2 回出ず、画像を全部入れると XML のどの名前の画像も ZIP に入る（置き場所ごとの名前）。"""
     def body(b):
         rid = b.add_image("grp.png", mf.png_bytes("Group"))
         cap = mf.para(mf.S["fig_cap"], "図1　グループ図形の図")
@@ -203,9 +202,12 @@ def test_each_slot_is_written_under_its_own_name(journal, meta, tmp_path):
                 mf.para(mf.S["body"], "以上で終わる。本文の段落としての長さを持たせるための、架空の説明の文である。")]
     path = tmp_path / "group.docx"
     mf.make_article(path, "グループ図形の検証用文書", body)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     checks_pass(res)
     names = hrefs(load(res))
     assert len(set(names)) == len(names) and "31_1_fig01.png" in names
+    # 変換の直後は ZIP に画像がない（作業する人が入れる。修正計画 W1）。全部入れると、XML のどの名前の画像も ZIP に入る
+    assert not [n for n in zipfile.ZipFile(res.zip_path).namelist() if "/Graphics/" in n]
+    fill_images(res)
     zipped = {n.rsplit("/", 1)[-1] for n in zipfile.ZipFile(res.zip_path).namelist() if "/Graphics/" in n}
-    assert set(names) == zipped == {i.name for i in res.images if i.status == "ok"}
+    assert set(names) == zipped == {i.name for i in res.images if i.status == "user"}

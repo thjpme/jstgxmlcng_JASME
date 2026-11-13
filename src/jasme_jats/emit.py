@@ -12,7 +12,7 @@ from typing import Optional
 
 from lxml import etree
 
-from .model import LinkSpec, Newline, Para, note_key
+from .model import Atom, LinkSpec, Newline, Para, note_key
 from .omml import OmmlConverter
 from .tracking import GEN, JX, SPAN
 
@@ -57,9 +57,13 @@ def xl(name):
 
 
 class Emitter:
-    def __init__(self, image_namer, fn_numbers=None, skip_images=()):
+    def __init__(self, image_namer, fn_numbers=None, skip_images=(), optional_fields=None, optional_namer=None):
         # ImageRef -> その画像の置き場所の名前（article.ImageSlot。置き場所の最初の画像でなければ None で、何も書かない）
         self.image_namer = image_namer
+        # 任意の置き場所（結果のないフィールドの位置。修正計画 W1 の手順 15）: 段落の ID -> [(段落の文字〈Para.text_only〉の中の位置, 置き場所)]
+        # と、置き場所 -> 名前。段落の文字は変えず、その位置に <inline-graphic> だけを書く（span が書き出す範囲に位置があるときだけ）
+        self.optional_fields = optional_fields
+        self.optional_namer = optional_namer
         self.fn_numbers = fn_numbers or {}      # Word の脚注・文末脚注の鍵（model.note_key）-> (fid, 表示する番号の文字列。本誌は「1)」)
         self.skip_images = set(skip_images)     # 図に移したため段落の中では出力しない画像の ID
         self.math_warnings = []
@@ -102,6 +106,8 @@ class Emitter:
         atoms = self.slice_atoms(para, start, end)
         if skip_gen:
             atoms = [a for a in atoms if a.kind != "gen"]
+        if ctx.images and self.optional_fields is not None:
+            atoms = self.with_optionals(para, start, end, atoms, skip_gen)
         before = self.breaks
         self.write_atoms(sp, atoms, ctx)
         n = sum(a.text.count("\n") for a in atoms if a.kind == "text")
@@ -109,6 +115,46 @@ class Emitter:
             self.newlines.append(Newline(src=para.src, count=n, breaks=self.breaks - before, cell=ctx.breaks,
                                          label=ctx.newline_label))
         return sp
+
+    @staticmethod
+    def plain_pos(para: Para, pos: int) -> int:
+        """段落の文字（Para.text_only）の位置 pos を、Para.plain() の位置にする。文字以外のアトム（数式・画像・脚注の参照など。
+        plain() では 1 文字）が同じ位置にあるときは、その後ろ（次の文字の直前）にする。pos が文字の終わりなら plain() の終わり。"""
+        tot = idx = 0
+        for a in para.atoms:
+            if a.kind == "text":
+                if pos < tot + len(a.text):
+                    return idx + (pos - tot)
+                tot += len(a.text)
+                idx += len(a.text)
+            else:
+                idx += 1
+        return idx
+
+    def with_optionals(self, para: Para, start: int, end: int, atoms, skip_gen: bool):
+        """span が書き出す範囲 [start, end) の中にある任意の置き場所（結果のないフィールドの位置）に、<inline-graphic> を書く印のアトム
+        （kind が opt。text が名前。段落のアトムには入れず、ここだけで使う）を差し込んだアトム列。範囲に入る置き場所がなければ atoms のまま。
+        位置は plain() の位置にしたとき start <= 位置 < end（段落の終わりの位置は、end が終わりのときだけ）。文字のアトムは位置で分ける。"""
+        fields = self.optional_fields(para.src)
+        if not fields:
+            return atoms
+        total = len(para.plain())
+        here = []
+        for pos, slot in fields:
+            q = self.plain_pos(para, pos)
+            if start <= q < end or (q == end == total):
+                here.append((q, slot))
+        if not here:
+            return atoms
+        out, last = [], start
+        for q, slot in sorted(here, key=lambda x: x[0]):
+            part = self.slice_atoms(para, last, q)
+            out += [a for a in part if a.kind != "gen"] if skip_gen else part
+            out.append(Atom(kind="opt", text=self.optional_namer(slot)))
+            last = q
+        part = self.slice_atoms(para, last, end)
+        out += [a for a in part if a.kind != "gen"] if skip_gen else part
+        return out
 
     def drop(self, parent, para: Para, start: int, end: int, seq: int, reason: str):
         """docx の文字のうち、構造の区切りとして出力しない空白（検証用に記録してから取り除く）。"""
@@ -263,6 +309,9 @@ class Emitter:
                 if name is not None:
                     g = etree.SubElement(parent, "inline-graphic")
                     g.set(xl("href"), name)
+        elif a.kind == "opt":
+            # 任意の置き場所（結果のないフィールドの位置）: 画像を入れたときだけ残る（package.apply_images が入れていないものを取り除く）
+            etree.SubElement(parent, "inline-graphic").set(xl("href"), a.text)
         elif a.kind == "fnref":
             # 脚注と文末脚注は ID が重なりうるので、種類と ID の組（注の鍵）で引く（記号を自分で付けた参照も同じ注を指す）
             fid, mark = self.fn_numbers.get(note_key(a.fn_kind, a.fn_id), (None, None))

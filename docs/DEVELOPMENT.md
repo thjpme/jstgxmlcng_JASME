@@ -10,7 +10,7 @@ pip install -e ".[dev]"
 python -m pytest
 ```
 
-EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（なければ該当テストは「変換失敗」を期待して通る）。
+図・表の画像は docx から書き出さない（作業する人が入れる。修正計画 W1）ので、テストに LibreOffice は要らない（`tests/make_fixtures.py` で照合用の PDF を作り直すときだけ使う）。
 
 ## コードの構成（`src/jasme_jats/`）
 
@@ -22,7 +22,7 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
 | ファイル | 役割 |
 |---|---|
 | `ooxml.py` | docx の低水準処理。**文字ポリシー**（何を docx の文字とみなすか）と、検証用の独立した文字列取り出し `canonical_text()`・`canonical_texts()`。読み取り・検証・ルート2 が共有する規則: 段落記号の削除でつなぐ段落（`joined_paragraphs()`。つなげないものは `unjoined_deleted_marks()`）と、隠し文字の判定（`HiddenRule`。直接の指定・文字スタイル・段落スタイル・既定の書式の `w:vanish`）、`mc:AlternateContent` の採る側（`choose_alternate()`。`preprocess()` が使う）、記号フォントの記号（`SYMBOL_TABLES`・`symbol_char()`・`sym_char()`・`w_t_text()`。Symbol・Wingdings 系の私用領域の符号を、フォントごとの表で Unicode にする。C011） |
-| `docx_reader.py` | docx → 中間表現（`model.py` の `Document` / `Para` / `Atom`）。コンテンツコントロール（`w:sdt`）・`w:customXml` に包まれた表の行・セル、テキストボックスの段落・表も、文書の順にたどって読む（`_children()`）。テキストボックスごとに `model.TextBox`（ID・アンカー段落・行内か・VML の位置指定・グループの中か・幅と高さ）を記録し、中の段落・表に `textbox_id` を付ける（入れ子の内側は外側の ID）。Word の脚注・文末脚注は、種類と ID の組の注の鍵（`model.note_key`。「footnote:5」。人が読む表記は `model.note_label`）で区別する（番号・リンク・PDF との照合・レポートのどれも、この鍵で注を引く）。削除の変更履歴の中の脚注・文末脚注の参照は、参照にせず `Document.deleted_note_refs` に記録する。段落記号が削除された段落は、次の段落とつないで連鎖の最初の段落の ID の 1 つの段落として読み（`Document.joined`。スタイルの違うものは `Document.joins`）、つなげないものは 10 章の警告にする。変更履歴で削除された、文字のない表の行は読み飛ばす（`Document.deleted_rows`）。スタイル・既定の書式の設定で隠した文字・画像は、隠し文字の一覧とは別にも記録する（`Document.style_hidden`・`ImageRef.hidden_style`。規則が暫定なので要確認）。記号フォントの私用領域の符号（箇条書きの記号・`w:sym`・ランの `w:t`）を Unicode にしたもの・しなかったものは `Document.symbols`（`model.SymbolReplaced`）に記録する（要確認 `symbol_replaced`）。結果を持たないまま終わるフィールド（`separate` がない、または結果が空）のうち、Word では表示のあるもの（EQ の囲い文字・分数・ルビ、SYMBOL、フォームのチェックボックスなど。`ooxml.FIELD_DRAWN`）は `Document.resultless_fields`（`model.ResultlessField`。段落の ID・種類・コード・位置・段落の文字）に記録する（要確認 `resultless_field`。XML は変えない）。画像の Word のトリミング（`a:srcRect`、VML は `v:imagedata` の `crop*`）は `ImageRef.crop`、回転・反転・色の変更など書き出しで反映しない加工は `ImageRef.edits`（名前と順は `model.IMAGE_EDITS`）に記録する（`_pic_edits`・`_vml_edits`）。画像の置き場所を決める手がかりとして、画像ごとに `ImageRef.draw_id`（同じ `w:drawing`・`w:pict`・`w:object` の画像は同じ値）・`digest`（画像ファイルまたは図形の XML の SHA-1）・`para_src`、画像を持たない図形の飾りの種類 `decoration`（`shape_decoration`）も記録する（`draw_id`・`digest` は画像の置き場所の単位と名前の幹に使う〈`structure.Classifier.assign_slots`〉。`decoration` は出力にはまだ使わない）。表の行の前後で飛ばしたグリッド（`w:gridBefore`・`w:gridAfter`）は `Row.grid_before`・`grid_after`、行の番号は `Row.number` に読み、`w:gridSpan` の 0・負・数でない値は 1 にそろえる（`_grid_span`） |
+| `docx_reader.py` | docx → 中間表現（`model.py` の `Document` / `Para` / `Atom`）。コンテンツコントロール（`w:sdt`）・`w:customXml` に包まれた表の行・セル、テキストボックスの段落・表も、文書の順にたどって読む（`_children()`）。テキストボックスごとに `model.TextBox`（ID・アンカー段落・行内か・VML の位置指定・グループの中か・幅と高さ）を記録し、中の段落・表に `textbox_id` を付ける（入れ子の内側は外側の ID）。Word の脚注・文末脚注は、種類と ID の組の注の鍵（`model.note_key`。「footnote:5」。人が読む表記は `model.note_label`）で区別する（番号・リンク・PDF との照合・レポートのどれも、この鍵で注を引く）。削除の変更履歴の中の脚注・文末脚注の参照は、参照にせず `Document.deleted_note_refs` に記録する。段落記号が削除された段落は、次の段落とつないで連鎖の最初の段落の ID の 1 つの段落として読み（`Document.joined`。スタイルの違うものは `Document.joins`）、つなげないものは 10 章の警告にする。変更履歴で削除された、文字のない表の行は読み飛ばす（`Document.deleted_rows`）。スタイル・既定の書式の設定で隠した文字・画像は、隠し文字の一覧とは別にも記録する（`Document.style_hidden`・`ImageRef.hidden_style`。規則が暫定なので要確認）。記号フォントの私用領域の符号（箇条書きの記号・`w:sym`・ランの `w:t`）を Unicode にしたもの・しなかったものは `Document.symbols`（`model.SymbolReplaced`）に記録する（要確認 `symbol_replaced`）。結果を持たないまま終わるフィールド（`separate` がない、または結果が空）のうち、Word では表示のあるもの（EQ の囲い文字・分数・ルビ、SYMBOL、フォームのチェックボックスなど。`ooxml.FIELD_DRAWN`）は `Document.resultless_fields`（`model.ResultlessField`。段落の ID・種類・コード・位置・段落の文字）に記録する（要確認 `resultless_field`。XML は変えない）。画像の Word のトリミング・回転などの加工は読まない（画像は書き出さないため。W1 の手順 16 で `ImageRef.crop`・`edits` をなくした）。画像の置き場所を決める手がかりとして、画像ごとに `ImageRef.draw_id`（同じ `w:drawing`・`w:pict`・`w:object` の画像は同じ値）・`digest`（画像ファイルまたは図形の XML の SHA-1）・`para_src`、画像を持たない図形の飾りの種類 `decoration`（`shape_decoration`）も記録する（`draw_id`・`digest` は画像の置き場所の単位と名前の幹に使う〈`structure.Classifier.assign_slots`〉。`decoration` は出力にはまだ使わない）。表の行の前後で飛ばしたグリッド（`w:gridBefore`・`w:gridAfter`）は `Row.grid_before`・`grid_after`、行の番号は `Row.number` に読み、`w:gridSpan` の 0・負・数でない値は 1 にそろえる（`_grid_span`） |
 | `numbering.py` | Word の自動段落番号を表示どおりの文字列にする。`w:numStyleLink` は、styles.xml の番号付けスタイルをたどって段の定義を得る（`Numbering(root, styles_root)`。`_follow_style_links`）。num の `w:lvlOverride/w:lvl`（段の書式の上書き）は、書かれた子要素（start・numFmt・lvlText・番号の書式のフォント）だけを abstractNum の段の定義に重ね、`w:startOverride` は、その num を最初に使った段落で数えを振り直す（`Numbering.label`。lvl の start より優先。0.30.0。R6）。数えは Word と同じく abstractNum ごとで、同じ abstractNum を使う num は番号を共有する（振り直した後に元の num に戻ると、振り直した後の続き。C008・R7。振り直しの開始番号は `restarts` に持ち、数えの初期値と、上位の段が未出現のときの `%n` の両方に使う）。表の削除された行を読み飛ばすときは、数え方を `Numbering.snapshot()`・`restore()` で戻す（`counters` を直接触らない）。`w:isLgl`・`w:lvlRestart` などは未対応（`docs/REVIEW_2026-11.md` の R8・R11） |
 | `omml.py` | Word の数式（OMML）→ MathML 2.0。根号の `degHide` が真でも `m:deg` に文字があれば `mroot`（文字を落とさない。`h_rad`） |
 | `article.py` | 論文の構造の型（0.27.1 で `structure.py` から本体を変えずに移した。修正計画の U6。`structure` からも同じ名前で import できる）: `ArticlePlan`（判断の記録 `decide()`、出力しない段落の記録 `exclude()`・`exclude_blank()`、位置を決められない図表・囲みを置いた位置の説明 `float_place()`・`box_place()`、注の番号をリンクにしない段落 `no_link_paras()` など）、構造のノード（`Sec`・`PNode`・`ListNode`・`QuoteNode`・`FigNode`・`TableNode`・`FormulaNode`・`BoxNode`・`FnNode`・`RefNode`・`BackSec`・`AppNode`・`Author`・`Aff`）、浮動配置の図形と文字だけのテキストボックスの扱いの記録（`FloatInfo`・`BoxInfo`）、段落の文字 `_para_text()`。`model.py` にだけ依存する（`structure` → `article` の一方向。`tests/test_article.py` が、別のプロセスで import して循環 import がないことを確かめる）。0.29.0 で `ArticlePlan.fn_guess_checks`・`fn_guess_numbered`（文字から推定した「注」の扱いの記録）と `float_unlinked`（番号が重なる・枝番があるためリンクしなかった図・表の参照。要素は `UnlinkedRef`〈図か表・段落 ID・文字・段落の中の範囲〉）、`fn_guess_span`（「注見出し」にしたとき注の節に入る段落）を足した。0.31.0 で `FnNode.tables`（注の節の中の表。`ArticlePlan.fn_table_paras()` がそのキャプション・セルの段落 ID を返し、linker が注番号をリンクしない）と、構造の衝突の記録 `StructureConflict`・`ArticlePlan.structure_conflicts`（K1・K2）を足した |
@@ -38,8 +38,8 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
 | `pdfmatch.py` | 出版版 PDF との照合（段落ごとの対応付けと、違いの一覧）。違いを組版の違い（(A)。`typeset_pair`・`QUOTE_CLASSES`・`NUMBER_PAIRS`・`case_paragraphs`。`TextDiff.kind` が `typeset`、全角・半角の `width`・PDF にない空白の `drops`、Word が付ける番号の `numbers`）・校正の直し（(B)。`kind` が `text`）・決められない違い（(C)。`TextDiff.why`）に分ける。1 つの違いに (A) と (B) が混ざるときは `diff_parts`（`typeset_ops`）で直す単位に分ける。PDF のページ番号・誌名の行・柱・投稿受付日など（組版で入る文字）と、docx にない図・表の中の文字は照合に使わず、段落の途中にあったものを一覧にする（`pdf_stream()`、`PdfCheck.ignored_lines`）。照合の位置（`PdfStream.keys`・`_joint`・`_align` など）は「1 文字 = 1 キー」を前提にするので、照合の鍵 `key()` は必ず 1 文字を返す（`lower()` が 2 文字になる「İ」だけは小文字にせず、そのまま返す。C056）。ページの途中の数字だけの行（引用文献の「pp.11-」の後の「16」のような前の行の続きを除く）・何ページにも出る行は、照合する列から除き、行全体でしか docx の文字と一致させない（`PdfStream.line_only`）。段落ごとの PDF の窓は、全段落を docx の順につないでまとめて照合して決める（`_joint`。0.21.0。PDF の中で表・図・ほかの段落に分断された段落も照合する）。docx に足すか・docx の文字を消すか決められない違いは、理由付きで直さない（`TextDiff.why`。`EDGE_WHY`・`UNSURE_WHY`・`WHOLE_WHY`・`LONG_WHY`・`DISPLACED_WHY`・`HEAD_WHY`・`MATH_WHY`〈文字として取り出せない数式の位置。`PdfStream.formula`〉）。docx のダッシュ（en dash・em dash など）と同じ位置の PDF の行末の「-」は、(A) のダッシュ・ハイフンとして PDF に合わせて「-」に直す（`DASHES`。docx のハイフンの仲間〈`HYPHENS`。「‐」、Word の改行なしハイフン「‑」など〉と、PDF の行末の docx と違う「-」「‐」も、行の途中と同じく PDF に合わせる） |
 | `pdfdocx.py` | ルート2: 出版版 PDF で補った docx（Word の変更履歴つき）を作る。組版の違い（`Fix` の kind が `width`・`space`・`glyph`）と校正の直し（kind が `text`）を直す。書き込んだ後に文字列と構造（役割・領域・リンク・注の区切り・著者と所属・姓と名の分け方。`_verify`・`_structure`）を確かめる。段落の文字（`paragraph_units()`）と段落のつながり（`_chains()`）は、読み取りと同じ規則（`ooxml.HiddenRule`・`joined_paragraphs`）で決める。空白の削除は根拠の全角・半角の直しに片方向で従う（`Fix.needs`・`spread_reasons`。1 つの違いを分けた組は `FixGroup`・`link_fixes`）。入力の docx と書き出し先が同じファイルなら `write_fixed_docx` は書く前に `ValueError`（`same_file`）。削除されたランの図形は `paragraph_units` で読み飛ばす |
 | `jstage_rules.py` | J-STAGE のアップロード時チェック（記事アップロードメッセージ一覧）のうち XML だけで判定できるものの再現 |
-| `images.py` / `package.py` / `report.py` | 画像の書き出し（変換できなかった EMF/WMF の元の画像は、出力フォルダの直下の `要変換/`。Word でトリミングした画像は表示される範囲に切り取り〈`images.crop_image`〉、切り取れない画像は切り取る前の画像を `要変換/` に置いて用意が必要な画像にする）、ZIP、レポート。アップロード用の ZIP に入れるものは `package.upload_entries()` だけで決め（今回の XML・今回指定した PDF・出力できた画像）、作った ZIP は `package.zip_problems()` で読み直して確かめる（`Result.zip_issues`）。記事フォルダにあるのに ZIP に入れなかったファイルは `package.unzipped_files()`（`Result.not_zipped`。レポートの 10 章）。利用者への知らせ（要対応・要確認）は `report.actions()` の 1 か所で `report.Action` の一覧にする（レポートの冒頭・14 章、Colab の赤い枠、コマンドラインの標準エラーと終了コードはこれだけで決まる。`docs/DESIGN.md` の 3 章）。知らせの文の画面の操作は目印 `report.step()` で書く（`STEP_NAMES`）。レポートの生のタグは `md_tag()` で囲む。要確認 `float_ref`（リンクしなかった図・表の参照。`float_ref_manual`・`float_ref_ai`〈AI の状態で文を分ける〉）と `fn_guess`（文字から推定した「注」の扱い）の `Action` を足した。0.30.0 で、要対応 `table_shape`（出力した表の形の崩れ。12 章の「表の形の確かめ」）・`autonum_lost`（XML に出なかった Word の自動番号。8 章）と、要確認 `image_crop`（切り取って出力した画像）・`image_edits`（Word の加工を反映していない画像）を足した。0.31.0 で、要確認 `excluded_unsure`（論文の中の位置を決められずに除いた段落。理由ごとの直し方は `UNPLACED_GUIDE`）と要対応 `abstract_missing`（英文要旨が見つからない）を足し、構造の衝突で中止するときの文 `structure_conflict_text`（`actions` の知らせではない）を足した |
-| `pipeline.py` / `cli.py` | 全体の流れ（画像の出力漏れの検出 `lost_images()`、表の形の確かめ `table_problems()`、自動番号の出力漏れの検出 `lost_autonums()`、最終の XML に残った私用領域の文字の検出 `pua_chars()`〈要対応 `pua_left`〉、記号フォントの記号を置き換えたものの集計 `symbols_replaced()`〈要確認 `symbol_replaced`〉を含む）とコマンドライン。`Result.needs_action`（要対応があるか）・`Result.pdf_fallback`（ルート2 で PDF の文字を読めなかった）・`Result.supplement`（ルート2 の補完の確かめ。不合格は `Result.ok` も偽）。コマンドラインの終了コードは、0 が要対応なし、1 が要対応あり（要対応の一覧は標準エラー）、2 が中止（`AIRequiredError`・`StructureConflictError`。K1・K2 の構造の衝突は AI を呼ぶ前に、ルート2 では補う前の元の docx で確かめて中止し、補った docx を残さない〈`_drop_fixed`。O7〉。AI の set_role で衝突ができたときは `_reject_roles` で不採用にして組み直す〈理由 `CONFLICT_ROLE_WHY`〉）。補った docx の書き出し先は `pipeline.fixed_docx_path`（入力が同じファイルなら `_2`、`_3`…の別名） |
+| `images.py` / `imagelist.py` / `package.py` / `report.py` | 作業する人が入れる図・表の画像の受け取り（`images.SlotImage`〈置き場所ごとの状態〉・`check_user_image`〈中身が PNG・JPEG・GIF かを確かめるだけで、バイト列は変えない〉・`match_names`〈ファイル名を置き場所の幹に合わせる〉。docx の画像は書き出さない。修正計画 W1）、入れた画像を XML に反映する `package.apply_images()`（1 か所）、ZIP、レポート（図の画像の一覧 `report.image_rows`、場所の文 `report.slot_where`）、取り違えの確かめの一覧 `imagelist.write_check()`（出力フォルダに別の HTML「{記事識別子}_図の確かめ.html」を書く。`Result.check_path`。ZIP に入れない）。アップロード用の ZIP に入れるものは `package.upload_entries()` だけで決め（今回の XML・今回指定した PDF・作業する人が入れた画像）、作った ZIP は `package.zip_problems()` で読み直して確かめる（`Result.zip_issues`）。記事フォルダにあるのに ZIP に入れなかったファイルは `package.unzipped_files()`（`Result.not_zipped`。レポートの 10 章）。利用者への知らせ（要対応・要確認）は `report.actions()` の 1 か所で `report.Action` の一覧にする（レポートの冒頭・14 章、Colab の赤い枠、コマンドラインの標準エラーと終了コードはこれだけで決まる。`docs/DESIGN.md` の 3 章）。知らせの文の画面の操作は目印 `report.step()` で書く（`STEP_NAMES`）。レポートの生のタグは `md_tag()` で囲む。要確認 `float_ref`（リンクしなかった図・表の参照。`float_ref_manual`・`float_ref_ai`〈AI の状態で文を分ける〉）と `fn_guess`（文字から推定した「注」の扱い）の `Action` を足した。0.30.0 で、要対応 `table_shape`（出力した表の形の崩れ。12 章の「表の形の確かめ」）・`autonum_lost`（XML に出なかった Word の自動番号。8 章）を足した（要確認 `image_crop`・`image_edits` は W1 でなくした）。0.31.0 で、要確認 `excluded_unsure`（論文の中の位置を決められずに除いた段落。理由ごとの直し方は `UNPLACED_GUIDE`）と要対応 `abstract_missing`（英文要旨が見つからない）を足し、構造の衝突で中止するときの文 `structure_conflict_text`（`actions` の知らせではない）を足した |
+| `pipeline.py` / `cli.py` | 全体の流れ（画像の置き場所を作れなかった画像の検出 `lost_images()`・XML の画像の名前の確かめ `image_problems()`・飾りの記録 `decorations()`、表の形の確かめ `table_problems()`、自動番号の出力漏れの検出 `lost_autonums()`、最終の XML に残った私用領域の文字の検出 `pua_chars()`〈要対応 `pua_left`〉、記号フォントの記号を置き換えたものの集計 `symbols_replaced()`〈要確認 `symbol_replaced`〉を含む）とコマンドライン。`Result.needs_action`（要対応があるか）・`Result.pdf_fallback`（ルート2 で PDF の文字を読めなかった）・`Result.supplement`（ルート2 の補完の確かめ。不合格は `Result.ok` も偽）。コマンドラインの終了コードは、0 が要対応なし、1 が要対応あり（要対応の一覧は標準エラー）、2 が中止（`AIRequiredError`・`StructureConflictError`。K1・K2 の構造の衝突は AI を呼ぶ前に、ルート2 では補う前の元の docx で確かめて中止し、補った docx を残さない〈`_drop_fixed`。O7〉。AI の set_role で衝突ができたときは `_reject_roles` で不採用にして組み直す〈理由 `CONFLICT_ROLE_WHY`〉）。補った docx の書き出し先は `pipeline.fixed_docx_path`（入力が同じファイルなら `_2`、`_3`…の別名） |
 | `colab.py` | Colab ノートブックの表示部品（手動モードの依頼文の枠、要対応（赤）・要確認（黄）の枠 `result_boxes()`〈`missing_images_box()` などは、その中の 1 つの枠〉、結果の要約の灰色の枠 `summary_box()`、畳んで出すレポート全文 `report_details()`〈Markdown → HTML は `markdown_text_only`〉）と、続けて変換するときの入力の確認。画面の操作の目印（`report.step`）は `STEP_WORDS`（`notebook`・`app`・`cli`）と `step_text` が画面ごとの語に置き換え、枠を作る関数は `screen` 引数（既定 `notebook`）を受ける。中止の枠は `ai_required_box`・`structure_conflict_box`（0.31.0）。枠は白地に暗い文字に固定し（`LIGHT_STYLE`・クラス `jasme-light`。色は `!important`）、ダークモードでも読める（0.31.1） |
 | `app.py` | 一般の利用者用の 1 画面の操作画面（Gradio。`docs/GUI_PLAN.md`。ノートブック `JASME_docx_to_JSTAGE_XML_GUI.ipynb` の 1 セルから `launch()` で開く）。`AppState`（Gradio に依存しない。入力・結果・「変換できるか」「要対応が残っているか」「手動モードで回答待ちか」「足りない画像」・ZIP・次の論文のリセット）と `build_app(state, io)`（画面。Colab に依存する操作は `io`）、`launch()`（share は常に False）。表示は `colab.py` の部品を使う。Gradio の版は pyproject の `gui` で固定。0.27.2 で一般の利用者用の画面として採用（従来のノートブックも残す。`docs/GUI_PLAN.md` の 8 章）。想定外の例外は `AppState.crash()` で赤い枠にし（`convert`・`apply`・`images`・`download` の操作別の案内。`report.actions()` の知らせではない）、変換したときの入力の写し `AppState.run`（`RunInputs`。ファイルは中身の sha256 で比べる）を `convert` が作り、`_run`・`apply_answer`・`add_images`・`download` はこの写しだけを使う。入力が写しと違えば、前の結果・貼り付けた回答・入れた画像を残したまま理由の文で断る（`changed_inputs`・`stale_text`。「このままダウンロード」でも断る。同じファイルの選び直しは変わっていない扱い。AI の方法・モデルは比べず、次の変換から使う）。手動かどうかも写しで決める（O3）。`convert` は確かめが済むまで前の結果と写しを変えず、`_run` は Options を作ってから前の結果 `self.res` を捨てる。別の論文に変えて変換すると回答の欄を空にし、前に別の依頼文へ反映したのと同じ文字の回答は断る（0.30.0）。手動の欄を見せるかは `answer_box_open`（手動モードで作った結果のときだけ、回答待ちか、`ai_error`・`partial`・`forced`・`float_ref`・`textbox_undecided`・`abstract_missing` の枠が出ているあいだ）。中止（`AIRequiredError`・`StructureConflictError`）は `_run` が `InputError` にして枠で出す |
 | `config.py` | 本誌の設定の読み込みと、記事ごとの書誌情報（`ArticleMeta.from_dict()`。巻・号・ページは NFKC にして、巻・号・開始ページが半角の英数字でなければ欄の名前を示して止める。日付は `_date()` で 2026/3/31 などの書き方も読む） |
@@ -60,8 +60,12 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
    知らせなければ利用者は気づかない。
    組み立てで前の値を上書きして段落が出力にも除外にも入らなくなる形（同じ種類の後付けの見出し・英文要旨の見出しが 2 つ、著者名の付かない所属。
    K1・K2）は、どちらを残すかを変換ツールが決めず、`plan.structure_conflicts` に記録して変換を中止する（`StructureConflictError`）。
-   不変性チェックは文字しか見ないので、画像は、変換の後に `pipeline.lost_images()` が、docx の画像のうち XML に出力しなかったもの
-   （引用文献など画像を出力できない段落や、除外した段落の中の画像）を調べ、要対応として知らせる（隠し文字の中の画像を除く）。
+   不変性チェックは文字しか見ないので、画像は、変換の後に `pipeline.lost_images()` が、docx の画像の位置のうち画像の置き場所（`article.ImageSlot`）を
+   作れなかったもの（引用文献・注の節や、題目・著者名・所属の段落の中）を、置き場所をすべて書いた XML（`Result.xml_base`）で調べ、要対応として知らせる
+   （隠し文字の中の画像と、飾りの図形を除く。作業する人が「入れない」とした置き場所は、置き場所ありとみなす）。XML の画像の名前が置き場所の一覧と
+   合わないときは `pipeline.image_problems()` が要対応 `image_names` で知らせる。
+   図・表の画像は作業する人が入れ（`pipeline.add_images`）、入れるたびに XML を `package.apply_images()` で作り直して、文字が置き場所をすべて書いた XML
+   （`Result.xml_base`）と同じこと・DTD・J-STAGE のチェック・ZIP の確かめをやり直す（`pipeline.rebuild_outputs`）。
    表の形（行ごとの列の数・セルの重なり・縦の結合の範囲・セルのない行）は `pipeline.table_problems()` が、builder の結合の判断に頼らず
    docx の行ごとの列の数と出力した `<table>` の割り当てだけで確かめ、崩れていれば要対応（`table_shape`）。Word の自動番号が XML に出なかった段落は
    `pipeline.lost_autonums()` が検出し、要対応 `autonum_lost` で知らせる（`jx:gen` の kind autonum には段落 ID の `src` を付ける。
@@ -86,6 +90,11 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
    （読み取り・検証・ルート2 とも同じに捨てる。囲い文字を合成して文字を作ることはしない）。読み取りが `ooxml.resultless_field_kind()` で
    表示のある種類（`FIELD_DRAWN`）だけを `Document.resultless_fields` に記録し、`report._resultless_field_action` が要確認で知らせる。
    種類を増やすときは `tests/test_resultless_fields.py` に足す。
+   画像で補うこともできる（修正計画 W1 の手順 15）: 画像を書ける文脈の段落（`structure.plan_figures` が返す段落。題目・著者名・所属・引用文献は含まない）の
+   フィールドごとに、任意の置き場所（`ImageSlot` の `kind` が `optional`。幹は `opt` ＋フィールドコードの SHA-1 の先頭 6 桁）を `assign_slots` が作る。
+   `Emitter.span` が、書き出す範囲の中にある位置（`ResultlessField.pos`。`Para.text_only` の文字数。`Emitter.plain_pos` が `plain()` の位置にする）に
+   `<inline-graphic>` を書く（文字のアトムを位置で分けるだけで、`Para` には新しい種類のアトムを入れない）。入れていない任意の置き場所は
+   `package.apply_images` が取り除くので、入れないときの XML は今と同じで、手順 `images` にも数えない。
 6. 出版版 PDF で補うときは、XML ではなく docx を直す（ルート2「docx から作り、出版版 PDF で補う」。`pdfdocx.py`、`docs/DESIGN.md` の 4.4）。
    補った docx は Word の変更履歴つきで利用者が確かめられ、それを変換する処理はルート1 と同じなので、1.〜5. はそのまま当てはまる。
    `pdfdocx.py` を直すときは、書き込んだ後の確かめ（読み直した文字列と、段落の役割・リンク・注の区切り）を外さないこと。PDF の組版で
@@ -101,10 +110,10 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
    `pdfmatch`・`pdfdocx` を直すときは、補完の確かめ
    （`fidelity.verify_supplement`）を外さず、表の定数を変えるときは `typeset_pair` と補完の確かめの判定が同じ答えになること（テスト）を
    確かめる。表に記号を足すのは実測で出たときだけ。
-7. アップロード用 ZIP に入れるものは `package.upload_entries()` だけで決め（`{aid}.xml`・今回置いた `{aid}.pdf`・状態が ok / converted / user の画像）、
-   できた ZIP は `package.zip_problems()` で読み直して確かめる。記事フォルダにあるのに入れなかったファイルは `Result.not_zipped` に持ち、
-   レポート 10 章で知らせる（`res.warnings` には入れない）。変換できなかった EMF/WMF は出力フォルダ直下の `要変換/` に置く（記事フォルダの外）。
-   Word でトリミングした画像は切り取って入れ（要確認 `image_crop`）、切り取れなければ failed にして入れない（切り取る前の画像は `要変換/`。`images.crop_image`）。
+7. アップロード用 ZIP に入れるものは `package.upload_entries()` だけで決め（`{aid}.xml`・今回置いた `{aid}.pdf`・作業する人が入れた画像
+   〈`images.SlotImage` の状態が user〉）、できた ZIP は `package.zip_problems()` で読み直して確かめる（画像は、置き場所にない名前の画像と、入れたのに
+   ZIP にない画像を見る。まだ入れていない画像は、手順 `images` が伝えるので数えない）。記事フォルダにあるのに入れなかったファイルは `Result.not_zipped` に持ち、
+   レポート 10 章で知らせる（`res.warnings` には入れない）。
 8. 利用者に知らせること（要対応・要確認・手順）は `report.actions()` に `report.Action` を 1 つ足す（冒頭の文・14 章の行・Colab の枠の
    見出しと本文・コマンドラインの文）。レポートの冒頭・14 章、Colab の手順 5・6・8、コマンドラインに個別の表示を足さない。
    要対応はコマンドラインの終了コード 1 と Colab の手順 8 で一度止めること、要確認は黄色い枠と冒頭・14 章だけ（終了コード 0）。
@@ -153,8 +162,8 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
   段落は `abstract`、英文要旨の後ろの資料は `appendix` で足せる。段落記号の削除は `para_mark_deleted()`〈`kind="move"` で `w:moveFrom`〉、
   段落記号の隠し文字〈スタイル区切り〉は `para_mark_hidden()`、文字スタイル・直接の隠し文字のランは `run_styled()`、段落の中の改行は `br()`・
   `run_with_break()`〈題目などの lxml の段落には `add_break()`〉、変更履歴で削除された表の行・セルは `deleted_row()`・`cell_deleted()`、
-  スタイルの定義は `Builder.styles_extra`〈`READER_STYLES`〉で足せる。表の行は `table_row()`〈見出し行・`gridBefore`・`gridAfter`〉、トリミング・回転などのある画像は
-  `drawing()` の `src_rect`・`xfrm`・`blip`、VML の画像は `vml_image()`、1 つの図形に画像が複数あるグループは `pic_group()`、切り取りを確かめる画像は `two_tone()` で作れる）。
+  スタイルの定義は `Builder.styles_extra`〈`READER_STYLES`〉で足せる。表の行は `table_row()`〈見出し行・`gridBefore`・`gridAfter`〉、画像は
+  `drawing()`〈`src_rect`・`xfrm`・`blip` の引数は、読み取りが加工を読まなくなった今は見た目の指定だけ〉、VML の画像は `vml_image()`、1 つの図形に画像が複数あるグループは `pic_group()`、1 色でない小さな画像は `two_tone()` で作れる）。
 - `tests/test_symbols.py`: 記号フォントの私用領域の符号（C011）。フォントごとの表（1 文字が 1 文字・私用領域ではない・フォントを取り違えない）と、箇条書きの記号が段の書式の
   フォントの表で Unicode になること（`numbering.bullet_text()`。Wingdings の F09F・F0A1・F06E。表から外した F0B2 は私用領域のまま。Symbol の F0B7・Wingdings の F0D8・フォントなしの F0B7 は今までどおり）、
   置き換えが要確認 `symbol_replaced` の 1 件（件数でまとめる。以前の版から同じ文字の置き換えは知らせず 8 章の表にだけ）になること、表にない符号が要対応 `pua_left`（段落 ID・符号・フォント・生成文字か docx の文字か。
@@ -167,6 +176,8 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
 - `tests/test_resultless_fields.py`: 結果を持たないフィールドの知らせ（C013）。EQ（`separate` なし・結果が空）が要確認 `resultless_field` の 1 件になること
   （段落の ID・種類・段落の文字の抜粋〈位置に印〉。同じ段落は 1 行。XML の文字は変わらず不変性チェックは合格）、表示のない種類（XE・TC・SET など）と結果のあるフィールド
   （PAGE・HYPERLINK・結果が空の REF）、削除・隠し文字の中のフィールドでは出ないこと、表のセル・脚注・`w:fldSimple` も記録されること、6 章に全件が載ること。
+  任意の置き場所（手順 15）は、入れないと XML が今と同じで手順に数えないこと、入れるとその位置（段落の先頭・終わり・太字の途中・表のセル）に `<inline-graphic>` が入り
+  文字は不変で DTD に合うこと、同じコードは幹に `_2` が付くこと、題目・引用文献には作らないこと、`lost` にならないこと、持ち越しとまとめて入れる名前。
   小さな docx はテストの中でその場で作る。ルート2 で PDF から読んだ中身の文字を補う動き（補った docx を Word で開くと二重に見える）は、別の作業（校正の直しの書き込みの見直し）で扱う。
 - `tests/test_reader.py`: 読み取った段落の文字が、検証側（`ooxml.canonical_texts()`。段落記号の削除でつないだ段落は連鎖の最初の段落の ID に
   連結した文字で、後ろの段落の ID は欠番）と一致すること。逆向きに、文字のある段落
@@ -190,8 +201,7 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
   表の行（文字のない行は読み飛ばして記録、文字の残る行と削除されたセルは出力して警告、図形を読んだ行は読み飛ばさない、読み飛ばした行の
   中の自動番号は数えず、行の中の隠し文字は隠し文字の一覧〈スタイルで隠した文字の一覧も〉に載せない）。
   `ooxml.joined_paragraphs`・`unjoined_deleted_marks`・`canonical_texts` の規則（同じ親の中だけ、目印は飛ばす、ブロックの `w:ins`・表・
-  本文の最後ではつながない）。自動番号の上書き（`w:lvlOverride/w:lvl`。書かれていない子要素は abstractNum の段の値。R6）と、同じ abstractNum を使う num の番号の共有・`w:startOverride` の初出の振り直し・削除された行の後の振り直し（C008・R7。`test_shared_abstract_num_*`〔上位の段が未出現のときの `%1`・`w:startOverride` を書いた順を含む〕・`test_numbering_snapshot_restore_includes_started`）、画像のトリミング
-  （`a:srcRect`・VML の `crop*`）と、1 つの図形に画像が複数あるときの大きさ（`a:blip` の `a:extLst` を拾わない、グループの縮尺を掛ける）。
+  本文の最後ではつながない）。自動番号の上書き（`w:lvlOverride/w:lvl`。書かれていない子要素は abstractNum の段の値。R6）と、同じ abstractNum を使う num の番号の共有・`w:startOverride` の初出の振り直し・削除された行の後の振り直し（C008・R7。`test_shared_abstract_num_*`〔上位の段が未出現のときの `%1`・`w:startOverride` を書いた順を含む〕・`test_numbering_snapshot_restore_includes_started`）、1 つの図形に画像が複数あるときの大きさ（`a:blip` の `a:extLst` を拾わない、グループの縮尺を掛ける）。
 - `tests/test_fidelity.py`: 不変性チェックがわざと壊した XML を確実に検出することのテスト（出力と除外の重なり、文字のある
   空白だけの除外も）。検証の docx 側の文字も、読み取りと同じく段落記号の削除でつなぎ、スタイルの隠し文字を隠すこと（欠番の ID の文字や、
   隠した文字を出力すると不合格になること）。チェックの処理を変えたら必ず通すこと。
@@ -245,7 +255,7 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
   本文の外の段落に結び付いた図形（修正計画の N7。`make_b3_place(outside=True)` と `sample_outside.docx`。AI 補完が必要なので
   ALL_DOCS には入れない）: 注・引用文献・英文要旨の段落にせず、図表の入った図形は位置を決められない図表として本文の最後に仮に置くこと
   （AI を使わない設定では止める、AI の本文の段落の指定は採用、注の段落の指定は不採用で本文の最後）、文字だけの囲みは本文の最後の
-  boxed-text（位置を推定。要確認）にすること、資料の中の囲みは資料の中のまま、引用文献の段落そのものの画像は XML に入らなかった画像の
+  boxed-text（位置を推定。要確認）にすること、資料の中の囲みは資料の中のまま、引用文献の段落そのものの画像は 画像を入れる場所を作れなかった画像の
   まま、組み立ては本文の外の図形があるときだけ 2 回で、判断の番号が重ならず、同じ doc で 2 回呼んでも同じ結果になること。
   引用文献の段落に結び付いたグループ図形の画像を、アンカー段落から集めて図に入れること（画像と図キャプション。画像と注記のグループ図形を
   AI が図として組んだときは、注記の段落を図の後ろに 1 回だけ出し、不変性チェックに合格すること。`test_group_shape_on_reference_keeps_its_image`）。
@@ -327,16 +337,31 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
   ほかに jasme_jats のモジュールを import しないこと、`article.py` で定義する名前（ノード・`ArticlePlan`・`_para_text`）が `structure`
   からも同じものとして import できること。
 - `tests/test_names.py`: 著者名の姓と名の分け方（C010・C064・C072）。`builder.split_eastern` の規則（空白が 1 か所・いちばん長い空白〈全角の空白は半角 2 つ分〉・いちばん長い空白が 2 か所以上のときの境目の推定〈論文の中の引用の形の「姓だけ」の表記、なければ字数。「中1」などの一般の語は手がかりにしない〉・注の参照とその前の空白・空白のない氏名。同じ入力なら同じ結果）、変換で字の間・前後の空白を落として姓と名に分け、不変性チェック・最終出力・DTD が合格すること、7 章の理由・4 章の記録、要確認 `name_split` の文（コードの名前を書かない。字数だけの推定はより強い言い方）、AI の `split_name` が字の間に空白のある氏名を受け付けて機械の推定より優先し、「AI が分けた」行として知らせに残ること（機械と同じ位置の指定は今までの知らせのまま。空白が 1 か所の氏名の扱いは変えない）、推定を含むときに枠の見出し・チェック項目・コマンドラインの文に書くこと、依頼文に推定で分けた氏名が載ること、ルート2 で `pdfdocx._name_shape` が補完の前後で同じになり、補完の確かめが合格すること。
-- `tests/test_lost_images.py`: 画像の出力漏れの検出（`pipeline.lost_images()`）。引用文献の段落の画像（画像だけの段落・行内の画像）、
+- `tests/test_lost_images.py`: 画像を入れる場所を作れなかった画像の検出（`pipeline.lost_images()`。要対応 `lost`）。引用文献の段落の画像（画像だけの段落・行内の画像）、
   冒頭の除外した段落の中の画像、本文から参照されていない Word の文末脚注の中の画像が、レポートの冒頭・9 章・
-  14 章、コマンドライン（終了コード 1）、Colab の枠に出ること（参照された文末脚注の中の画像は、注の中に出力すること）。隠し文字の中の
+  14 章、コマンドライン（終了コード 1）、Colab の枠に出ること（直し方は資料を英文要旨の後ろに移す〈`report.APP_MOVE_HOW`〉・本文に移す・消すで、
+  手順 `images` の行と置き場所の備考には出ないこと。参照された文末脚注の中の画像は、注の中に出力すること）。隠し文字の中の
   画像は対象にしないこと（文字スタイルで隠した画像は、スタイルの隠し文字の要確認で知らせ、ランに直接付けた隠し文字の画像は知らせない。
   `test_style_hidden_image_is_noticed`）、既存の fixture（AI の模擬回答・ルート2 を含む）では 0 件であること。引用文献の段落に結び付いた図形（画像と
   図キャプション。0.24.1 までは出力漏れ）の画像は、図に入る（位置を決められない図表。AI を使わない設定では止め、AI が位置を答えなければ
   本文の最後に仮に置いて要対応。修正計画の N7）こと。0.24.1 までの暫定の知らせ（「テキストボックスの中の文字 N 段落を、XML に
   出力していません」）を出さず、文字だけのテキストボックスの囲みは boxed-text に出し、囲みか図の注記か決められないものだけを要確認で
   知らせること（冒頭・14 章・コマンドラインの標準エラー。終了コード 0。図表の入ったテキストボックスの中の文字の要確認は
-  `tests/test_structure.py`）も。
+  `tests/test_structure.py` と `tests/test_image_guards.py`）も。
+- `tests/test_image_guards.py`: 画像の守りと知らせ（修正計画 W1 の手順 11）。`lost_images()` が置き場所をすべて書いた XML で調べること（「入れない」で
+  要素を取り除いた最終の XML で調べると置き場所なしになる）、「入れない」は変換し直して持ち越しても `lost` にならないこと、XML の `xlink:href` を壊すと
+  `image_problems()` が挙げて要対応 `image_names` になること、画像を入れる前の ZIP で要対応 `upload` が出ないこと、ZIP に置き場所にない画像を足す・
+  入れた画像を ZIP から抜くと `zip_problems()` が挙げること、要確認 `textbox_figure_text` が図形ごとに 1 行で図番号と幹を出すこと（図キャプションの図形・
+  図キャプション 2 つの図形・本文の図キャプションに含めた図形・キャプションのないグループの 4 つの形。AI の指定の前後で同じ）、同じ画像を 2 つの図に入れると
+  要確認 `image_same`、飾りの図形が 9 章に出て知らせにならないこと、図キャプションのある図形の中の文字の図形だけのグループが「図形で描いた図」に分かれ、
+  その図の備考と手順の行に「Word の図形で描いた図です」が出ること。
+- `tests/test_cli_images.py`: コマンドラインの `--images`（幹・番号の別名・記事識別子つきの名前で置き場所に合わせる。合わない名前・別の記事の名前・重なる名前は標準エラーに出して続ける。
+  PNG・JPEG・GIF でなければ 1 枚も入れず 2）・`--no-image`・図の画像の表（見出しが手順 `images` の `progress`）・終了コード 0・1・2
+  （修正計画 W1 の手順 14。`--no-metafile-conversion` は手順 16 で引数ごとなくした）。画面は `tests/test_app.py`（まとめて入れる・「入れない」・31 個目からの案内・変換し直しで画像が残る・次の論文で捨てる）、
+  ノートブックは `tests/test_notebook.py`（手順 1 に LibreOffice がない・手順 7 の `NO_IMAGE`・手順 8 が `blocking` で止める）。
+- `tests/test_imagelist.py`: 取り違えの確かめの一覧（`imagelist.check_html`・`write_check`。修正計画 W1 の手順 12）。行の数と並びが `report.image_rows` と同じこと、
+  キャプション・備考の `<`・`&` のエスケープ、`embed` なしは `Graphics/` への相対リンク・ありは埋め込み、画像を入れるたびに作り直されること、ファイルが記事フォルダの外にあり
+  ZIP に入らないこと、1 枚にまとめる図の備考、図形で描いた図と飾りの分かれ方、レポートの 9 章・14 章と `image_same` の案内。
 - `tests/test_tables.py`: 表の組み立て（修正計画 2026-11 の u3-tables。0.30.0）。すべてのセルが縦の結合の継続の行を出力せず、`rowspan` を出力した行だけで
   数えること、見出し行から本文の行へ結合を延ばさないこと・幅の違う継続を結合しないこと（どちらも 10 章の警告）、横に広いセルで結合が切れること、
   `gridBefore`・`gridAfter` を空のセルで埋めること、削除された結合元の下の継続が新しい結合元になること。表の形の確かめ（`pipeline.table_problems`）の
@@ -346,16 +371,22 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
   `actions()` で `autonum_lost` が `lost` のすぐ後ろに出ること、番号を出さないと決めた段落（題目・著者名・所属など）を飛ばすこと、すべての fixture で
   0 件であること、DTD に合わない数式を取り消して組み立て直した後・ルート2 で番号を PDF に合わせた後も、最後の木を使うこと。場所ごとの自動番号の
   出し方（表のセル・引用・別行数式・英文要旨・キャプションの `<label>`・注の 1 段落目と 2 段落目以降・題目・著者名・所属の 10 章の警告）は `tests/test_article.py`。
-- `tests/test_images.py`: Word でトリミングした画像の切り取り（u4-crop。0.30.0）。`crop_box`・`crop_text`、PNG（透明・dpi・16 bit）・JPEG（量子化表の再利用・
-  Exif の縮小画像を落とす）の切り取り、Exif の向き・複数のコマ・読めない画像を切り取れない画像（`CropError`）にすること、変換で切り取って
-  converted にし、拡張子を変えないこと、切り取れない画像・保存できない画像・EMF/WMF のトリミングを failed（`要変換/`）にして ZIP に入れないこと、1 px 未満の
-  切り取りは元のまま、回転などの加工を知らせること、要確認 `image_crop` が `image_edits` の前に出ること、切り取れなかった JPEG の `images` の文、AI に
-  切り取った画像を渡し、切り取れない画像を渡さないこと。読み取り（`srcRect`・VML の `crop*`、グループの中の画像の大きさ）は `tests/test_reader.py`。
+- `tests/test_user_images.py`: 作業する人が入れる図・表の画像の受け取り（修正計画 W1 の手順 8・9）。`check_user_image`（PNG・透過 PNG・GIF・JPEG・
+  Exif の向きつき JPEG を受け付けて形式と幅×高さを読む、拡張子でなく中身で決める、PDF・TIFF・BMP・WebP・0 バイトを理由つきで断る）、`match_names`
+  （別名・同じ番号が 2 つあるときは別名を受け付けない・ほかの記事識別子の名前・重なり）、`caption_body`、`text_before`・`slot_where`（章の最初・前の段落の
+  後ろ・段落の中・図形から組んだ図・付記の見出しの直後）、`apply_images`（拡張子・「入れない」の要素・任意の要素・後ろの文字・DTD）、入れた画像が
+  バイト列のまま ZIP に入ること、画像 2 枚の図が 1 枚で済むこと。fixture は `make_fixtures.make_where`。conftest の `fill_images(res)` は、残っている
+  置き場所すべてに 1 色の PNG を入れる（画像の手順を済ませて、ほかの知らせを今までどおり確かめるとき）。
+- `tests/test_image_carry.py`: 変換し直したときの画像の持ち越しと、キャプションのない画像の「入れない」（修正計画 W1 の手順 10）。本文を直した原稿では同じ図に
+  同じバイト列が付くこと、図を消した・足した・番号を入れ替えた原稿では別の図に入らず `images_dropped` に記録され手順 `images` の本文に出ること（短く 1 字違いの
+  キャプション〈指摘 4〉、同じ中身のキャプションのない画像が 2 か所のとき〈指摘 17〉を含む）、キャプションが少し変わった図には入れたうえで備考と枠に出て
+  手順は済み・終了コード 0 のままなこと、記事識別子が変わると 1 枚も入らないこと、「入れない」で要素が消え「全部で」から除かれ `lost` が出ないこと・変換し直しても残ること・
+  図・表の幹は断ること、コマンドラインの `--no-image`、画面の変換し直し。
 - `tests/test_sanitize.py`: `tools/sanitize_docx.py`（u1。0.30.0）。入力と同じ出力先を断ること（コマンドラインでも）、失敗したときに既存の出力を壊さないこと、
   個人情報（コメント・変更履歴の作成者・ヘッダー/フッターの文字・customXml・テンプレートのパス・文書のプロパティ）を取り除き本文の文字を変えないこと、
   すべての fixture で本文の文字が変わらないこと、外部のローカルのパスを警告すること、docx でない・壊れた XML の入力、元のファイルの権限を変えないこと。
 - 1 画面版の入力の写し（u2。0.30.0）: `tests/test_app.py` で、変換の後に入力を変えると「反映」「画像を入れる」「結果をダウンロード」が断られ、
-  同じファイルの選び直しは変わっていない扱いになること、入れた画像を変わった入力に持ち越さないこと、変換の後に AI の方法を変えても画面が
+  同じファイルの選び直しは変わっていない扱いになること、入れた画像を変換し直した結果に同じ図だけ入れ直すこと、変換の後に AI の方法を変えても画面が
   変わらないこと（O3）、確かめで止まった変換が前の写しを残すこと、別の論文で変換すると回答の欄が空になり、前の論文の回答を断ること、断る文が
   実際のラベルを使うこと。`tests/test_notebook.py` で、従来のノートブックの手順が途中で止まったら後ろの手順の「済み」が消えること。
 - 位置を決められない除外の知らせと注の節の表（u5-exclusions。0.31.0）: `tests/test_structure.py` で、英文要旨が 1 段落もないときの要対応
@@ -373,11 +404,12 @@ EMF/WMF 画像の変換を試すには LibreOffice（`soffice`）が必要（な
   コマンドラインの終了コード 2。`tests/test_ai.py` で、元の docx の衝突は AI を反映する前に止まること、AI の set_role で衝突ができると 2 段で
   不採用になること（範囲の外の set_role は採用のまま）と `conflict_overrides` の範囲。`tests/test_colab.py`・`tests/test_app.py`・`tests/test_notebook.py` で、
   中止の枠（3 画面で目印が残らない）、1 画面版の状態、ノートブックの手順 5・6 が止まること。
-- `tests/test_pipeline.py`（の後半）: アップロード用の ZIP の中身（修正計画の C）。EMF を変換できなかったときに 要変換/ を ZIP に入れず
-  出力フォルダの直下に置くこと、利用者が入れた画像だけが ZIP に加わること、同じ出力フォルダで 2 本目・開始ページを直して変換し直したときに
+- `tests/test_pipeline.py`（の後半）: アップロード用の ZIP の中身（修正計画の C）。変換の直後は画像がなく（docx の画像は書き出さない。
+  `要変換/` も作らない）、作業する人が入れた画像だけが ZIP に加わること、同じ出力フォルダで 2 本目・開始ページを直して変換し直したときに
   前の記事が入らないこと、前の変換の PDF・画像と手で置いたファイルを入れずに `not_zipped`（レポートの 10 章・コマンドライン）に出すこと、
-  画像を入れ直した後に計算し直すこと、手作りした ZIP での `zip_problems()`（EMSGM034E・053E・059E・073E・074E と記事フォルダの外・XML がない）、
-  変換した画像（converted）が ZIP に入ること（`zip_image_names()`）、画像を入れた後も PDF が ZIP に残ること、記事フォルダに残った PDF を
+  画像を入れ直した後に計算し直すこと、手作りした ZIP での `zip_problems()`（EMSGM034E・053E・059E・073E・074E と記事フォルダの外・XML がない。
+  画像の置き場所を渡したときの 2 つは `tests/test_image_guards.py`）、
+  入れた画像（状態 user）だけが ZIP に入ること（`zip_image_names()`）、画像を入れた後も PDF が ZIP に残ること、記事フォルダに残った PDF を
   もう一度指定できること、画像ファイルがない図の 9 章の備考（手順 7・`--images`）、14 章の PDF の行。
   書誌情報の入力: 全角の巻・号・ページの正規化とその知らせ、英数字以外の巻などのエラー（コマンドラインは終了コード 2）、
   日付の書き方（`test_dates_accept_common_forms`）。`tests/test_notebook.py` で、手順 3 の表示とエラーも確かめる。
@@ -601,12 +633,15 @@ LibreOffice の PDF で 13.1 に句読点の削除だけが並ぶときは、PDF
 
 - 手順 1 はツール本体を毎回入れ直す（同じ版番号でもコードが新しくなるように）。同じランタイムで前の版を読み込んだ後だと
   入れ直しが反映されないため、その場合はセッションの再起動を求めて止まる。
-- LibreOffice は手順 1 で裏でインストールし（`LO_PROC`）、手順 5 で終わるのを待つ。ツール本体の pip は確実さを優先して手順 1 の中で済ませる。
+- LibreOffice は使わない（図・表の画像を docx から書き出さなくなった。修正計画 W1 の手順 14 で `CONVERT_EMF`・`PREP_LO`・`LO_PROC`・
+  `app.IO.libreoffice_ready`・`--no-metafile-conversion` をなくした）。ツール本体の pip は確実さを優先して手順 1 の中で済ませる。
 - 開発版は手順 1 の `USE_DEV_VERSION` にチェックを入れると `input()` でブランチ名を尋ねる（通常の利用者が誤って変えないように）。
-- 手順 7 は、画像を用意できなかった図（`report.images_to_prepare`）の画像を図ごとにアップロードさせ、`pipeline.add_images()` で
-  正しい名前にして Graphics/ に入れ、ZIP とレポートを作り直す。受け取った画像は `USER_IMAGES` に残し、手順 5・6 で変換をやり直したときに
-  入れ直す（手順 2 で論文を選び直すと捨てる）。手順 8（ダウンロード）は、要対応（`report.actions()` の level が要対応）が残っていれば
-  一度止めて赤い枠で示し（足りない画像だけなら手順 7 を案内する。止めたかどうかは `_NEEDS_ACTION_OK` に、docx と要対応の中身〈枠の見出し・本文〉と足りない画像で記録し、変換し直して中身が変わればもう一度止める）、もう一度押すとダウンロードする。要確認だけなら止めない。
+- 手順 7「図の画像を入れる」は、画像の要る図・表の一覧（`imagelist.check_frame`）を出し、まとめてアップロードさせて `images.match_names` で名前を置き場所の幹に
+  合わせ、合わなかったファイルを挙げ、残りの置き場所（`report.image_rows` の状態 missing の行）を図ごとにアップロードさせる。`NO_IMAGE`（コンマ区切りの幹）は
+  キャプションのない画像を入れないことにする。`pipeline.add_images(res, supplied, skip=…)` で受け取って（中身は変えない）Graphics/ に入れ、XML・ZIP・レポートを作り直し、
+  確かめの一覧を出して、残りは手順 `images` の青い枠（`colab.missing_images_box`）が伝える。セルは残りの枚数を数えず、`Action.progress` を使う。手順 5・6 で変換をやり直すときは、その前に `pipeline.kept_images(res)` で入れた画像を覚え、変換の後に
+  `pipeline.reapply_images` で同じ図（番号・キャプションの本体・場所が合うもの）だけ入れ直す（変数 `KEPT`。手順 2 で論文を選び直すと捨てる）。手順 8（ダウンロード）は、要対応（`report.actions()` の level が要対応）が残っていれば
+  一度止めて赤い枠で示し（止める条件は `report.blocking(actions(res))` だけ。図の画像が残っていれば手順 7 を案内する。止めたかどうかは `_NEEDS_ACTION_OK` に、docx と止める知らせの中身〈枠の見出し・本文〉で記録し、変換し直して中身が変わればもう一度止める）、もう一度押すとダウンロードする。要確認だけなら止めない。
 - 手順 9 は、続けて他の論文を変換するための片付け（`DONE = {1}` に戻し、前の論文を `PREVIOUS` に記録する）。手順 3 は `PREVIOUS` と
   比べて書き換え忘れを知らせ（`colab.same_first_page()` / `carried_over()`）、手順 6 は前の論文の AI の回答が残っていれば止まる。
 - 手動モードの依頼文の表示（コピーボタン付きの枠）とエラーの枠は `src/jasme_jats/colab.py`。手順 5・6 では、要対応（赤）・要確認（黄）の枠
@@ -686,7 +721,7 @@ Claude Code の環境の作り方）を読む。
 | Word の文末脚注と、脚注・文末脚注の通し番号（0.24.0） | 修正計画の E（D4）で、Word の文末脚注を注として出し、脚注と文末脚注をまとめて本文で最初に参照される順の通し番号（「1)」）にした（決定事項 7。`docs/DESIGN.md` の 6 章）。架空の docx（`sample_structure.docx` など）でのみ確かめていて、文末脚注のある実際の原稿はまだない（テストデータ1〜3 には脚注も文末脚注もない）。J-STAGE の試験登載で、文末脚注から作った注と本文の「n)」の表示、記号を自分で付けた注（本文の記号は docx の文字のまま、注の一覧は「n)」）の表示を確かめる。記号を自分で付けた注の扱いは範囲外として残している（利用者に確かめる）。著者名の段落の中の脚注・文末脚注の参照は、番号を出さない（著者名の要素には上付きの文字を置けない。0.23.1 までは DTD 検証が不合格になっていた）。手で書いた注と Word の注が両方ある原稿は、番号が重なることを要確認で知らせるだけで、Word の注の番号を手で書いた注の後ろから続けるかは利用者に確かめる |
 | 資料（付録）の見出し（0.24.0） | 修正計画の E（D3）で、「資料（授業プリント）」「【資料1】」「資料Ⅱ（ワークシート）」などの見出しを認識し、英文要旨の後ろの章・節・項見出しのスタイルの段落から資料を始めるようにした（決定事項 8(a)）。`RE_APPENDIX` に合う段落のうち、文の形のもの（「。」か「．」で終わる和文〈「（資料1）に示すように、…。」〉と、語・番号の後ろが英小文字の語で「.」などで終わる英文〈「(Appendix 1) lists ….」〉）は見出しにしない（点検で足した規則。`structure.appendix_sentence`。0.23.1 で見出しだった、括弧の中に「。」がある見出しや「Appendix 1 questionnaire」は見出しのまま。「資料1　授業プリント。」のように「。」で終わる見出しは文とみなす）。どちらの規則で始めた資料も、文とみなした段落も判断の一覧に記録する（文とみなした 2 つ目からの資料の見出しは前の資料につながり、要確認にはならないので、試験運用で 4 章の「資料の見出しにしなかった」の行が出たら確かめる）。英文要旨の中の和文と思われる段落は、移さずに要確認で知らせる（短い和文の行でも出るので、試験運用で出すぎないか確かめる）。引用文献の後ろに置いた資料（決定事項 8(b)）は、資料にせず要確認で知らせるだけにしている（本誌にその形の原稿があれば、資料として扱う規則〈修正計画の E の「扱うなら」〉に広げる） |
 | AI 依頼文の set_role（0.24.0） | 修正計画の E（N6・D3）で、set_role の可否を `ai_assist.set_role_problem` の 1 か所にまとめ、依頼文で必ず捨てられる set_role を勧めないようにした。資料の見出しの役割 `app_heading` と、資料の見出しへの `abstract`（英文要旨に戻す）・`p`（資料の中の段落にする。前に資料がなければ見出しのない資料。`abstract` で戻した後ろの、見出しでない段落への `p` は英文要旨のまま）も足した。どれも模擬回答でのみ確かめていて、実際の AI（少なくとも Claude）ではまだ試していない。試験運用で一度確かめる |
-| アップロード用 ZIP の中身 | 修正計画（`docs/FIX_PLAN.md`）の C で、ZIP に入れるものを今回の XML・今回指定した PDF・出力できた画像だけにし（要変換/ は出力フォルダの直下）、作った ZIP を読み直して確かめる（`package.zip_problems`。メッセージ ID は記事アップロードメッセージ一覧から。`docs/JSTAGE_NOTES.md`）ようにした。新しい形の ZIP（要変換/ や前の変換の残りが入らないもの）が J-STAGE で受け付けられることは、試験運用で一度確かめる。Colab の「変換結果」の ZIP（出力フォルダ全体）には、記事フォルダに残った前の変換の残りが入りうる（手順 6 で変換し直したとき。実害は小さい） |
+| アップロード用 ZIP の中身 | 修正計画（`docs/FIX_PLAN.md`）の C で、ZIP に入れるものを今回の XML・今回指定した PDF・出力できた画像だけにし（W1 からは、画像は作業する人が入れたもの。EMF/WMF を変換して置く `要変換/` はなくした）、作った ZIP を読み直して確かめる（`package.zip_problems`。メッセージ ID は記事アップロードメッセージ一覧から。`docs/JSTAGE_NOTES.md`）ようにした。新しい形の ZIP（前の変換の残りが入らないもの）が J-STAGE で受け付けられることは、試験運用で一度確かめる。Colab の「変換結果」の ZIP（出力フォルダ全体）には、記事フォルダに残った前の変換の残りが入りうる（手順 6 で変換し直したとき。実害は小さい） |
 | 要対応・要確認の知らせ（0.23.1） | 修正計画（`docs/FIX_PLAN.md`）の D で、知らせを `report.actions()` の 1 か所にまとめた。コマンドラインの終了コードの意味が変わった（`--meta` がない・画像が足りない・手動モードで回答をまだ指定していない・図の本体が見つからない、なども 1。指定したファイル・フォルダがない、`--images` の画像を読めない、は 2）。手動モードの最初の実行（依頼文を作る段階）も決定事項 5(c) のとおり 1 にした（README に「失敗ではない」と明記）。スクリプトから呼ぶ人に紛らわしければ、コマンドラインだけ 0 にするかを利用者に相談する。別の記事の PDF の疑い（段落の半分以上が見つからない）は、出版社の実際の PDF でまだ試していないので要確認にとどめている。照合に使わなかった PDF の文字の要確認は、実際の出版版 PDF ではほぼ毎回出る（投稿受付日の行など）ので、試験運用で多すぎないかを確かめる |
 | 読み取りの文字ポリシー（0.26.0） | 修正計画（`docs/FIX_PLAN.md`）の G で、段落記号の削除を承諾した状態として次の段落とつなぎ（D5）、文字スタイル・段落スタイル・既定の書式の隠し文字も隠し（U8）、表のセルの段落の中の改行の前に `<break/>` を補い（U3。題目・著者・所属・引用文献の改行は要確認で知らせる）、変更履歴で削除された文字のない表の行を読み飛ばす（N8）ようにした（`docs/DESIGN.md` の 4.1）。規則は LibreOffice で承諾・表示した結果と比べた暫定のもの（隠し文字は修正計画の規則のまま。LibreOffice と違う形は `docs/DESIGN.md` の 7 章）で、Word での確認を待っている: (1) `tests/fixtures/sample_reader.docx` を Word で開いて「すべての変更を反映」した後の段落のつながりとスタイル（特に、LibreOffice と違うコンテンツコントロール・カスタム XML の境目、段落記号の `w:moveFrom`、脚注の参照のある段落。書式の元の段落〈前の段落が空なら後ろ。画像だけの段落〉と番号の数え方）、(2) スタイルの隠し文字の表示（特に、修正計画の規則〈ECMA-376 の切り替え〉と LibreOffice の表示が違う 3 つの形: 偽を指定した派生の文字スタイルを隠す段落スタイルの段落で使ったラン〈本ツールは隠す。`sample_reader.docx` の節「スタイルの隠し文字」の「〔表示を指定した派生の文字スタイルでも隠れる文字〕」〉、既定の書式と段落スタイルの両方の `w:vanish`〈本ツールは打ち消し合って見える〉、`w:specVanish` だけのラン〈本ツールは隠す〉）、(3) 変更履歴で削除されたセル（`w:cellDel`）を承諾した後の表の形（LibreOffice は列ごと消す。本ツールはセルを出力して警告）、(4) 隠し文字の
 ランの中のテキストボックス（行内・浮動配置）の文字が Word で隠れるか（本ツールは隠さずに出力する。隠し文字の中の画像は出力しない。

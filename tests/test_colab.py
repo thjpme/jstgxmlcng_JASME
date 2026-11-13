@@ -5,10 +5,10 @@ from jasme_jats.colab import error_box, prompt_box
 
 
 def test_prompt_box_escapes_text_and_has_copy_button():
-    html = prompt_box('依頼文 <b>&"', ["img3.png"])
+    html = prompt_box('依頼文 <b>&"')
     assert "依頼文 &lt;b&gt;&amp;&quot;" in html          # 依頼文はエスケープして textarea に入れる
     assert "依頼文をコピー" in html and "jasmeCopy(" in html
-    assert "img3.png" in html and "手順 6" in html
+    assert "手順 6" in html and "添付" not in html           # docx の画像は AI に渡さない（修正計画 W1）
 
 
 def test_error_box_and_check_box():
@@ -26,7 +26,7 @@ def test_summary_box_and_report_details(journal, meta, tmp_path, monkeypatch):
     from conftest import FULL
     from jasme_jats.colab import report_details, summary_box
     from jasme_jats.pipeline import Options, convert
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "s", convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "s"))
     html = summary_box(res)
     assert "結果の要約" in html and "文字の不変性チェック: 合格" in html and "DTD 検証: 合格" in html
     assert "J-STAGE のアップロード時チェック: 問題なし" in html and "出版版 PDF との照合: PDF なし" in html
@@ -89,11 +89,15 @@ def test_missing_images_box(journal, meta, tmp_path):
     from conftest import FULL, TEMPLATE
     from jasme_jats.colab import missing_images_box
     from jasme_jats.pipeline import Options, convert
-    res = convert(TEMPLATE, meta, journal, Options(out_dir=tmp_path / "t", convert_metafiles=False))
+    from conftest import fill_images
+    # 図の画像は作業する人が入れる（修正計画 W1）: 残っていれば手順 images の青い枠、入れれば出さない
+    res = convert(TEMPLATE, meta, journal, Options(out_dir=tmp_path / "t"))
     html = missing_images_box(res)
-    assert "#dc2626" in html and "画像ファイルを用意できなかった図が 1 件あります" in html
-    assert "31_1_fig01.png: 図1\u3000三角形ABC" in html and "jasme_31_1.zip の中の jasme/31/1/31_1/Graphics/" in html
-    assert missing_images_box(convert(FULL, meta, journal, Options(out_dir=tmp_path / "f", convert_metafiles=False))) == ""
+    assert "#2563eb" in html and "#dc2626" not in html and "手順: 図の画像を入れてください（あと 1 枚／全部で 1 枚）" in html
+    assert "・fig01: 「図1\u3000三角形ABC」" in html and "手順 7「図の画像を入れる」で入れてください" in html
+    fill_images(res)
+    assert missing_images_box(res) == ""
+    assert missing_images_box(convert(FULL, meta, journal, Options(out_dir=tmp_path / "f"))) != ""
 
 
 def test_pdf_diff_box_shows_formula_and_insert_marks():
@@ -160,7 +164,7 @@ def test_result_boxes_follow_actions(journal, tmp_path, monkeypatch):
     from jasme_jats.pipeline import Options, convert
     meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "lpage": "12", "pub_date": "2026-03-31",
                                   "received": "2026-01-10", "accepted": "2025-11-20", "peer_review": "あり"})
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "j", convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "j"))
     html = result_boxes(res)
     assert "#dc2626" in html and "J-STAGE のアップロード時チェックで問題が 1 件あります（要対応）" in html
     assert "EMSGM106E" in html and "手順 3" in html
@@ -171,16 +175,14 @@ def test_result_boxes_follow_actions(journal, tmp_path, monkeypatch):
     html = result_boxes(res)
     assert "J-STAGE 指定の DTD による検証が不合格です（1 件。要対応）" in html and "Element body content" in html
     good = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり"})
-    res = convert(FULL, good, journal, Options(out_dir=tmp_path / "m", ai_mode="manual", ai_response="読めない回答",
-                                               convert_metafiles=False))
+    res = convert(FULL, good, journal, Options(out_dir=tmp_path / "m", ai_mode="manual", ai_response="読めない回答"))
     html = result_boxes(res)
     assert "貼り付けた回答を読み込めませんでした（AI による補完は反映されていません）" in html
     assert "AI の回答をまだ反映していません" not in html            # 回答を貼り付けた後は「回答待ち」ではない
     # API モード: 偽の呼び出しがエラーを返す
     monkeypatch.setattr(pipeline, "call_provider",
                         lambda *a, **k: AIOutcome(mode="api", model="claude-test", error="API の利用制限に達しました"))
-    res = convert(FULL, good, journal, Options(out_dir=tmp_path / "a", ai_mode="api", ai_api_key="k",
-                                               convert_metafiles=False))
+    res = convert(FULL, good, journal, Options(out_dir=tmp_path / "a", ai_mode="api", ai_api_key="k"))
     html = result_boxes(res)
     assert "AI による補完ができませんでした" in html and "API の利用制限に達しました" in html
     assert res.needs_action and "AI による補完ができませんでした（2 章）" in res.report_path.read_text(encoding="utf-8")
@@ -193,7 +195,9 @@ def test_result_boxes_before_answer_in_manual_mode(journal, meta, tmp_path):
 
     from jasme_jats.colab import result_boxes
     from jasme_jats.pipeline import Options, convert
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", convert_metafiles=False))
+    from conftest import fill_images
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual"))
+    fill_images(res)                                         # 図の画像の手順（必須）を済ませる
     assert result_boxes(res, skip=("ai_pending", "name_split")) == ""     # name_split は d11「研究次郎」（C064）
     assert result_boxes(res, level="要対応") == ""
     assert result_boxes(res, blocking=True) == ""           # 手順 8 は、回答待ちでは止めない
@@ -210,14 +214,14 @@ def test_result_boxes_show_textbox_notices(journal, meta, tmp_path):
 
     from jasme_jats.colab import result_boxes
     from jasme_jats.pipeline import Options, convert
-    res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "n", convert_metafiles=False))
+    res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "n"))
     html = result_boxes(res, level="要確認")
     assert "囲みか図の注記か決められなかったテキストボックスが 3 件あります（要確認）" in html
     assert "#d97706" in html and "#dc2626" not in html             # 要確認は黄色い枠
     assert ("手順 4 で AI による補完の方法を「API で自動実行」か「手動（チャットに貼り付け）」にして ▶ を押し、手順 5 から"
             "変換し直すと") in html and "位置を推定して置いた囲みが 1 件あります（要確認）" in html
     assert result_boxes(res, level="要対応") == ""
-    res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "m", ai_mode="manual", convert_metafiles=False))
+    res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "m", ai_mode="manual"))
     html = result_boxes(res)
     assert "手順 6 で AI の回答を貼り付けて ▶ を押すと、AI が囲みか注記かを判断します" in html
     assert "囲みか図の注記か決められなかったテキストボックス（3 章）は、AI の回答を反映するまで XML に出力していません。" in html
@@ -244,7 +248,7 @@ def test_step_words_cover_every_mark_in_report():
     assert used == set(report.STEP_NAMES)                 # 使っていない目印・表にない目印がない
     assert step_text(report.step("docx") + "から", "notebook") == "手順 2 から"     # 1ffed92 までの文と同じ（助詞の前の空白）
     assert step_text(report.step("pdf") + "で選んだ", "notebook") == "手順 2 で選んだ"
-    assert step_text(report.step("images") + "で、", "notebook") == "手順 7「足りない画像をアップロード」で、"
+    assert step_text(report.step("images") + "で、", "notebook") == "手順 7「図の画像を入れる」で、"
     assert step_text(report.step("docx") + "、", "notebook") == "手順 2、"
     assert step_text(report.step("docx") + "から", "app") == "「docx（論文の Word ファイル）」の欄から"
     assert step_text(report.step("docx") + "から", "cli") == "docx の指定から"
@@ -281,9 +285,9 @@ def test_no_mark_left_in_any_screen(journal, meta, tmp_path):
     from jasme_jats.colab import lost_images_box, missing_images_box, pdf_diff_box, result_boxes, step_text, unplaced_box
     from jasme_jats.pipeline import AIRequiredError, Options, convert
     from jasme_jats.report import actions
-    cases = [(docx, Options(out_dir=tmp_path / f"c{k}{mode}", ai_mode=mode, convert_metafiles=False))
+    cases = [(docx, Options(out_dir=tmp_path / f"c{k}{mode}", ai_mode=mode))
              for k, docx in enumerate([FULL, EDGE, FLOAT, PLACE, OUTSIDE, STRUCTURE, TABLEFIG]) for mode in ("none", "manual")]
-    cases += [(PDFCHECK, Options(out_dir=tmp_path / f"p{route}", ai_mode="none", convert_metafiles=False,
+    cases += [(PDFCHECK, Options(out_dir=tmp_path / f"p{route}", ai_mode="none",
                                  pdf_path=PDFCHECK_PDF, route=route)) for route in ("docx", "pdf")]
     seen = set()
     for docx, opts in cases:
@@ -313,7 +317,7 @@ def test_app_screen_words_in_boxes(journal, meta, tmp_path):
 
     from jasme_jats.colab import result_boxes
     from jasme_jats.pipeline import Options, convert
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual"))
     note = result_boxes(res, level="手順")
     page = result_boxes(res, level="手順", screen="app")
     assert "手順 5 の依頼文を AI" in note and "手順 6 に貼り付けて ▶ を押してください" in note
@@ -355,7 +359,7 @@ def test_ai_required_message_names_the_modes_of_each_screen(journal, meta, tmp_p
     from jasme_jats.colab import ai_required_box, no_ai_box
     from jasme_jats.pipeline import AIRequiredError, Options, convert
     with pytest.raises(AIRequiredError) as e:
-        convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "a", convert_metafiles=False))
+        convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "a"))
     msg = str(e.value)
     assert "AI による補完を「使わない」設定では変換できません。" in msg
     note = ai_required_box(msg)                                   # ノートブック（既定）
@@ -385,13 +389,13 @@ def test_notebook_sentences_equal_those_before_marks(journal, meta, tmp_path):
 
     from jasme_jats.colab import result_boxes
     from jasme_jats.pipeline import Options, convert
-    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "p", convert_metafiles=False, pdf_path=PDFCHECK_PDF,
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "p", pdf_path=PDFCHECK_PDF,
                                                    route="docx"))
     assert ("校正の直しを補うときは、手順 2 で「docx から作り、出版版 PDF で補う」を選んで変換し直すか、docx を直して"
             "手順 2 からやり直してください。") in result_boxes(res)
-    res = convert(OUTSIDE, meta, journal, Options(out_dir=tmp_path / "o", ai_mode="manual", convert_metafiles=False))
+    res = convert(OUTSIDE, meta, journal, Options(out_dir=tmp_path / "o", ai_mode="manual"))
     assert "Word で直した docx を手順 2 でアップロードし直し、そこから順にやり直してください" in result_boxes(res)
-    res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "s", ai_mode="manual", convert_metafiles=False))
+    res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "s", ai_mode="manual"))
     assert "手順 6 で AI の回答を貼り付けて ▶ を押すと、AI が囲みか注記かを判断します" in result_boxes(res)
 
 
@@ -438,7 +442,7 @@ def test_report_details_shows_angle_brackets(journal, meta, tmp_path):
                 mf.table([[mf.cell(mf.para(S["body"], "表の", mf.br(), "セル"))]])]
     path = tmp_path / "x.docx"
     mf.make_article(path, "t", parts, refs=lambda b: [mf.para(S["ref"], "x<y>z", mf.br(), "続き")])
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     rep = res.report_path.read_text(encoding="utf-8")
     assert "x<y>z" in rep                                               # .md の文字は docx のまま
     text, _ = _html_text_and_tags(report_details(rep))
@@ -450,7 +454,7 @@ def test_report_details_shows_angle_brackets(journal, meta, tmp_path):
     for docx in ALL_DOCS + [FLOAT, FLOAT_TEXT, PLACE, OUTSIDE]:
         for mode in ("none", "manual"):
             try:
-                r = convert(docx, meta, journal, Options(out_dir=tmp_path / f"r{checked}", ai_mode=mode, convert_metafiles=False))
+                r = convert(docx, meta, journal, Options(out_dir=tmp_path / f"r{checked}", ai_mode=mode))
             except AIRequiredError:
                 continue
             checked += 1
@@ -505,8 +509,8 @@ def test_every_box_is_light_with_important_colors(journal, meta, tmp_path):
                                   structure_conflict_box, summary_box)
     from jasme_jats.pipeline import Options, convert
     from conftest import FULL
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "s", convert_metafiles=False))
-    boxes = [error_box("見出し", "詳細"), check_box("見出し", "詳細"), prompt_box("依頼文", ["a.png"]), no_ai_box(),
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "s"))
+    boxes = [error_box("見出し", "詳細"), check_box("見出し", "詳細"), prompt_box("依頼文"), no_ai_box(),
              ai_required_box("x"), structure_conflict_box("x"), next_article_box("a.docx"), summary_box(res),
              report_details("# 見出し\n\n本文")]
     for h in boxes:

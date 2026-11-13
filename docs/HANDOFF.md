@@ -22,7 +22,7 @@
 | GitHub のアカウント | ソースの取得と変更の反映 |
 | Claude のアカウント（Claude Code を使える有料プラン。対象のプランは Anthropic の案内で確認） | Claude Code での開発 |
 | Google のアカウント | Colab のノートブックでの動作確認 |
-| （手元のパソコンで開発するときだけ）Python 3.10 以上、Git、LibreOffice（任意） | 手元での実行とテスト |
+| （手元のパソコンで開発するときだけ）Python 3.10 以上、Git、LibreOffice（任意。照合用の試験 PDF を作り直すときだけ） | 手元での実行とテスト |
 
 ## 2. リポジトリの権限を引き継ぐ
 
@@ -111,7 +111,7 @@ GitHub は譲渡の後しばらく古い URL から転送しますが、転送�
      依存ライブラリを入れるコマンドを書いておきます（ライブラリの一覧は `pyproject.toml` の `dependencies` と `dev`）。
    - **秘密情報**: 実際の API（Claude・ChatGPT・Gemini）を呼んで試すときだけ、環境の設定に `ANTHROPIC_API_KEY` などを登録します。
      **API キーをチャットに貼り付けたり、リポジトリに書いたりしないでください。** テスト（`python -m pytest`）は実際の API を呼びません。
-   - LibreOffice（EMF/WMF の図の変換）は、環境に入っていなくてもテストは通ります（該当するテストは「変換失敗」を期待して通る）。
+   - LibreOffice は要りません（図・表の画像は docx から書き出さないので、EMF/WMF の変換をしません）。
 3. **セッションを始める**: リポジトリに `thjpme/jstgxmlcng_JASME`（または引き継いだ後のリポジトリ）を選び、最初の依頼を書きます（4.）。
    Claude Code は、作業用のブランチ（`claude/…`）で変更し、頼めば `main` に反映します。
 
@@ -128,7 +128,6 @@ GitHub は譲渡の後しばらく古い URL から転送しますが、転送�
    python -m pytest -q
    ```
 
-   EMF/WMF の図の変換も試すなら LibreOffice を入れます（`soffice` が使えれば自動で使われます）。
 3. そのフォルダで `claude` を実行し、最初の依頼を書きます（4.）。
 
 ## 4. 最初の依頼の例

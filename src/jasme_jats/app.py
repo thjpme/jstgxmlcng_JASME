@@ -3,8 +3,8 @@
 2 層に分ける。
   - AppState: 入力と結果を持ち、「変換を押せるか」「要対応が残っているか」「回答待ちか」「足りない画像」などを決める。
     Gradio に依存しない純粋な Python。変換は pipeline.convert() を呼ぶだけで、docx の文字には触れない。
-  - build_app(state, io): gr.Blocks を組み立て、ボタンの処理を AppState につなぐ。Colab に依存する操作（シークレットの読み出し・
-    LibreOffice の待ち合わせ）は io に切り出す（テストでは偽物を渡す）。
+  - build_app(state, io): gr.Blocks を組み立て、ボタンの処理を AppState につなぐ。Colab に依存する操作（シークレットの読み出し）は
+    io に切り出す（テストでは偽物を渡す）。
 
 知らせは report.actions() から colab.result_boxes(screen="app") で出す（文の中の画面の操作は、この画面の欄の名前に置き換わる）。この画面に個別の表示は足さない（docs/DEVELOPMENT.md の原則 8）。
 未公開の原稿を Gradio の中継サーバーに通さないため、launch() の share は必ず False。
@@ -24,14 +24,17 @@ from typing import Optional
 from . import __version__
 from . import report as rp
 from .ai_assist import API_KEY_NAMES, DEFAULT_MODEL
-from .colab import (ANSWER_LABEL, APPLY_LABEL, CONVERT_LABEL, ai_required_box, error_box, no_ai_box, report_details, result_boxes,
-                    step_text, structure_conflict_box, summary_box)
+from .colab import (ANSWER_LABEL, APPLY_LABEL, CONVERT_LABEL, ai_required_box, check_box, error_box, no_ai_box, report_details,
+                    result_boxes, step_text, structure_conflict_box, summary_box)
 from .config import ArticleMeta, JournalConfig, keyword_language_mismatch, keyword_problem
-from .pipeline import AIRequiredError, Options, StructureConflictError, add_images, convert
-from .report import actions, ai_pending, blocking, images_to_prepare
+from .images import match_names
+from .imagelist import check_frame
+from .pipeline import AIRequiredError, Options, StructureConflictError, add_images, convert, kept_images, reapply_images
+from .report import actions, ai_pending, blocking, image_rows, images_action
 
 DOCS = "https://github.com/thjpme/jstgxmlcng_JASME/blob/main/docs/USAGE.md"
-MAX_IMAGE_SLOTS = 30          # 足りない画像の欄の数（最初から作って、足りない図の数だけ見せる）。これより多い分は「画像を入れる」の後に出る
+MAX_IMAGE_SLOTS = 30          # 図ごとの行（ファイル選択）の数。最初から作って、置き場所の数だけ見せる。これより多い分は「まとめて入れる」で入れる
+FIXED_VIEWS = 10              # 画面の更新（build_app の views）の先頭の固定の部品の数。その後ろに、図ごとのファイル選択、「入れない」のチェックが MAX_IMAGE_SLOTS 個ずつ続く
 
 # 画面の入力欄。名前は AppState.inputs の鍵で、画面の部品の並びもこの順（INPUT_NAMES）
 ROUTES = [("docx から作り、出版版 PDF で補う", "pdf"), ("docx から作る", "docx")]
@@ -115,7 +118,7 @@ def type_choices() -> list:
 
 # ---------------------------------------------------------------------------- Colab に依存する操作
 class IO:
-    """既定の io: API キーを環境変数から読む。LibreOffice は待たない。"""
+    """既定の io: API キーを環境変数から読む。"""
 
     def read_secret(self, names) -> "str | None":
         for name in names:
@@ -124,12 +127,9 @@ class IO:
                 return value
         return None
 
-    def libreoffice_ready(self) -> None:
-        """LibreOffice のインストールが終わるのを待つ（既定では何もしない）。"""
-
 
 class ColabIO(IO):
-    """Colab 用の io: シークレット（google.colab.userdata）を読む。LibreOffice は準備のセルが裏で入れているので終わるのを待つ。"""
+    """Colab 用の io: シークレット（google.colab.userdata）を読む。"""
 
     def read_secret(self, names) -> "str | None":
         from google.colab import userdata      # Colab でないときは使わないので、ここで import する
@@ -141,12 +141,6 @@ class ColabIO(IO):
             if value:
                 return value
         return None
-
-    def libreoffice_ready(self) -> None:
-        import __main__
-        proc = getattr(__main__, "LO_PROC", None)      # 準備のセルが裏で起動したインストール（tools/make_notebook.py）
-        if proc is not None and proc.poll() is None:
-            proc.wait()
 
 
 # ---------------------------------------------------------------------------- 状態
@@ -163,7 +157,7 @@ class AppState:
         self.inputs = dict(DEFAULTS)
         self.res = None
         self.notes: list = []                  # 入力を確かめたときの知らせ（全角の数字を半角にしたなど）
-        self.user_images: dict = {}            # 足りない画像: 出力ファイル名 → (元のファイル名, 中身)
+        self.kept: dict = {}                   # 変換し直す前に覚えた、入れた画像（pipeline.kept_images。変換の後に reapply_images で入れ直す）
         self.run: Optional[RunInputs] = None   # 変換したときの入力の写し（入力が写しと違えば、結果を残したまま断る）
         self.paper_changed = False             # 直前の convert() で docx の中身が前回と違った（on_convert が回答の欄を空にするか決める）
         self._last_docx = None                 # 最後に convert() が手順 3 まで進んだときの docx の digest（変換が後で失敗しても残す）
@@ -263,10 +257,10 @@ class AppState:
     def stale_text(self, changed) -> str:
         names = "、".join(changed)
         if any(n in DOCXISH for n in changed):
-            inner = ("入れた画像は消えるので、変換の後にもう一度入れてください。手動モードでは新しい依頼文が出るので、"
+            inner = ("入れた画像は、同じ図（番号とキャプションが同じ図）には変換の後に引き継がれます。手動モードでは新しい依頼文が出るので、"
                      "AI に渡して回答を貼り替えます")
         else:
-            inner = ("入れた画像は消えるので、変換の後にもう一度入れてください。貼り付けた回答は欄に残るので、変換の後にもう一度"
+            inner = ("入れた画像は、同じ図には変換の後に引き継がれます。貼り付けた回答は欄に残るので、変換の後にもう一度"
                      + rp.step("apply_button") + "を押します")
         text = ("入力が前回の変換から変わっています（変わった項目: " + names + "）。今の結果は、変える前の入力で作ったものです。"
                 "変えた入力で作るには、" + rp.step("convert_again") + "してください（" + inner + "）。"
@@ -324,8 +318,8 @@ class AppState:
         except StructureConflictError as e:
             raise InputError(step_text(str(e), "app"), structure_conflict_box(str(e), "app"))
         step(0.9, "画像を入れ直しています…")
-        if self.user_images:
-            add_images(res, self.user_images, skip_unneeded=True)     # 変換をやり直したときに、受け取った画像を入れ直す
+        if self.kept:
+            reapply_images(res, self.kept)     # 変換をやり直したときに、前に入れた画像を、同じ図だと確かめられたものだけ入れ直す
         self.res = res
         return res
 
@@ -353,16 +347,15 @@ class AppState:
                                            + rp.step("convert_again") + "してください。"))
         self.paper_changed = self._last_docx is not None and compared["docx"] != self._last_docx
         self._last_docx = compared["docx"]
+        if self.res is not None:
+            self.kept = kept_images(self.res)    # 前の変換で入れた画像を覚える（変換の後に reapply_images で同じ図に入れ直す）
         self.res = None
-        self.user_images = {}                  # 前の変換で受け取った画像は持ち越さない（入力を変えずに回答を反映し直すときは apply_answer が入れ直す）
         self.run = None
         local_docx, local_pdf = self._copy_inputs()
         f = self.inputs
         self.run = RunInputs(compared=compared, docx=local_docx, pdf=local_pdf, route=str(f["route"]),
                              split_labels=bool(f["split_labels"]), ai_mode=f["ai_mode"], model=_model_value(f["model"]),
                              meta=meta, journal=journal, docx_name=Path(f["docx"]).name, api_key=api_key)
-        step(0.05, "LibreOffice を準備中…")
-        io.libreoffice_ready()
         step(0.2, "変換中…（数分かかることがあります）")
         res = self._run(self.run.ai_mode, None, progress)
         step(1.0, "完了")
@@ -383,7 +376,7 @@ class AppState:
 
     @property
     def answer_box_open(self) -> bool:
-        """手動の欄（依頼文・添付画像・回答の欄〈ANSWER_LABEL〉・「反映」）を見せるか。
+        """手動の欄（依頼文・回答の欄〈ANSWER_LABEL〉・「反映」）を見せるか。
 
         AI の回答をまだ反映していないとき（waiting_for_answer）に加えて、反映した後も、回答を読めない（ai_error）・途中で切れた
         （partial）・図表の位置が決まらない（forced）・AI もリンクを付けなかった図・表の参照がある（float_ref）・囲みか注記か決められないテキストボックスが残る（textbox_undecided）・英文要旨が見つからない（abstract_missing）の枠が出ているあいだは、
@@ -399,11 +392,6 @@ class AppState:
         if self.res is None or not self.res.prompt_path:
             return ""
         return self.res.prompt_path.read_text(encoding="utf-8")
-
-    def attachments(self) -> list:
-        """手動モードで依頼文と一緒に AI に渡す画像（AI添付画像/ の中）。"""
-        folder = self.out_dir / "AI添付画像"
-        return sorted(str(p) for p in folder.iterdir()) if folder.exists() else []
 
     def apply_answer(self, text: str, io: "IO | None" = None, progress=None):
         """AI の回答を付けて変換し直す。"""
@@ -421,51 +409,91 @@ class AppState:
                                        + rp.step("prompt") + "を AI に渡し、返ってきた回答に貼り替えてから" + rp.step("apply_button")
                                        + "を押してください。"))
         (progress or (lambda fraction, desc="": None))(0.2, "回答を反映して変換し直しています…")
+        self.kept = kept_images(self.res)      # _run は出力フォルダを消すので、入れた画像は先に覚える
         res = self._run("manual", text)
         self._last_answer = (prompt_digest, self.run.docx_name, text.strip())
         return res
 
-    # ---- 足りない画像
+    # ---- 図の画像（修正計画 W1 の 4.5）。残りの数・図の一覧の文は report.images_action、行は report.image_rows から作る。
+    # ここに書くのは、行のラベルと操作の案内だけ
+    def image_rows(self) -> list:
+        """画像の欄に出す行（report.image_rows のうち任意の置き場所を除いたもの。docx の順）。"""
+        if self.res is None:
+            return []
+        return [row for row in image_rows(self.res) if row.kind != "optional"]
+
     def missing_images(self) -> list:
-        """画像を用意する必要がある図: [(出力ファイル名, 図のキャプション, 理由)]。"""
-        return images_to_prepare(self.res) if self.res is not None else []
+        """まだ画像を入れていない置き場所の行（report.ImageRow の状態 missing）。"""
+        return [row for row in self.image_rows() if row.status == "missing"]
 
     def image_slots(self) -> list:
-        """画面に欄を出す図: missing_images() の先頭から MAX_IMAGE_SLOTS 件まで。"""
-        return self.missing_images()[:MAX_IMAGE_SLOTS]
+        """画面に行を出す置き場所: image_rows() の先頭から MAX_IMAGE_SLOTS 件まで。"""
+        return self.image_rows()[:MAX_IMAGE_SLOTS]
 
     @staticmethod
-    def slot_label(name: str, caption: str) -> str:
-        """欄のラベル: 「図のキャプション（出力ファイル名）」。キャプションがなければ出力ファイル名だけ。"""
-        return f"{caption}（{name}）" if caption else name
+    def slot_label(row) -> str:
+        """行のラベル: 「{キャプションの先頭 30 字}（{幹}）— {未／入れた: 元のファイル名／入れない}」。キャプションのない画像は場所を添える。"""
+        cap = row.caption.strip()
+        head = (cap[:30] + ("…" if len(cap) > 30 else "")) if cap and row.kind != "nocap" else \
+            "キャプションのない画像" + (f"（{row.where[:30]}）" if row.where else "")
+        state = {"missing": "未", "skipped": "入れない"}.get(row.status) or ("入れた: " + (row.image.source_name if row.image is not None else row.name))
+        return f"{head}（{row.key}）— {state}"
+
+    def images_visible(self) -> bool:
+        """「図の画像」の欄を出すか: 置き場所があるとき、または持ち越しの知らせがあるとき。"""
+        if self.res is None:
+            return False
+        act = images_action(self.res)
+        return bool(self.image_rows() or (act is not None and act.box_detail))
 
     def images_markdown(self) -> str:
-        rows = self.missing_images()
-        if not rows:
+        """「図の画像」の欄の見出しと説明: 見出しの進み具合と、残っているときの本文は手順 images の Action（progress・box_detail）。"""
+        if self.res is None:
             return ""
-        lines = [f"次の図の画像が必要です（{len(rows)} 件）。図ごとにファイルを選んで「画像を入れる」を押してください。"
-                 "ファイル名は何でもかまいません。一部の図だけ入れてもよく、残りの図の欄は残ります。"]
-        if len(rows) > MAX_IMAGE_SLOTS:
-            lines.append(f"一度に出す欄は {MAX_IMAGE_SLOTS} 件までです。上の {MAX_IMAGE_SLOTS} 件を入れると、続きの欄が出ます。")
-        lines += [f"{i}. {self.slot_label(name, cap)}" for i, (name, cap, _why) in enumerate(rows, 1)]
-        return "\n".join(lines)
+        act = images_action(self.res)
+        lines = ["### 図の画像" + (f"（{act.progress}）" if act is not None else "")]
+        if act is not None and act.box_detail:
+            lines.append(_app_text(act.box_detail))
+        if self.image_rows():
+            lines.append("下の「まとめて入れる」に、fig03.png・図3.png のような名前の画像（複数選べます）を選ぶと、名前で図に合わせます。"
+                         "名前で合わない画像は、図ごとの行で選びます。選んだら「画像を入れる」を押してください。"
+                         "キャプションのない画像を入れないときは、その行の「入れない」にチェックを入れます。")
+        if len(self.image_rows()) > MAX_IMAGE_SLOTS:
+            lines.append(f"図ごとの行は {MAX_IMAGE_SLOTS} 個までです。続きの図の画像は「まとめて入れる」で入れてください。")
+        return "\n\n".join(lines)
 
-    def add_images(self, mapping: dict) -> list:
-        """選んだ画像を、図ごとに入れる。mapping: 出力ファイル名 → ファイルのパス。戻り値: 入れた出力ファイル名。"""
+    def check_html(self) -> str:
+        """図の確かめの一覧（画像を埋め込んだ HTML。画像の要る図・表がなければ空文字）。"""
+        return check_frame(self.res) if self.res is not None else ""
+
+    def match_images(self, paths) -> tuple:
+        """「まとめて入れる」で選んだファイルを、名前で置き場所に合わせる（images.match_names）。
+        戻り値: ({幹: パス}, 合わなかったファイル名の一覧, 同じ幹に合った複数のファイル [(幹, [ファイル名, …])])。"""
+        if self.res is None or not paths:
+            return {}, [], []
+        by_name = {}
+        for p in paths:
+            by_name.setdefault(Path(p).name, Path(p))
+        found, unmatched, clashes = match_names(list(by_name), self.image_rows(), self.res.meta.article_id(self.res.journal))
+        return {key: by_name[name] for key, name in found.items()}, unmatched, clashes
+
+    def add_images(self, mapping: dict, skip=None) -> list:
+        """選んだ画像を、図ごとに入れる。mapping: 画像の置き場所の幹 → ファイルのパス。skip: 「入れない」にするキャプションのない画像の幹。
+        戻り値: 入れた画像の幹。"""
         if self.res is None:
             raise InputError("先に変換してください。")
         changed = self.changed_inputs()
         if changed:
             raise InputError(self.stale_text(changed))
         chosen = {name: Path(p) for name, p in (mapping or {}).items() if p}
-        if not chosen:
+        skip = list(skip or [])
+        if not chosen and not skip:
             raise InputError("画像が選ばれていません。")
         supplied = {name: (p.name, p.read_bytes()) for name, p in chosen.items()}
         try:
-            added = add_images(self.res, supplied)
+            added = add_images(self.res, supplied, skip=skip or None)
         except ValueError as e:
             raise InputError(str(e))
-        self.user_images.update(supplied)
         return added
 
     # ---- 想定外のエラー
@@ -485,8 +513,7 @@ class AppState:
                            + rp.step("apply_button") + "）は今は隠れています。" + rp.step("convert_again") + "すと、AI の回答を反映する前の結果と"
                            "手動の欄が戻り、貼り付けた回答も" + rp.step("answer_field") + "に残っています。欄が戻ったら、念のため回答を別の場所にも"
                            "保存してください。同じ例外で止まるときは、入力は変えずに、開発者に知らせてください。"),
-        "images": _app_text("入れた画像と変換の結果は、この画面に残っています。入力は変えず、" + rp.step("convert_again") + "さずに（押すと、"
-                            "入れた画像が消えます）、開発者に知らせてください。"),
+        "images": "入れた画像と変換の結果は、この画面に残っています。入力は変えず、開発者に知らせてください。",
         "download": "変換の結果は、この画面に残っています。もう一度ダウンロードの操作をしてかまいません。同じ例外で止まるときは、"
                     "入力は変えずに、開発者に知らせてください。"}
 
@@ -541,7 +568,8 @@ class AppState:
             return ""
         res = self.res
         parts = [no_ai_box("app")] if self.run is not None and self.run.ai_mode == "none" else []
-        parts.append(result_boxes(res, skip=("ai_pending",) if self.waiting_for_answer else (), screen="app"))
+        # 手順 images は「図の画像」の欄（images_markdown）に出すので、ここでは重ねて出さない
+        parts.append(result_boxes(res, skip=("images",) + (("ai_pending",) if self.waiting_for_answer else ()), screen="app"))
         parts.append(summary_box(res))
         parts.append(report_details(res.report_path.read_text(encoding="utf-8")))
         return "".join(parts)
@@ -566,7 +594,7 @@ class AppState:
             self.inputs[name] = DEFAULTS[name]
         self.res = None
         self.notes = []
-        self.user_images = {}
+        self.kept = {}
         self.run = None
         self.paper_changed = False
         self._last_docx = None
@@ -647,14 +675,18 @@ def build_app(state: AppState, io: "IO | None" = None):
         with gr.Column(visible=False) as manual_col:
             prompt = gr.Textbox(label="依頼文（新しいチャットに貼り付けて送る）", lines=8, max_lines=8, interactive=False,
                                 buttons=["copy"])
-            attach = gr.File(label="依頼文と一緒に添付する画像", file_count="multiple", interactive=False)
             answer = gr.Textbox(label=ANSWER_LABEL, lines=6)
             apply_btn = gr.Button(APPLY_LABEL)
         with gr.Column(visible=False) as images_col:
             images_md = gr.Markdown()
-            image_files = [gr.File(label=f"足りない図の画像 {k}", file_count="single", visible=False)
-                           for k in range(1, MAX_IMAGE_SLOTS + 1)]        # 図ごとの欄。view() が見せる数とラベルを決める
+            bulk_files = gr.File(label="まとめて入れる（複数選べます。fig03.png・図3.png のような名前で図に合わせます）", file_count="multiple",
+                                 file_types=["image"])
+            image_files = [gr.File(label=f"図の画像 {k}", file_count="single", file_types=["image"], visible=False)
+                           for k in range(1, MAX_IMAGE_SLOTS + 1)]        # 図ごとの行。view() が見せる数とラベルを決める
+            skip_boxes = [gr.Checkbox(label="入れない（出版版 PDF で見て、ほかの図に写っている・飾りだけ、のとき）", visible=False)
+                          for _ in range(MAX_IMAGE_SLOTS)]               # キャプションのない画像の行だけ見せる
             images_btn = gr.Button("画像を入れる")
+            check_view = gr.HTML()                                        # 図の確かめ（取り違えの確かめの一覧）
         with gr.Row():
             accept = gr.Checkbox(label="このままダウンロード（要対応か、残っている手順があります）", visible=False)
             download_btn = gr.Button("結果をダウンロード")
@@ -665,27 +697,30 @@ def build_app(state: AppState, io: "IO | None" = None):
                   keywords_en, pub_date, epub_date, received, accepted, corresp, doi, subject_other, subject_other_en,
                   ai_mode, model, split_labels]
         assert len(inputs) == len(INPUT_NAMES)
-        views = [message, result, manual_col, prompt, attach, images_col, images_md, accept, download_html] + image_files
-        assert len(views) == 9 + MAX_IMAGE_SLOTS
+        views = [message, result, manual_col, prompt, images_col, images_md, accept, download_html, bulk_files,
+                 check_view] + image_files + skip_boxes
+        assert len(views) == FIXED_VIEWS + 2 * MAX_IMAGE_SLOTS
 
         def sync(values):
             state.set_inputs(**dict(zip(INPUT_NAMES, values)))
 
-        def view(error: "InputError | None" = None, download: str = ""):
-            """結果に応じた画面の更新（views の順）。"""
+        def view(error: "InputError | None" = None, download: str = "", notice: str = ""):
+            """結果に応じた画面の更新（views の順）。notice は、操作の結果の知らせの HTML（message に error と並べて出す）。"""
             manual = state.answer_box_open
             slots = state.image_slots()
-            return [message_html(error) if error else "",
+            hide = MAX_IMAGE_SLOTS - len(slots)
+            return [(message_html(error) if error else "") + notice,
                     state.result_html(),
                     gr.update(visible=manual),
                     state.prompt_text() if manual else "",
-                    state.attachments() if manual else None,
-                    gr.update(visible=bool(state.missing_images())),
+                    gr.update(visible=state.images_visible()),
                     state.images_markdown(),
                     gr.update(visible=state.needs_action, value=False),
-                    download] + [gr.update(visible=True, label=state.slot_label(name, cap), value=None)
-                                 for name, cap, _why in slots] \
-                + [gr.update(visible=False, value=None)] * (MAX_IMAGE_SLOTS - len(slots))
+                    download,
+                    None,
+                    state.check_html()] \
+                + [gr.update(visible=True, label=state.slot_label(row), value=None) for row in slots] + [gr.update(visible=False, value=None)] * hide \
+                + [gr.update(visible=row.kind == "nocap", value=row.status == "skipped") for row in slots] + [gr.update(visible=False, value=False)] * hide
 
         def on_change(*values):
             sync(values)
@@ -714,25 +749,38 @@ def build_app(state: AppState, io: "IO | None" = None):
                 return view(state.crash(e, "apply"))
             return view()
 
-        def on_images(*paths):
-            names = [name for name, _cap, _why in state.image_slots()]       # 欄の並びは、直前の view() で出したもの
+        def on_images(bulk, *rest):
+            rows = state.image_slots()                           # 行の並びは、直前の view() で出したもの
+            paths, checks = rest[:MAX_IMAGE_SLOTS], rest[MAX_IMAGE_SLOTS:]
+            mapping = {row.key: p for row, p in zip(rows, paths)}
+            skip = [row.key for row, c in zip(rows, checks) if c and row.kind == "nocap" and row.status != "skipped"]
+            notes = []
             try:
-                state.add_images(dict(zip(names, paths)))
+                matched, unmatched, clashes = state.match_images(bulk or [])
+                for key, path in matched.items():
+                    if not mapping.get(key):                     # 行で選んだ画像があれば、そちらを使う
+                        mapping[key] = path
+                if unmatched:
+                    notes.append("名前の合う図がなかったファイル: " + "、".join(unmatched)
+                                 + "（fig03.png・図3.png・29_55_fig03.png のような名前にするか、図ごとの行で選んでください。"
+                                 "ほかの記事の識別子が付いた名前は入れません）")
+                notes += [f"同じ図（{key}）に合うファイルが複数あるので、どれも入れていません: " + "、".join(names) for key, names in clashes]
+                state.add_images(mapping, skip)
             except InputError as e:
-                return view(e)
+                return view(e, notice=check_box("画像を入れられなかったファイル", "\n".join(notes)) if notes else "")
             except Exception as e:
                 return view(state.crash(e, "images"))
-            return view()
+            return view(notice=check_box("画像を入れられなかったファイル", "\n".join(notes)) if notes else "")
 
         def on_download(accept_todo):
             out = [gr.update()] * len(views)               # 結果などはそのまま（message と download_html だけ変える）
             try:
                 path, note = state.download(accept_todo)
             except Exception as e:                         # ZIP を作れなかった（出力フォルダが消えているなど）
-                out[0], out[8] = state.crash(e, "download").html, ""
+                out[0], out[7] = state.crash(e, "download").html, ""
                 return out
             out[0] = error_box("ダウンロードの前に", note) if note else ""
-            out[8] = download_button_html(path) if path else ""
+            out[7] = download_button_html(path) if path else ""
             return out
 
         def on_next():
@@ -743,7 +791,7 @@ def build_app(state: AppState, io: "IO | None" = None):
             comp.change(on_change, inputs, [go, ready], api_name=False)
         go.click(on_convert, inputs, views + [answer, ready])
         apply_btn.click(on_apply, [answer], views)
-        images_btn.click(on_images, image_files, views)
+        images_btn.click(on_images, [bulk_files] + image_files + skip_boxes, views)
         download_btn.click(on_download, [accept], views)
         next_btn.click(on_next, None, inputs + views + [answer])
     return demo

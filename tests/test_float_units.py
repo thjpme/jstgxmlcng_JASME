@@ -23,8 +23,7 @@ def run(tmp_path, meta, journal, variant, placements=None, name="out"):
         mf.make_float_figs(path, variant)
     resp = None if placements is None else json.dumps({"placements": placements, "operations": [], "notes": []},
                                                       ensure_ascii=False)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / name, ai_mode="manual", ai_response=resp,
-                                               convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / name, ai_mode="manual", ai_response=resp))
     fid = res.fidelity
     assert fid.ok and fid.final_ok and res.dtd_valid and res.jstage_issues == [], (fid.missing, fid.conflicts)
     assert res.lost_images == []
@@ -225,8 +224,7 @@ def test_placement_after_paragraph_that_is_no_longer_body_is_rejected(journal, m
           "mathml": "", "surname": "", "given": "", "reason": "試験", "confidence": "低"}
     resp = json.dumps({"placements": [{"float": "s1", "after": after, "reason": "試験", "confidence": "中"}],
                        "operations": [op], "notes": []}, ensure_ascii=False)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", ai_response=resp,
-                                               convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", ai_response=resp))
     assert res.fidelity.ok and res.fidelity.final_ok
     assert after not in res.plan.body_seq and res.plan.unplaced_floats == ["s1"]
     [why] = [w for op_, w in res.ai.rejected if op_["op"] == "place_float"]
@@ -241,7 +239,7 @@ def test_group_near_figure_caption_goes_into_the_figure(journal, meta, tmp_path,
     図形に入れない（AI がなくても変換できる）。グループの中の文字は図の画像に写るとみなして除外する。グループ図形だけの空の
     段落も、キャプションなしの図を別に作らない。"""
     res = convert(_make(tmp_path, variant), meta, journal,
-                  Options(out_dir=tmp_path / "none", convert_metafiles=False))
+                  Options(out_dir=tmp_path / "none"))
     fid = res.fidelity
     assert fid.ok and fid.final_ok and res.dtd_valid and res.jstage_issues == [] and res.lost_images == []
     plan = res.plan
@@ -285,7 +283,7 @@ def test_group_four_elements_before_caption_stays_unplaced(journal, meta, tmp_pa
     path = _make(tmp_path, "near_group4_down")
     from jasme_jats.pipeline import AIRequiredError
     with pytest.raises(AIRequiredError):
-        convert(path, meta, journal, Options(out_dir=tmp_path / "none", convert_metafiles=False))
+        convert(path, meta, journal, Options(out_dir=tmp_path / "none"))
     res = run(tmp_path, meta, journal, "near_group4_down")
     plan = res.plan
     assert plan.floats["s1"].mode == "unplaced" and plan.unplaced_floats == ["s1"]

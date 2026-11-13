@@ -1761,6 +1761,9 @@ def float_figs_parts(b: Builder, variant):
     two_figs_above: テキストボックスに、図1・画像だけの段落・図2・画像だけの段落（図キャプションを画像の上に置く図形）。
     nocap_source: キャプションのないグループ図形（画像 1 枚と、文字「点Ｐ」・「資料：…」・引用のある出典の注記のテキストボックス。
     data24 の形）。nocap_label: 同じ形で、「資料：…」が図形の先頭にあり、後ろに別のテキストボックスのラベルの文字が続く。
+    two_figs_text: two_figs の後ろに、図の画像に写る文字「線分ＡＢの長さ」（修正計画 W1 の 4.2。図形ごとの行）。
+    drawn: 文字の図形（長方形のテキストボックス）だけのグループ図形で、中に文字「ア」「イ」と図キャプション「図1」（Word の図形で
+    描いた図。data10・data25 の形。グループは飾りの textgroup）。drawn_free: 同じ形で図キャプションのないもの（飾りの一覧に入る）。
     """
     kind, down = variant.replace("_down", ""), variant.endswith("_down")
     cm = B3_CM
@@ -1794,6 +1797,11 @@ def float_figs_parts(b: Builder, variant):
         "nocap_group": float_group([(im[0], 1440000, 960000)], [], [para(S["body"], "点Ｐ")], 1001, 8 * cm, 4 * cm, **pos),
         "nocap_textbox": tb(para(S["body"], "図形の中の説明の文である。") + bare("図形の中の表")
                             + pic(0, 1002)),
+        "two_figs_text": tb(pic(0, 1002) + para(S["fig_cap"], "図1　一つ目の図") + pic(1, 1003)
+                            + para(S["fig_cap"], "図2　二つ目の図") + para(S["body"], "線分ＡＢの長さ")),
+        "drawn": float_group([], [], [para(S["body"], "ア"), para(S["body"], "イ"), para(S["fig_cap"], "図1　図形で描いた図")],
+                             1001, 12 * cm, 6 * cm, **pos),
+        "drawn_free": float_group([], [], [para(S["body"], "ア"), para(S["body"], "イ")], 1001, 12 * cm, 6 * cm, **pos),
         "two_figs_above": tb(para(S["fig_cap"], "図1　上のキャプションの図") + pic(0, 1002)
                              + para(S["fig_cap"], "図2　二つ目の上のキャプションの図") + pic(1, 1003)),
         "nocap_source": float_group([(im[0], 1440000, 960000)], [],
@@ -1924,6 +1932,35 @@ def make_app_figures(path, variant):
     """資料の図キャプションの原稿（variant は app_figures_parts。ALL_DOCS には入れない。tests/test_table_images.py）。"""
     make_article(path, "資料の図の検証用文書", lambda b: [para(S["sec1"], "１．本文"), para(S["body"], "本文の段落である。")],
                  appendix=lambda b: app_figures_parts(b, variant))
+
+
+# ----------------------------------------------------------------------------- 画像の置き場所の場所の文（修正計画 W1 の 2.8）
+def where_parts(b: Builder):
+    """画像の置き場所の場所を示す文（structure.text_before・report.slot_where）の原稿の本文。
+
+    章「１．場所の確かめ」の最初に画像だけの段落、本文の段落・空白だけの段落・画像だけの段落、文の中に行内の画像のある段落、
+    浮動の画像の結び付いた段落、図キャプションの図（図1）、キャプションのないグループ図形を結び付けた段落（図形の位置は
+    アンカー段落の前。図形の中の「点Ｐ」は飛ばす）、付記の見出しの直後の画像だけの段落。
+    """
+    im = [b.add_image(f"where_{k}.png", png_bytes(f"Where {k}", size=(300, 200))) for k in range(1, 8)]
+
+    def pic(k, pid):
+        return drawing(im[k], 1440000, 960000, pid)
+    group = float_group([(im[5], 1440000, 960000)], [], [para(S["body"], "点Ｐ")], 1101, 8 * B3_CM, 4 * B3_CM,
+                        v=("paragraph", 0), wrap="wrapTopAndBottom")
+    return [para(S["sec1"], "１．場所の確かめ"), para(S["body"], pic(0, 1001)),
+            para(S["body"], "試験（2024）にならい，画像の場所を確かめる。"), para(S["body"], ""), para(S["body"], pic(1, 1002)),
+            para(S["body"], "文の中に", pic(2, 1003), "行内の画像がある段落である。"),
+            para(S["body"], "この段落に浮動の画像が結び付いている。", anchored_drawing(im[3], 1440000, 960000, 1004)),
+            para(S["body"], pic(4, 1005)), para(S["fig_cap"], "図1　児童Aの記述"),
+            para(S["sec1"], "２．図形の場所"), para(S["body"], "図形の前にある本文の段落である。"),
+            para(S["body"], "この段落に図形が結び付いている。", group),
+            para(S["notes_head"], "付記"), para(S["body"], pic(6, 1007)), para(S["body"], "付記の本文である。")]
+
+
+def make_where(path):
+    """画像の置き場所の場所の文の原稿（where_parts。ALL_DOCS には入れない。tests/test_user_images.py）。"""
+    make_article(path, "画像の場所の検証用文書", where_parts)
 
 
 # ----------------------------------------------------------------------------- sample_outside（本文の外の図形。修正計画の N7）

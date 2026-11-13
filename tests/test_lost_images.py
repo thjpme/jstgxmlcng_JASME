@@ -1,4 +1,4 @@
-"""画像の出力漏れの検出（pipeline.lost_images）と、文字だけのテキストボックスの知らせ（0.24.1 までの暫定の知らせの代わり）。
+"""画像を入れる場所を作れなかった画像の検出（pipeline.lost_images）と、文字だけのテキストボックスの知らせ（0.24.1 までの暫定の知らせの代わり）。
 
 不変性チェックは文字しか見ないので、画像を出力できない場所（引用文献・題目・著者名・所属の段落など）や、出力しなかった段落の
 中の画像は、調べないと XML からも Graphics/ からも黙って消える。docs/fix_plan_repro_tests.py の
@@ -66,11 +66,11 @@ def make_ref_image(path, refs):
     (inline_image_in_ref, "試験花子（2021）．「題」．『架空誌』")], ids=["image-in-ref", "inline-in-ref"])
 def test_image_in_reference_is_reported(refs, text, journal, meta, tmp_path):
     res = convert(make_ref_image(tmp_path / "ref.docx", refs), meta, journal,
-                  Options(out_dir=tmp_path / "out", convert_metafiles=False))
+                  Options(out_dir=tmp_path / "out"))
     # 文字の検証はすべて合格し、画像は XML にも Graphics/ にも出ない（変換は変えずに、知らせる）
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     # 本文の図の画像だけが XML と Graphics/ に出る
-    assert [i.image_id for i in res.images] == ["img1"] and len(list(load(res).iter("graphic", "inline-graphic"))) == 1
+    assert [c.image_id for i in res.images for s in res.plan.slots if s.key == i.key for c in s.covers] == ["img1"] and len(list(load(res).iter("graphic", "inline-graphic"))) == 1
     assert len(res.lost_images) == 1 and res.hidden_images == []
     li = res.lost_images[0]
     assert li.image_id == "img2" and li.source.startswith("word/media/")
@@ -84,26 +84,30 @@ def test_image_in_reference_is_reported(refs, text, journal, meta, tmp_path):
     assert li.text == text            # 段落の文字の冒頭（Word で探す手がかり）
     report = res.report_path.read_text(encoding="utf-8")
     top, ch9, ch14 = chapters(report)
-    assert "**要対応: XML に入らなかった画像が 1 件あります（9 章）。**" in top
-    assert f"> - img2（段落 {li.src}" in top and "Word でその画像" in top and "本文の段落に" in top
-    assert "| 画像 | XML に出力 1 件（うち要対応 0 件）。ほかに XML に入らなかった画像が 1 件あり、要対応（9 章） |" in top
-    assert "### XML に入らなかった画像（要対応）" in ch9 and "| img2 | word/media/" in ch9 and "| img1 | 31_1_fig01.png |" in ch9
-    assert "- [ ] **XML に入らなかった画像 1 件**（9 章）" in ch14 and "img2（段落" in ch14
-    assert "すべて Graphics/ に入っている" not in ch14
+    assert "**要対応: 画像を入れる場所を作れなかった画像が 1 つあります（9 章）。**" in top
+    assert f"> - img2（段落 {li.src}" in top and "引用文献・注の節や、題目・著者名・所属の段落の中にある画像には" in top
+    assert "資料の図なら、Word で資料（見出しと中身）を英文要旨の後ろ（論文の最後）に移して" in top and "要らない画像なら、Word で消して" in top
+    assert "| 画像 | 図の画像 0/1 枚を入れた（残り 1 枚。9 章）。ほかに、画像を入れる場所を作れなかった画像が 1 つあり、要対応（9 章） |" in top
+    assert "### 画像を入れる場所を作れなかった画像（要対応）" in ch9 and "| img2 | word/media/" in ch9 and "| fig01 | 図1" in ch9
+    assert "- [ ] **画像を入れる場所を作れなかった画像 1 つ**（9 章）: 資料の図なら Word で資料を英文要旨の後ろに移す" in ch14
+    assert "img2（段落" in ch14 and "- [x] 図の画像" not in ch14
+    # 直し方は lost の知らせだけに書く（手順 images の行・置き場所の備考には書かない。修正計画 W1 の 4.2）
+    from jasme_jats.report import actions, image_rows
+    step = next(a for a in actions(res) if a.key == "images")
+    assert "英文要旨の後ろ" not in step.box_detail and all("英文要旨の後ろ" not in row.note for row in image_rows(res))
 
 
 def test_figure_on_reference_becomes_unplaced(journal, meta, tmp_path):
     """引用文献の段落に結び付いた図形（画像と図キャプション）は、引用文献の段落にせず、位置を決められない図表にする（修正計画の
     N7。0.24.1 までは画像が XML に入らなかった）。AI を使わない設定では止める。AI が位置を答えなければ本文の最後に仮に置き、
-    手作業で移す要対応として知らせる。画像は図に入るので、XML に入らなかった画像にはならない。"""
+    手作業で移す要対応として知らせる。画像は図に入るので、画像を入れる場所を作れなかった画像にはならない。"""
     path = make_ref_image(tmp_path / "ref.docx", textbox_on_ref)
     with pytest.raises(AIRequiredError):
-        convert(path, meta, journal, Options(out_dir=tmp_path / "none", convert_metafiles=False))
+        convert(path, meta, journal, Options(out_dir=tmp_path / "none"))
     resp = '{"placements": [], "operations": [], "notes": []}'
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", ai_response=resp,
-                                               convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", ai_response=resp))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.lost_images == []
-    assert sorted(i.image_id for i in res.images) == ["img1", "img2"]
+    assert sorted(c.image_id for i in res.images for s in res.plan.slots if s.key == i.key for c in s.covers) == ["img1", "img2"]
     root = load(res)
     last = root.find("body")[-1]
     assert last[-1].tag == "fig" and "".join(last[-1].find("caption").itertext()) == "図5\u3000最後のページの図"
@@ -115,7 +119,7 @@ def test_figure_on_reference_becomes_unplaced(journal, meta, tmp_path):
     assert slot.note == "引用文献の段落に結び付いているため、本文の最後に置いています"
     assert res.needs_action and any("本文の最後" in x for x in res.forced_floats)
     top = chapters(res.report_path.read_text(encoding="utf-8"))[0]
-    assert "XML に入らなかった画像" not in top and "要対応: 位置を決められなかった図表が 1 件あります" in top
+    assert "画像を入れる場所を作れなかった画像" not in top and "要対応: 位置を決められなかった図表が 1 件あります" in top
 
 
 def test_cli_exits_1_and_reports_lost_images(journal, tmp_path, capsys):
@@ -123,20 +127,20 @@ def test_cli_exits_1_and_reports_lost_images(journal, tmp_path, capsys):
     path = make_ref_image(tmp_path / "ref.docx", image_only_ref)
     meta = tmp_path / "meta.toml"
     meta.write_text('[article]\nvolume = "31"\nissue = "1"\nfpage = "1"\npeer_review = "あり"\n', encoding="utf-8")
-    assert main([str(path), "--meta", str(meta), "--out", str(tmp_path / "out"), "--no-metafile-conversion"]) == 1
+    assert main([str(path), "--meta", str(meta), "--out", str(tmp_path / "out")]) == 1
     err = capsys.readouterr().err
-    assert "要対応: XML に入らなかった画像 1 件" in err and "本文の段落に移して" in err
+    assert "要対応: 画像を入れる場所を作れなかった画像 1 つ" in err and "資料の図なら docx で資料を英文要旨の後ろに移して" in err
     assert "img2（段落 d" in err and REF_IMAGE_EXCLUDED in err
 
 
 def test_lost_images_box(journal, meta, tmp_path):
     from jasme_jats.colab import lost_images_box
     res = convert(make_ref_image(tmp_path / "ref.docx", image_only_ref), meta, journal,
-                  Options(out_dir=tmp_path / "out", convert_metafiles=False))
+                  Options(out_dir=tmp_path / "out"))
     html = lost_images_box(res)
-    assert "#dc2626" in html and "XML に入らなかった画像が 1 件あります（要対応）" in html
-    assert "・img2（段落 d" in html and "本文の段落に移して" in html and "手順 2" in html
-    assert lost_images_box(convert(FULL, meta, journal, Options(out_dir=tmp_path / "f", convert_metafiles=False))) == ""
+    assert "#dc2626" in html and "画像を入れる場所を作れなかった画像が 1 つあります（要対応）" in html
+    assert "・img2（段落 d" in html and "本文の段落に移します" in html and "手順 2" in html
+    assert lost_images_box(convert(FULL, meta, journal, Options(out_dir=tmp_path / "f"))) == ""
 
 
 def test_image_in_excluded_front_paragraph_is_reported(journal, meta, tmp_path):
@@ -154,13 +158,13 @@ def test_image_in_excluded_front_paragraph_is_reported(journal, meta, tmp_path):
     body += mf.front_en(b, "Title", "Subtitle", [("Shichiro SHIKEN", "Fictional University")], ["Abstract text."])
     body += mf.tail(b)
     b.save(tmp_path / "front.docx", body)
-    res = convert(tmp_path / "front.docx", meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(tmp_path / "front.docx", meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.dtd_valid and res.images == []
     [li] = res.lost_images
     assert res.plan.region[li.src] == "front_ja" and li.location == "冒頭部"
     assert li.reason.startswith("XML に出力しなかった段落（理由「冒頭部のテンプレート装飾")
     assert "テキストボックス・グループ図形 s1 の中の画像" in li.reason
-    assert "**要対応: XML に入らなかった画像が 1 件あります（9 章）。**" in res.report_path.read_text(encoding="utf-8")
+    assert "**要対応: 画像を入れる場所を作れなかった画像が 1 つあります（9 章）。**" in res.report_path.read_text(encoding="utf-8")
 
 
 def make_endnote_image(path, referenced):
@@ -183,26 +187,26 @@ def make_endnote_image(path, referenced):
 def test_image_in_referenced_endnote_is_output(journal, meta, tmp_path):
     # 本文から参照された Word の文末脚注は注（fn）として出力するので、その中の画像も XML と Graphics/ に出る（0.24.0）
     res = convert(make_endnote_image(tmp_path / "endnote.docx", True), meta, journal,
-                  Options(out_dir=tmp_path / "out", convert_metafiles=False))
+                  Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
-    assert res.lost_images == [] and [i.image_id for i in res.images] == ["img1"]
+    assert res.lost_images == [] and [c.image_id for i in res.images for s in res.plan.slots if s.key == i.key for c in s.covers] == ["img1"]
     fn = load(res).find(".//fn-group/fn")
     assert "".join(fn.find("p").itertext()) == "1) 文末脚注の本文。" and fn.find("p/inline-graphic") is not None
-    assert "XML に入らなかった画像" not in res.report_path.read_text(encoding="utf-8")
+    assert "画像を入れる場所を作れなかった画像" not in res.report_path.read_text(encoding="utf-8")
 
 
 def test_image_in_unreferenced_endnote_is_reported_with_location(journal, meta, tmp_path):
     # 本文から参照されていない Word の文末脚注は出力しない（理由付きで除外）。その中の画像だけの段落は、XML に入らなかった
     # 画像として要対応で知らせ、場所は「Word の文末脚注 4」と書く
     res = convert(make_endnote_image(tmp_path / "endnote.docx", False), meta, journal,
-                  Options(out_dir=tmp_path / "out", convert_metafiles=False))
+                  Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.dtd_valid
     [li] = res.lost_images
     assert li.src.startswith("e") and li.location == "Word の文末脚注 4" and li.text == ""
     assert li.reason.startswith("XML に出力しなかった段落（理由「Word の文末脚注 4（本文から参照されていない注）」")
     top, ch9, _ = chapters(res.report_path.read_text(encoding="utf-8"))
     assert f"| {li.image_id} | word/media/note.png | {li.src} | Word の文末脚注 4 |" in ch9
-    assert "**要対応: XML に入らなかった画像が 1 件あります（9 章）。**" in top
+    assert "**要対応: 画像を入れる場所を作れなかった画像が 1 つあります（9 章）。**" in top
     assert "要確認: Word の文末脚注" not in top          # 文末脚注の暫定の知らせは出ない（0.24.0）
 
 
@@ -213,13 +217,13 @@ def test_hidden_image_is_not_lost(journal, meta, tmp_path):
         hidden = mf.drawing(rid, 1800000, 1000000, 611).replace("<w:r>", "<w:r><w:rPr><w:vanish/></w:rPr>", 1)
         return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "試験（2024）の本文。", hidden)]
     mf.make_article(tmp_path / "hidden.docx", "隠し文字の画像の検証用文書", parts)
-    res = convert(tmp_path / "hidden.docx", meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(tmp_path / "hidden.docx", meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.lost_images == [] and res.hidden_images == ["img1"] and res.images == []
     report = res.report_path.read_text(encoding="utf-8")
-    assert "XML に入らなかった画像" not in report
+    assert "画像を入れる場所を作れなかった画像" not in report
     assert "隠し文字の中の画像 1 件（img1）: Word で表示されないので、出力していません。" in report.split("## 7.")[0]
     ch9 = chapters(report)[1]
-    assert "XML に出力した画像はありません。" in ch9 and "隠し文字（Word で非表示に設定された文字）の中の画像 1 件（img1）" in ch9
+    assert "XML に画像を入れる場所はありません。" in ch9 and "隠し文字（Word で非表示に設定された文字）の中の画像 1 件（img1）" in ch9
 
 
 @pytest.mark.parametrize("by", ["direct", "style"])
@@ -235,7 +239,7 @@ def test_style_hidden_image_is_noticed(by, journal, meta, tmp_path):
         hidden = mf.drawing(rid, 1800000, 1000000, 612).replace("<w:r>", f"<w:r><w:rPr>{rpr}</w:rPr>", 1)
         return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "試験（2024）の本文。", hidden)]
     mf.make_article(tmp_path / "hidden.docx", "隠し文字の画像の検証用文書", parts)
-    res = convert(tmp_path / "hidden.docx", meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(tmp_path / "hidden.docx", meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.lost_images == [] and res.hidden_images == ["img1"] and res.images == []
     acts = {a.key: a for a in actions(res)}
     if by == "direct":
@@ -259,9 +263,9 @@ def test_no_lost_images_in_fixtures(case, journal, meta, tmp_path):
           "pdfcheck-route1": dict(path=PDFCHECK, pdf_path=PDFCHECK_PDF, route="docx"),
           "pdfcheck-route2": dict(path=PDFCHECK, pdf_path=PDFCHECK_PDF, route="pdf")}[case]
     path = kw.pop("path")
-    res = convert(path, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False, **kw))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path, **kw))
     assert res.lost_images == [] and res.hidden_images == []
-    assert "XML に入らなかった画像" not in res.report_path.read_text(encoding="utf-8")
+    assert "画像を入れる場所を作れなかった画像" not in res.report_path.read_text(encoding="utf-8")
 
 
 def make_provisional(path, hint=False):
@@ -288,7 +292,7 @@ def test_textbox_notices_replace_provisional_ones(journal, meta, tmp_path):
     # 0.24.1 の暫定の知らせ（「テキストボックスの中の文字 N 段落を、XML に出力していません」）は出さない。囲みは boxed-text に
     # 出し、囲みか図の注記か決められないものだけを要確認で知らせる（レポートの冒頭・14 章。要対応の後ろ）
     res = convert(make_provisional(tmp_path / "prov.docx"), meta, journal,
-                  Options(out_dir=tmp_path / "out", convert_metafiles=False))
+                  Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.lost_images == [] and res.dtd_valid
     bt = load(res).find(".//boxed-text")
     assert ["".join(p.itertext()) for p in bt.findall("p")] == ["問1\u3000枠の中の問題文である。", "ヒント: 図をかく。"]
@@ -297,7 +301,7 @@ def test_textbox_notices_replace_provisional_ones(journal, meta, tmp_path):
     assert "".join(load(res).find(".//fn-group/fn/p").itertext()) == "1) 文末脚注の本文。"
     assert not any("未対応" in reason for _, reason, _ in res.fidelity.excluded)
     res = convert(make_provisional(tmp_path / "hint.docx", hint=True), meta, journal,
-                  Options(out_dir=tmp_path / "hint", convert_metafiles=False))
+                  Options(out_dir=tmp_path / "hint"))
     top, _, ch14 = chapters(res.report_path.read_text(encoding="utf-8"))
     assert ("**要確認: 囲み（問題文・ヒントなど）か図の注記か決められなかったテキストボックスが 1 件あり、その文字を XML に"
             "出力していません（3 章・6 章）。**") in top and "「（ヒント）」" in top
@@ -308,7 +312,7 @@ def test_textbox_notices_replace_provisional_ones(journal, meta, tmp_path):
     top = render(res).split("## 2.")[0]
     assert top.index("> **注意: 文字の不変性チェックが不合格です。**") < top.index("> **要確認: 囲み（問題文")
     res.fidelity.ok = True
-    full = convert(FULL, meta, journal, Options(out_dir=tmp_path / "full", convert_metafiles=False)).report_path
+    full = convert(FULL, meta, journal, Options(out_dir=tmp_path / "full")).report_path
     assert "テキストボックス" not in full.read_text(encoding="utf-8").split("## 2.")[0]
 
 
@@ -318,7 +322,7 @@ def test_cli_shows_textbox_notices(journal, tmp_path, capsys):
     path = make_provisional(tmp_path / "hint.docx", hint=True)
     meta = tmp_path / "meta.toml"
     meta.write_text('[article]\nvolume = "31"\nissue = "1"\nfpage = "1"\npeer_review = "あり"\n', encoding="utf-8")
-    assert main([str(path), "--meta", str(meta), "--out", str(tmp_path / "out"), "--no-metafile-conversion"]) == 0
+    assert main([str(path), "--meta", str(meta), "--out", str(tmp_path / "out")]) == 0
     err = capsys.readouterr().err
     assert "要確認: 囲みか図の注記か決められなかったテキストボックス 1 件の文字を XML に出力していません" in err
     assert "--ai manual か --ai api で AI による補完を使うか" in err and "テキストボックスの中の文字" not in err
@@ -326,7 +330,7 @@ def test_cli_shows_textbox_notices(journal, tmp_path, capsys):
 
 def test_textless_reference_paragraph_is_not_a_ref(journal, meta, tmp_path):
     """引用文献の節の、文字のない段落（画像だけ・空白と画像だけ）は、中身のない <ref> にせず、空白の除外に記録する。画像は
-    XML に入らなかった画像として知らせ続ける。<ref> の ID は詰まり、本文からのリンク先は引用文献の文字に合ったまま。"""
+    画像を入れる場所を作れなかった画像として知らせ続ける。<ref> の ID は詰まり、本文からのリンク先は引用文献の文字に合ったまま。"""
     def body(b):
         return [mf.para(S["sec1"], "１．はじめに"),
                 mf.para(S["body"], "検証（2023）と試験（2024）を引用する。")]
@@ -340,7 +344,7 @@ def test_textless_reference_paragraph_is_not_a_ref(journal, meta, tmp_path):
 
     path = tmp_path / "textless.docx"
     mf.make_article(path, "文字のない引用文献の検証用文書", body, refs=refs)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     root = load(res)
     refs_ = list(root.iter("ref"))
@@ -351,7 +355,7 @@ def test_textless_reference_paragraph_is_not_a_ref(journal, meta, tmp_path):
     links = {"".join(x.itertext()): target[x.get("rid")] for x in root.iter("xref") if x.get("ref-type") == "bibr"}
     assert set(links) == {"2023", "2024"}
     assert links["2023"].startswith("検証次郎（2023）") and links["2024"].startswith("試験六郎（2024）")
-    # 2 つの画像は、どちらも XML に入らなかった画像として知らせる
+    # 2 つの画像は、どちらも 画像を入れる場所を作れなかった画像として知らせる
     assert sorted(li.image_id for li in res.lost_images) == ["img1", "img2"] and res.needs_action
     assert {li.reason for li in res.lost_images} == {REF_IMAGE_EXCLUDED}
     assert [li.location for li in res.lost_images if li.image_id == "img1"] == ["引用文献 1件目の後ろ"]
@@ -368,7 +372,7 @@ def test_textless_note_paragraph_before_first_note_is_not_a_note(journal, meta, 
 
     path = tmp_path / "note.docx"
     mf.make_article(path, "文字のない注の検証用文書", body)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     assert [[x.plain() for x in fn.paras] for fn in res.plan.fns] == [["1) 注の内容である。"]]
     assert [li.image_id for li in res.lost_images] == ["img1"] and res.needs_action

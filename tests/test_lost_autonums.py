@@ -66,7 +66,7 @@ def convert_tracking(monkeypatch, path, journal, meta, out, **opts):
         built.append((root, info))
         return root, info
     monkeypatch.setattr(pipeline, "build", spy)
-    res = convert(path, meta, journal, Options(out_dir=out, convert_metafiles=False, **opts))
+    res = convert(path, meta, journal, Options(out_dir=out, **opts))
     return res, built[-1][0], built[-1][1]
 
 
@@ -114,7 +114,7 @@ def test_guard_reports_missing_number(journal, meta, tmp_path, monkeypatch, caps
         if parent.tag != "td":
             orig(self, parent, p)
     monkeypatch.setattr(Builder, "autonum_mark", skip_cells)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     src = next(s for s, p in res.plan.paras.items() if p.plain() == "番号付きの質問")
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid       # 文字の検査は通る（番号は docx の文字ではない）
     assert res.lost_autonums == [LostNumber(src, "1.", res.lost_autonums[0].location, "td", "番号付きの質問")]
@@ -124,7 +124,7 @@ def test_guard_reports_missing_number(journal, meta, tmp_path, monkeypatch, caps
     report = res.report_path.read_text(encoding="utf-8")
     ch8 = report.split("## 8.")[1].split("## 9.")[0]
     assert "XML に番号を出せなかった段落" in ch8 and src in ch8
-    assert cli_main([str(path), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli"), "--no-metafile-conversion"]) == 1
+    assert cli_main([str(path), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli")]) == 1
     err = capsys.readouterr().err
     assert "自動番号" in err and src in err
 
@@ -134,9 +134,9 @@ def test_actions_order_puts_autonum_lost_right_after_lost(journal, meta, tmp_pat
     cell_article(path)
     orig = Builder.autonum_mark
     monkeypatch.setattr(Builder, "autonum_mark", lambda self, parent, p: None if parent.tag == "td" else orig(self, parent, p))
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert [a.key for a in actions(res)][0] == "autonum_lost"      # 画像が失われていなければ先頭
-    # XML に入らなかった画像もあるときは、その直後（actions() の head の並び: lost、autonum_lost）
+    # 画像を入れる場所を作れなかった画像もあるときは、その直後（actions() の head の並び: lost、autonum_lost）
     res.lost_images = [LostImage("img1", "", "引用文献 1件目", "試験用")]
     keys = [a.key for a in actions(res)]
     assert keys.index("autonum_lost") == keys.index("lost") + 1
@@ -259,7 +259,16 @@ def test_guard_uses_final_tree_after_dtd_retraction(journal, meta, tmp_path, mon
         calls.append(1)
         return (False, ["強制的な不適合"]) if len(calls) == 1 else orig_validate(xml, where)
     monkeypatch.setattr(pipeline, "validate", validate)
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=RESPONSE, convert_metafiles=False))
+    # AI の画像の数式（formula_image）は採用しなくなった（修正計画 W1）ので、AI の回答の反映の後に数式を付けて、取り消しの道を通す
+    orig_apply = pipeline.apply_ops
+
+    def apply_ops(ops, plan, *a, **k):
+        orig_apply(ops, plan, *a, **k)
+        from jasme_jats.ai_assist import parse_mathml
+        fig = next(f for f in plan.figures if f.caption is None and f.image_paras)
+        fig.formula = parse_mathml('<math xmlns="http://www.w3.org/1998/Math/MathML"><mi>a</mi></math>')[0]
+    monkeypatch.setattr(pipeline, "apply_ops", apply_ops)
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=RESPONSE))
     assert len(built) >= 2 and len(calls) == 2           # 取り消して組み立てをやり直した
     root, info = built[-1]
     assert [r is root and i is info for r, i in seen["autonums"]] == [True] and [r is root and i is info for r, i in seen["tables"]] == [True]

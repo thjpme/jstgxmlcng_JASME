@@ -102,13 +102,11 @@ DOCS = f"https://github.com/{REPO}/blob/main/docs"      # 説明書（利用者�
 # 手順 1（準備）のセルは断片に分けて持つ（1 画面版のノートブックが、順番を変えて同じ断片を使う）
 PREP_PARAMS = f"""
 #@title 1. 準備（最初に 1 回だけ。1 分ほどかかります）
-#@markdown **CONVERT_EMF**: Word の図形（EMF/WMF）の図を変換するために、LibreOffice を裏でインストールします（通常はチェックのまま。数分かかりますが、手順 2 以降は待たずに進めます）。
-CONVERT_EMF = True  #@param {{type:"boolean"}}
 #@markdown **USE_DEV_VERSION**: 開発者向け。開発中の版を試すときだけチェックします（ブランチ名を尋ねます）。
 USE_DEV_VERSION = False  #@param {{type:"boolean"}}
 
 """      # 見出しと入力欄
-PREP_BRANCH = f"""import shutil, subprocess, sys
+PREP_BRANCH = f"""import subprocess, sys
 # このランタイムで一度ツールを使っていると、古い版がメモリに残ったままになる（入れ直しても反映されない）
 loaded_before = "jasme_jats" in sys.modules
 BRANCH = "main"
@@ -130,14 +128,6 @@ if loaded_before:
                      "メニューの「ランタイム」→「セッションを再起動」（表示によっては「ランタイムを再起動」）を選んでから、"
                      "手順 1 からもう一度実行してください。")
 """      # ツールのインストール
-PREP_LO = f"""# LibreOffice はインストールに数分かかるので裏で入れる（手順 5 で終わるのを待つ）
-LO_LOG = "/content/libreoffice_install.log"
-if CONVERT_EMF and not (shutil.which("soffice") or shutil.which("libreoffice")):
-    if globals().get("LO_PROC") is None or LO_PROC.poll() is not None:
-        LO_PROC = subprocess.Popen("apt-get -qq update && (apt-get -qq install -y --no-install-recommends "
-                                   "libreoffice-draw-nogui || apt-get -qq install -y libreoffice-draw)",
-                                   shell=True, stdout=open(LO_LOG, "w"), stderr=subprocess.STDOUT)
-"""      # LibreOffice を裏でインストール
 PREP_VERSION = f"""# 版の表示は別のプロセスで行う（ここで読み込むと、次に手順 1 を実行したときに「前の版が残っている」扱いになるため）
 ver = subprocess.run([sys.executable, "-c", "from jasme_jats.pipeline import tool_version; print(tool_version())"],
                      capture_output=True, text=True).stdout.strip()
@@ -155,11 +145,8 @@ if not ver.startswith("{VERSION}"):
         raise SystemExit(mismatch + "ノートブックを GitHub（https://github.com/{REPO}）の main から開き直して、手順 1 からやり直してください。"
                          "開発中の版のノートブックを試しているときは、「開発版を使う（USE_DEV_VERSION）」にチェックを入れて、"
                          "そのブランチ名を入力してください。")
-if globals().get("LO_PROC") is not None and LO_PROC.poll() is None:
-    print("LibreOffice を裏でインストールしています（数分）。インストールは裏で続くので、このまま手順 2 に進んでください"
-          "（手順 5 の変換は、インストールが終わってから始まります）。")
 """      # 入った版の表示と確認
-PREP = PREP_PARAMS + PREP_BRANCH + PREP_PIP + PREP_LO + PREP_VERSION      # 手順 1（準備）のセル
+PREP = PREP_PARAMS + PREP_BRANCH + PREP_PIP + PREP_VERSION      # 手順 1（準備）のセル
 
 
 cells = [
@@ -169,7 +156,7 @@ cells = [
 **ツールの版: {VERSION}**{VERSION_NOTE}
 
 論文の Word ファイル（.docx）を、J-STAGE の全文 XML（JATS 1.1）に変換します。パソコンに何かをインストールする必要はありません。
-**上から順に、各セルの左の ▶ を押してください**（前の手順の実行が終わってから、次の ▶ を押します）。手順 6・7 は必要なときだけ使います。
+**上から順に、各セルの左の ▶ を押してください**（前の手順の実行が終わってから、次の ▶ を押します）。手順 6 は手動モードのときだけ、手順 7 は画像の要る図・表があるときに使います。
 
 説明書: [使い方・結果の見方・できないこと]({DOCS}/USAGE.md)　[AI の API キーと手動モード]({DOCS}/USAGE_AI.md)　ソースコード: https://github.com/{REPO}
 """),
@@ -191,7 +178,6 @@ if ROUTE_KEY == "pdf" and not UPLOAD_PDF:
 WORK = Path("/content/jasme_work")
 INPUT = WORK / "input"
 INPUT.mkdir(parents=True, exist_ok=True)
-USER_IMAGES = {}   # 手順 7 でアップロードした画像（出力ファイル名 → (元のファイル名, 中身)）。論文を選び直したら捨てる
 
 
 def upload(what, ext):
@@ -336,7 +322,7 @@ from IPython.display import HTML, display
 from jasme_jats.colab import (ai_required_box, no_ai_box, prompt_box, report_details, result_boxes, structure_conflict_box,
                               summary_box)
 from jasme_jats.config import ArticleMeta, JournalConfig
-from jasme_jats.pipeline import AIRequiredError, Options, StructureConflictError, add_images, convert
+from jasme_jats.pipeline import AIRequiredError, Options, StructureConflictError, convert, kept_images, reapply_images
 
 api_key = None
 if AI == "api":
@@ -352,14 +338,9 @@ if AI == "api":
     if not api_key:
         raise SystemExit(f"シークレット {' または '.join(API_KEY_NAMES[PROVIDER])} を読めませんでした: {_err or '値が空です'}")
 
-if CONVERT_EMF and globals().get("LO_PROC") is not None:
-    if LO_PROC.poll() is None:
-        print("LibreOffice のインストールが終わるのを待っています（EMF/WMF の図の変換に使います）…", flush=True)
-        LO_PROC.wait()
-    if not (shutil.which("soffice") or shutil.which("libreoffice")):
-        print("※ LibreOffice をインストールできませんでした。EMF/WMF の図は変換されません（レポート 9 章）。記録:", LO_LOG)
-
 OUT = WORK / "output"
+# やり直しのときは、前の変換で入れた画像（手順 7）を覚えておき、変換の後に同じ図へ入れ直す（変更した図には入れない）
+KEPT = kept_images(res) if globals().get("res") is not None else {}
 shutil.rmtree(OUT, ignore_errors=True)
 journal = JournalConfig.load()
 meta = ArticleMeta.from_dict(meta_input)
@@ -373,21 +354,17 @@ except AIRequiredError as e:
 except StructureConflictError as e:
     display(HTML(structure_conflict_box(str(e))))
     raise SystemExit("上の赤い枠のとおり Word で原稿を直して保存し、手順 2 から選び直してやり直してください。")
-if globals().get("USER_IMAGES"):
-    _again = add_images(res, USER_IMAGES, skip_unneeded=True)
+if KEPT:
+    _again = reapply_images(res, KEPT)
     if _again:
-        print("手順 7 でアップロードした画像を入れ直しました:", "、".join(_again))
+        print(f"前に入れた画像 {len(_again)} 枚を入れ直しました。")
 manual_prompt = None
 if AI == "none":
     display(HTML(no_ai_box()))
 if AI == "manual" and res.prompt_path:
     # 依頼文は、レポートの前に目立つ枠で出す
-    attach = OUT / "AI添付画像"
-    image_names = sorted(p.name for p in attach.iterdir()) if attach.exists() else []
-    for n in image_names:
-        files.download(str(attach / n))
     manual_prompt = res.prompt_path.read_text(encoding="utf-8")
-    display(HTML(prompt_box(manual_prompt, image_names)))
+    display(HTML(prompt_box(manual_prompt)))
 # 要対応（赤）・要確認（黄）の枠（report.actions）。手動モードの「AI の回答をまだ反映していません」は、上の依頼文の枠があるので出さない
 display(HTML(result_boxes(res, skip=("ai_pending",))))
 display(HTML(summary_box(res)))
@@ -411,79 +388,98 @@ if not AI_RESPONSE.strip() or "ここに AI の回答を貼り付ける" in AI_R
 if globals().get("PREVIOUS") and AI_RESPONSE.strip() == PREVIOUS.get("ai_response"):
     raise SystemExit(f"貼り付けられているのは、前の論文（{PREVIOUS['docx']}）の AI の回答です。今回の論文の依頼文（手順 5 の枠）を "
                      "AI に渡し、返ってきた回答に貼り替えてから ▶ を押してください。")
-""" + unmark(5) + """try:
+""" + unmark(5) + """KEPT = kept_images(res) if globals().get("res") is not None else {}      # 手順 7 で入れた画像があれば覚え、変換の後に同じ図へ入れ直す
+try:
     res = convert(docx_path, meta, journal, Options(out_dir=OUT, ai_mode="manual", ai_response=AI_RESPONSE,
                                                   pdf_path=pdf_path, route=ROUTE_KEY, split_labels=SPLIT_LABELS))
 except StructureConflictError as e:     # 手順 5 で確かめ済みなので通常は来ない（守り）
     display(HTML(structure_conflict_box(str(e))))
     raise SystemExit("上の赤い枠のとおり Word で原稿を直して保存し、手順 2 から選び直してやり直してください。")
 LAST_AI_RESPONSE = AI_RESPONSE.strip()
-if globals().get("USER_IMAGES"):
-    _again = add_images(res, USER_IMAGES, skip_unneeded=True)
+if KEPT:
+    _again = reapply_images(res, KEPT)
     if _again:
-        print("手順 7 でアップロードした画像を入れ直しました:", "、".join(_again))
+        print(f"前に入れた画像 {len(_again)} 枚を入れ直しました。")
 display(HTML(result_boxes(res)))      # 要対応（赤）・要確認（黄）・手順（青）の枠（report.actions）
 display(HTML(summary_box(res)))
 display(HTML(report_details(res.report_path.read_text(encoding="utf-8"))))
 """ + mark(5), form=False),
     code("""
-#@title 7. 足りない画像をアップロード（画像を用意できなかった図があるときだけ）
-#@markdown 手順 5 の赤い枠「画像ファイルを用意できなかった図」があるときだけ ▶ を押します。図ごとに「ファイル選択」が出るので、その図の画像（PNG・JPEG か、図の部分だけの 1 ページの PDF。記事の PDF から切り取るか、Word で図を右クリック →「図として保存」。ファイル名は何でもかまいません。図の題目は含めません）を選びます。用意できない図は「キャンセル」で飛ばせます。
-""" + guard(1, 2, 3, 4, 5) + unmark(7) + """from IPython.display import HTML, Image, display
+#@title 7. 図の画像を入れる
+#@markdown 画像の要る図・表があるときは、毎回この手順を行います。▶ を押すと、画像の要る図・表の一覧が出ます。出版版 PDF から図の部分だけを切り取った画像（PNG か JPEG。キャプションの行は写さない）を用意し、「まとめてアップロード」で選びます（ファイル名を fig04.png・図4.png のようにしておくと、名前で合わせます）。名前で合わなかった画像は、図ごとに選び直せます。キャプションのない画像を入れないときは、NO_IMAGE に名前（img3fa9c2 など。コンマ区切り）を書いてから ▶ を押します。
+NO_IMAGE = ""  #@param {type:"string"}
+""" + guard(1, 2, 3, 4, 5) + unmark(7) + """import re
+from IPython.display import HTML, display
 from jasme_jats.colab import error_box, missing_images_box
-from jasme_jats.pipeline import add_images, graphics_path
-from jasme_jats.report import images_to_prepare
+from jasme_jats.images import match_names
+from jasme_jats.imagelist import check_frame
+from jasme_jats.pipeline import add_images
+from jasme_jats.report import image_rows, images_action
 
-USER_IMAGES = globals().get("USER_IMAGES") or {}
-_missing = images_to_prepare(res)
-if not _missing:
-    print("用意が必要な画像はありません。手順 8 に進んでください。")
-for _name, _cap, _why in _missing:
-    print(f"▼ {_cap or _name} の画像を選んでください（{_name} として入れます。用意できないときはキャンセル）")
+_slots = [_row for _row in image_rows(res) if _row.kind != "optional"]
+if not _slots and images_action(res) is None:
+    print("入れる画像はありません。手順 8 に進んでください。")
+else:
+    display(HTML(check_frame(res)))      # 画像の要る図・表の一覧（入れた画像も出る）
+_skip = [_n.strip() for _n in re.split(r"[,、，\\s]+", NO_IMAGE) if _n.strip()]
+_supplied = {}
+if any(_row.status == "missing" and _row.key not in _skip for _row in _slots):
+    print("▼ 図の画像をまとめて選んでください（複数選べます。ファイル名が fig04.png・図4.png のような名前の画像を、名前で図に合わせます。"
+          "用意できていなければキャンセル）")
     _up = files.upload()
-    if not _up:
-        print("  選ばれなかったので飛ばします")
-        continue
-    if len(_up) > 1:
-        print("  ファイルが複数選ばれたので、最初の 1 つだけを使います")
-    _file, _data = next(iter(_up.items()))
+    _found, _unmatched, _clashes = match_names(list(_up), _slots, res.meta.article_id(res.journal))
+    _supplied = {_key: (_name, _up[_name]) for _key, _name in _found.items()}
+    for _name in _unmatched:
+        print(f"  「{_name}」に合う図がありません（ファイル名を図の名前に合わせるか、下で図ごとに選んでください）")
+    for _key, _names in _clashes:
+        print(f"  同じ図（{_key}）に合うファイルが複数あるので、どれも入れません: {'、'.join(_names)}")
+    for _row in _slots:
+        if _row.status != "missing" or _row.key in _supplied or _row.key in _skip:
+            continue
+        _what = (_row.label + " " if _row.label else "") + (_row.caption.strip()[:30] or "キャプションのない画像（" + _row.where + "）")
+        print(f"▼ {_what} の画像を選んでください（{_row.key}。用意できていなければキャンセル）")
+        _one = files.upload()
+        if not _one:
+            print("  選ばれなかったので飛ばします")
+            continue
+        if len(_one) > 1:
+            print("  ファイルが複数選ばれたので、最初の 1 つだけを使います")
+        _file, _data = next(iter(_one.items()))
+        _supplied[_row.key] = (_file, _data)
+if _supplied or _skip:
     try:
-        add_images(res, {_name: (_file, _data)})
+        _added = add_images(res, _supplied, skip=_skip or None)
     except ValueError as e:
-        display(HTML(error_box(f"{_cap or _name} の画像を入れられませんでした", str(e))))
-        continue
-    USER_IMAGES[_name] = (_file, _data)
-    print(f"  {_file} を {_name} として入れました")
-    display(Image(filename=str(graphics_path(res) / _name), width=360))
-if _missing:
-    _rest = images_to_prepare(res)
-    if len(_rest) < len(_missing):
-        print(f"画像を {len(_missing) - len(_rest)} 件入れ、{res.zip_path.name} とレポートを作り直しました。")
-    if _rest:
-        display(HTML(missing_images_box(res)))
+        display(HTML(error_box("画像を入れられませんでした（1 枚も入れていません）", str(e))))
     else:
-        print("足りない画像はなくなりました。手順 8 でダウンロードしてください。")
+        if _added:
+            print(f"画像を {len(_added)} 枚入れ、{res.zip_path.name} とレポートを作り直しました。")
+        if _skip:
+            print("画像を入れないことにしました:", "、".join(_skip))
+    display(HTML(check_frame(res)))      # 確かめの一覧（図番号・キャプションと画像が合っているか）
+_act = images_action(res)
+if _act is not None:
+    if missing_images_box(res):
+        display(HTML(missing_images_box(res)))      # 残っているとき（または持ち越しの確かめ）の青い枠
+    if _act.done:
+        print(_act.progress + "。上の一覧で、図番号・キャプションと画像が合っているか確かめてから、手順 8 に進んでください。")
 """ + mark(7)),
     code("""
 #@title 8. 結果をダウンロード
 #@markdown 「変換結果_巻_開始ページ.zip」（J-STAGE にアップロードする jasme_巻_開始ページ.zip、XML、変換レポート。「docx から作り、出版版 PDF で補う」では（PDF の文字を読めたとき）PDF で補った docx も）をダウンロードします。要対応（赤い枠）が残っていると一度止まります（そのままダウンロードするときは、もう一度 ▶）。
-""" + guard(1, 2, 3, 4, 5) + unmark(8) + """from IPython.display import HTML, display
+""" + guard(1, 2, 3, 4, 5) + unmark(8) + """import shutil
+from IPython.display import HTML, display
 from jasme_jats.colab import result_boxes
-from jasme_jats.report import actions, blocking, images_to_prepare
+from jasme_jats.report import actions, blocking
 
-_missing = images_to_prepare(res)
 _todo = blocking(actions(res))      # 止める知らせ（要対応と、残っている必須の手順。推奨の手順は止めない）
 # 止めたかどうかの記録。止める知らせの中身（枠の見出しと本文）が変われば、変換し直した同じ docx でももう一度止める
-_key = str(docx_path) + "|" + repr([(a.key, a.box_title, a.box_detail) for a in _todo]) + "|" + ",".join(n for n, _, _ in _missing)
+_key = str(docx_path) + "|" + repr([(a.key, a.box_title, a.box_detail) for a in _todo])
 if _todo and globals().get("_NEEDS_ACTION_OK") != _key:
     _NEEDS_ACTION_OK = _key
     display(HTML(result_boxes(res, blocking=True)))
-    if [a.key for a in _todo] == ["images"]:
-        raise SystemExit(f"画像を用意できなかった図が {len(_missing)} 件あります。手順 7 で画像をアップロードしてから、もう一度この ▶ を押して"
-                         "ください。画像を入れずにダウンロードするときは、そのままもう一度この ▶ を押します（後で ZIP の Graphics/ に"
-                         "入れることもできます）。")
-    raise SystemExit(f"要対応が {len(_todo)} 件あります（上の枠: " + "／".join(a.box_title for a in _todo) + "）。"
-                     + ("画像を用意できなかった図は、手順 7 で画像をアップロードしてから、もう一度この ▶ を押してください。" if _missing else "")
+    raise SystemExit(f"残っていることが {len(_todo)} 件あります（上の枠: " + "／".join(a.box_title for a in _todo) + "）。"
+                     + ("図の画像は、手順 7 で入れてから、もう一度この ▶ を押してください。" if any(a.key == "images" for a in _todo) else "")
                      + "枠の説明に従って直してから変換し直すか、このままダウンロードするときは（結果を確かめるときなど）、"
                        "もう一度この ▶ を押します。")
 archive = shutil.make_archive(str(WORK / f"変換結果_{res.xml_path.stem}"), "zip", OUT)
@@ -509,7 +505,7 @@ if "docx_path" in globals():
     PREVIOUS = {"docx": docx_path.name, "meta": dict(globals().get("meta_input") or {}),
                 "ai_response": globals().get("LAST_AI_RESPONSE", "")}
 for _name in ("docx_path", "pdf_path", "meta_input", "meta", "res", "manual_prompt", "LAST_AI_RESPONSE", "_DISCARD_OK",
-              "_SAME_PAGE_OK", "USER_IMAGES", "_NEEDS_ACTION_OK"):
+              "_SAME_PAGE_OK", "KEPT", "_NEEDS_ACTION_OK"):
     globals().pop(_name, None)
 _work = Path("/content/jasme_work")
 shutil.rmtree(_work / "input", ignore_errors=True)
@@ -528,18 +524,15 @@ display(HTML(next_article_box(globals().get("PREVIOUS", {}).get("docx", ""))))
 
 
 
-# 1 画面版（Gradio。一般の利用者用）: 準備と画面を 1 つのセルにする。LibreOffice のインストールを先に裏で始めてから pip をし（同時に進む）、
-# 画面を開く。2 回目の実行（画面を開き直すとき）はツールを入れ直さない（入れ直しには、セッションの再起動が要るため）
-_gradio_prep = (PREP_LO + PREP_PIP + PREP_VERSION).replace("（手順 5 で終わるのを待つ）", "（変換のときに終わるのを待つ）")
+# 1 画面版（Gradio。一般の利用者用）: 準備と画面を 1 つのセルにする。pip をして画面を開く。2 回目の実行（画面を開き直すとき）は
+# ツールを入れ直さない（入れ直しには、セッションの再起動が要るため）
+_gradio_prep = PREP_PIP + PREP_VERSION
 for _old, _new in (("手順 1 からもう一度実行", "このセルをもう一度実行"), ("手順 1 からやり直して", "このセルからやり直して"),
-                   ("次に手順 1 を実行したときに", "次にこのセルを実行したときに"),
-                   ("このまま手順 2 に進んでください", "画面を開きます"),
-                   ("（手順 5 の変換は、インストールが終わってから始まります）", "（変換は、インストールが終わってから始まります）")):
+                   ("次に手順 1 を実行したときに", "次にこのセルを実行したときに")):
     assert _old in _gradio_prep, _old
     _gradio_prep = _gradio_prep.replace(_old, _new)
 _gradio_prep = _gradio_prep.replace("jasme-jats[ai,images,colab]", "jasme-jats[ai,images,colab,gui]")
 _GRADIO_CELL = (PREP_PARAMS.replace("#@title 1. 準備（最初に 1 回だけ。1 分ほどかかります）", "#@title 準備して画面を開く（2 分ほどかかります）")
-                .replace("手順 2 以降は待たずに進めます", "画面は待たずに使えます")
                 + PREP_BRANCH
                 + """if loaded_before:
     print("ツールは入っているので、画面を開き直します（新しい版を入れるときは、メニューの「ランタイム」→「セッションを再起動」を"

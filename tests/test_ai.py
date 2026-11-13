@@ -30,17 +30,16 @@ def load(res):
 
 
 def test_manual_mode_applies_valid_ops_and_rejects_invalid(journal, meta, tmp_path):
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=RESPONSE,
-                                               convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=RESPONSE))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     root = load(res)
     bibr = {(x.text, x.get("rid")) for x in root.iter("xref") if x.get("ref-type") == "bibr"}
     assert {("2001", "B2"), ("2025", "B7"), ("2016", "B4"), ("1977", "B10")} <= bibr
-    rejected = {op["text"] for op, _ in res.ai.rejected}
+    rejected = {op["text"] for op, _ in res.ai.rejected if op["op"] != "formula_image"}
     assert rejected == {"Claude", "図9"}           # 年以外へのリンク・存在しない図は不採用
-    assert root.find(".//disp-formula/alternatives/graphic") is not None
-    assert root.find(".//disp-formula/alternatives/{http://www.w3.org/1998/Math/MathML}math") is not None
-    assert res.fidelity.ai_additions                   # AI が併記した数式は別枠で記録される
+    # 画像の数式の書き起こし（formula_image）は、docx の画像を AI に渡さなくなったので採用しない（修正計画 W1）
+    assert [why for op, why in res.ai.rejected if op["op"] == "formula_image"] == [ai_assist.FORMULA_IMAGE_WHY]
+    assert root.find(".//disp-formula/alternatives") is None and not res.fidelity.ai_additions
     names = [n for n in root.iter("name") if n.get("name-style") == "eastern"]
     assert [x.text for x in names[2]] == ["研究", "次郎"]
     assert res.unresolved_after == []
@@ -49,10 +48,11 @@ def test_manual_mode_applies_valid_ops_and_rejects_invalid(journal, meta, tmp_pa
 
 
 def test_manual_mode_without_response_writes_prompt(journal, meta, tmp_path):
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual"))
     prompt = res.prompt_path.read_text(encoding="utf-8")
     assert "[d18]" in prompt and "link_citation" in prompt
-    assert (tmp_path / "AI添付画像" / "img3.png").exists()
+    # docx の画像は AI に渡さない（修正計画 W1）: 添付画像のフォルダを作らず、依頼文に添付の案内を書かない
+    assert not (tmp_path / "AI添付画像").exists() and "AI添付画像" not in prompt and "添付" not in prompt.split("---")[0]
     assert res.fidelity.ok
     # チャットの AI が JSON を崩さないよう、回答の書き方（コードブロック 1 つ・半角の引用符）と見本を示す
     assert "## 回答の書き方" in prompt and "```json" in prompt
@@ -104,8 +104,7 @@ def test_parse_response_reads_json_before_trailing_text(journal, meta, tmp_path)
             parse_response(text)
         assert "Extra data" in str(e.value) and "途中で切れている" not in str(e.value)
     # 手動モードで貼り戻しても、ふつうの回答と同じく反映する
-    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=unclosed,
-                                                convert_metafiles=False))
+    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=unclosed))
     assert res.ai.error == "" and res.ai.partial == "" and res.plan.unplaced_floats == [] and res.fidelity.ok
 
 
@@ -141,13 +140,14 @@ def test_api_mode_with_fake_client(journal, meta, tmp_path, monkeypatch):
 
     import anthropic
     monkeypatch.setattr(anthropic, "Anthropic", FakeClient)
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_api_key="test",
-                                               convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_api_key="test"))
     assert calls["model"] == DEFAULT_MODEL
     assert calls["output_config"]["format"]["type"] == "json_schema"
     assert calls["fallbacks"] == "default"
     assert not res.ai.error
-    assert len(res.ai.accepted) == 7 and res.fidelity.ok
+    assert len(res.ai.accepted) == 6 and res.fidelity.ok      # 7 件のうち formula_image は採用しない（修正計画 W1）
+    content = calls["messages"][0]["content"]
+    assert not any(isinstance(c, dict) and c.get("type") == "image" for c in content)     # docx の画像は渡さない
 
 
 def test_default_model_is_written_once(tmp_path):
@@ -212,21 +212,20 @@ def test_api_model_auto_and_retired_fallback(journal, meta, tmp_path, monkeypatc
     # 既定のモデルが提供終了（見つからない）→ 使える最新の Opus に切り替えてやり直す
     calls = []
     _fake_anthropic(monkeypatch, calls, available=("claude-opus-6",), listed=listed)
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_api_key="t", convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_api_key="t"))
     assert calls == [DEFAULT_MODEL, "claude-opus-6"] and res.ai.model == "claude-opus-6"
     assert "切り替えた" in res.ai.model_note and not res.ai.error
     assert "使用したモデル: claude-opus-6" in res.report_path.read_text(encoding="utf-8")
     # 「自動」→ はじめから最新の Opus
     calls = []
     _fake_anthropic(monkeypatch, calls, available=("claude-opus-6",), listed=listed)
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_model="auto", ai_api_key="t",
-                                               convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_model="auto", ai_api_key="t"))
     assert calls == ["claude-opus-6"] and "自動" in res.ai.model_note
     # 指定したモデルがなく、一覧からも見つからない → 分かりやすいエラー
     calls = []
     _fake_anthropic(monkeypatch, calls, available=(), listed=[])
     res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_model="claude-typo",
-                                               ai_api_key="t", convert_metafiles=False))
+                                               ai_api_key="t"))
     assert "claude-typo が見つかりません" in res.ai.error and res.fidelity.ok
 
 
@@ -255,16 +254,16 @@ def test_openai_api_mode_with_fake_client(journal, meta, tmp_path, monkeypatch):
     calls = []
     _fake_openai(monkeypatch, calls)
     res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_provider="openai",
-                                               ai_model="gpt-test", ai_api_key="t", convert_metafiles=False))
+                                               ai_model="gpt-test", ai_api_key="t"))
     kw = calls[0]
     assert kw["model"] == "gpt-test"
     fmt = kw["text"]["format"]
     assert fmt["type"] == "json_schema" and fmt["strict"] is True and fmt["schema"] is ai_assist.RESPONSE_SCHEMA
     content = kw["input"][0]["content"]
-    assert any(c["type"] == "input_image" and c["image_url"].startswith("data:image/png;base64,") for c in content)
+    assert not any(c["type"] == "input_image" for c in content)        # docx の画像は渡さない（修正計画 W1）
     assert "link_citation" in kw["instructions"]
     assert not res.ai.error and res.ai.provider == "openai"
-    assert len(res.ai.accepted) == 7 and res.fidelity.ok and res.fidelity.final_ok
+    assert len(res.ai.accepted) == 6 and res.fidelity.ok and res.fidelity.final_ok
     report = res.report_path.read_text(encoding="utf-8")
     assert "API（ChatGPT: gpt-test）" in report and "入力 120 トークン" in report
 
@@ -312,15 +311,15 @@ def test_gemini_api_mode_with_fake_client(journal, meta, tmp_path, monkeypatch):
     calls = []
     _fake_gemini(monkeypatch, calls)
     res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_provider="gemini",
-                                               ai_model="gemini-test", ai_api_key="t", convert_metafiles=False))
+                                               ai_model="gemini-test", ai_api_key="t"))
     kw = calls[0]
     assert kw["model"] == "gemini-test"
     assert kw["config"].response_mime_type == "application/json"
     assert kw["config"].response_json_schema == ai_assist.RESPONSE_SCHEMA
     parts = kw["contents"][0].parts
-    assert any(p.inline_data is not None and p.inline_data.mime_type == "image/png" for p in parts)
+    assert not any(p.inline_data is not None for p in parts)        # docx の画像は渡さない（修正計画 W1）
     assert not res.ai.error and res.ai.provider == "gemini"
-    assert len(res.ai.accepted) == 7 and res.fidelity.ok and res.fidelity.final_ok
+    assert len(res.ai.accepted) == 6 and res.fidelity.ok and res.fidelity.final_ok
     report = res.report_path.read_text(encoding="utf-8")
     assert "API（Gemini: gemini-test）" in report and "出力 70 トークン" in report   # 思考のトークンも出力に数える
 
@@ -352,8 +351,7 @@ def test_other_providers_require_a_model_name(journal, meta, tmp_path):
     for model in ("", "auto", DEFAULT_MODEL):
         out = ai_assist.call_provider("openai", "x", [], model=model)
         assert "モデルの名前を指定" in out.error and "Opus と同等以上" in out.error
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_provider="gemini", ai_model="",
-                                               convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_provider="gemini", ai_model=""))
     assert "Gemini の API を使うときは" in res.ai.error and res.fidelity.ok
 
 
@@ -392,7 +390,7 @@ def test_sakana_api_mode_with_fake_client(journal, meta, tmp_path, monkeypatch):
     calls = []
     _fake_sakana(monkeypatch, calls)
     res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_provider="sakana",
-                                               ai_model="sakana-namazu", ai_api_key="sk-sakana", convert_metafiles=False))
+                                               ai_model="sakana-namazu", ai_api_key="sk-sakana"))
     client, kw = calls[0]["client"], calls[1]
     assert client["base_url"] == "https://api.sakana.ai/v1" and client["api_key"] == "sk-sakana"
     assert kw["model"] == "sakana-namazu"
@@ -400,10 +398,9 @@ def test_sakana_api_mode_with_fake_client(journal, meta, tmp_path, monkeypatch):
     assert kw["response_format"]["json_schema"]["schema"] is ai_assist.RESPONSE_SCHEMA
     system, user = kw["messages"]
     assert "## 回答の書き方" in system["content"] and "link_citation" in system["content"]
-    assert any(c["type"] == "image_url" and c["image_url"]["url"].startswith("data:image/png;base64,")
-               for c in user["content"])
+    assert not any(isinstance(c, dict) and c.get("type") == "image_url" for c in user["content"])   # docx の画像は渡さない
     assert not res.ai.error and res.ai.provider == "sakana"
-    assert len(res.ai.accepted) == 7 and res.fidelity.ok and res.fidelity.final_ok
+    assert len(res.ai.accepted) == 6 and res.fidelity.ok and res.fidelity.final_ok
     report = res.report_path.read_text(encoding="utf-8")
     assert "API（Sakana AI: sakana-namazu）" in report and "入力 90 トークン" in report
 
@@ -580,18 +577,15 @@ def test_api_mode_applies_finished_placements_of_cut_answer(journal, meta, tmp_p
     """API モードで回答が上限で切れたとき: 最後まで書かれた placements を反映し、誤りは消して、要対応の説明を残す。
     上限で止まっても JSON が最後まで書かれていれば、ふつうに反映する。何も読めなければ、今までどおり誤りにする。"""
     _fake_anthropic(monkeypatch, [], text=_cut_text(), stop="max_tokens")
-    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "cut", ai_mode="api", ai_api_key="t",
-                                                convert_metafiles=False))
+    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "cut", ai_mode="api", ai_api_key="t"))
     assert res.ai.error == "" and res.ai.cut and "最後まで書かれていた 1 件だけ" in res.ai.partial
     assert "また途中で切れるときは、「手動（チャットに貼り付け）」に切り替えて" in res.ai.partial   # 同じ上限でまた切れうる
     assert res.plan.floats["s1"].mode == "ai" and res.plan.unplaced_floats == ["s2", "s3"] and res.fidelity.ok
     _fake_anthropic(monkeypatch, [], text=head_first(), stop="max_tokens")
-    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "whole", ai_mode="api", ai_api_key="t",
-                                                convert_metafiles=False))
+    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "whole", ai_mode="api", ai_api_key="t"))
     assert res.ai.error == "" and res.ai.partial == "" and res.plan.unplaced_floats == []
     _fake_anthropic(monkeypatch, [], text=cut_cases()["e"], stop="max_tokens")
-    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "none", ai_mode="api", ai_api_key="t",
-                                                convert_metafiles=False))
+    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "none", ai_mode="api", ai_api_key="t"))
     assert res.ai.error == "AI の回答が長すぎて途中で切れました"            # API の誤り（JSON の読み取りの誤りにしない）
     assert res.ai.partial == "" and res.plan.unplaced_floats == ["s1", "s2", "s3"]
 
@@ -657,7 +651,7 @@ def _set_role(src, role):
 
 def _manual(path, ops, meta, journal, out):
     resp = json.dumps({"operations": ops, "placements": [], "notes": []}, ensure_ascii=False)
-    return convert(path, meta, journal, Options(out_dir=out, ai_mode="manual", ai_response=resp, convert_metafiles=False))
+    return convert(path, meta, journal, Options(out_dir=out, ai_mode="manual", ai_response=resp))
 
 
 def _text(el):
@@ -937,7 +931,7 @@ def _box_pl(xid, after, kind="box", **kw):
 
 def _manual_pl(path, placements, meta, journal, out, ops=()):
     resp = json.dumps({"placements": placements, "operations": list(ops), "notes": []}, ensure_ascii=False)
-    return convert(path, meta, journal, Options(out_dir=out, ai_mode="manual", ai_response=resp, convert_metafiles=False))
+    return convert(path, meta, journal, Options(out_dir=out, ai_mode="manual", ai_response=resp))
 
 
 def test_ai_kind_box_and_label_for_undecided_textboxes(journal, meta, tmp_path):
@@ -1018,11 +1012,11 @@ def test_textbox_undecided_advice_when_ai_failed_and_checklist_follows_mode(jour
     plan, ids = _boxes_by_text(journal)
     hint, note = ids["（ヒント）"], ids["注"]
     # 使っていない
-    none = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "none", convert_metafiles=False))
+    none = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "none"))
     act = next(a for a in actions(none) if a.key == "textbox_undecided")
     assert "AI による補完を使って変換し直すか" in act.checklist
     # 手動で回答を貼り戻す前
-    pend = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "pend", ai_mode="manual", convert_metafiles=False))
+    pend = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "pend", ai_mode="manual"))
     act = next(a for a in actions(pend) if a.key == "textbox_undecided")
     assert "AI の回答を反映するか" in act.checklist and "AI による補完を使って" not in act.checklist
     # AI を使った後（指定なし）
@@ -1327,7 +1321,7 @@ def test_fullwidth_space_paragraphs_in_textboxes_keep_fidelity(journal, meta, tm
                     + mf.para(S["fig_cap"], "図2　位置を決められない図"), 915, cx=8 * cm, cy=4 * cm, v=("paragraph", 2 * cm)))]
     path = tmp_path / "fw.docx"
     mf.make_article(path, "全角空白の検証用文書", parts)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual"))
     fid = res.fidelity
     assert fid.ok and fid.final_ok and res.dtd_valid and fid.bad_excluded == [], (fid.missing, fid.bad_excluded)
     kinds = sorted(bi.kind for bi in res.plan.textboxes.values())
@@ -1355,7 +1349,7 @@ def test_unsplit_names_come_from_build_info(journal, meta, tmp_path):
     from jasme_jats.builder import build
     _, plan, _ = _mechanical(FULL, journal)
     assert build(plan, meta, journal, None)[1].unsplit_names == [("d11", "研究次郎", "ja")]
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual"))
     assert "- [d11] 姓と名の区切りがない氏名: 「研究次郎」" in res.prompt_path.read_text(encoding="utf-8")
     assert 'split("「"' not in inspect.getsource(pipeline.convert)
     # 氏名の前後の空白（全角も）は AI の split_name の検証と同じく除き、間に空白のある氏名は載せない
@@ -1392,7 +1386,7 @@ def test_english_one_word_name_is_listed_and_warned(journal, meta, tmp_path):
     """英文 1 語の著者名は、全体を姓として出力し、4 章の記録（今までどおり）・AI 依頼文（決定事項 17。split_name を提案しないことを
     添える）・10 章の警告（決定事項 17 の後半）に出す。要対応・要確認は増えない。和文の「研究　次郎」は分けられるので載せない。"""
     path = names_article(tmp_path / "en.docx", ["研究\u3000次郎"], ["KENKYU"])
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     [warn] = [w for w in res.warnings if "英文の著者名" in w]
     assert "「KENKYU」" in warn and "全体を姓として" in warn and "Word で" in warn
@@ -1407,7 +1401,7 @@ def test_english_one_word_name_is_listed_and_warned(journal, meta, tmp_path):
     src = names[0].split("]", 1)[0].removeprefix("- [")
     op = {"op": "split_name", "src": src, "text": "", "occurrence": 1, "target": "", "role": "", "image": "", "mathml": "",
           "surname": "KEN", "given": "KYU", "reason": "試しの分割", "confidence": "低"}
-    res2 = convert(path, meta, journal, Options(out_dir=tmp_path / "out2", ai_mode="manual", convert_metafiles=False,
+    res2 = convert(path, meta, journal, Options(out_dir=tmp_path / "out2", ai_mode="manual",
                                                 ai_response=json.dumps({"operations": [op]}, ensure_ascii=False)))
     assert [why for _, why in res2.ai.rejected] == ["英文氏名は空白の位置で姓と名を分けるため、分割の指定は和文氏名だけに使える"]
     assert res2.ai.accepted == [] and res2.xml_path.read_bytes() == res.xml_path.read_bytes()
@@ -1423,7 +1417,7 @@ def _op(**kw):
 
 def _manual_raw(ops, meta, journal, out, notes=(), placements=()):
     resp = json.dumps({"operations": ops, "placements": list(placements), "notes": notes}, ensure_ascii=False)
-    return convert(FULL, meta, journal, Options(out_dir=out, ai_mode="manual", ai_response=resp, convert_metafiles=False))
+    return convert(FULL, meta, journal, Options(out_dir=out, ai_mode="manual", ai_response=resp))
 
 
 def test_a1_op_field_types(journal, meta, tmp_path):
@@ -1526,19 +1520,15 @@ def test_a6_links_in_nolink_paragraphs_rejected(journal):
     assert "題目" in out.rejected[0][1] and "引用文献" in out.rejected[1][1]
 
 
-def test_a8_formula_image_with_extra_content_rejected(journal):
+def test_a8_formula_image_is_always_rejected(journal):
+    """docx の画像を AI に渡さなくなった（修正計画 W1 の 2.7）ので、formula_image は中身にかかわらず不採用に記録し、図に数式を
+    付けない（操作そのものは W8 が消す）。"""
     _, plan, _ = _mechanical(FULL, journal, {}, {})
     fig = next(f for f in plan.figures if any(i.image_id == "img3" for ip in f.image_paras for i in ip.images))
     mml = '<math xmlns="http://www.w3.org/1998/Math/MathML"><mi>a</mi></math>'
-    for attr in ("tables", "extra_images", "caption_more"):
-        setattr(fig, attr, [object()])
-        out = ai_assist.AIOutcome()
-        ai_assist.apply_ops([_op(op="formula_image", image="img3", mathml=mml)], plan, None, out)
-        assert out.accepted == [] and "数式画像" in out.rejected[0][1] and fig.formula is None
-        setattr(fig, attr, [])
     out = ai_assist.AIOutcome()
     ai_assist.apply_ops([_op(op="formula_image", image="img3", mathml=mml)], plan, None, out)
-    assert len(out.accepted) == 1
+    assert out.accepted == [] and out.rejected[0][1] == ai_assist.FORMULA_IMAGE_WHY and fig.formula is None
 
 
 def test_f6_final_check_rejects_entity_declaration_without_reading(tmp_path):
@@ -1577,7 +1567,7 @@ def test_f7_link_on_label_range_rejected_when_split(journal, meta, tmp_path):
 
     def run(split, text, sub):
         resp = json.dumps({"operations": [_op(op="link_figure", src=cap, text=text, target="F2")], "placements": [], "notes": []})
-        return convert(p, meta, journal, Options(out_dir=tmp_path / sub, convert_metafiles=False, ai_mode="manual",
+        return convert(p, meta, journal, Options(out_dir=tmp_path / sub, ai_mode="manual",
                                                  ai_response=resp, split_labels=split))
     res = run(True, "図1", "a")
     assert res.fidelity.ok and res.ai.accepted == [] and "<label>" in res.ai.rejected[0][1]
@@ -1613,7 +1603,7 @@ def test_a8_formula_image_on_real_docx_with_table_and_moved_image(journal, meta,
     pl = {"float": fid, "after": anchor, "items": [{"kind": "fig", "caption": [], "body": [img, tid]}], "reason": "x",
           "confidence": "中"}
     resp = json.dumps({"operations": [_op(op="formula_image", image=img, mathml=mml)], "placements": [pl], "notes": []})
-    res = convert(p, meta, journal, Options(out_dir=tmp_path / "o", convert_metafiles=False, ai_mode="manual", ai_response=resp))
+    res = convert(p, meta, journal, Options(out_dir=tmp_path / "o", ai_mode="manual", ai_response=resp))
     assert res.fidelity.ok and res.fidelity.final_ok
     assert not any(op["op"] == "place_float" for op, _ in res.ai.rejected)
     root = load(res)
@@ -1658,8 +1648,7 @@ def test_parse_response_requires_operations():
 
 
 def test_manual_array_answer_is_ai_error(journal, meta, tmp_path):
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=json.dumps([_OP1]),
-                                               convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=json.dumps([_OP1])))
     assert "一覧" in res.ai.error
     assert "ai_error" in {a.key for a in actions(res)} and res.needs_action
     assert res.fidelity.ok
@@ -1668,8 +1657,7 @@ def test_manual_array_answer_is_ai_error(journal, meta, tmp_path):
 def test_deeply_nested_answer_does_not_abort(journal, meta, tmp_path):
     n = 100000
     resp = '{"placements": [], "operations": [' + "[" * n + "]" * n + "]}"
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=resp,
-                                               convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=resp))
     assert "入れ子" in res.ai.error and "ai_error" in {a.key for a in actions(res)}
     with pytest.raises(ValueError, match="入れ子"):
         parse_response(resp)
@@ -1681,8 +1669,7 @@ def test_cut_top_level_array_is_not_partial(journal, meta, tmp_path):
     cut = '[{"placements": [{"float": "s1", "kind": "box"}], "operations": [{"op": "link_'
     for text in ("```json\n" + cut, cut):
         assert ai_assist.parse_cut_response(text) is None
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response="```json\n" + cut,
-                                               convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response="```json\n" + cut))
     assert "一覧" in res.ai.error and not res.ai.partial
 
 
@@ -1708,7 +1695,7 @@ def test_set_role_abstract_fixes_missing_abstract(journal, meta, tmp_path):
     from test_structure import _no_abstract_style_docx
     from jasme_jats.structure import EN_OTHER_EXCLUDED
     path = _no_abstract_style_docx(tmp_path)
-    before = convert(path, meta, journal, Options(out_dir=tmp_path / "before", ai_mode="manual", convert_metafiles=False))
+    before = convert(path, meta, journal, Options(out_dir=tmp_path / "before", ai_mode="manual"))
     assert "abstract_missing" in [a.key for a in actions(before)] and before.plan.abstract == []
     prompt = before.prompt_path.read_text(encoding="utf-8")
     assert "英文要旨の段落が見つからない" in prompt and "set_role の abstract" in prompt
@@ -1866,13 +1853,12 @@ def _real_answer_block():
 
 
 def test_pasted_request_is_refused(journal, meta, tmp_path):
-    first = convert(FULL, meta, journal, Options(out_dir=tmp_path / "a", ai_mode="manual", convert_metafiles=False))
+    first = convert(FULL, meta, journal, Options(out_dir=tmp_path / "a", ai_mode="manual"))
     prompt = first.prompt_path.read_text(encoding="utf-8")
     with pytest.raises(ValueError, match="依頼文"):
         parse_response(prompt)
     assert ai_assist.parse_cut_response(prompt) is None
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "b", ai_mode="manual", ai_response=prompt,
-                                               convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "b", ai_mode="manual", ai_response=prompt))
     assert "依頼文" in res.ai.error and not res.ai.accepted
     assert "ai_error" in {a.key for a in actions(res)} and res.needs_action
     assert res.fidelity.ok

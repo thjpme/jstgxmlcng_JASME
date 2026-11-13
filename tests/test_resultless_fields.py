@@ -30,7 +30,7 @@ def article(path, parts, **kw):
 
 
 def run_convert(path, journal, meta, tmp_path):
-    return convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    return convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
 
 
 def found(res):
@@ -163,3 +163,135 @@ def test_kind_rule():
     assert resultless_field_kind(" FORMCHECKBOX ") == "FORMCHECKBOX"
     for code in ('XE "a"', 'TC "a"', 'TA \\l "a"', "RD x.docx", "SET a b", "ASK a b", "ADDIN X", "PRIVATE", "", "  ", "PAGE", "REF a"):
         assert resultless_field_kind(code) is None, code
+
+
+# ---- 任意の置き場所（修正計画 W1 の手順 15。画像で補えるようにする）
+
+def optional(res):
+    return [i for i in res.images if i.kind == "optional"]
+
+
+def test_optional_slot_is_not_a_step_and_xml_is_unchanged(journal, meta, tmp_path):
+    """入れないと、XML は今と同じ（<inline-graphic> なし）で、手順 images に数えない。置き場所は状態 unused で一覧にだけ出る。"""
+    path = tmp_path / "opt.docx"
+    article(path, lambda b: [mf.para(S["body"], "矢印を書き，", fld(r"eq \o\ac(○,3)"), "と記した。")])
+    res = run_convert(path, journal, meta, tmp_path)
+    xml = res.xml_path.read_text(encoding="utf-8")
+    assert "inline-graphic" not in xml and "矢印を書き，と記した。" in xml
+    im, = optional(res)
+    assert im.status == "unused" and im.key.startswith("opt") and len(im.key) == 9
+    assert "images" not in [a.key for a in actions(res)]
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and not res.lost_images
+    from jasme_jats.report import images_progress
+    assert images_progress(res) == (0, 0)
+    a, = found(res)
+    assert im.key in a.top and "画像で補うこともできます" in a.top and "入れなくてもかまいません" in a.top
+
+
+def test_optional_image_is_placed_at_the_field_position(journal, meta, tmp_path):
+    """入れると、その位置に <inline-graphic> が入る。文字は不変、DTD 合格、ZIP にも入る。"""
+    from conftest import key_png
+    from jasme_jats.pipeline import add_images
+    path = tmp_path / "opt2.docx"
+    article(path, lambda b: [mf.para(S["body"], "矢印を書き，", fld(r"eq \o\ac(○,3)"), "と記した。")])
+    res = run_convert(path, journal, meta, tmp_path)
+    key = optional(res)[0].key
+    assert add_images(res, {key: ("a.png", key_png(1))}) == [key]
+    xml = res.xml_path.read_text(encoding="utf-8")
+    aid = meta.article_id(journal)
+    assert f'矢印を書き，<inline-graphic xlink:href="{aid}_{key}.png"/>と記した。' in xml
+    assert optional(res)[0].status == "user"
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and not res.image_problems and not res.zip_issues
+    assert not res.lost_images
+    import zipfile
+    assert f"Graphics/{aid}_{key}.png" in "".join(zipfile.ZipFile(res.zip_path).namelist())
+
+
+def test_optional_at_start_end_and_same_code(journal, meta, tmp_path):
+    """段落の先頭・終わりの位置も書ける。同じコードが 2 か所なら 2 つ目の幹に _2 が付く。"""
+    from conftest import key_png
+    from jasme_jats.pipeline import add_images
+    path = tmp_path / "opt3.docx"
+    article(path, lambda b: [mf.para(S["body"], fld(r"EQ \o\ac(○,1)"), "中", fld(r"EQ \o\ac(○,1)"), "身", fld(r"EQ \o\ac(○,2)"))])
+    res = run_convert(path, journal, meta, tmp_path)
+    keys = [i.key for i in optional(res)]
+    assert len(keys) == 3 and keys[1] == keys[0] + "_2" and keys[2] != keys[0]
+    add_images(res, {k: ("x.png", key_png(n)) for n, k in enumerate(keys)})
+    xml = res.xml_path.read_text(encoding="utf-8")
+    aid = meta.article_id(journal)
+    h = [f'<inline-graphic xlink:href="{aid}_{k}.png"/>' for k in keys]
+    assert h[0] + "中" + h[1] + "身" + h[2] in xml
+    assert res.fidelity.final_ok and res.dtd_valid and not res.image_problems
+
+
+def test_optional_inside_bold_and_cell(journal, meta, tmp_path):
+    """太字の途中・表のセルの中のフィールドも、その位置に書ける（文字は不変）。"""
+    from conftest import key_png
+    from jasme_jats.pipeline import add_images
+    path = tmp_path / "opt4.docx"
+    cell_para = mf.para(S["body"], "セルの", fld(r"EQ \o\ac(○,7)"), "文字")
+    article(path, lambda b: [mf.para(S["body"], mf.run("太字の", b=True), fld(r"EQ \o\ac(○,5)"), mf.run("部分", b=True), "である。"),
+                             mf.table([[mf.cell([cell_para]), mf.cell("隣")]])])
+    res = run_convert(path, journal, meta, tmp_path)
+    keys = [i.key for i in optional(res)]
+    assert len(keys) == 2
+    add_images(res, {k: ("x.png", key_png(n)) for n, k in enumerate(keys)})
+    xml = res.xml_path.read_text(encoding="utf-8")
+    aid = meta.article_id(journal)
+    assert f'<bold>太字の</bold><inline-graphic xlink:href="{aid}_{keys[0]}.png"/><bold>部分</bold>である。' in xml
+    assert f'セルの<inline-graphic xlink:href="{aid}_{keys[1]}.png"/>文字' in xml
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and not res.image_problems
+
+
+def test_no_optional_slot_in_title_and_references(journal, meta, tmp_path):
+    """題目・引用文献の中のフィールド（画像を書けない文脈）には置き場所を作らない。XML は今と同じで、要確認 resultless_field は残る。"""
+    import zipfile
+    path = tmp_path / "opt5.docx"
+    article(path, lambda b: [mf.para(S["body"], "本文である。")],
+            refs=lambda b: [mf.para(S["ref"], "文献の", fld(r"EQ \o\ac(○,1)"), "文字列．")])
+    patched = tmp_path / "opt5p.docx"
+    with zipfile.ZipFile(path) as zin, zipfile.ZipFile(patched, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "word/document.xml":
+                text = data.decode("utf-8")
+                end = "フィールドの検証用文書</w:t></w:r>"
+                assert text.count(end) == 1
+                data = text.replace(end, end + fld(r"EQ \o\ac(○,2)")).encode("utf-8")
+            zout.writestr(item, data)
+    res = run_convert(patched, journal, meta, tmp_path)
+    assert len(res.resultless_fields) == 2 and optional(res) == []
+    assert "inline-graphic" not in res.xml_path.read_text(encoding="utf-8")
+    assert res.fidelity.ok and res.dtd_valid and not res.lost_images
+    a, = found(res)
+    assert "画像で補うこともできます" not in a.top and "画像の幹" not in a.top
+
+
+def test_unused_optional_does_not_make_lost(journal, meta, tmp_path):
+    """入れていない任意の置き場所は lost（画像の置き場所がない）にならない。"""
+    path = tmp_path / "opt6.docx"
+    article(path, lambda b: [mf.para(S["body"], "矢印", fld(r"EQ \o\ac(○,3)"), "。")])
+    res = run_convert(path, journal, meta, tmp_path)
+    assert res.lost_images == [] and all(a.key != "lost" for a in actions(res))
+    assert optional(res)[0].status == "unused"
+
+
+def test_optional_image_is_carried_over_and_matched_by_name(journal, meta, tmp_path):
+    """持ち越し: 変換し直しても、同じ幹の任意の画像は入れ直される。まとめて入れるときの名前（幹）でも合う。"""
+    from conftest import key_png
+    from jasme_jats.images import match_names
+    from jasme_jats.pipeline import add_images, kept_images, reapply_images
+    path = tmp_path / "opt7.docx"
+    article(path, lambda b: [mf.para(S["body"], "矢印", fld(r"EQ \o\ac(○,3)"), "。")])
+    res = run_convert(path, journal, meta, tmp_path)
+    key = optional(res)[0].key
+    aid = meta.article_id(journal)
+    matched, unmatched, clashes = match_names([f"{aid}_{key}.png", "other.png"], res.images, aid)
+    assert matched == {key: f"{aid}_{key}.png"} and unmatched == ["other.png"] and not clashes
+    add_images(res, {key: ("a.png", key_png(2))})
+    kept = kept_images(res)
+    res2 = run_convert(path, journal, meta, tmp_path)
+    assert optional(res2)[0].status == "unused"
+    assert reapply_images(res2, kept) == [key]
+    assert optional(res2)[0].status == "user" and "<inline-graphic" in res2.xml_path.read_text(encoding="utf-8")
+    assert not res2.images_dropped and res2.fidelity.final_ok

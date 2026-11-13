@@ -15,7 +15,7 @@ XLINK = "http://www.w3.org/1999/xlink"
 def run(tmp_path, variant, meta, journal):
     path = tmp_path / f"{variant}.docx"
     mf.make_figs(path, variant)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     fid = res.fidelity
     assert fid.ok and fid.final_ok and res.dtd_valid and res.lost_images == [], (fid.missing, fid.conflicts)
     return res, etree.fromstring(res.xml_path.read_bytes().split(b"\n", 2)[2]).find("body")

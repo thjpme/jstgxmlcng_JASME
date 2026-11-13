@@ -269,7 +269,8 @@ MANUAL_ANSWER_HEADING = "## 回答の書き方（必ず守ってください）"
 
 
 def build_request(plan: ArticlePlan, linker, build_exclusions=(), unsplit_names=(), name_splits=()) -> tuple:
-    """AI への依頼（本文の文字列と画像）を作る。戻り値: (テキスト, [画像: (image_id, media_type, bytes)])
+    """AI への依頼（本文の文字列）を作る。戻り値: (テキスト, 画像の一覧)。docx の画像は AI に渡さない（図・表の画像は作業する人が
+    用意する。修正計画 W1）ので、画像の一覧はいつも空（2 つ目の値は W8 が消す）。
 
     build_exclusions は書き出しの段階で出力しないと決めた段落（builder.BuildInfo.exclusions）、unsplit_names は姓と名を分けられ
     なかった氏名 [(段落の ID, 氏名, 言語 ja / en)]（builder.BuildInfo.unsplit_names）。英文の氏名も「姓と名の区切りがない氏名」に
@@ -362,21 +363,13 @@ def build_request(plan: ArticlePlan, linker, build_exclusions=(), unsplit_names=
         basis = "決め方" if sp.how == "longest" else "推定"
         lines.append(f"- [{src}] {kind}: 「{shown}」（{basis}: 姓「{sp.surname}」・"
                      f"名「{sp.given}」。{why}）。英文の著者名・引用文献の表記などから、正しい境目を split_name で指定")
-    images = []
-    for f in plan.figures:
-        for ip in f.image_paras:
-            for img in ip.images:
-                if f.caption is None and img.target:
-                    images.append(img)
-    lines += float_section(plan, images)
-    seen = set()
-    images = [i for i in images if not (i.image_id in seen or seen.add(i.image_id))]
-    return "\n".join(lines), images
+    lines += float_section(plan)
+    return "\n".join(lines), []
 
 
-def float_section(plan: ArticlePlan, images: list) -> list:
+def float_section(plan: ArticlePlan) -> list:
     """依頼文の「位置を決められなかった図表」と「位置を機械的に決めた図表（変更不可）」の節と、文字だけのテキストボックスの
-    節（textbox_section）。images に添付する画像を足す。"""
+    節（textbox_section）。"""
     lines = []
     if not plan.floats:
         return textbox_section(plan)
@@ -409,17 +402,13 @@ def float_section(plan: ArticlePlan, images: list) -> list:
                 if q.is_blank and not q.images:
                     continue
                 lines.append(f"    段落 [{q.src}]（スタイル: {q.style_name}）{para_view(q)[:80]}")
-                images.extend(i for i in q.images if i.target)
             for t in info.tables:
                 cells = [c for c in t.paragraphs() if not c.is_blank or c.images]
                 lines.append(f"    表 {t.tid}（{len(t.rows)} 行。セルの段落: "
                              + "、".join(f"[{c.src}]{para_view(c)[:30]}" for c in cells[:12])
                              + ("…" if len(cells) > 12 else "") + "）")
-                images.extend(i for c in cells for i in c.images if i.target)
             for img in info.images:
                 lines.append(f"    画像 {img.image_id}（グループ図形の画像。{img.width_cm:.1f}cm×{img.height_cm:.1f}cm）")
-                if img.target:
-                    images.append(img)
             if info.reason:
                 lines.append(f"  機械的に決められなかった理由: {info.reason}")
     if fixed:
@@ -526,40 +515,6 @@ def textbox_section(plan: ArticlePlan) -> list:
         for x in fixed:
             lines.append(f"[{x}] 囲み: {_box_at(boxes[x])}に配置済み")
     return lines
-
-
-def image_blocks(doc, images):
-    """AI に見せる画像（png / jpg / gif のみ。EMF などは変換できれば変換する）。
-
-    Word でトリミングした画像（ImageRef.crop）は、Word の表示どおりに切り取ったものを渡す。切り取れない画像（EMF/WMF の
-    トリミング、Exif の向きのある画像など。images.CropError）は渡さない（Word で見せていない部分を外に出さない。AI には
-    依頼文の文字だけ）。"""
-    blocks = []
-    for img in images:
-        data = doc.media.get(img.target)
-        if data is None:
-            continue
-        ext = img.target.rsplit(".", 1)[-1].lower()
-        mt = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif"}.get(ext)
-        if mt is None and ext in ("emf", "wmf"):
-            if img.crop:
-                continue
-            from .images import convert_metafile
-            png, _ = convert_metafile(data, ext, min_width_px=800)
-            if png:
-                data, mt = png, "image/png"
-        if mt is None:
-            continue
-        if img.crop and ext in ("png", "jpg", "jpeg", "gif"):
-            from .images import CropError, crop_image
-            try:
-                out, _, _ = crop_image(data, {"png": "PNG", "jpg": "JPEG", "jpeg": "JPEG", "gif": "GIF"}[ext], img.crop)
-            except CropError:
-                continue
-            if out is not None:
-                data = out
-        blocks.append((img.image_id, mt, data))
-    return blocks
 
 
 # ---------------------------------------------------------------------------- API / 手動
@@ -925,19 +880,15 @@ operations の各項目の意味（すべての操作に 12 項目すべてを�
 - confidence: 高 / 中 / 低"""
 
 
-def manual_prompt(request_text, images) -> str:
+def manual_prompt(request_text, images=()) -> str:
     """手動モード: チャットに貼り付ける依頼文。
 
     チャットの AI は、回答を地の文で書くと引用符を飾り文字（“ ”）に変えることがあり、JSON として読めなくなる。
-    そのため、回答をコードブロック 1 つにまとめるよう求め、形式の見本を示す。
+    そのため、回答をコードブロック 1 つにまとめるよう求め、形式の見本を示す。docx の画像は AI に渡さない（修正計画 W1）ので、
+    画像を添付する案内は書かない（images は使わない。引数は W8 が消す）。
     """
     system = system_prompt()
-    img_note = ""
-    if images:
-        names = "、".join(f"{i}.{mt.split('/')[-1].replace('jpeg', 'jpg')}" for i, mt, _ in images)
-        img_note = (f"\n\n（この依頼には画像が {len(images)} 枚あります。出力フォルダの「AI添付画像」にある {names} を"
-                    "このメッセージに添付してください。ファイル名が画像 ID です。）")
-    return (f"{system}{img_note}\n\n"
+    return (f"{system}\n\n"
             f"{MANUAL_ANSWER_HEADING}\n"
             "- 回答は、```json で始まり ``` で終わるコードブロック 1 つだけにしてください。コードブロックの前後には何も書かないでください。\n"
             "- アーティファクトやファイルにはせず、この会話の中にコードブロックとして書いてください。\n"
@@ -1545,6 +1496,10 @@ def label_ranges(plan: ArticlePlan, split: bool) -> dict:
     return out
 
 
+# formula_image（画像の数式の書き起こし）を採用しない理由（2 章の不採用の一覧）
+FORMULA_IMAGE_WHY = "docx の画像を AI に渡していないので採用しない（画像の数式の書き起こしは使わない）"
+
+
 def apply_ops(ops, plan: ArticlePlan, doc, outcome: AIOutcome, split: bool = False):
     """set_role 以外の操作を検証して適用する（構造を組み直した後の plan に対して）。
 
@@ -1554,11 +1509,6 @@ def apply_ops(ops, plan: ArticlePlan, doc, outcome: AIOutcome, split: bool = Fal
     labels = label_ranges(plan, split)
     ids = {"B": {r.rid for r in plan.refs}, "F": {f.fid for f in plan.figures if f.fid},
            "T": {t.tid for t in plan.tables}, "fn": {f.fid for f in plan.fns}, "FD": {f.fid for f in plan.formulas if f.fid}}
-    images = {}
-    for f in plan.figures:
-        for ip in f.image_paras:
-            for img in ip.images:
-                images[img.image_id] = f
     # リンクを出せない段落（emit の xref が偽の文脈で書く段落）: 題目・著者名・所属・引用文献（no_link_paras）と別行数式
     nolink = dict(plan.no_link_paras())
     for fm in plan.formulas:
@@ -1634,30 +1584,8 @@ def apply_ops(ops, plan: ArticlePlan, doc, outcome: AIOutcome, split: bool = Fal
                                           if not (u.word == word and u.src == src and u.start < rng[1] and rng[0] < u.end)]
             continue
         if kind == "formula_image":
-            fig = images.get(op["image"])
-            if fig is None:
-                outcome.rejected.append((op, f"画像 {op['image']} が見つからない"))
-                continue
-            if fig.caption is not None:
-                outcome.rejected.append((op, "キャプションのある図は数式画像として扱わない"))
-                continue
-            if fig.tables or fig.extra_images or fig.caption_more:
-                # builder は formula_image にすると画像の段落の画像だけを書き直すので、表の文字・移した画像・キャプションの
-                # 続きの段落が落ちてしまう（不変性チェックの不合格、画像の見落とし）
-                outcome.rejected.append((op, "表・他の段落から移した画像・キャプションの続きの段落のある図は、"
-                                             "数式画像として扱うと中身が落ちるので扱わない"))
-                continue
-            mml, err = parse_mathml(op["mathml"])
-            if mml is None:
-                outcome.rejected.append((op, f"MathML として読めない: {err}"))
-                continue
-            fig.formula = mml
-            src = fig.image_paras[0].src if fig.image_paras else ""
-            d = plan.decide("ai", "formula", src, f"画像 {op['image']} を数式と判断し、読み取った MathML を併記した"
-                            f"（元の画像も残している）。読み取り結果: {math_display_text(mml)}。{op['reason']}",
-                            op["confidence"])
-            fig.formula_decision = d.did
-            outcome.accepted.append((op, d))
+            # docx の画像を AI に渡さなくなった（修正計画 W1）ので、画像を読み取った数式は使わない（操作そのものは W8 が消す）
+            outcome.rejected.append((op, FORMULA_IMAGE_WHY))
             continue
         if kind == "split_name":
             src = op["src"]

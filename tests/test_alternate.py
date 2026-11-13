@@ -128,7 +128,7 @@ def test_symex_is_read_by_route1(tmp_path, journal, meta):
     n10_article(tmp_path, journal, symex_article(tmp_path))
     docx = tmp_path / "n10.docx"
     assert para_text(source_texts(docx), "視点") == "視点①から始める。"
-    res = convert(docx, meta, journal, Options(out_dir=tmp_path / "r1", convert_metafiles=False))
+    res = convert(docx, meta, journal, Options(out_dir=tmp_path / "r1"))
     out = texts(load(res))
     assert out.count("視点①から始める。") == 1 and sum(t.count("①") for t in out) == 1
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid

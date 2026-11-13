@@ -3,7 +3,7 @@
 ノートブックのセルを短く保ち、テストできるようにするため、表示用の HTML はここで作る。
 Colab の出力欄は暗い配色のこともあるので、枠の中の文字色・背景色は明示し、枠は白地に暗い文字に固定する（`LIGHT_STYLE`。ダークモードでも読める）。
 
-枠の色は 3 つ: 要対応は赤（error_box）、要確認は黄（check_box）、結果の要約は灰（summary_box）。変換の後は、要対応・要確認の
+枠の色は 4 つ: 要対応は赤（error_box）、要確認は黄（check_box）、手順は青（step_box）、結果の要約は灰（summary_box）。変換の後は、要対応・要確認の
 枠（result_boxes）→ 結果の要約（summary_box）→ レポート全文（report_details。畳んで出す）の順に出す。
 """
 from __future__ import annotations
@@ -69,18 +69,13 @@ _TEXTAREA = ("width:100%;box-sizing:border-box;font-family:monospace;font-size:1
              "border:1px solid #9ca3af;border-radius:4px;padding:6px;margin-top:8px")
 
 
-def prompt_box(prompt: str, image_names=()) -> str:
-    """手動モードの依頼文を、コピーボタン付きの目立つ枠で表示する HTML（手順 5 で、結果の枠の前に出す）。"""
+def prompt_box(prompt: str) -> str:
+    """手動モードの依頼文を、コピーボタン付きの目立つ枠で表示する HTML（手順 5 で、結果の枠の前に出す）。docx の画像は AI に
+    渡さない（修正計画 W1）ので、添付する画像はない。"""
     tid = "jasme-prompt-" + uuid.uuid4().hex[:8]
-    imgs = ""
-    if image_names:
-        names = "、".join(html.escape(n) for n in image_names)
-        imgs = (f"<li>画像 {len(image_names)} 枚（{names}）も同じメッセージに添付します。"
-                "画像はブラウザのダウンロードフォルダに保存されています。</li>")
     head = "手動モード: 次の依頼文を AI（claude.ai などのチャット）に渡してください"
     steps = ("<ol style='margin:6px 0 10px 20px;padding:0'>"
              "<li>「依頼文をコピー」を押し、<b>新しいチャット</b>に貼り付けて送信します。</li>"
-             f"{imgs}"
              "<li>返ってきた回答（<code>json</code> と書かれたコードブロック）を、コードブロック右上のコピーボタンでコピーします。</li>"
              "<li>この下の<b>手順 6</b> のセルに貼り付けて ▶ を押します。</li>"
              "</ol>")
@@ -274,7 +269,7 @@ STEP_WORDS = {
         "prompt": "手順 5 の依頼文", "paste": "手順 6 に貼り付けて ▶ を押", "repaste": "手順 6 で貼り付け直し",
         "answer_apply": "手順 6 で AI の回答を貼り付けて ▶ を押す", "convert_again": "手順 5 をもう一度実行",
         "answer_field": "手順 6 の貼り付けの欄", "apply_button": "手順 6 の ▶",
-        "images": "手順 7「足りない画像をアップロード」"},
+        "images": "手順 7「図の画像を入れる」"},
     "app": {
         "docx": "「docx（論文の Word ファイル）」の欄", "pdf": "「PDF（J-STAGE に登載する PDF）」の欄", "route": "「作り方」の欄",
         "meta": "巻・号・ページなどの入力欄",
@@ -285,9 +280,8 @@ STEP_WORDS = {
         "answer_apply": f"AI の回答を「{ANSWER_LABEL}」の欄に貼り付けて「{APPLY_LABEL}」を押す",
         "convert_again": f"「{CONVERT_LABEL}」をもう一度押",
         "answer_field": f"「{ANSWER_LABEL}」の欄", "apply_button": f"「{APPLY_LABEL}」",
-        # 欄の並びの見出し（AppState.images_markdown の「次の図の画像が必要です」）の下に、図ごとの欄が並ぶ。欄の名前は図のキャプション
-        # （出力ファイル名）（AppState.slot_label）
-        "images": "「次の図の画像が必要です」の下に並ぶ、図ごとの欄（欄の名前は図のキャプションと出力ファイル名）"},
+        # 結果の下の「図の画像」の欄（AppState.images_markdown の見出し。まとめて入れる欄・図ごとの行・「画像を入れる」が並ぶ）
+        "images": "「図の画像」の欄"},
     "cli": {
         "docx": "docx の指定", "pdf": "--pdf の指定", "route": "--route の指定", "meta": "--meta の指定",
         "ai_choose": "--ai manual か --ai api を指定して",
@@ -321,14 +315,14 @@ def step_text(text: str, screen: str = "notebook") -> str:
 
 
 def _box(action, screen: str = "notebook") -> str:
-    """report.Action を枠にする（要対応は赤、要確認は黄、手順は青。枠の見出しがなければ空文字。済んだ手順の枠は出さない）。
-    screen は目印の置き換え先（step_text）。"""
+    """report.Action を枠にする（要対応は赤、要確認は黄、手順は青。枠の見出しがなければ空文字。済んだ手順の枠は、本文〈box_detail〉が
+    あるときだけ出す。例: 画像を持ち越したときの、確かめてほしいこと）。screen は目印の置き換え先（step_text）。"""
     from .report import NEEDS_ACTION, STEP
     if action is None or not action.box_title:
         return ""
     title, detail = step_text(action.box_title, screen), step_text(action.box_detail, screen)
     if action.level == STEP:
-        return "" if action.done else step_box(title, detail, failed=action.failed, required=action.required)
+        return "" if action.done and not action.box_detail else step_box(title, detail, failed=action.failed, required=action.required)
     return (error_box if action.level == NEEDS_ACTION else check_box)(title, detail)
 
 
@@ -347,13 +341,13 @@ def result_boxes(res, level=None, skip=(), screen: str = "notebook", blocking: b
 
 
 def missing_images_box(res, screen: str = "notebook") -> str:
-    """画像ファイルを用意できなかった図（Word の図形で描かれた図など）があるときの表示（赤い枠）。なければ空文字。"""
+    """図の画像がまだ残っているときの表示（手順 images の青い枠。report.images_action）。残っていなければ空文字。"""
     from .report import images_action
     return _box(images_action(res), screen)
 
 
 def lost_images_box(res, screen: str = "notebook") -> str:
-    """docx にあるのに XML に入らなかった画像（引用文献の段落の中の画像など）があるときの表示（赤い枠）。なければ空文字。"""
+    """画像を入れる場所を作れなかった画像（引用文献の段落の中の画像など。report.lost_action）があるときの表示（赤い枠）。なければ空文字。"""
     from .report import lost_action
     return _box(lost_action(res), screen)
 

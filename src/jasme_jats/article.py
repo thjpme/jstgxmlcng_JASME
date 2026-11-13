@@ -65,6 +65,7 @@ class ImageSlot:
     label は「図3」「図1-2」（番号を読めなければ ""）、caption はキャプションの段落（なければ None）、src は場所を示す段落の ID、
     covers はこの 1 枚に写るとみなした ImageRef の一覧（docx の順）、float_id は図形の ID（図形の中身なら）、how は含めた決め方の
     記録、note は備考。
+    任意の置き場所（結果のないフィールド〈EQ の囲い文字など〉の位置）は covers が空で、pos・code で位置を示す。画像を入れたときだけ XML に残る。
     """
     key: str
     kind: str
@@ -76,6 +77,9 @@ class ImageSlot:
     place: str = "fig"
     how: str = ""
     note: str = ""
+    # 任意の置き場所（kind が optional）だけ: フィールドの位置（src の段落の文字〈Para.text_only〉の中の文字数）とフィールドコード
+    pos: int = -1
+    code: str = ""
 
 
 @dataclass(eq=False)

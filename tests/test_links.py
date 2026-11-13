@@ -22,7 +22,7 @@ from lxml import etree
 from jasme_jats.linker import RE_FIGREF, RE_TABREF, Linker, find_in_para
 from jasme_jats.model import Atom, LinkSpec, Para
 from jasme_jats.pipeline import Options, _mechanical, convert
-from jasme_jats.report import TO_CHECK, actions, step
+from jasme_jats.report import TO_CHECK, actions, blocking, step
 from jasme_jats.structure import ArticlePlan
 
 S = mf.S
@@ -93,8 +93,7 @@ def links(journal, tmp_path_factory):
     from jasme_jats.config import ArticleMeta
     meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "lpage": "12", "pub_date": "2026-03-31",
                                   "received": "2025-06-01", "accepted": "2025-11-20", "peer_review": "あり"})
-    return convert(LINKS, meta, journal, Options(out_dir=tmp_path_factory.mktemp("links"), ai_mode="manual",
-                                                 convert_metafiles=False))
+    return convert(LINKS, meta, journal, Options(out_dir=tmp_path_factory.mktemp("links"), ai_mode="manual"))
 
 
 def article(tmp_path, body, notes=NOTES3):
@@ -134,7 +133,7 @@ def test_superscript_notes_bare(journal, meta, tmp_path):
     """番号だけの上付きの論文: かな・閉じ括弧の後ろの ¹ ² はリンクし、「4 m」＋² はリンクしない。上付きの「1-3」は 1 と 3、
     「1, 2」は 1 と 2（xref に空白を入れない）。文の括弧を閉じる直前の上付きの「3」＋本文の「）」（「（…述べる³）」）はリンクするが、
     論文の書き方を「1)」の書き方にしない（ほかの番号だけの注番号もリンクしたまま。0.26.0 と同じ）。"""
-    res = convert(LINKS_BARE, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    res = convert(LINKS_BARE, meta, journal, Options(out_dir=tmp_path))
     root = load(res)
     expect = {
         "これは架空の主張である": [("主張である", "1", "fn1")],
@@ -177,7 +176,8 @@ def test_unlinked_superscripts_are_recorded(links):
         for m in msgs:
             assert m in report
             assert f"- [{src}] 推定: {m}" in prompt
-    assert [a.key for a in actions(links)] == ["ai_pending"]      # 記録だけ（手動モードの回答待ちのほかに知らせはない）
+    # 記録だけ（手動モードの回答待ちと、図の画像を入れる手順のほかに知らせはない）
+    assert [a.key for a in actions(links)] == ["ai_pending", "images"]
 
 
 def test_link_note_from_record_is_accepted(links, journal, meta, tmp_path):
@@ -187,7 +187,7 @@ def test_link_note_from_record_is_accepted(links, journal, meta, tmp_path):
         msg = records(links, prefix)[-1]
         [(t, k)] = RE_ITEM.findall(msg)
         ops.append(op("link_note", src_of(links, prefix), t, int(k), "fn2"))
-    res = convert(LINKS, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", convert_metafiles=False,
+    res = convert(LINKS, meta, journal, Options(out_dir=tmp_path, ai_mode="manual",
                                                 ai_response=json.dumps({"operations": ops}, ensure_ascii=False)))
     assert len(res.ai.accepted) == 2 and res.ai.rejected == []
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
@@ -201,7 +201,7 @@ def test_exponent_without_note_is_not_unresolved(journal, meta, tmp_path):
     はっきりした上付きの「5)」で注 5 がないものは、今までどおり 3 章に出る。"""
     path = article(tmp_path, [mf.para(S["body"], "面積は 3 cm", mf.run("2", sup=True), " である", mf.run("1)", sup=True), "。"),
                               mf.para(S["body"], "一覧にない注である", mf.run("5)", sup=True), "。")], notes=NOTES3[:1])
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     fn = [(u[2], u[3]) for u in res.unresolved_after if u[0] == "fn"]
     assert fn == [("5)", "上付きの「5)」に対応する注が見つからない")]
     assert records(res, "面積は 3 cm") == []
@@ -240,7 +240,7 @@ def test_exponent_without_note_is_not_unresolved(journal, meta, tmp_path):
 def test_superscript_boundaries(prefix, body, links_, bare_notes, recorded, journal, meta, tmp_path):
     """上付きの注番号の規則の境界（prefix で始まる段落のリンク・論文の書き方・その段落の記録の有無）。"""
     path = article(tmp_path, body)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert same_links(*para_links(load(res), prefix), links_)
     assert _mechanical(path, journal)[2].bare_notes is bare_notes
     assert bool(records(res, prefix)) is recorded
@@ -253,7 +253,7 @@ def test_note_marks_inside_box(journal, meta, tmp_path):
                   "。これを確かめよ。")
     path = article(tmp_path, [mf.para(S["body"], "本文の段落である", mf.run("2)", sup=True), "。",
                                       mf.textbox_inline(box, 4101, cx=12 * 360000, cy=2 * 360000))])
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
     [bt] = load(res).iter("boxed-text")
     [bp] = bt.iter("p")
@@ -271,7 +271,7 @@ def test_note_style_counts_box_and_cell(where, journal, meta, tmp_path):
     else:
         holder = [mf.para(S["tab_cap"], "表1\u3000架空の表"), mf.table([[mf.cell("観点"), mf.cell(shaped)]])]
     path = article(tmp_path, [mf.para(S["body"], "番号だけの主張である", mf.run("2", sup=True), "。"), *holder])
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     assert _mechanical(path, journal)[2].bare_notes is False
     assert same_links(*para_links(load(res), "番号だけの主張である"), [])
@@ -371,7 +371,7 @@ def test_link_figure_from_record_is_accepted(links, journal, meta, tmp_path):
     msg = records(links, "地図1と図表1", "figure")[1]          # 概念図1
     t, k = re.search(r"link_figure（text「(.+?)」、occurrence (\d+)）", msg).groups()
     response = json.dumps({"operations": [op("link_figure", src_of(links, "地図1と図表1"), t, int(k), "F1")]}, ensure_ascii=False)
-    res = convert(LINKS, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=response, convert_metafiles=False))
+    res = convert(LINKS, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=response))
     assert len(res.ai.accepted) == 1 and res.fidelity.ok
     assert same_links(*para_links(load(res), "地図1と図表1", ("fig",)), [("概念", "図1", "F1")])
 
@@ -461,7 +461,7 @@ def test_figure_ref_before_superscript_note_converts(journal, meta, tmp_path):
                 mf.para(S["fn_head"], "注"), mf.para(S["body"], "1) 一つ目の架空の注。")]
     path = tmp_path / "figsup.docx"
     mf.make_article(path, "リンクの境界の検証用文書", parts)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
     assert same_links(*para_links(load(res), "結果を図1", ("fig", "fn")),
                       [("結果を", "図1", "F1"), ("図1", "1)", "fn1"), ("実験結果", "Fig. 1", "F1")])
@@ -510,7 +510,7 @@ def test_figure_number_then_superscript_note_converts(marked, journal, meta, tmp
                 mf.para(S["fn_head"], "注"), *(mf.para(S["body"], n) for n in NOTES3)]
     path = tmp_path / "fignum.docx"
     mf.make_article(path, "リンクの境界の検証用文書", parts)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
     assert _mechanical(path, journal)[2].bare_notes is not marked
     root = load(res)
@@ -552,7 +552,7 @@ def test_note_style_ignores_note_list_and_references(journal, meta, tmp_path):
     mf.make_article(path, "リンクの境界の検証用文書", parts, refs=lambda b: [
         mf.para(S["ref"], "試験七郎（2023）．「架空の論文", mf.run("1)", sup=True), "」．『架空誌』，第3巻，pp.1-2．")])
     assert _mechanical(path, journal)[2].bare_notes is True
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     assert same_links(*para_links(load(res), "番号だけの主張である"), [("主張である", "1", "fn1")])
 
@@ -608,8 +608,7 @@ def test_route2_note_style_change(variant, journal, meta, tmp_path, monkeypatch)
     assert _mechanical(path, journal)[2].bare_notes is True
     monkeypatch.setattr(pdfmatch, "extract_pages", lambda p: pages)
     (tmp_path / "dummy.pdf").write_bytes(b"%PDF-1.4\n")
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", pdf_path=tmp_path / "dummy.pdf", route="pdf",
-                                               convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", pdf_path=tmp_path / "dummy.pdf", route="pdf"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     fixes = [(f.old, f.new, f.applied, f.reason) for f in res.docx_fix.fixes]
     xrefs = [(text(x), x.get("rid")) for x in load(res).iter("xref") if x.get("ref-type") == "fn"]
@@ -637,7 +636,7 @@ def test_superscript_exponent_not_linked(journal, meta, tmp_path):
     注 2 があっても注へのリンクにしない。"""
     path = article(tmp_path, [mf.para(S["body"], "面積は 3 cm", mf.run("2", sup=True), " である", mf.run("1)", sup=True), "。")],
                    notes=NOTES3[:2])
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     links_ = [(text(x), x.get("rid")) for x in load(res).iter("xref") if x.get("ref-type") == "fn"]
     assert ("1)", "fn1") in links_
     assert ("2", "fn2") not in links_
@@ -660,7 +659,7 @@ def test_caption_more_is_linked(journal, meta, tmp_path):
                 mf.para(S["fn_head"], "注"), mf.para(S["body"], NOTES3[0])]
     path = tmp_path / "k3.docx"
     mf.make_article(path, "リンクの境界の検証用文書", parts)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
     root = load(res)
     [fig] = list(root.iter("fig"))
@@ -706,7 +705,7 @@ def test_branch_figure_numbers_are_not_linked(journal, meta, tmp_path):
             mf.para(S["body"], "図1-2、図3は架空である。")]
     path = floats_article(tmp_path, body, ["図1-1　架空の図", "図1-2　もう一つの図", "図2.1　枝番の図",
                                                      "図3　ふつうの図"])
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
     root = load(res)
     assert float_links(root, "図1-1と図1-2を比べる") == [("3", "fig", "F4")]
@@ -717,7 +716,8 @@ def test_branch_figure_numbers_are_not_linked(journal, meta, tmp_path):
     recs = [d for d in plan.decisions if d.category == "figure" and not d.applied and "リンクしなかった" in d.message]
     assert len(recs) == 6 and all("link_figure" in d.message for d in recs)
     [act] = [a for a in actions(res) if a.key == "float_ref"]
-    assert act.level == TO_CHECK and "図1-1" in act.top and "図2.1" in act.top and not res.needs_action
+    assert act.level == TO_CHECK and "図1-1" in act.top and "図2.1" in act.top
+    assert [a.key for a in blocking(actions(res))] == ["images"]       # 要確認なので止めない（止めるのは図の画像の手順だけ）
     assert "図1-1" in act.box_detail and "図1-1" in act.cli
     assert "手順" not in act.top + act.box_detail + act.cli + act.checklist
     # 内部の操作名を出さず、そのままでもよいこと・付けるなら XML のどこをどうするかを言う（F13）
@@ -751,7 +751,7 @@ def test_duplicate_figure_numbers_are_not_linked(journal, meta, tmp_path):
     body = [mf.para(S["body"], "図1と図2を見る。表1と表2を見る。")]
     path = floats_article(tmp_path, body, ["図1　一つ目の図", "図1　二つ目の図", "図2　三つ目の図"],
                           ["表1　一つ目の表", "表2　二つ目の表", "表2　三つ目の表"])
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
     assert float_links(load(res), "図1と図2を見る") == [("2", "fig", "F3"), ("表1", "table", "T1")]
     assert [(u.word, u.text) for u in res.plan.float_unlinked] == [("図", "図1"), ("表", "表2")]
@@ -764,7 +764,7 @@ def test_branch_ref_not_range_only_with_branch_captions(journal, meta, tmp_path)
     """枝番のキャプションがない論文では、「図1-2」は今までどおり範囲（図1〜図2）として読み、図1 と図2 にリンクする（知らせも出ない）。"""
     body = [mf.para(S["body"], "図1-2を見る。表1、2も見る。")]
     path = floats_article(tmp_path, body, ["図1　一つ目の図", "図2　二つ目の図"], ["表1　一つ目の表", "表2　二つ目の表"])
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert float_links(load(res), "図1-2を見る") == [("図1", "fig", "F1"), ("2", "fig", "F2"), ("表1", "table", "T1"),
                                                   ("2", "table", "T2")]
     assert res.plan.float_unlinked == [] and [a for a in actions(res) if a.key == "float_ref"] == []
@@ -775,7 +775,7 @@ def test_branch_table_numbers_only_affect_tables(journal, meta, tmp_path):
     body = [mf.para(S["body"], "図1-2と表1-2と表3を見る。")]
     path = floats_article(tmp_path, body, ["図1　一つ目の図", "図2　二つ目の図"],
                           ["表1-1　一つ目の表", "表1-2　二つ目の表", "表3　三つ目の表"])
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert float_links(load(res), "図1-2と表1-2") == [("図1", "fig", "F1"), ("2", "fig", "F2"), ("3", "table", "T3")]
     assert [(u.word, u.text) for u in res.plan.float_unlinked] == [("表", "表1-2")]
 
@@ -838,7 +838,7 @@ def test_en_dash_branch_caption_label_and_links(split, journal, meta, tmp_path):
     リンクせず要確認で知らせる。split_labels=False では <label> を作らず、キャプションの文字は変わらない。"""
     body = [mf.para(S["body"], "図1–2を見る。図1も見る。図3を見る。")]
     path = floats_article(tmp_path, body, ["図1–1　最初の図", "図1–2　次の図", "図3　別の図"])
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False, split_labels=split))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", split_labels=split))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     root = load(res)
     caps = ["".join(c.itertext()) for c in root.iter("caption")]
@@ -874,7 +874,7 @@ def test_year_after_dash_is_not_a_branch(split, journal, meta, tmp_path):
     リンクする。split_labels=False ではキャプションの文字は変わらない。"""
     body = [mf.para(S["body"], "図1を見る。")]
     path = floats_article(tmp_path, body, ["図1―2019年度の推移", "図2　別の図"], name="g4")
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False, split_labels=split))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", split_labels=split))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     root = load(res)
     if split:
@@ -897,7 +897,7 @@ def _float_ref_states(tmp_path, journal, meta):
 
 def _manual(path, ops, meta, journal, out):
     resp = json.dumps({"operations": ops, "placements": [], "notes": []}, ensure_ascii=False)
-    return convert(path, meta, journal, Options(out_dir=out, ai_mode="manual", ai_response=resp, convert_metafiles=False))
+    return convert(path, meta, journal, Options(out_dir=out, ai_mode="manual", ai_response=resp))
 
 
 def _link_op(src, target, occurrence=1, text="図1"):
@@ -915,13 +915,13 @@ def test_h3_float_ref_advice_follows_the_ai_state(journal, meta, tmp_path):
     （以前は、回答待ちや AI を使った後にも「AI による補完を使う設定で変換し直すと…」と勧めた）。AI がリンクを付けた参照は残りから除く。"""
     path, src = _float_ref_states(tmp_path, journal, meta)
     # (1) AI を使っていない: AI による補完を使う設定にして変換し直すことを勧める（画面ごとの語は目印）
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "none", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "none"))
     assert len(res.plan.float_unlinked) == 2
     act = _float_ref(res)
     assert "AI による補完を使う設定（API か手動）で変換し直すと" in act.top and step("ai_choose") + "変換し直すと" in act.box_detail
     assert "--ai manual か --ai api を指定して変換し直すと" in act.cli
     # (2) 手動で回答待ち: 回答を反映すると AI がリンクを付けること、反映した後に残る分をこの知らせで確かめることを言う。設定の変更は勧めない
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "pending", ai_mode="manual", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "pending", ai_mode="manual"))
     act = _float_ref(res)
     assert "AI の回答を反映すると" in act.top and "もう一度出る" in act.top and "設定（API か手動）" not in act.top
     assert step("answer_apply") + "と" in act.box_detail and step("ai_choose") not in act.box_detail
@@ -942,8 +942,7 @@ def test_h3_float_ref_advice_follows_the_ai_state(journal, meta, tmp_path):
     res = _manual(path, [_link_op(src, "F99", 1)], meta, journal, tmp_path / "none_ok")
     assert len(res.plan.float_unlinked) == 2 and "AI もリンクを付けませんでした" in _float_ref(res).top
     # (6) 回答を読み込めなかった: AI は反映されていない。設定の変更ではなく回答を反映できたらと言う
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "bad", ai_mode="manual", ai_response="これは JSON ではない",
-                                               convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "bad", ai_mode="manual", ai_response="これは JSON ではない"))
     assert res.ai.error
     act = _float_ref(res)
     assert "AI による補完が反映できていません" in act.top and "AI の回答を反映できたら" in act.top
@@ -958,7 +957,7 @@ def test_manual_fields_hidden_when_result_was_not_made_in_manual_mode(journal, m
 
     from jasme_jats.app import AppState
     path, src = _float_ref_states(tmp_path, journal, meta)
-    none = convert(path, meta, journal, Options(out_dir=tmp_path / "none", convert_metafiles=False))
+    none = convert(path, meta, journal, Options(out_dir=tmp_path / "none"))
     assert none.ai.mode == "none" and [a for a in actions(none) if a.key == "float_ref"]
     st = AppState(tmp_path / "w")
     st.set_inputs(ai_mode="none")
@@ -1016,7 +1015,7 @@ def test_float_ref_advice_names_operations_each_screen_can_take(journal, meta, t
         return {"report": act.top, "notebook": step_text(act.box_detail, "notebook"), "app": step_text(act.box_detail, "app"),
                 "cli": act.cli}
     # (b) 回答待ち（手動）
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "pending", ai_mode="manual", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "pending", ai_mode="manual"))
     t = texts(res)
     assert "手順 6 で AI の回答を貼り付けて ▶ を押すと" in t["notebook"]
     assert "「反映」を押すと、AI が指定した参照にリンクが付く" in t["app"] and "「反映」を押して変換し直すと" not in t["app"]
@@ -1037,7 +1036,7 @@ def test_float_ref_advice_names_operations_each_screen_can_take(journal, meta, t
     st.res, st.run = res, SimpleNamespace(ai_mode="manual")
     assert st.answer_box_open                                   # 案内のとおり、貼り付け直す欄が見えている
     # (c) AI を使った後（API）: もう一度変換する
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "api_done", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "api_done"))
     res.ai = AIOutcome(mode="api")
     res.ai.raw = "{}"
     t = texts(res)
@@ -1047,7 +1046,7 @@ def test_float_ref_advice_names_operations_each_screen_can_take(journal, meta, t
     real = pipeline.call_provider
     pipeline.call_provider = lambda *a, **k: _api_failed()
     try:
-        res = convert(path, meta, journal, Options(out_dir=tmp_path / "api_err", ai_mode="api", ai_api_key="x", convert_metafiles=False))
+        res = convert(path, meta, journal, Options(out_dir=tmp_path / "api_err", ai_mode="api", ai_api_key="x"))
     finally:
         pipeline.call_provider = real
     assert res.ai.error and res.ai.mode == "api"
@@ -1058,8 +1057,7 @@ def test_float_ref_advice_names_operations_each_screen_can_take(journal, meta, t
     assert "「変換する」をもう一度押して AI による補完ができれば" in t["app"]
     assert "--ai api でもう一度実行して AI による補完ができれば" in t["cli"]
     # 回答を読めなかった手動モードは、今までどおり「AI の回答を反映できたら」
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "bad", ai_mode="manual", ai_response="これは JSON ではない",
-                                               convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "bad", ai_mode="manual", ai_response="これは JSON ではない"))
     assert "AI の回答を反映できたら" in texts(res)["report"]
 
 
@@ -1078,7 +1076,7 @@ def test_cli_ai_response_needs_ai_manual(journal, meta, tmp_path, capsys):
     from jasme_jats.cli import main
     resp = tmp_path / "回答.json"
     resp.write_text('{"operations": [], "placements": [], "notes": []}', encoding="utf-8")
-    base = [str(FULL), "--meta", str(META_EXAMPLE), "--no-metafile-conversion", "--ai-response", str(resp)]
+    base = [str(FULL), "--meta", str(META_EXAMPLE), "--ai-response", str(resp)]
     for extra in ([], ["--ai", "none"], ["--ai", "api"]):
         with pytest.raises(SystemExit) as e:
             main(base + extra + ["--out", str(tmp_path / "out")])

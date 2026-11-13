@@ -17,7 +17,6 @@ from pathlib import Path
 from .ai_assist import PROVIDERS
 from .docx_reader import table_where
 from .linker import body_paragraphs, linked_ids
-from .images import crop_text
 from .model import note_key, note_label
 from .ooxml import FIELD_DRAWN
 from .package import article_dir
@@ -123,35 +122,204 @@ def float_places(plan) -> str:
     return "本文の最後" if n["end"] else "アンカー段落の後ろ"
 
 
-def _image_captions(r) -> dict:
-    """画像の置き場所の幹（article.ImageSlot.key。images.ImageResult.key）→ 図・表のキャプション（図〈<fig>〉・画像で貼った表の
-    置き場所と、表のセルの図キャプションの図。キャプションのない図は ""。キャプションのない段落の中の置き場所は含まれない）。"""
-    return {s.key: (s.caption.plain().strip() if s.caption is not None else "")
-            for s in r.plan.slots if s.place in ("fig", "table") or s.kind == "fig"}
+def _head(p, n=20) -> str:
+    """段落の文字の先頭 n 字（長ければ「…」を付ける）。場所の文に使う（docx の文字のまま）。"""
+    t = p.text_only().strip() if p is not None else ""
+    return t[:n] + ("…" if len(t) > n else "")
 
 
-def images_to_prepare(r) -> list:
-    """利用者が用意する必要のある画像（画像ファイルがない Word の図形、変換できなかった EMF など）。
+def slot_where(r, slot) -> str:
+    """画像の置き場所 slot（article.ImageSlot）の場所を人に示す文。場所の文を書く所（手順 images の行・図の画像の一覧の「場所」の列・
+    コマンドラインの行など）は、すべてこれを使う（修正計画 W1 の 2.8）。
 
-    戻り値: [(出力ファイル名, 図のキャプション, 理由)]。レポートの冒頭・14 章、Colab の枠、コマンドラインの表示で使う。
-    理由には、置き場所の備考（article.ImageSlot.note。表のセルで画像を見つけられなかった理由、表で組めなかった理由、本文の
-    最後に置いた理由など）があれば、括弧に入れて添える。
+    キャプションのある置き場所（図・表・表のセルの図）は章の見出しだけ（「章「3．結果」」。場所はキャプションで分かる）。
+    キャプションのない置き場所は、行内（place inline）なら「「{段落の先頭 20 字}」の段落の中」、場所を示す段落 slot.src 自身に文字が
+    あれば「「…」の段落の後ろ」（段落に結び付いた画像の図）、なければ前の文字のある段落の「「…」の段落の後ろ」か、章の最初なら
+    「章「{見出し}」の最初」（structure.text_before）。図形の中身から組んだキャプションのない図は、図を置いた位置の前の文字のある
+    段落で書く。章の見出しが分かれば、後ろに「（章「…」）」を添える。
     """
-    caps = _image_captions(r)
-    notes = {s.key: s.note for s in r.plan.slots if s.note} if r.plan is not None else {}
+    from .structure import text_before
+    plan = r.plan
+    heading, para = text_before(plan, slot.src, slot)
+    chapter = f"章「{_head(heading)}」" if heading is not None else ""
+    if slot.caption is not None:
+        return chapter
+    # 図形の中身から組んだ図（float_id のある <fig>）は、図を置いた位置の前の段落で書く（機械的な配置ではアンカー段落の前に
+    # 置くので、アンカー段落の「後ろ」とは書かない）
+    own = plan.paras.get(slot.src) if not (slot.float_id and slot.place == "fig") else None
+    if own is not None and own.text_only().strip():
+        para = own
+    if para is None:
+        return f"{chapter}の最初" if chapter else "本文の最初"
+    if heading is not None and para is heading:
+        chapter = ""
+    where = "の段落の中" if slot.place == "inline" and para is own else "の段落の後ろ"
+    return f"「{_head(para)}」{where}" + (f"（{chapter}）" if chapter else "")
+
+
+def decoration_where(r, img, anchor_src: str = "") -> str:
+    """飾りの図形 img（model.ImageRef。decoration のあるもの）の場所を人に示す文（9 章の飾りの一覧。pipeline.decorations）。
+
+    浮動配置の図形の中（float_id があり、図形のアンカー段落 anchor_src が分かる）なら「図形 s3（「{アンカー段落の先頭 20 字}」の段落に
+    結び付いている）」、そうでなければ画像の置き場所と同じ書き方（slot_where。文字のある段落の中なら「…の段落の中」、飾りだけの段落なら
+    前の文字のある段落の「…の段落の後ろ」）。
+    """
+    from .article import ImageSlot
+    plan = r.plan
+    if img.float_id and anchor_src:
+        head = _head(plan.paras.get(anchor_src))
+        return f"図形 {img.float_id}（" + (f"「{head}」の段落に結び付いている" if head else f"段落 {anchor_src} に結び付いている") + "）"
+    own = plan.paras.get(img.para_src)
+    if own is not None and own.text_only().strip():
+        return slot_where(r, ImageSlot(key="", kind="nocap", src=img.para_src, place="inline"))
+    # 飾りだけの段落（空白だけの段落と同じく除外され、要素の木にない）は、docx の順で前の文字のある段落（図形・テキストボックスの
+    # 中の段落を除く）の後ろと書く
+    prev = None
+    for src, p in plan.paras.items():
+        if src == img.para_src:
+            break
+        if p.text_only().strip() and not p.float_id and not p.in_textbox:
+            prev = p
+    if prev is None:
+        return slot_where(r, ImageSlot(key="", kind="nocap", src=img.para_src, place="fig"))
+    return slot_where(r, ImageSlot(key="", kind="nocap", src=prev.src, place="fig"))
+
+
+# 飾りの図形の種類（model.Decoration.kind）の言い方（9 章・図の画像の一覧の備考）
+DECORATION_JA = {"frame": "枠", "mask": "白い四角", "line": "線や矢印", "textgroup": "文字の図形の集まり"}
+
+
+# 画像の置き場所の状態（images.SlotImage.status）の言い方（図の画像の一覧の「入れた画像」の列と備考）
+OPTIONAL_CAPTION = "（画像で補える文字の位置。任意）"      # 任意の置き場所（結果のないフィールドの位置）の行の、図・表とキャプションの列
+IMAGE_STATUS_JA = {"missing": "未", "user": "入れた", "skipped": "入れない", "unused": "入れていない（任意）"}
+
+
+@dataclass
+class ImageRow:
+    """図の画像の一覧の 1 行（image_rows。9 章の表・画面の欄・コマンドラインの表・図の確かめの一覧が同じものを使う）。
+
+    key は置き場所の幹、name は Graphics/ の中の名前、label は「図3」「表1」（キャプションのない画像は ""）、caption はキャプションの
+    文字（docx の文字のまま。なければ ""）、where は場所（slot_where）、place は位置の決め方（structure.PLACE_JA の語）、status は
+    images.SlotImage.status、detail は入れた画像の元のファイル名・形式・幅×高さ px・KB、note は備考（修正計画 W1 の 4.3 の順に「。」で
+    つないだもの）、image は images.SlotImage、slot は article.ImageSlot。slot_note は置き場所の備考（ImageSlot.note。手順 images の行の
+    括弧に添えるもの。図形で描いた図では「docx でこの図の画像を見つけられませんでした」の代わりに、図形で描いた図の備考）、drawn は
+    図形で描いた図の図形の種類（「文字の図形の集まり」など。そうでなければ ""）。
+    """
+    key: str
+    name: str
+    kind: str
+    label: str
+    caption: str
+    where: str
+    place: str
+    status: str
+    detail: str
+    note: str
+    image: object = None
+    slot: object = None
+    slot_note: str = ""
+    drawn: str = ""
+
+
+def _image_detail(i) -> str:
+    """入れた画像の元のファイル名・形式・幅×高さ px・KB（入れていなければ ""）。"""
+    if i.status != "user":
+        return ""
+    parts = [i.source_name] if i.source_name else []
+    parts.append((i.format or "").upper().replace("JPG", "JPEG"))
+    if i.size:
+        parts.append(f"{i.size[0]}×{i.size[1]} px")
+    parts.append(f"{max(1, round(i.bytes / 1024))} KB")
+    return "・".join(x for x in parts if x)
+
+
+def _covers_note(slot) -> str:
+    """1 枚にまとめる図の備考: 置き場所に docx の画像の位置が 2 つ以上あるとき（covers が 2 つ以上）。"""
+    if len(slot.covers) < 2:
+        return ""
+    pics = sum(1 for i in slot.covers if not i.shape_only)
+    shapes = len(slot.covers) - pics
+    what = "と".join(x for x in ((f"画像 {pics} 枚" if pics else ""), (f"図形 {shapes} 個" if shapes else "")) if x)
+    return f"docx ではこの図に{what}（1 枚にまとめた画像を入れてください）"
+
+
+HOW_NOTES = {"near": "近くの段落に結び付いた画像をこの図に含めた", "same_para": "キャプションの段落の中の画像をこの図に含めた"}
+
+
+def drawn_note(kinds: str) -> str:
+    """図形で描いた図の備考（修正計画 W1 の 4.3 の備考の 4）。kinds は図形の種類の言い方（「文字の図形の集まり」など）。"""
+    return f"Word の図形（{kinds}）で描いた図です。出版版 PDF から図の部分を切り取って入れてください"
+
+
+def drawn_figures(r) -> dict:
+    """図形で描いた図: {置き場所の幹: 図形の種類の言い方（「文字の図形の集まり」など。「・」でつなぐ）}（Result.decorations の figure のあるもの）。"""
+    out = {}
+    for d in getattr(r, "decorations", []):
+        if d.figure:
+            out.setdefault(d.figure, [])
+            kind = DECORATION_JA.get(d.kind, d.kind)
+            if kind not in out[d.figure]:
+                out[d.figure].append(kind)
+    return {k: "・".join(v) for k, v in out.items()}
+
+
+def image_rows(r) -> list:
+    """図の画像の一覧（ImageRow。XML の順〈structure.figure_rows〉）。手順 images の行・9 章の表・画面・コマンドラインが使う。
+
+    行は、出力した画像の置き場所（Result.images）ごとに 1 つ（表で組んだ図など、置き場所のない図・表は入らない）。備考は、状態（未・
+    入れない）、置き場所の備考（ImageSlot.note。表で組めなかった理由・表のセルで画像を決められなかった理由と候補・本文の最後に置いた
+    理由。必ず出す）、1 枚にまとめる図、図形で描いた図（Result.decorations の figure）、含め方（近くの段落・キャプションの段落の中の
+    画像を含めた）、キャプションが変わった持ち越し、同じ中身の画像が入っている図、の順。図形で描いた図は、置き場所の備考の
+    「docx でこの図の画像を見つけられませんでした」（structure.NO_FIGURE_IMAGE）を出さない（画像がないのは図形で描いたため）。
+    """
+    from .structure import NO_FIGURE_IMAGE, PLACE_JA, figure_rows
+    if r.plan is None:
+        return []
+    slots = {s.key: s for s in r.plan.slots}
+    places = {}
+    for row in figure_rows(r.plan):
+        if row.key:
+            places.setdefault(row.key, PLACE_JA.get(row.place, row.place))
+    same = {}
+    for i in r.images:
+        if i.status == "user" and i.sha1:
+            same.setdefault(i.sha1, []).append(i)
+    changed_keys = {c.key for c in getattr(r, "images_changed", [])}
+    drawn = drawn_figures(r)
     out = []
     for i in r.images:
-        if i.status not in ("missing", "failed"):
-            continue
-        if i.status == "missing" and not i.source and i.image_id:
-            why = "Word の図形・グラフで描かれていて、docx に画像ファイルがない"
-        else:
-            why = i.message             # docx に画像のない図（キャプションだけの図）は、その理由（pipeline.NO_DOCX_IMAGE）
-        note = notes.get(i.key, "")
-        if note and note not in why:
-            why = f"{why}（{note}）"
-        out.append((i.name, caps.get(i.key, ""), why))
+        slot = slots.get(i.key)
+        notes = []
+        if i.status in ("missing", "skipped"):
+            notes.append(IMAGE_STATUS_JA[i.status])
+        slot_note = i.note
+        if i.key in drawn and slot_note.startswith(NO_FIGURE_IMAGE):
+            slot_note = slot_note[len(NO_FIGURE_IMAGE):].lstrip("。")
+        if slot_note:
+            notes.append(slot_note)
+        if slot is not None:
+            notes.append(_covers_note(slot))
+        if i.key in drawn:
+            notes.append(drawn_note(drawn[i.key]))
+            slot_note = "。".join(x for x in (drawn_note(drawn[i.key]), slot_note) if x)
+        if slot is not None:
+            notes += [HOW_NOTES[h] for h in (slot.how or "").split("+") if h in HOW_NOTES]
+        if i.key in changed_keys and i.status == "user":
+            notes.append("入れた後にキャプションが変わりました")
+        others = [o for o in same.get(i.sha1, []) if o is not i] if i.status == "user" and i.sha1 else []
+        if others:
+            notes.append("同じ画像が" + "・".join(o.label or o.key for o in others) + " にも入っています")
+        out.append(ImageRow(key=i.key, name=i.name, kind=i.kind, label=i.label, caption=i.caption, where=i.location,
+                            place=places.get(i.key, ""), status=i.status, detail=_image_detail(i),
+                            note="。".join(x for x in notes if x), image=i, slot=slot, slot_note=slot_note,
+                            drawn=drawn.get(i.key, "")))
     return out
+
+
+def images_progress(r) -> tuple:
+    """手順 images の数: (残りの数, 全部の数)。全部は、任意の置き場所と「入れない」とした置き場所を除いた数（修正計画 W1 の 4.1）。"""
+    need = [i for i in r.images if i.kind != "optional" and i.status in ("missing", "user")]
+    return sum(1 for i in need if i.status == "missing"), len(need)
 
 
 # PDF と照合しない番号の但し書き（8 章・13.4 で共用）
@@ -160,14 +328,17 @@ NUMBERS_NOT_MATCHED_BODY = ("表のセル・囲み・別行数式の段落と、
 NUMBERS_NOT_MATCHED = "（" + NUMBERS_NOT_MATCHED_BODY + "）"
 
 
-LOST_IMAGES_WHY = ("docx にあるのに、画像を出力できない場所（引用文献・題目・著者名・所属の段落など）や、XML に出力しなかった"
-                   "段落の中にあるため、XML にも Graphics/ にも入っていません。このままでは、その画像は J-STAGE の画面に表示されません。")
-LOST_IMAGES_ACTION = ("本文に必要な画像なら、Word でその画像（テキストボックスなどの図形に入っているときは図形ごと）を本文の段落に"
-                      "移してから、変換し直してください。PDF にない装飾など、要らない画像なら、対応は要りません。")
+# 画像を入れる場所を作れなかった画像（要対応 lost。修正計画 W1 の 4.2）の説明と直し方。APP_MOVE_HOW は、本文の外の資料を移す直し方の
+# ただ 1 つの文で、lost・要確認 app_after_refs（・W8 の float_end）が共用する（手順 images の行・置き場所の備考には直し方を書かない）
+LOST_IMAGES_WHY = ("引用文献・注の節や、題目・著者名・所属の段落の中にある画像には、XML に画像を入れる場所を作れません"
+                   "（このままでは、その画像は J-STAGE に載りません）。")
+APP_MOVE_HOW = "Word で資料（見出しと中身）を英文要旨の後ろ（論文の最後）に移して、変換し直してください。"
+LOST_IMAGES_MORE = "題目・著者名・所属の段落の中の画像は、本文の段落に移します。要らない画像なら、Word で消してください。"
+LOST_IMAGES_HOW = "資料の図なら、" + APP_MOVE_HOW + LOST_IMAGES_MORE
 
 
 def lost_image_label(li) -> str:
-    """XML に入らなかった画像（pipeline.lost_images）1 件の見出し。例: img3（段落 d45「試験太郎（2020）」、引用文献 2件目）。
+    """画像を入れる場所を作れなかった画像（pipeline.lost_images）1 件の見出し。例: img3（段落 d45「試験太郎（2020）」、引用文献 2件目）。
 
     レポートの冒頭・9 章・14 章、Colab の枠、コマンドラインの表示で使う。
     """
@@ -238,12 +409,17 @@ def _para_samples(rows, n=5) -> str:
 
 
 def image_summary(r) -> str:
-    """1 章の要約の「画像」の行。XML に入らなかった画像があるときは、XML に出力した画像と分けて書く。"""
-    need = sum(1 for i in r.images if i.status in ("failed", "missing"))
-    if not r.lost_images:
-        return f"{len(r.images)} 件（要対応 {need} 件、9 章）"
-    return (f"XML に出力 {len(r.images)} 件（うち要対応 {need} 件）。ほかに XML に入らなかった画像が {len(r.lost_images)} 件あり、"
-            "要対応（9 章）")
+    """1 章の要約の「画像」の行（修正計画 W1 の 4.4）。画像を入れる場所を作れなかった画像があるときは、それも書く。"""
+    left, total = images_progress(r)
+    if not total:
+        line = "画像の要る図・表はありません"
+    elif left:
+        line = f"図の画像 {total - left}/{total} 枚を入れた（残り {left} 枚。9 章）"
+    else:
+        line = f"図の画像 {total} 枚をすべて入れた（9 章）"
+    if r.lost_images:
+        line += f"。ほかに、画像を入れる場所を作れなかった画像が {len(r.lost_images)} つあり、要対応（9 章）"
+    return line
 
 
 def article_folder(r) -> str:
@@ -1197,34 +1373,99 @@ def figure_text_exclusions(r) -> list:
     return [(src, text) for src, why, text in r.fidelity.excluded if why == TEXTBOX_TEXT_EXCLUDED]
 
 
-# 図表の入ったテキストボックス・グループ図形の中の文字を出力しなかったときの説明と対処（_textbox_figure_text_action）
-FIGURE_TEXT_WHY = ("図・表の入ったテキストボックス・グループ図形の中の、キャプションでも図の本体でもない文字（図の説明・出典など）は、"
-                   "図の一部とみなして本文から除いています。")
-FIGURE_TEXT_HOW = "本文に必要な文字なら、Word でその文字をテキストボックスの外（本文の段落）に出してから、変換し直してください。"
+# 図の画像に写るとみなして XML の本文に出さなかった、図形の中の文字の説明と直し方（要確認 textbox_figure_text。修正計画 W1 の 4.2）
+FIGURE_TEXT_WHY = ("図・表の入った図形（テキストボックス・グループ図形）の中の、キャプションでない文字は、図の画像に写るものとして、"
+                   "XML の本文には出していません（全文はレポートの 6 章）。入れる画像にその文字が写っているか確かめてください。")
+FIGURE_TEXT_HOW = "本文として読ませたい文字なら、Word でその文字を図形の外（本文の段落）に出して、変換し直してください。"
+
+
+def figure_text_groups(r) -> list:
+    """図の画像に写るとみなして除外した段落（figure_text_exclusions）を、その段落を中身に持つ図形ごとにまとめたもの（docx の順）:
+    [(図形の言い方, 字数〈空白を除く〉, 先頭の文字)]。修正計画 W1 の 4.2。
+
+    図形は段落の float_id（浮動配置の図形）か、なければ textbox_id（行内のテキストボックス）で決める。図形の言い方は、その図形の
+    中身から組んだ図・表の置き場所（FloatInfo.nodes の slot の label・key。docx の順）で「図2・図3（fig02・fig03）の図形」、
+    キャプションのない画像なら「キャプションのない画像（img3fa9c2。{slot_where}）の図形」、本文の図キャプションに含めた図形（mode が
+    caption）なら「本文の図キャプション「図5 …」の図（fig05）に含めた図形」、置き場所が 1 つもなければ「図形 s3（{場所}）」。
+    nodes がない図形（行内のテキストボックス・キャプションだけの図形を figure_units が組んだ図）は、キャプションか含めた画像がその図形の
+    中にある置き場所を使う。
+    """
+    plan = r.plan
+    groups = {}
+    for src, text in figure_text_exclusions(r):
+        p = plan.paras.get(src)
+        gid = (p.float_id or f"x:{p.textbox_id}") if p is not None else f"p:{src}"
+        groups.setdefault(gid, []).append((p, text))
+    out = []
+    for gid, rows in groups.items():
+        chars = sum(len("".join(t.split())) for _, t in rows)
+        head = next((t.strip() for _, t in rows if t.strip()), "")
+        head = head[:20] + ("…" if len(head) > 20 else "")
+        out.append((_figure_text_owner(r, gid, rows), chars, head))
+    return out
+
+
+def _figure_text_owner(r, gid, rows) -> str:
+    """figure_text_groups の図形の言い方。"""
+    plan = r.plan
+    fi = plan.floats.get(gid) if not gid.startswith(("x:", "p:")) else None
+    if fi is not None and fi.mode == "caption":
+        slot = next((s for s in plan.slots if s.caption is not None and s.caption.src == fi.caption_src), None)
+        if slot is not None:
+            cap = slot.caption.text_only().strip()
+            cap = cap[:20] + ("…" if len(cap) > 20 else "")
+            return f"本文の図キャプション「{cap}」の図（{slot.key}）に含めた図形"
+    slots = []
+    if fi is not None:
+        slots = [n.slot for n in fi.nodes if getattr(n, "slot", None) is not None]
+    if not slots:
+        def inside(q):
+            if q is None or gid.startswith("p:"):
+                return False
+            return f"x:{q.textbox_id}" == gid if gid.startswith("x:") else q.float_id == gid
+        slots = [s for s in plan.slots if inside(s.caption) or any(inside(plan.paras.get(i.para_src)) for i in s.covers)]
+    slots = list(dict.fromkeys(slots))
+    if slots:
+        named = [s for s in slots if s.label]
+        parts = []
+        if named:
+            parts.append("・".join(s.label for s in named) + "（" + "・".join(s.key for s in named) + "）")
+        parts += [f"キャプションのない画像（{s.key}。{slot_where(r, s)}）" if s.kind == "nocap" else s.key
+                  for s in slots if not s.label]
+        return "と".join(parts) + "の図形"
+    if fi is not None:
+        anchor = plan.paras.get(fi.float.anchor_src)
+        head = _head(anchor)
+        return f"図形 {gid}（" + (f"「{head}」の段落に結び付いている" if head else f"段落 {fi.float.anchor_src} に結び付いている") + "）"
+    p = rows[0][0]
+    if p is not None and p.float_id:
+        return f"図形 {p.float_id}"
+    return f"テキストボックス {p.textbox_id}" if p is not None and p.textbox_id else "図形"
 
 
 def _textbox_figure_text_action(r):
-    """図表の入ったテキストボックス・グループ図形の中の文字を XML に出力しなかった段落（figure_text_exclusions）。なければ None。
+    """要確認 textbox_figure_text: 図の画像に写るとみなして XML の本文に出さなかった、図形の中の文字（figure_text_exclusions）。
+    いつも出す（決定 3）。1 つの知らせで、図形ごとに 1 行（図番号か幹と、字数と先頭の文字。figure_text_groups）。なければ None。
 
-    要確認にとどめる（文字はレポートの 6 章に全文がある。0.19.0〜0.24.1 の暫定の知らせ〈文字だけのテキストボックスも含めて
-    数えていた〉のうち、0.25.0 でも図の一部として除外するものの知らせ。AI の placements では戻せず、set_role も fig_caption・
-    table_caption・exclude しか採らない（本文の段落には戻せない）ので、Word でテキストボックスの外に出してもらう。暫定の判断）。
+    図形の中身の組み方は AI の指定の有無で変わらない（structure.Classifier.float_units）ので、手動モードで AI の回答を貼り戻す前の、
+    位置を決められない図表の中身も数える。文字はレポートの 6 章に全文がある。
     """
-    rows = figure_text_exclusions(r)
-    if not rows:
+    groups = figure_text_groups(r)
+    if not groups:
         return None
-    n = len(rows)
-    what = f"図表の入ったテキストボックス・グループ図形の中の文字 {n} 段落"
-    samples = _para_samples(rows)
+    n = len(groups)
+    lines = [f"・{owner}: {chars} 字「{head}」" for owner, chars, head in groups]
+    title = f"図の画像に写るものとして、XML の本文に出していない文字があります（図形 {n} つ"
     return Action(
         TO_CHECK, "textbox_figure_text",
-        top=f"> **要確認: {what}を、XML に出力していません（6 章）。** {FIGURE_TEXT_WHY}{FIGURE_TEXT_HOW}対象の段落: {samples}",
-        checklist=(f"- [ ] **{what}**（6 章。XML に出力していない）: 図の一部（説明・出典など）か確かめ、本文に必要なら Word で"
-                   "テキストボックスの外（本文の段落）に出して変換し直す"),
-        box_title=f"図表の入ったテキストボックスの中の文字 {n} 段落を、XML に出力していません（要確認）",
-        box_detail=f"{FIGURE_TEXT_WHY}{FIGURE_TEXT_HOW}（レポートの冒頭と 6 章）\n対象の段落: {samples}",
-        cli=(f"要確認: {what}を、XML に出力していません（レポートの冒頭と 6 章）。{FIGURE_TEXT_WHY}本文に必要な文字なら、docx で"
-             f"その文字をテキストボックスの外（本文の段落）に出して変換し直すこと。対象の段落: {samples}"))
+        top="\n".join([f"> **要確認: {title}。6 章）。** {FIGURE_TEXT_WHY}{FIGURE_TEXT_HOW}", ">"]
+                      + [f"> - {esc(x[1:])}" for x in lines]),
+        checklist=(f"- [ ] **図の画像に写るものとして XML の本文に出していない文字（図形 {n} つ）**（6 章）: 入れる画像に写っているか"
+                   "確かめ、本文として読ませたい文字なら Word で図形の外に出して変換し直す"),
+        box_title=f"{title}。要確認）",
+        box_detail=f"{FIGURE_TEXT_WHY}{FIGURE_TEXT_HOW}\n" + "\n".join(lines),
+        cli=(f"要確認: {title}。レポートの冒頭と 6 章）。入れる画像に写っているか確かめ、本文として読ませたい文字なら docx で図形の外"
+             "（本文の段落）に出して変換し直すこと。\n" + "\n".join("  " + x[1:] for x in lines)))
 
 
 def unplaced_exclusions(r) -> list:
@@ -1344,51 +1585,206 @@ def _abstract_missing_action(r):
              f"対象: {samples}"))
 
 
+def _image_line(row) -> str:
+    """手順 images の残りの 1 行（box_detail。修正計画 W1 の 4.1）。括弧には置き場所の備考（ImageSlot.note）をそのまま添える。"""
+    cap = row.caption.strip()
+    head = f"「{cap[:30]}{'…' if len(cap) > 30 else ''}」" if cap else ""      # キャプションは番号から（docx の文字のまま）
+    notes = [row.slot_note] if row.slot_note else []
+    if row.kind == "table":
+        notes.insert(0, "表が画像で挿入されていると考えられます。表の部分を画像にして入れてください")
+    if row.kind == "nocap" or not cap:
+        head = "キャプションのない画像"
+        notes = ([row.where] if row.where else []) + notes
+    return f"・{row.key}: {head}" + (f"（{'。'.join(notes)}）" if notes else "")
+
+
+def _image_short(row) -> str:
+    """14 章・コマンドラインの残りの 1 項目: fig04（図4 …）・img3fa9c2（キャプションなし）。"""
+    if row.kind == "nocap" or not row.caption.strip():
+        return f"{row.key}（キャプションなし）"
+    cap = row.caption.strip()
+    return f"{row.key}（{cap[:20]}{'…' if len(cap) > 20 else ''}）"
+
+
+def _cap30(text: str) -> str:
+    """キャプションの先頭 30 字（長ければ「…」を付ける）。docx の文字のまま。"""
+    t = (text or "").strip()
+    return t[:30] + ("…" if len(t) > 30 else "")
+
+
+def _image_cli(row) -> str:
+    """コマンドラインの残りの 1 項目。キャプションのない画像は、入れないときの指定（--no-image）も添える。"""
+    if row.kind == "nocap" or not row.caption.strip():
+        return f"{row.key}（キャプションなし。{row.where}。入れないときは --no-image {row.key}）"
+    return _image_short(row)
+
+
+def images_dropped(r) -> list:
+    """持ち越せず、まだ入れ直していない前の画像（Result.images_dropped の DroppedImage）。入れ直した（今の置き場所に画像が入った）ものは除く。
+
+    今の図が示されているもの（suggest）はその図に、ないものは同じ幹の図に画像が入っていれば、済んだとみなす。
+    """
+    now = {i.key: i for i in r.images}
+    out = []
+    for d in getattr(r, "images_dropped", []):
+        im = now.get(d.suggest or d.key)
+        if im is None or im.status != "user":
+            out.append(d)
+    return out
+
+
+def images_changed(r) -> list:
+    """キャプションが少し変わった図に入れ直した画像（Result.images_changed の ChangedImage）で、画像がまだ入っているもの。"""
+    got = {i.key for i in r.images if i.status == "user"}
+    return [c for c in getattr(r, "images_changed", []) if c.key in got]
+
+
+def _dropped_lines(r, dropped) -> list:
+    """持ち越せなかった画像の行（手順 images の本文・14 章・コマンドラインで共用）。"""
+    caps = {i.key: i.caption for i in r.images}
+    out = []
+    for d in dropped:
+        head = f"・前の {d.key}" + (f"「{_cap30(d.caption)}」" if d.caption.strip() else "（キャプションなし）") + f"の画像（{d.source_name or 'ファイル名なし'}）: "
+        if d.suggest:
+            head += f"今の {d.suggest}" + (f"「{_cap30(caps.get(d.suggest, ''))}」" if caps.get(d.suggest, "").strip() else "") + "の画像と思われます"
+        else:
+            head += d.why
+        out.append(head)
+    return out
+
+
+def _changed_lines(changed) -> list:
+    return [f"・{c.key}: 前「{_cap30(c.old_caption)}」→ 今「{_cap30(c.new_caption)}」（{c.source_name or 'ファイル名なし'}）" for c in changed]
+
+
+def images_carry_text(r) -> str:
+    """変換し直しで持ち越した画像についての知らせ（修正計画 W1 の 4.1）: 入れ直さなかった画像と、キャプションが少し変わった図に入れた画像。なければ ""。"""
+    dropped, changed = images_dropped(r), images_changed(r)
+    parts = []
+    if dropped:
+        parts.append(f"前に入れた画像のうち {len(dropped)} 枚は、変換し直した原稿で図の番号かキャプション（キャプションのない画像は場所）が変わっていたので、"
+                     "入れていません（別の図の画像を入れないためです）。入れ直してください。\n" + "\n".join(_dropped_lines(r, dropped)))
+    if changed:
+        parts.append("前に入れた画像を、キャプションが少し変わった図に入れ直しました。図と画像が合っているか、図の確かめの一覧で確かめてください。\n"
+                     + "\n".join(_changed_lines(changed)))
+    return "\n".join(parts)
+
+
 def images_action(r):
-    """画像ファイルを用意できなかった図（Word の図形で描かれた図など。images_to_prepare）。なければ None。"""
-    need = images_to_prepare(r)
-    if not need:
+    """手順 images（必須）: 図・表の画像を入れる（修正計画 W1 の 4.1）。画像の置き場所（任意を除く）がなければ None。
+
+    図・表の画像は、作業する人が出版版 PDF などから用意して入れる（docx の画像は使わない）。残っていれば必須の手順が残り
+    （終了コード 1・ダウンロードの歯止め）、全部入れれば済み（done）。枠の本文には、残りの置き場所ごとに 1 行（image_rows）。
+    変換し直しで持ち越せなかった画像と、キャプションが少し変わった図に入れ直した画像があれば、本文に足す（済んでいても枠を出す）。
+    """
+    left, total = images_progress(r)
+    carry = images_carry_text(r)
+    if not total and not carry:
         return None
-    zname = r.zip_path.name if r.zip_path else "アップロード用の ZIP"
-    items = "\n".join(f"・{name}: {cap or '（キャプションなし）'}（{why}）" for name, cap, why in need)
+    rows = [row for row in image_rows(r) if row.kind != "optional" and row.status in ("missing", "user")]
+    rest = [row for row in rows if row.status == "missing"]
+    changed = images_changed(r)
+    dropped = images_dropped(r)
+    if not left:
+        title = (f"図の画像 {total} 枚をすべて入れました" if total else "図の画像を入れる必要はありません")
+        if changed:
+            title += f"（キャプションが変わった図 {len(changed)} つを確かめてください）"
+        elif dropped:
+            title += f"（前に入れた画像 {len(dropped)} 枚は入れていません）"
+        note = ""
+        if total and sum(1 for i in r.images if i.status == "skipped"):
+            note = f"。キャプションのない画像 {sum(1 for i in r.images if i.status == 'skipped')} か所は入れないことにした"
+        return Action(STEP, "images", required=True, done=True,
+                      progress=(f"{total} 枚をすべて入れました" if total else "入れる画像はありません"),
+                      checklist=((f"- [x] 図の画像 {total} 枚を入れた（9 章）{note}" if total else "- [x] 図の画像を入れる必要はない（9 章）")
+                                 + ("".join("\n  " + esc(x) for x in carry.splitlines()) if carry else "")),
+                      box_title=title if carry else "", box_detail=carry, cli=carry)
+    progress = f"あと {left} 枚／全部で {total} 枚"
+    detail = (f"この論文で画像が要る図・表は {total} つです（Word の原稿の中の画像は使いません）。出版版 PDF を画面に大きく表示し、"
+              "図ごとに図の部分だけを切り取って（スクリーンショット）、PNG か JPEG で保存し、"
+              f"{step('images')}で入れてください。キャプション（「図1 …」の行）は写さないでください（XML に文字で入っています）。"
+              "ファイル名を fig04.png・図4.png のようにしておくと、まとめて入れられます。\n残り:\n"
+              + "\n".join(_image_line(row) for row in rest))
     return Action(
-        NEEDS_ACTION, "images",
-        top="\n".join([(f"> **要対応: 画像ファイルを用意できなかった図が {len(need)} 件あります（9 章）。** 次の名前の画像（拡張子の形式で。.png なら PNG、.jpg なら JPEG）を"
-                        f"作り、{esc(zname)} の中の `{graphics_dir(r)}` に入れてください。画像がないままでは、その図が J-STAGE の"
-                        "画面に表示されません。"), ">"]
-                      + [f"> - `{name}`: {esc(cap, 40) or '（キャプションなし）'}（{esc(why)}）" for name, cap, why in need]),
-        checklist=(f"- [ ] **画像ファイルを用意できなかった図 {len(need)} 件**の画像を作り、ZIP の中の `{graphics_dir(r)}` に入れる: "
-                   + "、".join(f"`{name}`（{esc(cap, 20) or 'キャプションなし'}）" for name, cap, _ in need)),
-        box_title=f"画像ファイルを用意できなかった図が {len(need)} 件あります",
-        box_detail=("Word の図形で描かれた図や、変換・切り取りができなかった画像は、そのままでは Graphics/ に入れられません。画像がないままでは、"
-                    f"その図が J-STAGE の画面に表示されません。{step('images')}で、図ごとにその図の画像を"
-                    f"選んでください（ファイル名は何でもかまいません）。手元で入れるときは、次の名前の画像を {zname} の中の "
-                    f"{graphics_dir(r)} に入れます（レポートの冒頭と 9 章）。\n{items}"),
-        cli=(f"要対応: 画像ファイルを用意できなかった図 {len(need)} 件。画像を作り、同じ名前でフォルダに入れて --images で"
-             f"指定するか、ZIP の中の {graphics_dir(r)} に入れること（レポートの冒頭と 9 章）: "
-             + ", ".join(f"{name}（{(cap[:20] + '…' if len(cap) > 20 else cap) or 'キャプションなし'}）"
-                         for name, cap, _ in need)))
+        STEP, "images", required=True, done=False, progress=progress,
+        checklist=(f"- [ ] **図の画像を入れる（{progress}）**（9 章）: " + "、".join(esc(_image_short(row)) for row in rest)
+                   + ("".join("\n  " + esc(x) for x in carry.splitlines()) if carry else "")),
+        box_title=f"図の画像を入れてください（{progress}）",
+        box_detail=detail + ("\n" + carry if carry else ""),
+        cli=(f"手順: 図の画像があと {left} 枚要ります（全部で {total} 枚）。次の名前（拡張子は .png・.jpg・.gif）の画像を、この論文だけの"
+             "フォルダに入れ、--images で指定して変換し直すこと: " + "、".join(_image_cli(row) for row in rest)
+             + ("\n" + carry if carry else "")))
 
 
 def lost_action(r):
-    """docx にあるのに XML に入らなかった画像（pipeline.lost_images）。なければ None。"""
+    """画像を入れる場所（置き場所）を作れなかった docx の画像（pipeline.lost_images。修正計画 W1 の 4.2）。なければ None。"""
     lost = r.lost_images
     if not lost:
         return None
+    n = len(lost)
     return Action(
         NEEDS_ACTION, "lost",
-        top="\n".join([(f"> **要対応: XML に入らなかった画像が {len(lost)} 件あります（9 章）。** {LOST_IMAGES_WHY}"
-                        f"{LOST_IMAGES_ACTION}"), ">"]
+        top="\n".join([f"> **要対応: 画像を入れる場所を作れなかった画像が {n} つあります（9 章）。** {LOST_IMAGES_WHY}{LOST_IMAGES_HOW}", ">"]
                       + [f"> - {esc(lost_image_label(li))}: {esc(li.reason)}" for li in lost]),
-        checklist=(f"- [ ] **XML に入らなかった画像 {len(lost)} 件**（9 章）が本文に必要か確かめ、必要なら Word でその画像を本文の段落に"
-                   "移して変換し直す: " + "、".join(esc(lost_image_label(li)) for li in lost)),
-        box_title=f"XML に入らなかった画像が {len(lost)} 件あります（要対応）",
-        box_detail=(f"{LOST_IMAGES_WHY}{LOST_IMAGES_ACTION}変換し直すときは、Word で直した docx を{step('docx')}でアップロードし直し、そこから"
+        checklist=(f"- [ ] **画像を入れる場所を作れなかった画像 {n} つ**（9 章）: 資料の図なら Word で資料を英文要旨の後ろに移す。"
+                   "要らなければ Word で消す: " + "、".join(esc(lost_image_label(li)) for li in lost)),
+        box_title=f"画像を入れる場所を作れなかった画像が {n} つあります（要対応）",
+        box_detail=(f"{LOST_IMAGES_WHY}{LOST_IMAGES_HOW}変換し直すときは、Word で直した docx を{step('docx')}でアップロードし直し、そこから"
                     "順にやり直してください（レポートの冒頭と 9 章）。\n"
                     + "\n".join(f"・{lost_image_label(li)}: {li.reason}" for li in lost)),
-        cli=(f"要対応: XML に入らなかった画像 {len(lost)} 件（画像を出力できない引用文献・題目・著者名・所属の段落や、"
-             f"出力しなかった段落の中にある。レポートの冒頭と 9 章）。{LOST_IMAGES_ACTION}\n"
+        cli=(f"要対応: 画像を入れる場所を作れなかった画像 {n} つ（引用文献・注の節や、題目・著者名・所属の段落の中にある。"
+             "レポートの冒頭と 9 章）。資料の図なら docx で資料を英文要旨の後ろに移して変換し直すこと。\n"
              + "\n".join(f"  {lost_image_label(li)}: {li.reason}" for li in lost)))
+
+
+def same_images(r) -> list:
+    """同じ中身（SHA-1）の画像が入っている置き場所の組（images.SlotImage の一覧の一覧。2 つ以上のものだけ。XML の順）。"""
+    groups = {}
+    for i in r.images:
+        if i.status == "user" and i.sha1:
+            groups.setdefault(i.sha1, []).append(i)
+    return [g for g in groups.values() if len(g) > 1]
+
+
+def _slot_label(i) -> str:
+    """置き場所の言い方: 図2（fig02）・キャプションのない画像（img3fa9c2）。"""
+    return f"{i.label}（{i.key}）" if i.label else f"キャプションのない画像（{i.key}）"
+
+
+def _image_same_action(r):
+    """要確認 image_same: 入れた画像のうち、中身が同じものが 2 つ以上の置き場所にある（修正計画 W1 の 4.2）。なければ None。"""
+    groups = same_images(r)
+    if not groups:
+        return None
+    lines = ["と".join(_slot_label(i) for i in g) + "に、同じ中身の画像が入っています。" for g in groups]
+    keys = "・".join(i.key for g in groups for i in g)
+    how = f"取り違えていないか、「{r.meta.article_id(r.journal)}_図の確かめ.html」で確かめてください。"
+    return Action(
+        TO_CHECK, "image_same",
+        top="> **要確認: 同じ画像が 2 つ以上の図に入っています（9 章）。** " + esc("".join(lines)) + how,
+        checklist=f"- [ ] **同じ画像が入っている図**（{keys}）を、「{r.meta.article_id(r.journal)}_図の確かめ.html」で確かめる",
+        box_title="同じ画像が 2 つ以上の図に入っています（要確認）",
+        box_detail="".join(lines) + how,
+        cli=f"要確認: 同じ画像が 2 つ以上の図に入っています（{keys}。レポートの冒頭と 9 章）。" + "".join(lines) + "取り違えていないか確かめること。")
+
+
+IMAGE_NAMES_HOW = "この XML は登載に使わず、変換レポートを添えて開発者に知らせてください。"
+
+
+def _image_names_action(r):
+    """要対応 image_names: 最終の XML の画像の名前が、画像を入れる場所の一覧と合わない（pipeline.image_problems。変換ツールの不具合の
+    守りで、ふつうは出ない。修正計画 W1 の 4.2）。なければ None。"""
+    issues = getattr(r, "image_problems", [])
+    if not issues:
+        return None
+    what = "。".join(issues)
+    return Action(
+        NEEDS_ACTION, "image_names",
+        top=f"> **要対応: XML の画像の名前に不具合があります（変換ツールの不具合の可能性。9 章）。** XML の中の画像の名前が、画像を入れる場所の一覧と合いません（{esc(what)}）。{IMAGE_NAMES_HOW}",
+        checklist=f"- [ ] **XML の画像の名前の不具合**（9 章）: この XML は登載に使わず、変換レポートを添えて開発者に知らせる",
+        box_title="XML の画像の名前に不具合があります（要対応。変換ツールの不具合の可能性）",
+        box_detail=f"XML の中の画像の名前が、画像を入れる場所の一覧と合いません（{what}）。{IMAGE_NAMES_HOW}",
+        cli=f"要対応: XML の画像の名前に不具合があります（変換ツールの不具合の可能性。レポートの冒頭と 9 章）: {what}。この XML は登載に使わないこと。")
 
 
 LOST_AUTONUM_WHY = ("Word では段落の先頭に番号が表示されますが、XML のその段落には番号がありません（変換ツールの不具合の可能性があります）。"
@@ -1563,76 +1959,6 @@ def _pua_left_action(r):
              + "\n".join(f"  {x}" for x in lines)))
 
 
-def _image_crop_action(r):
-    """Word でトリミングした画像を、表示される範囲に切り取って出力したもの（ImageResult.crop）。なければ None。"""
-    imgs = [i for i in r.images if i.crop and i.status == "converted"]
-    if not imgs:
-        return None
-    n = len(imgs)
-    zname = r.zip_path.name if r.zip_path else "アップロード用の ZIP"
-    gdir = graphics_dir(r)
-    caps = _image_captions(r)
-    holder = {}                                  # 画像の ID -> 画像のある段落の場所（図に入っていない画像の手がかり）
-    for p in r.plan.paras.values():
-        for img in p.images:
-            holder.setdefault(img.image_id, r.plan.locations.get(p.src) or p.src)
-    rows = []
-    for i in imgs:
-        cap = caps.get(i.key)
-        label = esc(cap, 20) if cap else (f"図に入っていない画像。{esc(holder[i.image_id], 30)}" if i.image_id in holder
-                                           else "図に入っていない画像")
-        rows.append((i.name, i.image_id, label or "キャプションなし", crop_text(i.crop)))
-    top_rows = [f"> - `{name}`（{iid}。{label}）: {ct}" for name, iid, label, ct in rows]
-    detail_rows = [f"・{name}（{label}）: {ct}" for name, iid, label, ct in rows]
-    check_rows = "、".join(f"`{name}`（{label}）" for name, iid, label, ct in rows)
-    cli_rows = ", ".join(f"{name}（{ct}）" for name, iid, cap, ct in rows)
-    return Action(
-        TO_CHECK, "image_crop",
-        top="\n".join([(f"> **要確認: Word で切り取った（トリミングした）画像 {n} 件を、Word で表示される範囲に切り取って出力しました（9 章）。** "
-                        f"切り取った画像は {esc(zname)} の中の `{gdir}` にあります。出版版 PDF や Word の表示と比べて、切り取りの位置が"
-                        "合っているか確かめてください。違っていれば、Word で切り取りを直して変換し直してください。"), ">"] + top_rows),
-        checklist=f"- [ ] **Word で切り取った画像 {n} 件**（9 章）の切り取りの位置が Word の表示と合っているか確かめる: {check_rows}",
-        box_title=f"Word で切り取った画像 {n} 件を切り取って出力しました（要確認）",
-        box_detail=("Word で切り取った（トリミングした）画像は、docx の中では切り取る前のまま入っているので、Word で表示される範囲に切り取って "
-                    f"{zname} の中の {gdir} に入れました。出版版 PDF や Word の表示と比べて、位置が合っているか確かめてください。"
-                    f"違っていれば、Word で切り取りを直した docx を{step('docx')}でアップロードし直し、そこから順にやり直してください"
-                    "（レポートの冒頭と 9 章）。\n" + "\n".join(detail_rows)),
-        cli=(f"要確認: Word で切り取った画像 {n} 件を、表示される範囲に切り取って出力した（ZIP の中の {gdir}。レポートの冒頭と 9 章）。"
-             f"位置を確かめること: {cli_rows}"))
-
-
-ART_NOTE = "（docx の画像は効果を付けた後のものの場合がある）"
-
-
-def _image_edits_action(r):
-    """Word の回転・反転・色の変更などを反映せずに出力した画像（ImageResult.edits）。なければ None。"""
-    imgs = [i for i in r.images if i.edits and i.status in ("ok", "converted")]
-    if not imgs:
-        return None
-    n = len(imgs)
-    zname = r.zip_path.name if r.zip_path else "アップロード用の ZIP"
-    gdir = graphics_dir(r)
-    rows = []
-    for i in imgs:
-        kinds = "・".join(i.edits)
-        rows.append((i.name, i.image_id, kinds, ART_NOTE if "アート効果" in i.edits else ""))
-    why = ("J-STAGE の画面では、Word の表示と見た目（向き・色・余白など）が違うことがあります。")
-    return Action(
-        TO_CHECK, "image_edits",
-        top="\n".join([(f"> **要確認: Word で回転・反転・色の変更などをした画像 {n} 件は、その加工を反映していないことがあります（9 章）。** "
-                        f"{why}出力した画像は {esc(zname)} の中の `{gdir}` にあります。違っていれば、加工した後の見た目の画像を"
-                        "画像編集ソフトなどで作り、Word で差し替えて変換し直してください。"), ">"]
-                      + [f"> - `{name}`（{iid}）: {kinds}{note}" for name, iid, kinds, note in rows]),
-        checklist=(f"- [ ] **Word で加工した画像 {n} 件**（9 章）の見た目が Word の表示と合っているか確かめる: "
-                   + "、".join(f"`{name}`（{kinds}）" for name, iid, kinds, note in rows)),
-        box_title=f"Word の加工（回転・反転・色の変更など）を反映していない画像が {n} 件あります（要確認）",
-        box_detail=(f"{why}出力した画像は {zname} の中の {gdir} にあります。違っていれば、加工した後の見た目の画像を"
-                    f"画像編集ソフトなどで作り、Word で差し替えた docx を{step('docx')}でアップロードし直し、そこから順にやり直してください"
-                    "（レポートの冒頭と 9 章）。\n" + "\n".join(f"・{name}（{iid}）: {kinds}{note}" for name, iid, kinds, note in rows)),
-        cli=(f"要確認: Word の加工（回転・反転・色の変更など）を反映していないことがある画像 {n} 件（レポートの冒頭と 9 章）: "
-             + ", ".join(f"{name}（{kinds}）" for name, iid, kinds, note in rows)))
-
-
 STYLE_HIDDEN_SAMPLES = 5     # スタイルの隠し文字の要確認に並べる段落の数（全件はレポートの 6 章）
 
 
@@ -1699,8 +2025,21 @@ def _resultless_excerpt(f) -> str:
     return esc(("…" if f.pos > n else "") + head + RESULTLESS_MARK + tail + ("…" if len(f.text) > f.pos + n else ""))
 
 
-def _resultless_line(src, fs, plan=None) -> str:
-    """1 段落ぶんの 1 行: 段落の ID（と場所）、種類、個数、抜粋。"""
+def _resultless_keys(r) -> dict:
+    """段落の ID -> その段落の、画像で補える位置（任意の置き場所。XML に出した <inline-graphic> の位置）の幹の一覧（修正計画 W1 の手順 15）。"""
+    plan = getattr(r, "plan", None)
+    if plan is None:
+        return {}
+    shown = {i.key for i in getattr(r, "images", None) or [] if i.kind == "optional"}
+    out = {}
+    for slot in plan.slots:
+        if slot.kind == "optional" and slot.key in shown:
+            out.setdefault(slot.src, []).append(slot.key)
+    return out
+
+
+def _resultless_line(src, fs, plan=None, keys=()) -> str:
+    """1 段落ぶんの 1 行: 段落の ID（と場所）、種類、個数、抜粋。画像で補える位置があれば、その幹（任意の置き場所）も添える。"""
     place = plan.locations.get(src, "") if plan is not None and getattr(plan, "locations", None) else ""
     kinds = []
     for f in fs:
@@ -1708,7 +2047,8 @@ def _resultless_line(src, fs, plan=None) -> str:
         if label not in kinds:
             kinds.append(label)
     excerpts = " ／ ".join(_resultless_excerpt(f) for f in fs[:RESULTLESS_SEGMENTS]) + (" ／ ほか" if len(fs) > RESULTLESS_SEGMENTS else "")
-    return f"{src}{'（' + esc(place) + '）' if place else ''}: {'・'.join(kinds)} {len(fs)} か所「{excerpts}」"
+    spare = f"（画像の幹: {'・'.join(keys)}）" if keys else ""
+    return f"{src}{'（' + esc(place) + '）' if place else ''}: {'・'.join(kinds)} {len(fs)} か所「{excerpts}」{spare}"
 
 
 def _resultless_field_action(r):
@@ -1717,13 +2057,15 @@ def _resultless_field_action(r):
 
     表示は Word がフィールドコードから描くもので docx の文字ではないので、XML には出ない（読み取りも検証も同じに捨てるため、不変性チェック
     は合格する）。囲い文字を合成して文字を作ることはしない（docx にない文字を作らない）。元の論文が特殊な作り方をしているときなので、要確認として
-    1 件にまとめて知らせ、取れる行動は「Word で普通の文字か数式に打ち直して変換し直す」の 1 つだけにする。"""
+    1 件にまとめて知らせ、取れる行動は「Word で普通の文字か数式に打ち直して変換し直す」と、画像で補う（任意の置き場所。入れなくてもよい。
+    手順 15）の 2 つにする。"""
     paras = _resultless_by_para(r)
     if not paras:
         return None
     n = sum(len(fs) for _, fs in paras)
     plan = getattr(r, "plan", None)
-    lines = [_resultless_line(src, fs, plan) for src, fs in paras[:RESULTLESS_LINES]]
+    keyed = _resultless_keys(r)
+    lines = [_resultless_line(src, fs, plan, keyed.get(src, ())) for src, fs in paras[:RESULTLESS_LINES]]
     if len(paras) > RESULTLESS_LINES:
         lines.append(f"ほか {len(paras) - RESULTLESS_LINES} 段落（全件はレポートの 6 章）")
     what = "Word では表示されるのに、XML に出せていないかもしれない文字（囲い文字など）があります"
@@ -1733,6 +2075,9 @@ def _resultless_field_action(r):
         why += "出版版 PDF で補った docx では、PDF から別の文字として補われていることがあります。"
     how = ("XML のその位置に文字があるかを確かめ、なければ、Word で、その部分を普通の文字（③ など）か Word の数式に打ち直して、"
            "変換し直してください。直さなければ、その文字は XML で抜けたままになります")
+    if keyed:
+        how += ("。画像で補うこともできます（各行の「画像の幹」の画像を、図の画像と同じ所で入れます。"
+                "入れた画像は、その文字の位置に画像として入ります。入れなくてもかまいません。手順には数えません）")
     mark = f"対象（{RESULTLESS_MARK}は、文字のある位置の印です。レポートの表示だけで、XML には入りません）:"
     return Action(
         TO_CHECK, "resultless_field",
@@ -1779,14 +2124,12 @@ def _app_after_refs_action(r):
     return Action(
         TO_CHECK, "app_after_refs",
         top=(f"> **要確認: {APP_TITLE_TOP}（10 章）。** 今の版では、引用文献などの後ろの"
-             "資料は資料（付録）として扱わず、引用文献などの段落のまま出力しています。資料なら、Word で英文要旨の後ろ（論文の最後）に"
-             f"移して、変換し直してください。対象の段落: {samples}"),
+             f"資料は資料（付録）として扱わず、引用文献などの段落のまま出力しています。資料なら、{APP_MOVE_HOW}対象の段落: {samples}"),
         checklist=(f"- [ ] **引用文献などの後ろの資料の見出し**（{n} 件。10 章）: 資料なら、Word で英文要旨の後ろに移して"
                    "変換し直す"),
         box_title=APP_TITLE_BOX + "（要確認）",
         box_detail=("引用文献・注・付記・謝辞の中に、資料の見出しと思われる段落があります。今の版では資料として扱わず、引用文献などの"
-                    "段落のまま出力しています。資料なら、Word でその見出しと中身を英文要旨の後ろ（論文の最後）に移してから、変換し直して"
-                    f"ください（レポートの冒頭と 10 章）。\n対象の段落: {samples}"),
+                    f"段落のまま出力しています。資料なら、{APP_MOVE_HOW}（レポートの冒頭と 10 章）\n対象の段落: {samples}"),
         cli=("要確認: 引用文献などの後ろに、資料の見出しと思われる段落があります（レポートの冒頭と 10 章）。資料なら、docx で英文要旨の"
              "後ろに移して変換し直すこと"))
 
@@ -2348,11 +2691,11 @@ def actions(r) -> list:
     すべて直せたときにも出すものなので、ここには入れない（render の固定の部分。直せなかった箇所は pdf_unfixed の枠）。
     記事フォルダにあるのに ZIP に入れなかったファイル（Result.not_zipped）は 10 章の警告のまま。
     """
-    head = [f(r) for f in (_fidelity_action, _supplement_action, _dtd_action, _table_shape_action,
+    head = [f(r) for f in (_fidelity_action, _supplement_action, _dtd_action, _table_shape_action, _image_names_action,
                            _upload_action, _ai_error_action, _ai_pending_action,
                            _partial_action, _forced_action, _textbox_undecided_action,
                            _textbox_place_action, _textbox_figure_text_action, _unplaced_action, images_action,
-                           lost_action, lost_autonum_action, _pua_left_action, _abstract_missing_action, _image_crop_action, _image_edits_action, _style_hidden_action, _resultless_field_action, _symbol_action, _abstract_ja_action, _app_after_refs_action, _note_overlap_action, _float_ref_action,
+                           lost_action, _image_same_action, lost_autonum_action, _pua_left_action, _abstract_missing_action, _style_hidden_action, _resultless_field_action, _symbol_action, _abstract_ja_action, _app_after_refs_action, _note_overlap_action, _float_ref_action,
                            _fn_guess_action, _name_split_action, _newline_action)]
     return [a for a in head if a is not None] + pdf_actions(r)
 
@@ -2693,27 +3036,80 @@ def render(r) -> str:
         L.append("")
 
     # ------------------------------------------------------------------ 9. 画像
-    L.append("## 9. 画像")
+    L.append("## 9. 図の画像")
     L.append("")
     lost = r.lost_images
-    if r.images:
-        st = {"ok": "そのまま出力", "converted": "変換して出力", "failed": "要対応", "missing": "要対応（画像なし）",
-              "user": "利用者が用意"}
-        L.append(table(["画像", "出力ファイル（Graphics/）", "docx 内のファイル", "状態", "備考"],
-                       [(i.image_id, i.name, i.source, st.get(i.status, i.status), i.message) for i in r.images]))
+    rows = image_rows(r)
+    if rows:
+        L.append("図・表の画像は、作業する人が出版版 PDF などから用意して入れます（Word の原稿の中の画像は使いません）。"
+                 f"入れた画像との対応は「{esc(r.meta.article_id(r.journal))}_図の確かめ.html」でも確かめられます。")
+        L.append("")
+        L.append(table(["名前", "図・表とキャプション", "場所", "位置の決め方", "入れた画像", "元のファイル名・形式・大きさ", "備考"],
+                       [(row.key, row.caption.strip() or (OPTIONAL_CAPTION if row.kind == "optional" else "（キャプションなし）"),
+                         row.where, row.place, row.name if row.status == "user" else IMAGE_STATUS_JA.get(row.status, row.status),
+                         row.detail, row.note) for row in rows]))
     elif lost or r.hidden_images:
-        L.append("XML に出力した画像はありません。")
+        L.append("XML に画像を入れる場所はありません。")
     else:
-        L.append("画像はありません。")
+        L.append("画像の要る図・表はありません。")
     L.append("")
+    dropped, changed = images_dropped(r), images_changed(r)
+    if dropped:
+        L.append("### 入れ直しが要る前の画像")
+        L.append("")
+        L.append(f"変換し直す前に入れた画像のうち {len(dropped)} 枚は、図の番号かキャプション（キャプションのない画像は場所）が変わっていたので、"
+                 "入れていません（別の図の画像を入れないためです）。")
+        L.append("")
+        L.append(table(["前の名前", "前のキャプション", "元のファイル名", "今の図・理由"],
+                       [(d.key, d.caption.strip() or "（キャプションなし）", d.source_name,
+                         (f"今の {d.suggest} の画像と思われます" if d.suggest else d.why)) for d in dropped]))
+        L.append("")
+    if changed:
+        L.append("### キャプションが変わった図に入れ直した画像")
+        L.append("")
+        L.append("前に入れた画像を、キャプションが少し変わった図に入れ直しました。図と画像が合っているか確かめてください。")
+        L.append("")
+        L.append(table(["名前", "前のキャプション", "今のキャプション", "元のファイル名"],
+                       [(c.key, c.old_caption.strip(), c.new_caption.strip(), c.source_name) for c in changed]))
+        L.append("")
+    decos = getattr(r, "decorations", [])
+    drawn = [d for d in decos if d.figure]
+    if drawn:
+        labels = {i.key: i.label for i in r.images}
+        L.append("### 図形で描いた図（図の本体）")
+        L.append("")
+        L.append("次の図は、Word の図形（文字の図形の集まりなど）で描かれていて、docx に画像がありません。図の置き場所に、出版版 PDF から"
+                 "切り取った画像を 1 枚入れます。")
+        L.append("")
+        for d in drawn:
+            label = labels.get(d.figure, "") or d.figure
+            L.append(f"- {esc(label)}（{d.figure}）: {DECORATION_JA.get(d.kind, d.kind)}（{d.image.image_id}。{esc(d.where)}）。"
+                     f"画像の場所には数えず、{esc(label)} の置き場所に 1 枚入れる")
+        L.append("")
+    plain = [d for d in decos if not d.figure]
+    if plain:
+        L.append("### 画像の場所に数えなかった図形（飾り）")
+        L.append("")
+        L.append("次の図形は、枠・白い四角・線・矢印・文字の図形だけの集まりなので、画像の場所に数えていません（XML には出ません）。")
+        L.append("")
+        L.append(table(["図形", "種類", "場所"], [(d.image.image_id, DECORATION_JA.get(d.kind, d.kind), d.where) for d in plain]))
+        L.append("")
     if lost:
-        L.append("### XML に入らなかった画像（要対応）")
+        L.append("### 画像を入れる場所を作れなかった画像（要対応）")
         L.append("")
-        L.append(f"{LOST_IMAGES_WHY}{LOST_IMAGES_ACTION}")
+        L.append(f"{LOST_IMAGES_WHY}{LOST_IMAGES_HOW}")
         L.append("")
-        L.append(table(["画像", "docx 内のファイル", "段落", "場所", "段落の文字", "出力しなかった理由（推定）"],
+        L.append(table(["画像", "docx 内のファイル", "段落", "場所", "段落の文字", "場所を作れなかった理由（推定）"],
                        [(li.image_id, li.source or "（Word の図形）", li.src or "-", li.location, li.text, li.reason)
                         for li in lost]))
+        L.append("")
+    if getattr(r, "image_problems", []):
+        L.append("### XML の画像の名前の不具合（要対応）")
+        L.append("")
+        L.append(f"XML の中の画像の名前が、画像を入れる場所の一覧と合いません（変換ツールの不具合の可能性があります）。{IMAGE_NAMES_HOW}")
+        L.append("")
+        for x in r.image_problems:
+            L.append(f"- {esc(x)}")
         L.append("")
     if r.hidden_images:
         L.append(f"隠し文字（Word で非表示に設定された文字）の中の画像 {len(r.hidden_images)} 件（{'、'.join(r.hidden_images)}）は、"
@@ -2822,23 +3218,18 @@ def render(r) -> str:
     L.append("")
     L.append(pdf_checklist_line(r))
     L.append("- [ ] 2 章（AI による補完）と 3 章（未解決）を PDF と照らして確認する")
+    if image_rows(r):
+        L.append(f"- [ ] 「{esc(r.meta.article_id(r.journal))}_図の確かめ.html」で、図番号・キャプションと入れた画像が合っているかを確認する")
     if fx is not None:
         L.append(f"- [ ] **PDF で補った docx（{esc(fx.path.name)}）を Word で開き、変更履歴を確認する**"
                  "（却下したい変更があれば、却下して保存した docx を「docx から作る」で変換し直す）")
         if fx.skipped_text:
             L.append(f"- [ ] 13 章の、直さなかった箇所（{len(fx.skipped_text)} 件）を確認する")
     # 手順（必須 → 推奨）→ 要対応 → 要確認（actions）。それぞれの中は、PDF の項目を先に、残りを actions の順に。
-    # 「画像はすべて Graphics/ に入っている」は、XML に入らなかった画像の前に出す
-    checks = checklist_order(acts)
-    all_images = bool(r.images) and not images_to_prepare(r) and not lost
-    for a in checks:
-        if all_images and a.key == "lost":
-            L.append(f"- [x] 画像 {len(r.images)} 件はすべて Graphics/ に入っている（9 章）")
-            all_images = False
+    # 図の画像を全部入れたときは、手順 images の済んだ行（[x]）が出る
+    for a in checklist_order(acts):
         if a.checklist:
             L.append(a.checklist)
-    if all_images:
-        L.append(f"- [x] 画像 {len(r.images)} 件はすべて Graphics/ に入っている（9 章）")
     L.append("- [ ] 11 章の書誌情報（巻・号・頁・日付・DOI）を確認する")
     L.append(f"- [ ] J-STAGE 編集登載システムで、巻（{esc(m.volume or '?')}）・号（{esc(m.issue or '?')}）と、その号のセクション"
              "（目次の見出し。例: 論文）を作成しておく（ないとアップロード時に EMSGM181E「巻号が学会誌別巻号の設定に存在しません」・"

@@ -127,7 +127,7 @@ def test_conflicts_and_bad_exclusions_are_reported(journal, meta, tmp_path, monk
         return orig(docx_path, root, list(exclusions) + [Exclusion(out, "試験の除外", "x"),
                                                          Exclusion(blank, "空白のみの段落", "", blank=True)])
     monkeypatch.setattr(pipeline, "verify", broken)
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path))
     assert not res.fidelity.ok and res.fidelity.conflicts and res.fidelity.bad_excluded
     sec5 = res.report_path.read_text(encoding="utf-8").split("## 5.")[1].split("## 6.")[0]
     assert "XML に出力したのに、出力しない段落としても記録されている段落（変換ツールの不具合）" in sec5
@@ -202,7 +202,7 @@ def test_textbox_in_deleted_run_is_not_counted(journal, meta, tmp_path):
     outer = next(s for s, t in read.items() if t.startswith("前の文。"))
     assert "".join(c for c, _, _ in paragraph_units(raw[outer], rule)) == read[outer] == src[outer] == "前の文。後ろの文。"
     # 変換全体も不合格にならない
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.fidelity.final_ok
 
 
@@ -214,7 +214,7 @@ def test_unreadable_final_output_gets_its_own_notice(journal, meta, tmp_path, mo
     from jasme_jats.report import NEEDS_ACTION, actions
     real = pipeline.serialize
     monkeypatch.setattr(pipeline, "serialize", lambda root: real(root).replace(b"</p>", b"&foo;</p>", 1))
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "bad", convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "bad"))
     assert res.fidelity.final_ok is False and res.fidelity.final_unreadable and res.needs_action
     [act] = [a for a in actions(res) if a.key == "fidelity"]
     assert act.level == NEEDS_ACTION
@@ -222,7 +222,7 @@ def test_unreadable_final_output_gets_its_own_notice(journal, meta, tmp_path, mo
         assert "読めません" in text and "登載に使わ" in text and "一致していません" not in text and "差分" not in text, text
     assert "読めなかった理由" in act.box_detail and "開発者" in act.box_detail
     monkeypatch.setattr(pipeline, "serialize", lambda root: real(root).replace("はじめに".encode(), "おわりに".encode(), 1))
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "diff", convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "diff"))
     [act] = [a for a in actions(res) if a.key == "fidelity"]
     assert not res.fidelity.final_unreadable and "一致していません" in act.box_detail and "5 章" in act.top
 
@@ -235,7 +235,7 @@ def test_entity_declaration_in_final_output_is_unreadable_notice(journal, meta, 
     from jasme_jats.report import NEEDS_ACTION, actions
     real = pipeline.serialize
     monkeypatch.setattr(pipeline, "serialize", lambda root: real(root).replace(b'.dtd">', b'.dtd" [<!ENTITY foo "abc">]>', 1))
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "ent", convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "ent"))
     assert res.fidelity.ok and res.fidelity.final_ok is False and res.fidelity.final_unreadable
     assert "<!ENTITY" in res.fidelity.final_detail and res.needs_action
     [act] = [a for a in actions(res) if a.key == "fidelity"]
@@ -258,7 +258,7 @@ def test_h6_unreadable_and_different_text_both_reported(unreadable, journal, met
     def broken(root):
         return real(root).replace(a, b, 1).replace("はじめに".encode(), "おわりに".encode(), 1)
     monkeypatch.setattr(pipeline, "serialize", broken)
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "both", convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "both"))
     fid = res.fidelity
     assert fid.final_ok is False and fid.final_unreadable and fid.final_differs and res.needs_action
     [act] = [x for x in actions(res) if x.key == "fidelity"]
@@ -272,7 +272,7 @@ def test_h6_unreadable_and_different_text_both_reported(unreadable, journal, met
     assert fid.final_detail
     # 読めないだけのときは、差分の文を出さない
     monkeypatch.setattr(pipeline, "serialize", lambda root: real(root).replace(a, b, 1))
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "only", convert_metafiles=False))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "only"))
     assert res.fidelity.final_unreadable and not res.fidelity.final_differs
     [act] = [x for x in actions(res) if x.key == "fidelity"]
     assert "一致していません" not in act.top + act.box_detail and "一致していないので" not in act.cli

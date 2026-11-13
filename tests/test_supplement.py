@@ -23,8 +23,7 @@ SUP_ROW = "出版版 PDF による補完の確かめ（ルート2）"
 
 
 def route2(tmp_path, meta, journal, name="r2"):
-    return convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / name, pdf_path=PDFCHECK_PDF, route="pdf",
-                                                    convert_metafiles=False))
+    return convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / name, pdf_path=PDFCHECK_PDF, route="pdf"))
 
 
 def report(res):
@@ -46,7 +45,7 @@ def test_supplement_passes_on_pdfcheck(journal, meta, tmp_path, capsys):
     assert "合格" in row and "不合格" not in row and "43" in row
     from jasme_jats.cli import main
     assert main([str(PDFCHECK), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli"), "--pdf",
-                 str(PDFCHECK_PDF), "--no-metafile-conversion"]) == 0
+                 str(PDFCHECK_PDF)]) == 0
     assert "補完の確かめ: 合格" in capsys.readouterr().out
 
 
@@ -77,7 +76,7 @@ def test_supplement_detects_non_typeset_change(journal, meta, tmp_path, monkeypa
     assert "**不合格**" in section and "| d12 |" in section
     from jasme_jats.cli import main
     assert main([str(PDFCHECK), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli"), "--pdf",
-                 str(PDFCHECK_PDF), "--no-metafile-conversion"]) == 1
+                 str(PDFCHECK_PDF)]) == 1
     captured = capsys.readouterr()
     assert "補完の確かめ: 不合格" in captured.out and "補完の確かめが不合格" in captured.err
 
@@ -308,12 +307,10 @@ def test_supplement_pairs_agree_with_pdfmatch():
 # ---------------------------------------------------------------------------- 18. 行わないとき
 def test_supplement_none_on_route1_and_fallback(journal, meta, tmp_path):
     """ルート1 と、PDF を読めなかったルート2 では補完の確かめを行わず（None）、1 章に行が出ない。"""
-    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "r1", pdf_path=PDFCHECK_PDF,
-                                                   convert_metafiles=False))
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "r1", pdf_path=PDFCHECK_PDF))
     assert res.supplement is None and SUP_ROW not in report(res).split("## 2.")[0]
     (tmp_path / "broken.pdf").write_bytes(b"")
-    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "fb", pdf_path=tmp_path / "broken.pdf", route="pdf",
-                                                   convert_metafiles=False))
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "fb", pdf_path=tmp_path / "broken.pdf", route="pdf"))
     assert res.pdf_fallback and res.supplement is None and SUP_ROW not in report(res).split("## 2.")[0]
 
 
@@ -425,8 +422,7 @@ def test_supplement_space_not_left_alone_when_note_number_is_kept(journal, meta,
              "３）2 段落からなる注の 1 段落目である。\n"]
     monkeypatch.setattr(pdfmatch, "extract_pages", lambda path: pages)
     (tmp_path / "dummy.pdf").write_bytes(b"%PDF-1.4\n")
-    res = convert(src, meta, journal, Options(out_dir=tmp_path / "o", pdf_path=tmp_path / "dummy.pdf", route="pdf",
-                                              convert_metafiles=False))
+    res = convert(src, meta, journal, Options(out_dir=tmp_path / "o", pdf_path=tmp_path / "dummy.pdf", route="pdf"))
     note = [f for f in res.docx_fix.fixes if f.src == "d13" and f.reason]
     assert [(f.kind, f.old, f.new) for f in note] == [("space", " ", ""), ("width", "（", "("), ("width", "）", ")")]
     assert note[1].reason == pdfdocx.NOTE_REASON

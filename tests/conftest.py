@@ -36,3 +36,43 @@ def meta():
     return ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "lpage": "12",
                                   "pub_date": "2026-03-31", "received": "2025-06-01", "accepted": "2025-11-20",
                                   "peer_review": "あり", "keywords": "proof; 論証; 数学的探究"})
+
+
+def one_color_png(color=(200, 200, 200), size=(8, 6)) -> bytes:
+    """1 色の PNG（図の画像の代わり。ツールは画像の中身を見ない）。"""
+    import io
+
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", size, color).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def key_png(k: int) -> bytes:
+    """k 番目の置き場所の 1 色の PNG（k ごとに色が違う）。"""
+    return one_color_png((200, (37 * k) % 256, k % 256))
+
+
+def fill_images(res) -> list:
+    """残っている画像の置き場所（状態 missing）すべてに 1 色の PNG を入れる（pipeline.add_images）。画像を入れる手順 images を
+    済ませて、ほかの知らせ（要対応・要確認）を今までどおり確かめるときに使う。置き場所ごとに色を変える（同じ中身の画像を
+    2 つの図に入れると要確認 image_same が出るため）。戻り値: 入れた幹の一覧。"""
+    from jasme_jats.pipeline import add_images
+    keys = [i.key for i in res.images if i.status == "missing"]
+    need = {key: ("fill.png", key_png(k)) for k, key in enumerate(keys)}
+    return add_images(res, need) if need else []
+
+
+def image_folder(path, keys) -> Path:
+    """幹ごとに 1 色の PNG（fig01.png など）を置いたフォルダ（コマンドラインの --images に渡す）。"""
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+    for k, key in enumerate(keys):
+        (path / f"{key}.png").write_bytes(key_png(k))
+    return path
+
+
+def others(res) -> list:
+    """図の画像を入れる手順（images）を除いた知らせ（report.actions）。手順のほかの知らせを今までどおり比べるときに使う。"""
+    from jasme_jats.report import actions
+    return [a for a in actions(res) if a.key != "images"]

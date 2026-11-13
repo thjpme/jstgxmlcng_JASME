@@ -6,8 +6,8 @@ from conftest import CELLS, EDGE, META_EXAMPLE, TABLEFIG
 from lxml import etree
 
 from jasme_jats.cli import main as cli_main
-from jasme_jats.pipeline import NO_DOCX_IMAGE, AIRequiredError, Options, convert
-from jasme_jats.report import actions, images_to_prepare
+from jasme_jats.pipeline import AIRequiredError, Options, convert
+from jasme_jats.report import actions, image_rows
 from jasme_jats.structure import TEXTBOX_TEXT_EXCLUDED
 
 XLINK = "http://www.w3.org/1999/xlink"
@@ -44,8 +44,17 @@ def figures(root):
 
 def slot_notes(res):
     """図の画像の置き場所の備考（本体にできなかった近くの表の理由など。W1 で plan.figure_issues と要対応 figbody の代わり）:
-    キャプションの冒頭 2 字 → 備考（備考のある置き場所だけ）。"""
-    return {s.caption.plain()[:2]: s.note for s in res.plan.slots if s.note and s.caption is not None}
+    キャプションの冒頭 2 字 → 備考（備考のある置き場所だけ）。docx に画像の見つからない図の備考の書き出し
+    （structure.NO_FIGURE_IMAGE）は除く（その書き出しは test_figure_without_image_or_table_nearby_is_unchanged で確かめる）。"""
+    from jasme_jats.structure import NO_FIGURE_IMAGE
+    out = {}
+    for s in res.plan.slots:
+        note = s.note
+        if s.caption is not None and not s.covers and note.startswith(NO_FIGURE_IMAGE):
+            note = note[len(NO_FIGURE_IMAGE):].lstrip("。")
+        if note and s.caption is not None:
+            out[s.caption.plain()[:2]] = note
+    return out
 
 
 def checks_pass(res):
@@ -58,7 +67,7 @@ def checks_pass(res):
 def test_cell_figures_without_ai(journal, meta, tmp_path):
     """図形の中の表のセルに画像とキャプションが並ぶもの（セルごと・画像の行とキャプションの行・キャプション 1 つの図）は、
     AI なしでも、セルの画像を本体、セルのキャプションをキャプションにした図に組む（表としては出さない）。"""
-    res = convert(CELLS, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    res = convert(CELLS, meta, journal, Options(out_dir=tmp_path))
     checks_pass(res)
     assert res.plan.unplaced_floats == [] and {i.mode for i in res.plan.floats.values()} == {"mechanical"}
     root = load(res)
@@ -82,7 +91,7 @@ def test_cell_figures_without_ai(journal, meta, tmp_path):
 def test_cell_figures_are_listed_with_captions_in_request(journal, meta, tmp_path):
     """AI 依頼文の「位置を機械的に決めた図表」では、表のセルの画像とキャプションで組んだ図も、キャプションで示す
     （「キャプションなし」と示さない）。"""
-    res = convert(CELLS, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", convert_metafiles=False))
+    res = convert(CELLS, meta, journal, Options(out_dir=tmp_path, ai_mode="manual"))
     fixed = res.prompt_path.read_text(encoding="utf-8").split("\n# 位置を機械的に決めた図表（変更不可。")[1].split("\n#")[0]
     assert "[s1] 「図1\u3000左のセルの図」「図2\u3000右のセルの図」: 段落" in fixed
     assert "[s2] 「図3\u3000二つの画像からなる図」: 段落" in fixed and "キャプションなし" not in fixed
@@ -97,7 +106,7 @@ def test_cell_figures_not_unique_stay_a_table(journal, meta, tmp_path, variant, 
     anchor = {"s1": "この段落に図1と図2", "s3": "この段落に図4と図5"}[fid]
     path = tmp_path / f"cells_{variant}.docx"
     mf.make_b3_cells(path, variant)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "none", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "none"))
     checks_pass(res)
     assert res.plan.unplaced_floats == [] and res.plan.floats[fid].mode == "mechanical"
     seq = sequence(load(res))
@@ -107,9 +116,9 @@ def test_cell_figures_not_unique_stay_a_table(journal, meta, tmp_path, variant, 
     path = tmp_path / f"cells_{variant}_down.docx"
     mf.make_b3_cells(path, variant + ("+down" if fid == "s1" else "+down3"))
     with pytest.raises(AIRequiredError) as e:
-        convert(path, meta, journal, Options(out_dir=tmp_path / "down_none", convert_metafiles=False))
+        convert(path, meta, journal, Options(out_dir=tmp_path / "down_none"))
     assert [f.float.fid for f in e.value.floats] == [fid]
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "down_manual", ai_mode="manual", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "down_manual", ai_mode="manual"))
     checks_pass(res)
     nxt = after(sequence(load(res)), anchor)[0]
     assert nxt.startswith("表:") and res.plan.floats[fid].where == "anchor"
@@ -147,7 +156,7 @@ def test_cell_figures_guards(journal, meta, tmp_path, shape):
             "sentence": lambda pic: [[mf.cell([pic(0), mf.para(mf.S["body"], "図1は，左の画像を示す。")]),
                                       mf.cell([pic(1), cap("図2\u3000右のセルの図")])]]}[shape]
     path = cells_doc(tmp_path, shape, rows)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     checks_pass(res)
     root = load(res)
     assert figures(root) == {} and after(sequence(root), "試験（2024）にな", 2)[1] == "この段落に図形が結び"
@@ -183,8 +192,7 @@ def test_cell_figures_are_not_fixed_by_route2(journal, meta, tmp_path, monkeypat
            for t in texts if t]
     monkeypatch.setattr(pdfmatch, "extract_pages", lambda p: ["\n".join(pub)])
     (tmp_path / "dummy.pdf").write_bytes(b"%PDF-1.4\n")
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", pdf_path=tmp_path / "dummy.pdf", route="pdf",
-                                               convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", pdf_path=tmp_path / "dummy.pdf", route="pdf"))
     checks_pass(res)
     plan = res.plan
     cell_srcs = {q.src for info in plan.floats.values() for t in info.tables for q in t.paragraphs()}
@@ -202,7 +210,7 @@ def test_cell_figures_are_not_fixed_by_route2(journal, meta, tmp_path, monkeypat
 def test_cell_figures_one_caption_in_a_row(journal, meta, tmp_path):
     """横 1 行に画像 2 つとキャプション 1 つが並ぶ表は、2 つの画像を本体にした図 1 つに組む（図キャプションが表全体で 1 つ）。"""
     path = cells_doc(tmp_path, "row3", lambda pic: [[mf.cell(pic(0)), mf.cell(pic(1)), mf.cell(cap("図1\u3000二つの画像の図"))]])
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     checks_pass(res)
     root = load(res)
     assert figures(root) == {"図1": (1, 0)} and root.find("body").find(".//table-wrap") is None      # 2 つの画像で置き場所 1 つ
@@ -220,7 +228,7 @@ def test_table_with_caption_but_no_image_stays_a_table(journal, meta, tmp_path):
                 mf.para(mf.S["body"], "以上で終わる。")]
     path = tmp_path / "caption_in_table.docx"
     mf.make_article(path, "表の中の図キャプションの検証用文書", parts)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     checks_pass(res)
     assert res.plan.unplaced_floats == [] and res.plan.floats["s1"].mode == "mechanical"
     assert sequence(load(res))[:2] == ["表:問1\u3000架", "この段落に表のテキス"]       # アンカー段落の前に、表のまま
@@ -231,13 +239,13 @@ def test_cell_figures_of_unplaced_float_and_mixed_paragraph(journal, meta, tmp_p
     画像を図に入れ、段落の文字は図の画像に写るとみなして除外する（修正計画 W1 の 2.4。前は図の直後の段落に出していた）。"""
     path = tmp_path / "cells_down.docx"
     mf.make_b3_cells(path, "down")
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "down", ai_mode="manual", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "down", ai_mode="manual"))
     checks_pass(res)
     assert res.plan.unplaced_floats == ["s1"]
     assert after(sequence(load(res)), "この段落に図1と図2", 2) == ["図1", "図2"]
     path = tmp_path / "cells_mixed.docx"
     mf.make_b3_cells(path, "mixed")
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "mixed", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "mixed"))
     checks_pass(res)
     root = load(res)
     fig = next(f for f in root.iter("fig") if "".join(f.find("caption").itertext()).startswith("図1"))
@@ -264,7 +272,7 @@ def test_unplaced_float_notice_lists_its_paragraphs(journal, meta, tmp_path, cap
         want = "F1 "
     resp = tmp_path / "empty.json"
     resp.write_text('{"placements": [], "operations": [], "notes": []}', encoding="utf-8")
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False,
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual",
                                                ai_response=resp.read_text(encoding="utf-8")))
     checks_pass(res)
     assert res.plan.unplaced_floats == ["s1"]
@@ -286,7 +294,7 @@ def test_caption_less_table_becomes_figure_body(journal, meta, tmp_path, capsys)
     """画像のない図キャプションの直前の、キャプションのない表は、その図の本体にする（fig の中の table-wrap）。
     表とキャプションの間に段落がある、表に表キャプションが付いている、などで組めないときは、理由を画像の置き場所の備考に残す
     （W1: 要対応 figbody はなくなり、画像の要る図として知らせる）。"""
-    res = convert(TABLEFIG, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    res = convert(TABLEFIG, meta, journal, Options(out_dir=tmp_path))
     checks_pass(res)
     root = load(res)
     # 表で組んだ図には置き場所を作らない。本体のない図キャプションの図は、置き場所（<graphic> 1 つ）を作る（W1）
@@ -310,21 +318,24 @@ def test_caption_less_table_becomes_figure_body(journal, meta, tmp_path, capsys)
     assert "図の本体（画像・表）が見つからない" not in report
     # 本体のない図 F2・F3 にも画像の置き場所を作るので、「graphic なしで出力」の警告はない（W1）。表を本体にした F1 には置き場所がない
     assert not any("<graphic> なしで出力" in w for w in res.warnings)
-    # 理由には、置き場所の備考（表で組めなかった理由）を括弧に入れて添える
-    assert [(n, why) for n, _, why in images_to_prepare(res)] == [
-        ("31_1_fig02.png", f"{NO_DOCX_IMAGE}（{slot_notes(res)['図2']}）"),
-        ("31_1_fig03.png", f"{NO_DOCX_IMAGE}（{slot_notes(res)['図3']}）")]
-    # コマンドラインでは、画像の要る図として知らせる（要対応 images。終了コードは 1）
+    # 図の画像の一覧の備考に、置き場所の備考（表で組めなかった理由）を必ず出す。手順 images の行の括弧にも添える
+    assert [(row.key, row.note) for row in image_rows(res)] == [
+        ("fig02", f"未。docx でこの図の画像を見つけられませんでした。{slot_notes(res)['図2']}"),
+        ("fig03", f"未。docx でこの図の画像を見つけられませんでした。{slot_notes(res)['図3']}")]
+    [step] = [a for a in actions(res) if a.key == "images"]
+    assert f"（docx でこの図の画像を見つけられませんでした。{slot_notes(res)['図2']}）" in step.box_detail
+    assert f"（docx でこの図の画像を見つけられませんでした。{slot_notes(res)['図3']}）" in step.box_detail
+    # コマンドラインでは、画像を入れる手順として知らせる（必須の手順 images。終了コードは 1）
     assert cli_main([str(TABLEFIG), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli")]) == 1
     err = capsys.readouterr().err
-    assert "図の本体（画像・表）が見つからない" not in err and "31_1_fig02.png" in err
+    assert "図の本体（画像・表）が見つからない" not in err and "fig02（図2" in err
 
 
 def test_caption_above_figure_takes_following_table(journal, meta, tmp_path):
     """図キャプションを図の上に置く原稿では、画像のない図キャプションの直後の、キャプションのない表を図の本体にする。"""
     path = tmp_path / "tablefig_above.docx"
     mf.make_b3_tablefig(path, "above")
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     checks_pass(res)
     root = load(res)
     assert figures(root) == {"図5": (1, 0), "図4": (0, 1)} and slot_notes(res) == {}
@@ -371,7 +382,7 @@ def test_table_near_caption_that_cannot_be_the_body(journal, meta, tmp_path, sha
                 mf.para(mf.S["body"], "以上で終わる。")]
     path = tmp_path / f"{shape}.docx"
     mf.make_article(path, "表と図キャプションの検証用文書", parts)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     checks_pass(res)
     assert list(slot_notes(res).values()) == [why]
     assert figures(load(res))["図1"] == (1, 0) and any(t.table is not None for t in res.plan.tables)    # 本体なしでも置き場所はある
@@ -393,7 +404,7 @@ def test_table_with_its_own_caption_is_not_a_candidate(journal, meta, tmp_path, 
                 mf.para(mf.S["body"], "以上で終わる。")]
     path = tmp_path / f"{shape}.docx"
     mf.make_article(path, "表キャプションの付いた表の検証用文書", parts)
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     checks_pass(res)
     assert slot_notes(res) == {}
     root = load(res)
@@ -493,7 +504,7 @@ def test_provisional_float_is_not_paired_with_outside(journal, meta, tmp_path, s
     path = tmp_path / f"{shape}.docx"
     mf.make_article(path, "仮に置いた図形の検証用文書", lambda b: place_parts(b, shape))
     # AI が位置を答えなかった（図形は仮の位置のまま。手作業で移す図表の ID が知らせに出る）
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False,
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual",
                                                ai_response='{"placements": [], "operations": [], "notes": []}'))
     checks_pass(res)
     assert res.plan.unplaced_floats == ["s1"] and slot_notes(res) == {}
@@ -539,7 +550,7 @@ def test_provisional_float_is_not_paired_with_outside_captions(journal, meta, tm
     手作業で移す図表の知らせには、図形の中身だけを出す。"""
     path = tmp_path / f"{shape}.docx"
     mf.make_article(path, "仮に置いた図形の検証用文書", lambda b: place_parts(b, shape))
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False,
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual",
                                                ai_response='{"placements": [], "operations": [], "notes": []}'))
     checks_pass(res)
     assert res.plan.unplaced_floats == ["s1"] and res.plan.floats["s1"].where == "anchor"
@@ -619,7 +630,7 @@ def test_provisional_floats_at_same_place_are_paired(journal, meta, tmp_path, ap
     段落の後ろと答えた図形は、同じ位置に仮に置くので組む）。"""
     path = tmp_path / "split.docx"
     mf.make_article(path, "仮に置いた図形の検証用文書", lambda b: split_parts(b, apart))
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False,
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual",
                                                ai_response='{"placements": [], "operations": [], "notes": []}'))
     checks_pass(res)
     assert res.plan.unplaced_floats == ["s1", "s2"]
@@ -640,8 +651,13 @@ def test_provisional_floats_at_same_place_are_paired(journal, meta, tmp_path, ap
 
 def test_figure_without_image_or_table_nearby_is_unchanged(journal, meta, tmp_path):
     """近くに表の候補がない、画像のない図キャプション（キャプションだけのテキストボックスなど）は、今までどおり判断の一覧に
-    記録し、画像の置き場所（備考なし）を作る。"""
-    res = convert(EDGE, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    記録し、画像の置き場所を作る。備考は「docx でこの図の画像を見つけられませんでした」だけ（図の画像の一覧の備考と、
+    手順 images の行の括弧に出る。W1 の手順 9 で pipeline.NO_DOCX_IMAGE の代わり）。"""
+    from jasme_jats.report import actions
+    res = convert(EDGE, meta, journal, Options(out_dir=tmp_path))
     assert slot_notes(res) == {}
-    assert any(s.kind == "fig" and not s.covers for s in res.plan.slots)
+    empty = [s for s in res.plan.slots if s.kind == "fig" and not s.covers]
+    assert empty and all(s.note == "docx でこの図の画像を見つけられませんでした" for s in empty)
+    [step] = [a for a in actions(res) if a.key == "images"]
+    assert f"{empty[0].key}: " in step.box_detail and "（docx でこの図の画像を見つけられませんでした）" in step.box_detail
     assert any(d.message == "図キャプションに対応する画像が見つからない（図形・グループ化等の可能性）" for d in res.plan.decisions)

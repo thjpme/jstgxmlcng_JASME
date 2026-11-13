@@ -22,8 +22,9 @@ from pathlib import Path
 from .ai_assist import API_KEY_NAMES, DEFAULT_MODEL
 from .colab import step_text
 from .config import ArticleMeta, JournalConfig
+from .images import match_names
 from .pipeline import AIRequiredError, Options, StructureConflictError, add_images, convert
-from .report import actions, images_to_prepare, pdf_summary, upload_issues
+from .report import actions, image_rows, images_action, pdf_summary, upload_issues
 
 
 def main(argv=None):
@@ -50,10 +51,12 @@ def main(argv=None):
                          "（著者校正の直しと、全角・半角・ダッシュ・引用符などの組版の違いを PDF から補った docx〈Word の"
                          "変更履歴つき〉を出力フォルダに作り、それを変換する）。docx: docx から作る（docx の文字は 1 文字も"
                          "変えない。--pdf があれば照合してレポートに載せるだけ）")
-    ap.add_argument("--no-metafile-conversion", action="store_true", help="EMF/WMF 画像の変換を行わない")
     ap.add_argument("--images", type=Path,
-                    help="画像を用意できなかった図（Word の図形で描かれた図など）の画像を入れたフォルダ。出力のファイル名"
-                         "（25_77_fig01.png など。拡張子は .png・.jpg・.pdf などでもよい）と同じ名前の画像を Graphics/ に入れる")
+                    help="図・表の画像を入れたフォルダ（論文ごとに分ける）。ファイル名は fig03.png・図3.png・29_55_fig03.png のどれでもよい"
+                         "（PNG・JPEG・GIF）。名前の合う画像を、中身を変えずに Graphics/ に入れる")
+    ap.add_argument("--no-image", action="append", default=[], metavar="名前",
+                    help="画像を入れない、キャプションのない画像の置き場所の名前（img3fa9c2 など。出版版 PDF で見て、ほかの図に写っている・"
+                         "飾りだけ、のとき）。複数あるときは繰り返し指定する。図・表の画像は入れないことにできない")
     a = ap.parse_args(argv)
     if a.ai == "api" and a.ai_provider != "claude" and not a.ai_model:
         ap.error(f"--ai-provider {a.ai_provider} では --ai-model でモデル名を指定してください"
@@ -88,7 +91,7 @@ def main(argv=None):
     opts = Options(out_dir=a.out, split_labels=None if a.split_labels is None else a.split_labels == "yes",
                    ai_mode=a.ai, ai_provider=a.ai_provider, ai_model=a.ai_model or DEFAULT_MODEL, ai_api_key=api_key,
                    ai_response=a.ai_response.read_text(encoding="utf-8") if a.ai_response else None,
-                   pdf_path=a.pdf, route=a.route, convert_metafiles=not a.no_metafile_conversion)
+                   pdf_path=a.pdf, route=a.route)
     try:
         res = convert(a.docx, meta, journal, opts)
     except (AIRequiredError, StructureConflictError) as e:
@@ -115,14 +118,21 @@ def main(argv=None):
         print(f"AI 判断一覧: {res.ai_report_path}")
     if res.prompt_path:
         print(f"AI 依頼文: {res.prompt_path}")
-    if a.images:
+    if a.images or a.no_image:
         try:
-            added = add_images(res, user_images_in(a.images, images_to_prepare(res)))
+            supplied = images_in(a.images, res) if a.images else {}
+            added = add_images(res, supplied, skip=a.no_image)
         except ValueError as e:
             print(f"画像: {e}", file=sys.stderr)
             return 2        # 画像を 1 枚も入れずに止める（ZIP とレポートは変換のときのまま）
         if added:
             print(f"画像を入れて ZIP とレポートを作り直した: {', '.join(added)}")
+        if a.no_image:
+            print(f"画像を入れないことにした（手順の「全部で」から除いた）: {', '.join(a.no_image)}")
+    table = image_table(res)
+    if table:
+        print("\n".join(table))
+        print(f"図の確かめの一覧: {res.check_path}")
     if res.not_zipped:        # add_images の後の値（ZIP を作り直すと計算し直す）
         print(f"※ 記事フォルダにあるが ZIP に入れなかったファイル {len(res.not_zipped)} 件（前の変換の残りか、手で置いたもの。"
               "PDF は --pdf、画像は --images で指定し直すと入る。レポートの 10 章）: " + ", ".join(res.not_zipped))
@@ -134,15 +144,35 @@ def main(argv=None):
     return 1 if res.needs_action else 0
 
 
-def user_images_in(folder: Path, need) -> dict:
-    """フォルダの中から、用意が必要な画像と同じ名前（拡張子は問わない）のファイルを探す。出力ファイル名 → パス。"""
-    found = {}
-    for name, _, _ in need:
-        stem = name.rsplit(".", 1)[0]
-        cands = sorted(p for p in folder.iterdir() if p.is_file() and p.stem == stem)
-        if cands:
-            found[name] = cands[0]
-    return found
+def images_in(folder: Path, res) -> dict:
+    """フォルダの画像を、ファイル名で置き場所に合わせる（images.match_names）。幹 → パス。
+
+    受け付ける名前は fig03・図3・29_55_fig03 など（拡張子は問わない）。合う置き場所のないファイル、同じ置き場所に合う複数のファイルは
+    標準エラーに出して続ける（別の記事の識別子の付いた名前も「合わない」名前）。隠しファイル（.で始まる名前）は見ない。
+    """
+    paths = {p.name: p for p in sorted(folder.iterdir()) if p.is_file() and not p.name.startswith(".")}
+    rows = [row for row in image_rows(res) if row.kind != "optional"]
+    found, unmatched, clashes = match_names(list(paths), rows, res.meta.article_id(res.journal))
+    for name in unmatched:
+        print(f"画像: 「{name}」に合う図がありません（fig03.png・図3.png・{res.meta.article_id(res.journal)}_fig03.png のような名前にします。"
+              "ほかの記事の識別子が付いた名前は入れません）", file=sys.stderr)
+    for key, names in clashes:
+        print(f"画像: 同じ図（{key}）に合うファイルが複数あるので、どれも入れていません: {', '.join(names)}", file=sys.stderr)
+    return {key: paths[name] for key, name in found.items()}
+
+
+def image_table(res) -> list:
+    """標準出力に出す図の画像の表の行（見出しは手順 images の progress、行は report.image_rows）。画像の要る図・表がなければ空。"""
+    rows = [row for row in image_rows(res) if row.kind != "optional"]
+    if not rows:
+        return []
+    act = images_action(res)
+    out = ["図の画像" + (f"（{act.progress}）" if act is not None else "") + ":"]
+    width = max(len(row.key) for row in rows)
+    for row in rows:
+        state = {"missing": "未", "skipped": "入れない"}.get(row.status) or f"入れた（{row.detail}）"
+        out.append(f"  {row.key.ljust(width)}  {(row.label or '—').ljust(4)}  {state}")
+    return out
 
 
 if __name__ == "__main__":

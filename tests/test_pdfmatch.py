@@ -75,7 +75,7 @@ def test_width_pairs():
 def test_route1_reports_without_changing_text(journal, meta, tmp_path):
     """ルート1: docx の文字は 1 文字も変えず、PDF との違いはレポートに載せるだけ。"""
     pytest.importorskip("pypdfium2")
-    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, pdf_path=PDFCHECK_PDF, convert_metafiles=False))
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, pdf_path=PDFCHECK_PDF))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     assert res.route == "docx" and res.docx_fix is None and not list(tmp_path.glob("*.docx"))
     pc = res.pdf_check
@@ -101,8 +101,7 @@ def test_route2_fixes_docx_with_tracked_changes(journal, meta, tmp_path):
     """ルート2: PDF で補った docx（変更履歴つき）を作り、それを変換する。"""
     pytest.importorskip("pypdfium2")
     before = PDFCHECK.read_bytes()
-    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, pdf_path=PDFCHECK_PDF, route="pdf",
-                                                   convert_metafiles=False))
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, pdf_path=PDFCHECK_PDF, route="pdf"))
     assert PDFCHECK.read_bytes() == before                  # 元の docx は変えない
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     fx = res.docx_fix
@@ -138,11 +137,11 @@ def test_route2_fixes_docx_with_tracked_changes(journal, meta, tmp_path):
 
 def test_route2_needs_pdf(journal, meta, tmp_path):
     with pytest.raises(ValueError, match="PDF が必要"):
-        convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, route="pdf", convert_metafiles=False))
+        convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, route="pdf"))
 
 
 def test_no_pdf_means_no_check(journal, meta, tmp_path):
-    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path))
     assert res.pdf_check is None
     assert "| 出版版 PDF との照合 | PDF なし（照合していない） |" in res.report_path.read_text(encoding="utf-8")
 
@@ -177,8 +176,7 @@ def test_wrong_pdf_changes_nothing(journal, meta, tmp_path):
     """別の記事の PDF なら、段落が見つからないだけで、ルート2 でも docx の文字は直さない。"""
     pytest.importorskip("pypdfium2")
     from conftest import NOTES
-    res = convert(NOTES, meta, journal, Options(out_dir=tmp_path, pdf_path=PDFCHECK_PDF, route="pdf",
-                                                convert_metafiles=False))
+    res = convert(NOTES, meta, journal, Options(out_dir=tmp_path, pdf_path=PDFCHECK_PDF, route="pdf"))
     fx, pc = res.docx_fix, res.pdf_check
     assert fx.applied == [] and fx.unmatched and tracked_counts(fx.path) == (0, 0)
     assert pc.diffs == [] and pc.unmatched and res.fidelity.ok
@@ -199,8 +197,7 @@ def test_word_footnote_numbers_follow_pdf(journal, meta, tmp_path, monkeypatch):
     pages = ["Word の脚注1）が付いた文。\n１）Word の脚注機能で付けた注です。\n"]
     monkeypatch.setattr(pdfmatch, "extract_pages", lambda path: pages)
     (tmp_path / "dummy.pdf").write_bytes(b"%PDF-1.4\n")    # ZIP に入れるだけ（文字は extract_pages の代わりから）
-    res = convert(EDGE, meta, journal, Options(out_dir=tmp_path / "pdf", pdf_path=tmp_path / "dummy.pdf", route="pdf",
-                                               convert_metafiles=False))
+    res = convert(EDGE, meta, journal, Options(out_dir=tmp_path / "pdf", pdf_path=tmp_path / "dummy.pdf", route="pdf"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     root = load(res)
     x = next(x for x in root.iter("xref") if x.get("ref-type") == "fn")
@@ -212,8 +209,7 @@ def test_word_footnote_numbers_follow_pdf(journal, meta, tmp_path, monkeypatch):
     report = res.report_path.read_text(encoding="utf-8")
     assert "| 注の一覧の脚注番号 | Word の脚注 5 | 「1)」→「１）」 |" in report
     # ルート1 では、Word の番号も設定 fn_mark のまま（違いはレポートに載せるだけ）
-    res = convert(EDGE, meta, journal, Options(out_dir=tmp_path / "docx", pdf_path=tmp_path / "dummy.pdf",
-                                               convert_metafiles=False))
+    res = convert(EDGE, meta, journal, Options(out_dir=tmp_path / "docx", pdf_path=tmp_path / "dummy.pdf"))
     assert "".join(load(res).find(".//fn/p").itertext()) == "1) Word の脚注機能で付けた注です。"
     report = res.report_path.read_text(encoding="utf-8")
     assert "| 注の一覧の脚注番号 | Word の脚注 5 | 「1)」→「１）」 |" in report
@@ -353,12 +349,11 @@ def test_colab_box_and_cli_route(journal, meta, tmp_path, capsys):
     pytest.importorskip("pypdfium2")
     from jasme_jats.cli import main
     from jasme_jats.colab import pdf_diff_box
-    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "1", pdf_path=PDFCHECK_PDF, convert_metafiles=False))
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "1", pdf_path=PDFCHECK_PDF))
     html = pdf_diff_box(res)
     assert "#d97706" in html and "出版版 PDF と文字が違う箇所が 1 件あります" in html
     assert "XML は docx の文字のまま" in html and "docx から作り、出版版 PDF で補う" in html
-    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "2", pdf_path=PDFCHECK_PDF, route="pdf",
-                                                   convert_metafiles=False))
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "2", pdf_path=PDFCHECK_PDF, route="pdf"))
     assert pdf_diff_box(res) == ""                 # すべて直せて、残っている違いもない
     from jasme_jats.report import TO_CHECK, actions
     # (B) 校正の直し（「資料」→「付録」）を直せなかったときは要確認（終了コード 0）
@@ -381,14 +376,14 @@ def test_colab_box_and_cli_route(journal, meta, tmp_path, capsys):
     # --pdf があれば、既定は「docx から作り、出版版 PDF で補う」（--meta がないと J-STAGE のアップロード時チェックで要対応になり 1）
     from conftest import META_EXAMPLE
     meta_args = ["--meta", str(META_EXAMPLE)]
-    assert main([str(PDFCHECK), "--out", str(tmp_path / "c"), "--pdf", str(PDFCHECK_PDF), "--no-metafile-conversion"]
+    assert main([str(PDFCHECK), "--out", str(tmp_path / "c"), "--pdf", str(PDFCHECK_PDF)]
                 + meta_args) == 0
     out = capsys.readouterr().out
     assert "出版版 PDF との照合: PDF で補った校正の直し 1 箇所・組版の違い 43 箇所" in out
     assert "PDF で補った docx（変更履歴つき）:" in out and "_PDFで補完した原稿.docx" in out
     assert "補完の確かめ: 合格" in out
     assert main([str(PDFCHECK), "--out", str(tmp_path / "d"), "--pdf", str(PDFCHECK_PDF), "--route", "docx",
-                 "--no-metafile-conversion"] + meta_args) == 0     # ルート1 の PDF との違いは要確認（0）
+                 ] + meta_args) == 0     # ルート1 の PDF との違いは要確認（0）
     out = capsys.readouterr().out
     assert "出版版 PDF との照合: 文字の違い 1 件" in out and "PDF で補った docx" not in out
 
@@ -404,8 +399,7 @@ def test_route2_keeps_note_marks_when_fixing_breaks_notes(journal, meta, tmp_pat
              "３）2 段落からなる注の 1 段落目である。\n"]
     monkeypatch.setattr(pdfmatch, "extract_pages", lambda path: pages)
     (tmp_path / "dummy.pdf").write_bytes(b"%PDF-1.4\n")
-    res = convert(NOTES, meta, journal, Options(out_dir=tmp_path, pdf_path=tmp_path / "dummy.pdf", route="pdf",
-                                                convert_metafiles=False))
+    res = convert(NOTES, meta, journal, Options(out_dir=tmp_path, pdf_path=tmp_path / "dummy.pdf", route="pdf"))
     assert res.fidelity.ok and res.dtd_valid
     fx = res.docx_fix
     kept = [f for f in fx.skipped if f.reason == NOTE_REASON]
@@ -426,8 +420,7 @@ def test_route2_with_unreadable_pdf_converts_original(journal, meta, tmp_path, m
     from jasme_jats.colab import pdf_diff_box
     monkeypatch.setattr(pdfmatch, "extract_pages", lambda path: ["", "\n"])
     (tmp_path / "dummy.pdf").write_bytes(b"%PDF-1.4\n")
-    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, pdf_path=tmp_path / "dummy.pdf", route="pdf",
-                                                   convert_metafiles=False))
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, pdf_path=tmp_path / "dummy.pdf", route="pdf"))
     assert res.fidelity.ok and res.docx_fix is None and not list(tmp_path.glob("*.docx"))
     assert ORIGINAL["d12"] in texts(load(res))
     report = res.report_path.read_text(encoding="utf-8")
@@ -442,18 +435,17 @@ def test_route2_with_unreadable_pdf_converts_original(journal, meta, tmp_path, m
     assert "docx を PDF で補っていない" in report.split("## 14.")[1]
     from conftest import META_EXAMPLE
     assert main([str(PDFCHECK), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli"), "--pdf",
-                 str(tmp_path / "dummy.pdf"), "--no-metafile-conversion"]) == 1
+                 str(tmp_path / "dummy.pdf")]) == 1
     err = capsys.readouterr().err
     assert "要対応: 出版版 PDF で補えませんでした" in err and "PDF から文字を取り出せなかった" in err
     # ルート1 で読めないときは要確認（照合できなかっただけで、XML は docx の文字のまま。終了コード 0）
-    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "r1", pdf_path=tmp_path / "dummy.pdf", route="docx",
-                                                   convert_metafiles=False))
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "r1", pdf_path=tmp_path / "dummy.pdf", route="docx"))
     assert not res.pdf_fallback and not res.needs_action
     html = pdf_diff_box(res)
     assert "出版版 PDF と照合できませんでした（要確認）" in html and "出版版 PDF で補えませんでした" not in html
     assert "要確認: 出版版 PDF と照合できませんでした" in res.report_path.read_text(encoding="utf-8").split("## 2.")[0]
     assert main([str(PDFCHECK), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli1"), "--pdf",
-                 str(tmp_path / "dummy.pdf"), "--route", "docx", "--no-metafile-conversion"]) == 0
+                 str(tmp_path / "dummy.pdf"), "--route", "docx"]) == 0
 
 
 def test_route2_keeps_reference_when_fixing_breaks_citation(journal, meta, tmp_path, monkeypatch):
@@ -465,8 +457,7 @@ def test_route2_keeps_reference_when_fixing_breaks_citation(journal, meta, tmp_p
              + "見本花子（2021）．「見本の研究」．『見本誌』，第2巻，pp.11-20．\n"]
     monkeypatch.setattr(pdfmatch, "extract_pages", lambda path: pages)
     (tmp_path / "dummy.pdf").write_bytes(b"%PDF-1.4\n")
-    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, pdf_path=tmp_path / "dummy.pdf", route="pdf",
-                                                   convert_metafiles=False))
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, pdf_path=tmp_path / "dummy.pdf", route="pdf"))
     fx = res.docx_fix
     assert {f.src for f in fx.skipped} == {"d17"} and {f.reason for f in fx.skipped} == {STRUCTURE_REASON}
     assert ("d17", "験", "行") in {(f.src, f.old, f.new) for f in fx.skipped}
@@ -1487,8 +1478,7 @@ def convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, route, docx=
     from jasme_jats import pdfmatch
     monkeypatch.setattr(pdfmatch, "extract_pages", lambda path: pages)
     (tmp_path / "dummy.pdf").write_bytes(b"%PDF-1.4\n")
-    return convert(docx, meta, journal, Options(out_dir=tmp_path / route, pdf_path=tmp_path / "dummy.pdf", route=route,
-                                                convert_metafiles=False))
+    return convert(docx, meta, journal, Options(out_dir=tmp_path / route, pdf_path=tmp_path / "dummy.pdf", route=route))
 
 
 def chapters(res):
@@ -1555,8 +1545,7 @@ def test_no_running_heads_in_report(journal, meta, tmp_path):
     """照合に使わなかった文字がなければ「ありません。」（冒頭の要約と 14 章にも出さない）。"""
     pytest.importorskip("pypdfium2")
     from jasme_jats.report import IGNORED_TITLE
-    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, pdf_path=PDFCHECK_PDF, route="pdf",
-                                                   convert_metafiles=False))
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, pdf_path=PDFCHECK_PDF, route="pdf"))
     assert res.docx_fix.check.ignored_lines == [] and res.pdf_check.ignored_lines == []
     head, ch13, ch14 = chapters(res)
     assert f"### 13.7 {IGNORED_TITLE}\n\nありません。" in ch13
@@ -3426,8 +3415,7 @@ def test_route2_with_broken_pdf_is_needs_action(journal, meta, tmp_path):
     """壊れた PDF（0 バイト）でも、ルート2 は docx を直さずに変換を続け、要対応として知らせる。"""
     from jasme_jats.colab import pdf_diff_box
     (tmp_path / "broken.pdf").write_bytes(b"")
-    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, pdf_path=tmp_path / "broken.pdf", route="pdf",
-                                                   convert_metafiles=False))
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, pdf_path=tmp_path / "broken.pdf", route="pdf"))
     assert res.pdf_fallback and res.docx_fix is None and res.fidelity.ok and res.needs_action
     html = pdf_diff_box(res)
     assert "出版版 PDF で補えませんでした" in html and "PDF を読めなかった" in html
@@ -3445,11 +3433,10 @@ def test_route2_without_pypdfium2_is_needs_action(journal, meta, tmp_path, monke
         raise ImportError("No module named 'pypdfium2'")
     monkeypatch.setattr(pdfmatch, "extract_pages", no_module)
     (tmp_path / "dummy.pdf").write_bytes(b"%PDF-1.4\n")
-    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "a", pdf_path=tmp_path / "dummy.pdf", route="pdf",
-                                                   convert_metafiles=False))
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "a", pdf_path=tmp_path / "dummy.pdf", route="pdf"))
     assert res.pdf_fallback and "pypdfium2 が入っていない" in pdf_diff_box(res)
     assert main([str(PDFCHECK), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli"), "--pdf",
-                 str(tmp_path / "dummy.pdf"), "--no-metafile-conversion"]) == 1
+                 str(tmp_path / "dummy.pdf")]) == 1
     assert "pypdfium2 が入っていない" in capsys.readouterr().err
 
 
@@ -3459,8 +3446,7 @@ def test_route2_fully_fixed_has_no_action(journal, meta, tmp_path):
     pytest.importorskip("pypdfium2")
     from jasme_jats.colab import pdf_diff_box, result_boxes
     from jasme_jats.report import actions, pdf_suspect
-    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, pdf_path=PDFCHECK_PDF, route="pdf",
-                                                   convert_metafiles=False))
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, pdf_path=PDFCHECK_PDF, route="pdf"))
     assert res.docx_fix is not None and not res.pdf_fallback
     assert actions(res) == [] and result_boxes(res) == "" and pdf_diff_box(res) == "" and not pdf_suspect(res)
     assert not res.needs_action
@@ -3479,14 +3465,13 @@ def test_split_paragraph_is_matched_as_one(journal, meta, tmp_path):
     mf.make_pdfcheck(path, split=True)
     joined = ORIGINAL["d13"]
     # ルート1: XML は docx の文字のまま 1 つの <p>。違いは d13 の 1 か所（後ろの w:p の ID d14 は欠番）
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "r1", pdf_path=PDFCHECK_PDF, convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "r1", pdf_path=PDFCHECK_PDF))
     assert res.fidelity.ok and res.dtd_valid and res.joined == [("d13", ["d13", "d14"])]
     out = texts(load(res))
     assert joined in out and "授業は2回行った。" not in out
     assert [(d.src, d.docx, d.pdf) for d in res.pdf_check.diffs] == [("d13", "資料", "付録")]
     # ルート2: 1 つの段落として「資料」→「付録」と「2」→「２」を直し、XML は 1 つの <p>
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "r2", pdf_path=PDFCHECK_PDF, route="pdf",
-                                               convert_metafiles=False))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "r2", pdf_path=PDFCHECK_PDF, route="pdf"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     fx = res.docx_fix
     assert fx.skipped == [] and fx.unmatched == [] and res.pdf_check.diffs == []
@@ -3573,8 +3558,7 @@ def test_route2_fixes_paragraphs_with_style_hidden_text(split, journal, meta, tm
     def route2(name, hidden):
         path = tmp_path / f"{name}.docx"
         mf.make_pdfcheck(path, split=split, hidden=hidden)
-        res = convert(path, meta, journal, Options(out_dir=tmp_path / name, pdf_path=PDFCHECK_PDF, route="pdf",
-                                                   convert_metafiles=False))
+        res = convert(path, meta, journal, Options(out_dir=tmp_path / name, pdf_path=PDFCHECK_PDF, route="pdf"))
         assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
         return path, res
 
@@ -3822,8 +3806,7 @@ def test_typeset_skipped_is_not_to_check(journal, meta, tmp_path):
     直せなかったときは、今までどおり要確認。"""
     pytest.importorskip("pypdfium2")
     from jasme_jats.report import TO_CHECK, actions
-    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, pdf_path=PDFCHECK_PDF, route="pdf",
-                                                   convert_metafiles=False))
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path, pdf_path=PDFCHECK_PDF, route="pdf"))
     fx = res.docx_fix
     assert len(fx.applied_text) == 1 and len(fx.applied_typeset) == 43 and actions(res) == []
     f = fx.applied_typeset[0]
@@ -3878,13 +3861,12 @@ def test_route2_chapter13_sections(journal, meta, tmp_path):
     pytest.importorskip("pypdfium2")
     import re
     from jasme_jats.report import IGNORED_TITLE
-    res2 = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "2", pdf_path=PDFCHECK_PDF, route="pdf",
-                                                    convert_metafiles=False))
+    res2 = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "2", pdf_path=PDFCHECK_PDF, route="pdf"))
     heads2 = re.findall(r"^### (13\.\d .*)$", chapters(res2)[1], flags=re.M)
     assert heads2 == ["13.1 PDF で補った校正の直し（変更履歴）", "13.2 組版の違い（PDF に合わせた。確認は要りません）",
                       "13.3 直さなかった箇所（要確認）", "13.4 Word が付ける番号", "13.5 補った docx と PDF の照合（残っている違い）",
                       "13.6 PDF の中に見つからなかった段落", f"13.7 {IGNORED_TITLE}", "13.8 補完の確かめ"]
-    res1 = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "1", pdf_path=PDFCHECK_PDF, convert_metafiles=False))
+    res1 = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "1", pdf_path=PDFCHECK_PDF))
     heads1 = re.findall(r"^### (13\.\d .*)$", chapters(res1)[1], flags=re.M)
     assert heads1 == ["13.1 文字の違い（要確認）", "13.2 組版の違い（docx のまま）", "13.3 PDF の中に見つからなかった段落",
                       f"13.4 {IGNORED_TITLE}"]
