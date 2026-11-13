@@ -223,6 +223,36 @@ def test_float_notes_list_unreferenced_and_uncaptioned(journal):
     assert any(n.startswith("キャプションのない表") and "T1" in n for n in notes)
 
 
+def test_float_notes_show_object_marks_as_text(journal):
+    """3 章の図・表の名前の文字は、数式などの位置の文字（U+FFFC）を表示用の文字にする（report.shown_text・shorten_shown）。"""
+    from jasme_jats.linker import body_paragraphs
+    from jasme_jats.pipeline import _mechanical
+    from jasme_jats.report import OBJECT_MARK, OBJECT_SHOWN, float_notes
+
+    class Cap:
+        """もとのキャプションの段落の代わりに、plain だけ別の文字を返す（ほかの属性はもとの段落のもの）。"""
+        def __init__(self, para, text):
+            self.para, self.text = para, text
+
+        def __getattr__(self, name):
+            return getattr(self.para, name)
+
+        def plain(self):
+            return self.text
+
+    doc, plan, linker = _mechanical(FULL, journal)
+    for p, _ in body_paragraphs(plan):
+        for a in p.atoms:
+            if a.link is not None and a.link.attrs.get("rid") in ("F2", "T1"):
+                a.link = None
+    fig = next(f for f in plan.figures if f.fid == "F2")
+    fig.caption = Cap(fig.caption, OBJECT_MARK + "図2　式" + OBJECT_MARK + "の値の変化を表した図の例である")
+    plan.tables[0].caption = Cap(plan.tables[0].caption, "表1　" + OBJECT_MARK + "の一覧")
+    notes = "\n".join(float_notes(plan))
+    assert OBJECT_MARK not in notes
+    assert f"F2（図2　式{OBJECT_SHOWN}の値の変化を表した図…）" in notes and f"T1（表1　{OBJECT_SHOWN}の一覧）" in notes
+
+
 def test_ref_doi_as_uri(journal, meta, tmp_path):
     # 設定 ref_doi = "uri": 「https://doi.org/10.…」の文字全体を <uri> にする（文字はそのまま）
     import dataclasses

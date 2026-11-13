@@ -83,19 +83,19 @@ def float_notes(plan):
     ためのもの。3 章）。"""
     out = []
     figs, tabs = linked_ids(plan, "fig"), linked_ids(plan, "table")
-    nf = [f"{f.fid}（{esc(f.caption.plain()[:20])}）" for f in plan.figures
+    nf = [f"{f.fid}（{esc(shorten_shown(f.caption.plain(), 20))}）" for f in plan.figures
           if f.fid and f.caption is not None and f.fid not in figs]
     if nf:
         out.append("本文中のどこからも参照（リンク）されていない図: " + "、".join(nf))
-    nt = [f"{t.tid}（{esc(t.caption.plain()[:20])}）" for t in plan.tables
+    nt = [f"{t.tid}（{esc(shorten_shown(t.caption.plain(), 20))}）" for t in plan.tables
           if t.tid and t.caption is not None and t.tid not in tabs]
     if nt:
         out.append("本文中のどこからも参照（リンク）されていない表: " + "、".join(nt))
     nc = []
     for t in plan.tables:
         if t.caption is None:
-            first = next((p.plain().strip() for p in (t.table.paragraphs() if t.table else []) if p.plain().strip()), "")
-            nc.append(f"{t.tid or '-'}（最初のセル「{esc(first[:15])}」）")
+            first = next((shown_text(p.plain()) for p in (t.table.paragraphs() if t.table else []) if shown_text(p.plain())), "")
+            nc.append(f"{t.tid or '-'}（最初のセル「{esc(shorten_shown(first, 15))}」）")
     if nc:
         out.append("キャプションのない表（表番号がないため本文からリンクできない。表として出力した）: " + "、".join(nc))
     # 本文の図キャプションの図に含めた図形（修正計画 W1 の 2.3 の B6。図キャプションの位置に置いたので、位置を決められない図表に数えない）
@@ -104,7 +104,7 @@ def float_notes(plan):
         if info.mode != "caption":
             continue
         fig = next((f for f in plan.figures if f.caption is not None and f.caption.src == info.caption_src), None)
-        what = f"{fig.fid}「{esc(fig.caption.plain().strip()[:20])}」" if fig is not None and fig.fid else info.caption_src
+        what = f"{fig.fid}「{esc(shorten_shown(fig.caption.plain(), 20))}」" if fig is not None and fig.fid else info.caption_src
         cap.append(f"{fid}（{what}）")
     if cap:
         out.append("本文の図キャプションの図に含め、その位置に置いた図形（キャプションのないグループ図形。近くの段落に結び付いていた）: "
@@ -1707,17 +1707,19 @@ def _image_cli(row) -> str:
 def images_dropped(r) -> list:
     """持ち越せず、まだ入れ直していない前の画像（Result.images_dropped の DroppedImage）。同じ論文のものだけ（別の論文のものは images_other_article）。
 
-    今の図が示されているもの（suggest）は、その図にこの前の画像そのもの（中身の SHA-1 が同じ）が入っていれば済んだとみなす（別の画像が
-    入っていても済みにしない）。示されていないものは、同じ幹の図に画像が入っていれば済んだとみなす。
+    今の図が示されているもの（suggest）は、その図にこの前の画像そのもの（中身の SHA-1 が同じ）が入っているか、変換の後に作業する人が
+    その図に画像を入れた（Result.images_readded。切り取り直した別の画像でもよい）なら済んだとみなす（持ち越しでほかの前の画像が
+    入っただけでは済みにしない）。示されていないものは、同じ幹の図に画像が入っていれば済んだとみなす。
     """
     now = {i.key: i for i in r.images}
+    readded = getattr(r, "images_readded", set())
     out = []
     for d in getattr(r, "images_dropped", []):
         if d.other_article:
             continue
         if d.suggest:
             im = now.get(d.suggest)
-            done = im is not None and im.status == "user" and bool(d.sha1) and im.sha1 == d.sha1
+            done = im is not None and im.status == "user" and (d.suggest in readded or (bool(d.sha1) and im.sha1 == d.sha1))
         else:
             im = now.get(d.key)
             done = im is not None and im.status == "user"

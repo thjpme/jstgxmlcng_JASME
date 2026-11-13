@@ -47,7 +47,7 @@ class KeptImage:
     key は置き場所の幹、kind は fig・table・nocap・optional、source_name は元のファイル名、data は中身（バイト列のまま）、
     caption は入れたときのキャプションの文字、body はその本体（structure.caption_body。番号を除いた文字）、where は入れたときの
     場所の段落の先頭 20 字（キャプションのない画像の照合に使う）、skipped は「入れない」とした置き場所か、article_id は記事識別子
-    （巻と最初のページ）、layout は入れたときの置き場所の並び全体（pipeline._slot_layout。幹・種類・本体・場所。どの KeptImage も同じ）。
+    （巻と最初のページ）、layout は入れたときの置き場所の並び全体（pipeline._slot_layout。幹・種類・本体・場所・docx の画像の中身。どの KeptImage も同じ）。
     """
     key: str
     kind: str
@@ -66,8 +66,10 @@ class DroppedImage:
     """持ち越せなかった前の画像（pipeline.Result.images_dropped）。別の図の画像を入れないために入れなかったもの。
 
     key は前の置き場所の幹、source_name は元のファイル名、caption は前のキャプションの文字、why は入れなかった理由の言い方、
-    suggest は、前のキャプションの本体と本体が同じ図が今ちょうど 1 つあるときのその幹（なければ ""）、sha1 は前の画像の中身の SHA-1
-    （report.images_dropped が、suggest の置き場所にこの画像そのものが入ったかを見る）、other_article は、記事識別子が変わった
+    suggest は、前のキャプションの本体と本体が同じ図が今ちょうど 1 つあるときのその幹か、本体が少し変わり番号もずれた図で、互いにただ 1 つの
+    いちばん近い組（割合 0.8 以上）の今の図の幹（なければ ""。示すだけで入れない）、sha1 は前の画像の中身の SHA-1
+    （report.images_dropped が、suggest の置き場所にこの画像そのものが入ったかを見る。作業する人がその置き場所に画像を入れ直したときも
+    済みにする）、other_article は、記事識別子が変わった
     （別の論文の）ときの前の記事識別子（同じ論文なら ""。手順 images では行を並べず 1 行で知らせる）。
     """
     key: str

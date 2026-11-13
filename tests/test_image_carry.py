@@ -21,13 +21,13 @@ def png(color) -> bytes:
     return one_color_png(color=color)
 
 
-def make(path, figs, text="本文の段落である。", nocaps=(), title="持ち越しの検証用文書"):
+def make(path, figs, text="本文の段落である。", nocaps=(), title="持ち越しの検証用文書", pics=None):
     """図 figs（キャプションの文字の一覧。番号は「図N」を前から付ける）と、キャプションのない画像 nocaps（前の文字の一覧。
-    画像の中身は前の文字ごとに違う）を並べた小さな論文を作る。"""
+    画像の中身は前の文字ごとに違う）を並べた小さな論文を作る。pics を渡すと、図の docx の画像の中身をその文字から作る（図ごと）。"""
     def parts(b):
         out = [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], text)]
         for n, cap in enumerate(figs, 1):
-            rid = b.add_image(f"c{n}.png", mf.png_bytes(f"fig {cap}"))
+            rid = b.add_image(f"c{n}.png", mf.png_bytes(f"fig {pics[n - 1] if pics else cap}"))
             out += [mf.para(S["body"], mf.drawing(rid, 1440000, 960000, 900 + n)), mf.para(S["fig_cap"], f"図{n}　{cap}")]
         for n, (before, color) in enumerate(nocaps, 1):
             rid = b.add_image(f"n{n}.png", mf.png_bytes(f"nocap {color}"))
@@ -196,11 +196,81 @@ def test_removed_figure_does_not_carry_fuzzy_match_from_other_figure(tmp_path, j
     action = images_action(new)
     assert not action.done and new.needs_action and "images" in [a.key for a in blocking(actions(new))]
     assert "今の fig02「図2\u3000児童Cの記述」の画像と思われます" in action.box_detail
-    # 今の fig02 に、前の図3 の画像そのものを入れれば、その案内は済む。別の画像を入れても済みにしない
-    add_images(new, {"fig02": ("other.png", png((7, 7, 7)))})
-    assert "前の fig03" in images_action(new).box_detail
+    # 今の fig02 に、前の図3 の画像そのものを入れれば、その案内は済む
     add_images(new, {"fig02": sent["fig03"]})
     assert "前の fig03" not in images_action(new).box_detail
+
+
+def test_suggested_row_is_done_when_user_puts_another_image(tmp_path, journal):
+    """「今の fig02 の画像と思われます」の行は、作業する人がその図に画像を入れ直せば（切り取り直した別の画像でも）済む。枠が出続けない。"""
+    res = conv(tmp_path, make(tmp_path / "a.docx", ["授業の全体の流れ", "児童Bの記述", "児童Cの記述"]), journal)
+    fill(res)
+    new, kept, put = again(tmp_path, make(tmp_path / "b.docx", ["授業の全体の流れ", "児童Cの記述"]), journal, res)
+    assert "前の fig03" in images_action(new).box_detail and not images_action(new).done
+    add_images(new, {"fig02": ("fig02.png", png((1, 2, 3)))})           # 前の画像と中身が違う
+    action = images_action(new)
+    assert action.done and action.box_detail == "" and action.box_title == "" and not new.needs_action
+    assert new.images_readded == {"fig02"}
+
+
+@pytest.mark.parametrize("before, after", [
+    (["授業の様子", "第2時の児童Bの記述", "第3時の児童Bの記述"], ["授業の様子", "第3時の児童Bの記述例"]),
+    (["授業の様子", "児童Aの1回目の記述", "児童Aの3回目の記述"], ["授業の様子", "児童Aの3回目の記述内容"]),
+])
+def test_removed_figure_and_edited_next_caption_get_no_wrong_image(tmp_path, journal, before, after):
+    """図2 を消し、次の図（前の図3）のキャプションも少し直す（点検 10 の指摘 1）。前の図2 の画像は、本体が 0.8 以上で似ていても、
+    前の図3 の本体のほうが今の図2 に近いので入れない（互いにいちばん近い組でない）。前の図3 の画像は、今の fig02 の画像と思われると
+    示すだけで入れない。手順 images は済みにならない。"""
+    res = conv(tmp_path, make(tmp_path / "a.docx", before), journal)
+    sent = fill(res)
+    new, kept, put = again(tmp_path, make(tmp_path / "b.docx", after), journal, res)
+    assert put == ["fig01"] and "fig02" not in user(new) and new.images_changed == []
+    by = {d.key: d for d in new.images_dropped}
+    assert {k: d.suggest for k, d in by.items()} == {"fig02": "", "fig03": "fig02"}
+    assert "図がなくなった" in by["fig02"].why                       # 前の図2 は本当になくなった
+    action = images_action(new)
+    assert not action.done and new.needs_action and "image_changed" not in [a.key for a in actions(new)]
+    assert f"今の fig02「図2\u3000{after[1]}」の画像と思われます" in action.box_detail
+    assert action.box_detail.count("図がなくなったのなら") == 1             # 前の図3 の行には出さない
+    add_images(new, {"fig02": sent["fig03"]})
+    assert images_action(new).done
+
+
+def test_added_figure_and_edited_caption_get_no_wrong_image(tmp_path, journal):
+    """図を足し、前の図2 のキャプションも少し直す: 前の図2 の画像を、似た新しい図2 に入れない（今の図3 のほうが近い）。"""
+    res = conv(tmp_path, make(tmp_path / "a.docx", ["授業の様子", "第3時の児童Bの記述"]), journal)
+    fill(res)
+    new, kept, put = again(tmp_path, make(tmp_path / "b.docx", ["授業の様子", "第2時の児童Bの記述", "第3時の児童Bの記述例"]), journal, res)
+    assert put == ["fig01"] and new.images_changed == []
+    assert {d.key: d.suggest for d in new.images_dropped} == {"fig02": "fig03"}
+
+
+def test_two_similar_figures_are_not_decided_and_do_not_say_figure_is_gone(tmp_path, journal):
+    """似たキャプションの今の図が 2 つあり、どちらの図の画像か決められない: 入れず、示さず、「図がなくなった」とも言わない。"""
+    res = conv(tmp_path, make(tmp_path / "a.docx", ["授業の様子", "第2時の児童の記述"]), journal)
+    fill(res)
+    new, kept, put = again(tmp_path, make(tmp_path / "b.docx", ["授業の様子", "第2時の児童の記述A", "第2時の児童の記述B"]), journal, res)
+    assert put == ["fig01"] and new.images_changed == []
+    [d] = new.images_dropped
+    assert d.key == "fig02" and d.suggest == "" and "似た図が 2 つ以上" in d.why and "なくなった" not in d.why
+
+
+def test_same_layout_with_changed_docx_image_is_matched_again(tmp_path, journal):
+    """置き場所の並びが同じでも、docx の画像の中身が変わった置き場所は「並びが同じ」とみなさず、通常の照合に回す（点検 10 の指摘 2）。"""
+    caps = ["授業の様子", "児童の記述", "児童の記述"]
+    res = conv(tmp_path, make(tmp_path / "a.docx", caps), journal)
+    fill(res)
+    kept = kept_images(res)
+    same_doc = conv(tmp_path, make(tmp_path / "s.docx", caps), journal)            # 同じ docx: 全部持ち越す
+    assert reapply_images(same_doc, kept) == ["fig01", "fig02", "fig03"]
+    # 図2 の docx の画像だけ差し替えた: 図2 は同じキャプションの図が 2 つあるので入れない。ほかは幹で入れ直す
+    pics = ["授業の様子", "差し替えた画像", "児童の記述"]
+    new = conv(tmp_path, make(tmp_path / "b.docx", caps, pics=pics), journal)
+    assert reapply_images(new, kept) == ["fig01", "fig03"]
+    assert [(d.key, d.suggest) for d in new.images_dropped] == [("fig02", "")] and "決められません" in new.images_dropped[0].why
+    # キャプションが 1 つしかない図なら、通常の照合（本体が同じ）で入れ直す
+    new2 = conv(tmp_path, make(tmp_path / "c.docx", caps, pics=["差し替えた画像", "児童の記述", "児童の記述"]), journal)
+    assert reapply_images(new2, kept) == ["fig01", "fig02", "fig03"]
 
 
 def test_same_captions_are_not_carried_when_undecidable(tmp_path, journal):
