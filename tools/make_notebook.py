@@ -62,8 +62,9 @@ if not (isinstance(DEFAULT_MODEL, str) and DEFAULT_MODEL.strip()) or not (
 _Y, _M, _D = str(DEFAULT_MODEL_INFO["not_before"]).split("-")
 MODEL_NOT_BEFORE = f"{int(_Y)} 年 {int(_M)} 月 {int(_D)} 日"    # 提供終了の予定（この日より前には終わらない）
 _LOW, _HIGH = DEFAULT_MODEL_INFO["per_run_usd"]          # 1 回の変換にかかる費用の目安（ドル。下限・上限。AI に出版版 PDF も送る）
-COST_NOTE = (f"出版版 PDF も一緒に送ります。1 回あたりおおむね {_LOW:g}〜{_HIGH:g} ドル（論文の長さとページ数で変わります）。"
-             "同じ原稿をもう一度変換するときは、前の回答を使うので料金はかかりません。")
+COST_NOTE = (f"出版版 PDF も一緒に送ります。1 回あたりおおむね {_LOW:g}〜{_HIGH:g} ドル（目安。論文の長さとページ数で変わります。"
+             "実際の API で測って直します）。図の画像や書誌だけを直して変換し直すときは、前の回答を使うので料金はかかりません"
+             "（Word で原稿を直したときや、AI・モデル・PDF を変えたときは、AI を呼び直します）。")
 MODEL_LINE = (f'MODEL = "{DEFAULT_MODEL}"  #@param ["{DEFAULT_MODEL}", "自動（最新の Opus）"] {{allow-input: true}}\n')
 
 
@@ -288,9 +289,9 @@ if _prev:
               "、".join(carried_over(_prev["meta"], meta_input)))
 """ + mark(3)),
     code("""
-#@title 4. AI による補完の方法を選ぶ
-#@markdown **AI_MODE**: 「API で自動実行」は、左の 🔑（シークレット）に API キー（Claude は名前 `ANTHROPIC_API_KEY`）を登録し、「ノートブックからのアクセス」をオンにしておきます（利用料がかかります。""" + COST_NOTE + """）。「手動」は、手順 5 に出る依頼文を、出版版 PDF を添えてチャットに送り、回答を手順 6 で貼り戻します（API キー不要。強く推奨）。「使わない」では、位置を決められない図・表を、結び付いた段落の後ろに置きます。登録のしかた・料金・手動の手順は説明書の [AI の API キーと手動モード](""" + DOCS + """/USAGE_AI.md)。
-AI_MODE = "手動（チャットに貼り付け）"  #@param ["使わない", "API で自動実行（Claude・推奨）", "API で自動実行（ChatGPT）", "API で自動実行（Gemini）", "API で自動実行（Sakana AI）", "手動（チャットに貼り付け）"]
+#@title 4. AI による仕上げの方法を選ぶ
+#@markdown **AI_MODE**: AI による仕上げ（図・表の位置合わせ・リンクの取りこぼしの確かめなど）は、強く推奨します。どちらの方法でも、AI に出版版 PDF を渡すと（強く推奨）、図・表を出版版と同じ位置に置けます。**「手動（チャットに貼り付け）」**（初期値）は API キーが要りません。手順 5 に出る依頼文を、出版版 PDF を添付してチャット（claude.ai など）に送り、返ってきた回答を手順 6 で貼り戻します。はじめて使うときや、論文が少ないときに向きます。**「API で自動実行（Claude）」**は、貼り付けの手間がなく、何本も続けて変換するときに向きます（PDF も自動で送ります）。左の 🔑（シークレット）に API キー（名前 `ANTHROPIC_API_KEY`）を登録し、「ノートブックからのアクセス」をオンにしておきます（利用料がかかります。""" + COST_NOTE + """）。API で使う AI は Claude を推奨します（ChatGPT・Gemini・Sakana AI は動作を確かめていません）。「使わない」では、位置を決められない図・表を、結び付いた段落の後ろに置きます。登録のしかた・料金・手動の手順は説明書の [AI の API キーと手動モード](""" + DOCS + """/USAGE_AI.md)。
+AI_MODE = "手動（チャットに貼り付け）"  #@param ["使わない", "API で自動実行（Claude）", "API で自動実行（ChatGPT）", "API で自動実行（Gemini）", "API で自動実行（Sakana AI）", "手動（チャットに貼り付け）"]
 #@markdown **MODEL**（Claude のモデル。通常は変更不要）・**OTHER_MODEL**（ChatGPT・Gemini・Sakana AI のときは必ず入力。各社の最上位クラスのモデルを推奨）・**SPLIT_LABELS**（図表番号「図1」を <label> 要素に分ける。既定は分けない）
 """ + MODEL_LINE + """OTHER_MODEL = ""  #@param {type:"string"}
 SPLIT_LABELS = False  #@param {type:"boolean"}
@@ -304,7 +305,7 @@ else:
     if not API_MODEL or API_MODEL.lower().startswith("claude"):
         raise SystemExit("Claude 以外を使うときは、Claude 以外のモデル名（OTHER_MODEL）の欄に、使うモデルの名前を入力してください"
                          "（Claude Opus と同等以上の性能のモデルを推奨します。モデル名は各社の資料で確認してください）。")
-print("AI による補完:", AI_MODE + (f"（モデル: {API_MODEL}）" if AI == "api" else ""))
+print("AI による仕上げ:", AI_MODE + (f"（モデル: {API_MODEL}）" if AI == "api" else ""))
 if PROVIDER != "claude":
     print("※ 推奨は Claude です。API キーの作り方・料金などは各社の案内で確かめてください（説明書 USAGE_AI.md の 6.）。")
 if PROVIDER == "sakana":
@@ -357,13 +358,14 @@ if KEPT:
     _again = reapply_images(res, KEPT)
     if _again:
         print(f"前に入れた画像 {len(_again)} 枚を入れ直しました。")
+# 要対応（赤）・要確認（黄）・手順（青）の枠（report.actions）。手動モードの AI による仕上げ（回答待ち）は、下の依頼文の枠があるので出さない
+display(HTML(result_boxes(res, skip=("ai_finish",) if AI == "manual" else ())))
 manual_prompt = None
 if AI == "manual" and res.prompt_path:
-    # 依頼文は、レポートの前に目立つ枠で出す（見出しと説明は推奨の手順 ai_finish のもの。PDF を添付して送る案内つき）
+    # 依頼文は、要対応・要確認・必須の手順の枠の後ろ（推奨の手順を必須の手順より先に出さない。1 画面版と同じ順）、レポートの前に
+    # 目立つ枠で出す（見出しと説明は推奨の手順 ai_finish のもの。PDF を添付して送る案内つき）
     manual_prompt = res.prompt_path.read_text(encoding="utf-8")
     display(HTML(prompt_box(manual_prompt, ai_finish_of(res), "notebook", res.pdf_name)))
-# 要対応（赤）・要確認（黄）・手順（青）の枠（report.actions）。手動モードの AI による仕上げ（回答待ち）は、上の依頼文の枠があるので出さない
-display(HTML(result_boxes(res, skip=("ai_finish",) if AI == "manual" else ())))
 display(HTML(summary_box(res)))
 display(HTML(report_details(res.report_path.read_text(encoding="utf-8"))))
 """ + mark(5)),

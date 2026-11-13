@@ -53,7 +53,7 @@ def test_style_check_from_machine_suspects_without_ai(journal, meta, tmp_path):
     assert "AI の提案:" not in act.box_detail and "XML には反映していません" in act.box_detail
     assert s1 in act.top and s1 in act.cli and "2 か所" in act.checklist
     fin = _act(res, "ai_finish")
-    assert fin.level == STEP and not fin.required and fin.box_title == "AI にスタイルの直し方を提案させる（推奨）"
+    assert fin.level == STEP and not fin.required and fin.box_title == "AI にスタイルの直し方を提案させる"
     assert "スタイルを確かめる段落 2 か所について、AI が Word での直し方を提案します。" in fin.box_detail
     assert "AI がスタイルの直し方を提案します" in fin.cli and "スタイルを確かめる段落が 2 か所ある（2 章）" in fin.checklist
     assert blocking(actions(res)) == [] and not res.needs_action

@@ -99,9 +99,12 @@ def test_cell_figures_are_listed_with_captions_in_request(journal, meta, tmp_pat
     """AI 依頼文の「位置が決まっている図・表と囲みの中身」では、表のセルの画像とキャプションで組んだ図も、キャプションの段落で示す
     （「キャプションなし」と示さない。修正計画 W8 の手順 16）。"""
     res = convert(CELLS, meta, journal, Options(out_dir=tmp_path, ai_mode="manual"))
-    fixed = res.prompt_path.read_text(encoding="utf-8").split("\n# 位置が決まっている図・表と囲みの中身（")[1].split("\n#")[0]
+    text = res.prompt_path.read_text(encoding="utf-8")
+    fixed = text.split("\n# 位置が決まっている図・表と囲みの中身（")[1].split("\n#")[0]
+    # 2 段にまたがる機械的な図形（s1）の中身は「# PDF を見たときだけ答える図・表」に書く（修正計画 W8 の 6.5 の 4）
+    wide = text.split("\n# PDF を見たときだけ答える図・表（")[1].split("\n#")[0]
     assert ("[s1] 中身: 図 F1 = [d15]〔図キャプション〕図1\u3000左のセルの図\n"
-            "      図 F2 = [d17]〔図キャプション〕図2\u3000右のセルの図") in fixed
+            "      図 F2 = [d17]〔図キャプション〕図2\u3000右のセルの図") in wide
     assert "[s2] 中身: 図 F3 = [d22]〔図キャプション〕図3\u3000二つの画像からなる図" in fixed and "キャプションのない" not in fixed
 
 

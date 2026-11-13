@@ -8,7 +8,7 @@
 依頼文を出版版 PDF と一緒にチャット〈claude.ai など〉に渡し、返ってきた回答を保存して --ai-response で指定すると、図・表の位置などを反映する。
 AI を使わないときは --ai none。修正計画 W8 の 4.8）。
 
---ai api では --pdf の出版版 PDF を、Claude には依頼のデータの前に付けて送る（--ai-no-pdf で送らない。修正計画 W8 の 4.7）。
+--ai api では --pdf の出版版 PDF を、どの AI にも依頼のデータの前に付けて送る（--ai-no-pdf で送らない。修正計画 W8 の 4.7）。
 
 --ai api では、出力フォルダに前の変換の AI回答.json（反映した AI の回答の写し）があり、依頼の番号・AI・モデル・PDF の渡し方が
 今回と同じなら、API を呼ばずにその回答を使う（--ai-refresh で読まずに呼び直す。修正計画 W8 の 4.6）。
@@ -46,10 +46,11 @@ def main(argv=None):
     ap.add_argument("--config", type=Path, help="雑誌の設定ファイル（既定: 同梱の jasme.toml）")
     ap.add_argument("--split-labels", choices=["yes", "no"], help="図表番号を <label> に分けるか（既定: 設定ファイルに従う）")
     ap.add_argument("--ai", choices=["none", "api", "manual"], default="manual",
-                    help="AI による補完の方法（既定: manual。依頼文 AI依頼文.txt を書き出すだけで、回答は --ai-response で後から指定する。"
+                    help="AI による仕上げの方法（既定: manual。依頼文 AI依頼文.txt を書き出すだけで、回答は --ai-response で後から指定する。"
                          "api は API で自動実行、none は使わない）")
     ap.add_argument("--ai-provider", choices=["claude", "openai", "gemini", "sakana"], default="claude",
-                    help="API モードで使う AI（既定・推奨: claude。openai は ChatGPT、gemini は Gemini、sakana は Sakana AI）。"
+                    help="API モードで使う AI（既定・推奨: claude。openai は ChatGPT、gemini は Gemini、sakana は Sakana AI。"
+                         "Claude 以外は動作を確かめていない）。"
                          "API キーは環境変数 ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY（または GOOGLE_API_KEY）/ "
                          "SAKANA_API_KEY")
     ap.add_argument("--ai-model",
@@ -59,9 +60,9 @@ def main(argv=None):
                     help="手動モード（--ai manual と一緒に指定する）: AI の回答（JSON）を保存したファイル")
     ap.add_argument("--ai-refresh", action="store_true",
                     help=f"API モード（--ai api と一緒に指定する）: 出力フォルダの {ANSWER_FILE}（前の変換の AI の回答）を使わず、"
-                         "AI を呼び直す（既定では、依頼の番号・AI・モデルが同じなら、API を呼ばずにその回答を使う）")
+                         "AI を呼び直す（既定では、依頼の番号・AI・モデル・PDF の渡し方が同じなら、API を呼ばずにその回答を使う）")
     ap.add_argument("--ai-no-pdf", action="store_true",
-                    help="API モード（--ai api と一緒に指定する）: --pdf の出版版 PDF を AI に渡さない（既定では、Claude には依頼のデータの"
+                    help="API モード（--ai api と一緒に指定する）: --pdf の出版版 PDF を AI に渡さない（既定では、選んだ AI に依頼のデータの"
                          "前に PDF を付けて送る。送ると図・表の位置の答えが正確になる）")
     ap.add_argument("--pdf", type=Path, help="記事の PDF（J-STAGE への登載に必須。指定すると ZIP に入れる。"
                                           "指定しなければ、記事フォルダに前の変換の PDF が残っていても ZIP に入れない）")
@@ -141,8 +142,8 @@ def main(argv=None):
     if res.ai_report_path:
         print(f"AI 判断一覧: {res.ai_report_path}")
     if res.prompt_path:
-        # 依頼文の渡し方の案内 1 行（位置を聞く図形があるときは、出版版 PDF を一緒に渡す。回答の指定は --ai-response）
-        pdf = step_text(step("pdf_attach"), "cli") if res.plan.asked_floats else ""
+        # 依頼文の渡し方の案内 1 行（位置を聞く図形か、2 段にまたがる機械的な図形があるときは、出版版 PDF を一緒に渡す。回答の指定は --ai-response）
+        pdf = step_text(step("pdf_attach"), "cli") if res.plan.asked_floats or res.plan.wide_floats else ""
         again = "" if a.ai_response else f"（チャット〈claude.ai など〉に{pdf}送信し、返ってきた回答を保存して --ai manual --ai-response で指定する）"
         print(f"AI 依頼文: {res.prompt_path}{again}")
     if res.ai_answer_path:

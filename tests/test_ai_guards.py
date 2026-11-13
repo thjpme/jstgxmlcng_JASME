@@ -136,12 +136,15 @@ def test_parse_response_strips_controls():
 
 # ---------------------------------------------------------------------------- 点検:原則 7 API の想定外の例外
 def test_unexpected_api_exception_does_not_stop(journal, meta, tmp_path, monkeypatch):
-    """call_provider が想定外の例外（SDK の誤りの型でないもの）を出しても、変換は AI を使わないときと同じ形で終わり、状態は「失敗」。"""
+    """call_provider が想定外の例外（SDK の誤りの型でないもの）を出しても、変換は AI を使わないときと同じ形で終わり、状態は「失敗」。
+    例外の文は書かず、型の名前だけにする（API キーなどが例外の文に入っていても、2 章・AI判断一覧に出さない。点検 review13 原則 5）。"""
     def boom(*a, **k):
-        raise RuntimeError("試験の誤り")
+        raise RuntimeError("試験の誤り dummy-secret-value")
     monkeypatch.setattr(pipeline, "call_provider", boom)
-    res = convert(NOTES, meta, journal, Options(out_dir=tmp_path / "a", ai_mode="api", ai_api_key="dummy"))
-    assert ai_state(res) == "失敗" and "RuntimeError: 試験の誤り" in res.ai.error
+    res = convert(NOTES, meta, journal, Options(out_dir=tmp_path / "a", ai_mode="api", ai_api_key="dummy-secret-value"))
+    assert ai_state(res) == "失敗" and res.ai.error == "AI の呼び出しで想定外の誤りが起きました（RuntimeError）"
+    for path in (res.report_path, res.ai_report_path):
+        assert "dummy-secret-value" not in path.read_text(encoding="utf-8")
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     assert "ai_finish" not in [a.key for a in report.blocking(actions(res))]
 
@@ -215,3 +218,87 @@ def test_blank_after_paragraph_is_named_by_previous_text(journal, meta, tmp_path
     res = _manual(path, answers.answer(placements=[(fid, blank)]), meta, journal, tmp_path / "a")
     d = res.plan.float_decisions[fid]
     assert "段落「」" not in d.message and f"段落{blank}（空の段落。「以上が図1である。」の次）の後に置いた" in d.message
+
+
+# ---------------------------------------------------------------------------- 点検 review13 原則 1 対になっていない代理の符号
+@pytest.mark.parametrize("where", ["reason", "text", "notes"])
+def test_lone_surrogate_in_answer_does_not_stop(where, journal, meta, tmp_path):
+    """回答の JSON のエスケープ "\\ud800" は json.loads で読めてしまうが、UTF-8 にできないので、読んだ直後（strip_controls）に除く。
+    AI回答.json・レポートを書くときに変換が止まらない（手動・API とも）。"""
+    resp = json.loads(answers.answer(links=[("文献", "d18", "2001", 1, "B2")], docx=FULL))
+    if where == "notes":
+        resp["notes"] = ["\udfff"]
+    else:
+        resp["links"][0][where] = "x\ud800y" if where == "reason" else "\ud800"
+    text = json.dumps(resp)                     # ensure_ascii（"\ud800" のエスケープのまま）
+    res = _manual(FULL, text, meta, journal, tmp_path / "m")
+    assert res.report_path.exists() and res.fidelity.ok and res.dtd_valid
+    for path in (res.report_path, res.ai_report_path):
+        path.read_text(encoding="utf-8")
+    assert data_has_no_surrogate(parse_response(text))
+    if where == "reason":
+        assert [op["reason"] for op, _ in res.ai.accepted] == ["xy"]
+
+
+def data_has_no_surrogate(v) -> bool:
+    if isinstance(v, str):
+        return not any("\ud800" <= c <= "\udfff" for c in v)
+    if isinstance(v, list):
+        return all(data_has_no_surrogate(x) for x in v)
+    if isinstance(v, dict):
+        return all(data_has_no_surrogate(k) and data_has_no_surrogate(x) for k, x in v.items())
+    return True
+
+
+def test_lone_surrogate_in_api_answer_does_not_stop(journal, meta, tmp_path, monkeypatch):
+    resp = json.loads(answers.answer(docx=FULL))
+    resp["notes"] = ["\ud800"]
+    monkeypatch.setattr(pipeline, "call_provider", lambda *a, **k: ai_assist.AIOutcome(
+        mode="api", model="m", raw=json.dumps(resp)))
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "a", ai_mode="api", ai_api_key="dummy"))
+    assert not res.ai.error and res.ai.notes == [] and res.ai_answer_path.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------- 点検 review13 原則 5 Claude の回答に文字の部分がない
+def test_claude_answer_without_text_has_a_reason(monkeypatch):
+    """Claude の回答に文字の部分（type が text）がないときは、理由のない「失敗」にしない（call_openai などと同じ文）。"""
+    import types
+    import anthropic
+
+    class FakeStream:
+        def __init__(self, kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get_final_message(self):
+            return types.SimpleNamespace(stop_reason="end_turn", content=[types.SimpleNamespace(type="thinking")], usage=None)
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            self.beta = types.SimpleNamespace(messages=types.SimpleNamespace(stream=lambda **kw: FakeStream(kw)))
+            self.messages = self.beta.messages
+
+    monkeypatch.setattr(anthropic, "Anthropic", FakeClient)
+    out = ai_assist.call_api("指示", "データ", None, api_key="dummy")
+    assert out.raw == "" and out.error == "AI から回答が返ってきませんでした"
+
+
+# ---------------------------------------------------------------------------- 点検 review13 原則 6 使い回しの説明
+def test_reused_answer_is_told_in_ai_finish():
+    """前の変換の回答を使って AI を呼ばなかったこと（AIOutcome.reused）は、残っている推奨の手順 ai_finish の枠とコマンドラインの文に
+    添える（済んだ手順は枠を出さないので添えない）。"""
+    import types
+    r = types.SimpleNamespace(ai=types.SimpleNamespace(reused=ai_assist.REUSED_MSG))
+    left = report.Action(STEP, "ai_finish", required=False, box_detail="本文。", cli="文。")
+    assert report._with_reused(left, r).box_detail == "本文。" + ai_assist.REUSED_MSG
+    assert left.cli == "文。" + ai_assist.REUSED_MSG
+    done = report.Action(STEP, "ai_finish", required=False, done=True)
+    assert report._with_reused(done, r).box_detail == "" and report._with_reused(None, r) is None
+    r.ai.reused = ""
+    again = report.Action(STEP, "ai_finish", required=False, box_detail="本文。")
+    assert report._with_reused(again, r).box_detail == "本文。"

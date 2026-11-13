@@ -65,11 +65,21 @@ def why_not_at_anchor(fl: Float, layout: Optional[Layout]) -> str:
     return "横の位置がアンカー段落の段の左端ではない"
 
 
+SPAN_WIDTH = 1.3      # 2 段にまたがる図形とみなす幅の下限（1 段の幅に対する割合。spans_columns）
+
+
+def spans_columns(fl: Float, layout: Optional[Layout]) -> bool:
+    """図形 fl が 2 段にまたがるか: 段組みが 2 段以上で、図形の幅が 1 段の幅の SPAN_WIDTH 倍より広い（describe の「2 段にまたがる」。
+    機械的に置いた図形のうち、AI が出版版 PDF を見たときだけ位置を採るものを決める。修正計画 W8 の 6.5 の 4）。"""
+    lay = layout or Layout()
+    return lay.columns > 1 and fl.width_cm > lay.column_width_cm * SPAN_WIDTH
+
+
 def describe(fl: Float, layout: Optional[Layout]) -> str:
     """AI に渡す、docx に記録された位置の説明（AI 依頼文の「docx の配置」）。値は日本語で書く（基準・配置・折り返しの英語の値を
     出さない。知らない値は「基準の分からない位置」「指定の位置」「不明」。修正計画 W8 の 4.1）。"""
     lay = layout or Layout()
-    if lay.columns > 1 and fl.width_cm > lay.column_width_cm * 1.3:
+    if spans_columns(fl, lay):
         size = f"幅 {fl.width_cm:.1f} cm・高さ {fl.height_cm:.1f} cm（2 段にまたがる）"
     else:
         size = f"幅 {fl.width_cm:.1f} cm・高さ {fl.height_cm:.1f} cm（1 段の幅）"

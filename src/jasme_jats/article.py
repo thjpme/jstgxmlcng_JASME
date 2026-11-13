@@ -264,6 +264,10 @@ class FloatInfo:
     # その図形の中身から組んだ図・表の節（FigNode・TableNode。XML の順。表で組んだ図・表のセルの図・中身をそのまま出した図形から
     # 図形の外と同じ規則で組んだもの・mode が caption の図形を含めた本文の図も。Classifier.assign_slots が入れる）
     nodes: list = field(default_factory=list)
+    # 位置を機械的に決められる図形（図の左上が結び付いた段落の左上にある。floats.at_anchor）のうち、2 段にまたがるもの
+    # （floats.spans_columns）。組版で別のページ・段の端に移されていることがあるので、出版版 PDF を見た回答のときだけ AI の位置を採る
+    # （Classifier.place_floats が入れる。AI の位置を採っても asked_floats・answered_floats には数えない。修正計画 W8 の 6.5 の 4）
+    wide: bool = False
 
 
 @dataclass(eq=False)
@@ -383,12 +387,19 @@ class ArticlePlan:
         """AI に位置を聞く図形の ID（mode が unplaced か ai。機械的に置いたもの〈mechanical〉と、本文の図キャプションの図に含めたもの
         〈caption〉は入らない。結び付いた段落が本文の外で本文の最後に置いたもの〈end_why anchor〉も入る: PDF で本文の段落を答えれば、
         そこに置ける）。推奨の手順 ai_finish の残りの数は、これと answered_floats で決める（修正計画 W8 の 3.3・4.3）。"""
-        return [fid for fid, info in self.floats.items() if info.mode in ("unplaced", "ai")]
+        return [fid for fid, info in self.floats.items() if info.mode in ("unplaced", "ai") and not info.wide]
 
     @property
     def answered_floats(self) -> list:
         """asked_floats のうち、AI の答えを採用したもの（mode が ai か、AI が本文の外と答えて end_why が ai のもの）。"""
-        return [fid for fid, info in self.floats.items() if info.mode == "ai" or (info.mode == "unplaced" and info.end_why == "ai")]
+        return [fid for fid, info in self.floats.items()
+                if not info.wide and (info.mode == "ai" or (info.mode == "unplaced" and info.end_why == "ai"))]
+
+    @property
+    def wide_floats(self) -> list:
+        """位置を機械的に決められる、2 段にまたがる図形の ID（FloatInfo.wide。AI の位置を採ったもの〈mode が ai〉も）。依頼文では、
+        出版版 PDF を見たときだけ答える図形として、位置を聞く図形と分けて挙げる（修正計画 W8 の 6.5 の 4）。"""
+        return [fid for fid, info in self.floats.items() if info.wide and info.mode in ("mechanical", "ai")]
 
     @property
     def undecided_boxes(self) -> list:

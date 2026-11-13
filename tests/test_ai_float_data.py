@@ -63,9 +63,14 @@ def test_fixed_floats_are_listed_by_id(journal):
     assert _section(req.data, FIXED_HEADING).startswith("[s4] 中身: 図 F5 = [d29]")
     assert "s4" not in req.asked["floats"]
     # 位置を聞く図形がなければ「# 位置を決める図・表」を出さない（表のセルで組んだ図は、中身だけを答えない節に書く）
+    # 2 段にまたがる機械的な図形（s1・s3）は「# PDF を見たときだけ答える図・表」に中身を書き、ほかは答えない節に書く（W8 の 6.5 の 4）
     plan, req = _req(CELLS, journal)
-    assert not plan.asked_floats and FLOATS_HEADING not in req.data
-    assert all(f"[{fid}] 中身: " in _section(req.data, FIXED_HEADING) for fid in plan.floats)
+    assert not plan.asked_floats and FLOATS_HEADING not in req.data and plan.wide_floats == ["s1", "s3"]
+    wide = _section(req.data, ai_assist.WIDE_HEADING)
+    assert all(f"[{fid}] 中身: " in wide for fid in plan.wide_floats)
+    assert wide.splitlines()[-1] == "位置が決まっている図形（答えません）: s2"
+    assert all(f"[{fid}] 中身: " in _section(req.data, FIXED_HEADING) for fid in plan.floats if fid not in plan.wide_floats)
+    assert not any(f"[{fid}] 中身: " in _section(req.data, FIXED_HEADING) for fid in plan.wide_floats)
 
 
 def test_caption_mode_float_is_id_only(journal, tmp_path):

@@ -8,8 +8,10 @@ J-STAGE の全文 XML（JATS 1.1、FULL-J）に変換します。
   それを変換することもできます（[docs/USAGE.md](docs/USAGE.md) の「出版版 PDF との照合と、2 通りの作り方」）。
 - 見出し・本文・図表・ブロック引用・注・謝辞・付記・引用文献・英文要旨などを、テンプレートのスタイルから機械的に変換します。
 - 本文中の「図1」「表2」、注の上付き番号、引用（`Claude (2025)` の **2025 の部分だけ**）、URL・DOI に機械的にリンクを付けます。
-- 機械処理で取りこぼした箇所（スタイルの誤り、変則的な引用、画像で貼られた数式など）は、任意で生成 AI（Claude）に補完させられます。
-  AI は文字を変更できず、提案はプログラムが検証してから反映します。AI が判断した箇所はレポートに一覧で出ます。
+- 機械的に決められない箇所（Word のテキストボックスなどに入った図・表の位置、リンクの取りこぼし、姓名の境目など）は、生成 AI
+  （Claude）による仕上げで補えます（強く推奨。必須ではありません）。AI に出版版 PDF を渡すと、図・表を出版版と同じ位置に置けます。
+  スタイルの誤り（見出し・引用・謝辞など）は AI の提案として知らせるだけで、XML は直しません（Word で直して変換し直します）。
+  AI は文字を変更できず、回答はプログラムが検証してから反映します。AI が判断した箇所はレポートに一覧で出ます。
 - 出力は J-STAGE のアップロード用フォルダ構成の ZIP と、変換レポートです。
 
 ## 使い方（Google Colab。パソコンへのインストールは不要）
@@ -32,14 +34,15 @@ J-STAGE の全文 XML（JATS 1.1、FULL-J）に変換します。
 
 ```
 docx ─読み取り→ 中間表現 ─スタイルで構造化→ ─機械的リンク→ ┬─────────────→ XML 組み立て ─ 文字の不変性チェック ─ 目印を除去 ─ 最終チェック ─ DTD 検証 ─ ZIP・レポート
-                                                      └─ AI 補完（任意）: AI は「操作」の JSON を返すだけ → Python が検証して適用 ┘
+                                                      └─ AI による仕上げ（推奨）: AI は種類ごとの一覧の JSON を返すだけ → Python が検証して適用 ┘
 ```
 
 - 段落の文字は「アトム」の列として保持し、リンクや書式は文字を包む要素として付け加えるだけにしています。文字列を書き換える処理はありません。
 - 変換途中の XML では、各段落の文字を `<jx:span src="段落ID">` で囲んでおき、docx から別の実装で取り出した文字列と段落ごとに照合します。
   照合が済んでから目印を取り除き、取り除いた後の XML でもう一度文字列を照合します。
-- AI に XML や docx を直接編集させることはありません。AI が返すのは「この段落のこの文字列を文献 B3 にリンクする」といった操作の一覧で、
-  プログラムが 1 件ずつ検証します（存在しない文字列・リンク先、年以外へのリンクなどは不採用としてレポートに記録）。
+- AI に XML や docx を直接編集させることはありません。AI が返すのは「この図はこの段落の後ろ」「この段落のこの文字列を文献 B3 に
+  リンクする」といった種類ごとの一覧で、プログラムが 1 件ずつ検証します（存在しない文字列・リンク先、年以外へのリンクなどは不採用として
+  レポートに記録）。
 
 詳しくは [docs/DESIGN.md](docs/DESIGN.md) を参照してください。
 
@@ -49,8 +52,8 @@ Python 3.10 以上が必要です。
 
 ```bash
 pip install "jasme-jats[ai,images] @ git+https://github.com/thjpme/jstgxmlcng_JASME.git@main"
-python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output            # AI を使わない
-python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai manual  # 手動モード（依頼文を作る）
+python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai none  # AI を使わない
+python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai manual  # 手動モード（依頼文を作る。--ai を書かないときの既定）
 python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai manual --ai-response 回答.json
 ANTHROPIC_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai api
 OPENAI_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai api --ai-provider openai --ai-model モデル名
@@ -62,6 +65,8 @@ python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --pdf 記
 ```
 
 書誌情報ファイルの例: [examples/meta_example.toml](examples/meta_example.toml)
+
+API で使う AI は Claude を推奨します（`--ai-provider openai`・`gemini`・`sakana` は動作を確かめていません）。
 
 コマンドラインの終了コードは、**0 が要対応なし、1 が要対応あり、2 が変換の中止**です（要対応・要確認・手順の一覧は標準エラーに出します。
 要確認や推奨の手順だけなら 0）。次の場合も 1 になります: `--meta` を指定しない（開始ページがないので、J-STAGE のアップロード時チェックの EMSGM230E

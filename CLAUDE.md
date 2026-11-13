@@ -43,10 +43,12 @@
   （個別の表示を render・colab・cli・app・make_notebook.py に足さない。画面の操作は手順番号や欄の名前を直接書かず、目印 `report.step()` で書く）。
   コマンドラインの終了コードは、0 が要対応も残っている必須の手順もなし、1 がどちらかあり（`Result.needs_action`。`report.blocking()`）、2 が中止。
   推奨の手順は、残っていても失敗しても終了コードに数えない。
-- AI による補完は必須にしない（AI を条件に変換を中止しない。推奨の手順 `ai_finish`）。AI の回答で変えてよいのは、図・表の位置、文字だけのテキストボックスの
+- AI による仕上げは必須にしない（AI を条件に変換を中止しない。推奨の手順 `ai_finish`）。AI の回答で変えてよいのは、図・表の位置、文字だけのテキストボックスの
   種類と位置、リンク、姓名の境目と、注の区切り・資料の始まり（`ai_assist.BOUNDARY_KINDS`。直したら要確認 `ai_boundary`）だけ。Word のスタイルで直せる誤りは
   AI の回答では直さず、提案として要確認 `style_check` に載せる。AI は段落を除外できない。AI に渡すのは依頼文と出版版 PDF だけで、docx の画像は渡さない。
-  回答は依頼の番号（`ai_assist.request_stamp`）と段落の先頭の文字で確かめてから使う（`ai_assist.check_answer`）。
+  回答は依頼の番号（`ai_assist.request_stamp`）と段落の先頭の文字で確かめてから使い（`ai_assist.check_answer`）、出版版 PDF を見て答えたかも
+  確かめる（`ai_assist.pdf_seen`。見ていない回答では手順を済みにしない。機械的に置いた 2 段にまたがる図・表〈`FloatInfo.wide`〉は、PDF を見た
+  回答のときだけ AI の位置で置く〈`ai_assist.wide_rejects`〉）。
 - 詳しくは `docs/DEVELOPMENT.md` の「守るべき原則」。
 
 ## 環境とテスト

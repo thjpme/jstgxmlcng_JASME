@@ -716,7 +716,7 @@ class Builder:
                 self.info.warnings.append(
                     f"英文の著者名「{core}」（段落 {p.src}）に姓と名の区切り（空白）がないため、全体を姓として"
                     "出力しました。名もある氏名なら、Word で姓と名の間に空白を入れて保存してから変換し直してください"
-                    "（AI による補完では、英文の著者名は分けられません）。")
+                    "（AI による仕上げでは、英文の著者名は分けられません）。")
             parts = [("surname", core_s, core_e)]
         else:
             second = "given" if first == "surname" else "surname"

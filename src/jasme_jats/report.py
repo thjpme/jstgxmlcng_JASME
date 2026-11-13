@@ -1,6 +1,6 @@
 """変換レポート（Markdown）。
 
-冒頭に結果の要約、続いて AI による補完（不確実性のある箇所）、機械処理で解決できなかった箇所、
+冒頭に結果の要約、続いて AI による仕上げ（不確実性のある箇所）、機械処理で解決できなかった箇所、
 機械的な推定、出力しなかった文字の全件、落とした空白の全件、生成文字、画像、書誌情報、DTD 検証と J-STAGE の登載時チェック、
 出版版 PDF との照合、登載前のチェックリストの順に並べる。
 
@@ -846,7 +846,7 @@ def note_notes(plan):
             f"{fn.fid}（「{esc(fn.paras[0].plain()[:20])}」"
             + (f"。{len(fn.paras)} 段落を 1 件の注にまとめた" if len(fn.paras) > 1 else "") + "）" for fn in unnum)
             + "。番号の書き方が想定外のため、複数の注が 1 件にまとめられている可能性がある。PDF と照らして確認し、"
-              "AI 補完（注の区切りの指定）を使うか、docx の注の番号をテンプレートの形式（「1)」）にしてから変換し直す")
+              "AI による仕上げ（注の区切りの指定）を使うか、docx の注の番号をテンプレートの形式（「1)」）にしてから変換し直す")
     elif nums != list(range(1, len(nums) + 1)):
         out.append("注の番号が 1 からの連番になっていない: " + "、".join(str(n) for n in nums))
     unref = [f"{fn.fid}（{esc(fn.paras[0].plain()[:20])}）" for fn in fns if fn.fid not in order]
@@ -1285,15 +1285,17 @@ def ai_state(r) -> str:
 
 
 def pdf_unseen(r) -> bool:
-    """AI に位置を聞いた図形（plan.asked_floats）があるのに、AI が出版版 PDF を見て答えた回答ではないか（AIOutcome.pdf_seen が
-    「見た」「見た（確かめられない）」でない。回答に pdf がなければ「添付なし」と同じ扱い）。位置を聞く図形がなければ偽
-    （PDF を見ていなくても、リンクなどは決められる。修正計画 W8 の 4.3・4.4）。"""
+    """AI に位置を聞いた図形（plan.asked_floats）か、PDF を見たときだけ AI の位置を使う 2 段にまたがる機械的な図形（plan.wide_floats）
+    があるのに、AI が出版版 PDF を見て答えた回答ではないか（AIOutcome.pdf_seen が「見た」「見た（確かめられない）」でない。回答に pdf が
+    なければ「添付なし」と同じ扱い）。どちらの図形もなければ偽（PDF を見ていなくても、リンクなどは決められる。修正計画 W8 の 4.3・4.4。
+    2 段の図形だけの論文で、PDF を見ていない回答を知らせずに使い回さないよう、2 段の図形も数える。点検 review14 原則 1）。"""
     from .ai_assist import PDF_SEEN_OK
-    return bool(r.plan.asked_floats) and r.ai.pdf_seen not in PDF_SEEN_OK
+    return bool(r.plan.asked_floats or r.plan.wide_floats) and r.ai.pdf_seen not in PDF_SEEN_OK
 
 
 def ai_done(r) -> bool:
-    """AI による仕上げが済んだか（ai_state が「済み」で、位置を聞いた図形があれば AI が出版版 PDF を見て答えたこと〈pdf_unseen が偽〉。
+    """AI による仕上げが済んだか（ai_state が「済み」で、位置を聞いた図形か 2 段にまたがる機械的な図形があれば AI が出版版 PDF を見て
+    答えたこと〈pdf_unseen が偽〉。
     1 画面版の手動の欄を閉じる条件。修正計画 W8 の 4.3・4.4・4.5）。"""
     return ai_state(r) == "済み" and not pdf_unseen(r)
 
@@ -1332,14 +1334,15 @@ AI_STYLE_TITLE = "AI にスタイルの直し方を提案させる"            #
 AI_ANSWER_TITLE = "AI の回答を反映する"                      # 図形もテキストボックスもなく、失敗か一部のとき
 AI_FAILED_TITLE = "AI の回答を反映できませんでした"
 AI_PDF_TITLE = "AI に出版版 PDF を見せて、図・表の位置を合わせ直す"     # 回答で位置は決まったが、AI が出版版 PDF を見ていないとき
-AI_CHOOSE_HOW = "（ノートブックは手順 4〜6、1 画面版は「AI による補完の方法」の欄、コマンドラインは --ai manual か --ai api）"
+AI_CHOOSE_HOW = "（ノートブックは手順 4〜6、1 画面版は「AI による仕上げの方法」の欄、コマンドラインは --ai manual か --ai api）"
 CUT_ASK = "「回答が途中で切れました。同じ形式で最初から出し直してください」"     # 途中で切れた回答の、出し直しの頼み方
 
 
 def _ai_finish_action(r):
     """推奨の手順 ai_finish（AI による仕上げ。修正計画 W8 の 4.3）。出す条件に当たらなければ None（レポートの 2 章に 1 行だけ書く）。
 
-    出す条件: AI に位置を聞く図形がある（plan.asked_floats）／囲みか図の注記か決められないテキストボックスがあるか、AI の答えで
+    出す条件: AI に位置を聞く図形がある（plan.asked_floats）／PDF を見たときだけ AI の位置を使う 2 段にまたがる機械的な図形がある
+    （plan.wide_floats。点検 review14 利用者向け 5）／囲みか図の注記か決められないテキストボックスがあるか、AI の答えで
     決めた／機械が挙げた、スタイルを確かめる段落がある（plan.style_suspects。英文要旨が見つからない要対応の段落は除く）／状態
     （ai_state）が「失敗」か「一部」。状態ごとに文を変え、済みなら done、失敗なら failed（枠の見出しを赤字）。残っていても
     失敗しても、needs_action は偽（推奨の手順）。位置は決まったが AI が出版版 PDF を見ていないとき（pdf_unseen）は、済みにせず
@@ -1348,9 +1351,12 @@ def _ai_finish_action(r):
     plan, ai = r.plan, r.ai
     state = ai_state(r)
     asked, left, boxes = plan.asked_floats, _float_left(plan), plan.undecided_boxes
+    # 2 段にまたがる図形: wide は機械的な位置のままのもの（PDF を見せると移せる）、moved は AI の位置に移したもの（6.5 の 4）
+    wide = [f for f in plan.wide_floats if plan.floats[f].mode == "mechanical"]
+    moved = [f for f in plan.wide_floats if plan.floats[f].mode == "ai"]
     skip = set(abstract_missing_srcs(plan))
     m = len({x.src for x in plan.style_suspects if x.src not in skip and x.kind not in STYLE_NO_AI_KINDS})
-    if not (asked or boxes or _boxes_answered(plan) or m or state in ("失敗", "一部")):
+    if not (asked or plan.wide_floats or boxes or _boxes_answered(plan) or m or state in ("失敗", "一部")):
         return None
     manual = ai.mode == "manual"
     n, k = len(left), len(boxes)
@@ -1364,7 +1370,7 @@ def _ai_finish_action(r):
     else:
         where = "結び付いている段落のすぐ後ろ"
     # 見出し: 残っている図形があれば位置、なければ残っているテキストボックス、どちらもなければ（途中で切れた回答など）回答の反映
-    if left or (asked and state == "済み"):
+    if left or (asked and state == "済み") or plan.wide_floats:
         base = AI_FINISH_TITLE
     elif boxes or (_boxes_answered(plan) and state == "済み"):
         base = AI_BOX_TITLE
@@ -1372,28 +1378,35 @@ def _ai_finish_action(r):
         base = AI_STYLE_TITLE
     else:
         base = AI_ANSWER_TITLE
-    title = f"{base}（強く推奨。残り {n} 個）" if left else f"{base}（推奨）"
+    # 見出しに「推奨」を書かない（青い枠は「手順（推奨）: 」を前に付け、14 章の行は「（推奨）」を付けるので、重ねない。点検 review13 利用者向け 10）
+    title = f"{base}（残り {n} 個）" if left else base
     progress = state + (f"・残り {n} 個" if left else "")
     prompt = r.prompt_path.name if r.prompt_path else "AI依頼文.txt"
     # 位置を聞く図形・テキストボックスの説明（未実行・回答待ち）
     floats = (f"Word のテキストボックスなどの{names}は、本文のどこに出すかを原稿から決められないため、"
               f"{where}に置いています（出版版 PDF の位置とは数段落ずれていることがあります。置いた位置はレポートの 3 章）。"
               "AI に出版版 PDF を見せると、PDF と同じ位置に置けます。" if left else "")
+    # 2 段にまたがる機械的な図形（PDF を見た回答のときだけ AI の位置を使う。点検 review14 利用者向け 4・5）
+    wide_text = (f"2 段にまたがる{float_phrase(plan, wide)}は、Word の配置から機械的に決めた位置に置いています（組版で移されていることが"
+                 "あります）。AI に出版版 PDF を見せると、出版版と同じ位置に移せます。" if wide else "")
     box_text = f"囲みか図の注記か決められないテキストボックス {k} 個の文字は、XML に出していません。" if boxes else ""
     style_text = f"スタイルを確かめる段落 {m} か所について、AI が Word での直し方を提案します。" if m else ""
-    what = "と".join(([("図・表の位置")] if left else []) + (["テキストボックスの種類"] if boxes else []))
+    what = "と".join(([("図・表の位置")] if left or wide else []) + (["テキストボックスの種類"] if boxes else []))
     does = f"AI が{what}を決めます" if what else ("AI がスタイルの直し方を提案します" if m else "AI がリンクなどを決めます")
     short = "、".join(([f"{esc(names)}を、{where}に置いている（3 章）"] if left else [])
+                     + ([f"2 段にまたがる{esc(float_phrase(plan, wide))}を、機械的に決めた位置に置いている（3 章）"] if wide else [])
                      + ([f"囲みか図の注記か決められないテキストボックス {k} 個の文字を XML に出していない（3 章）"] if boxes else [])
                      + ([f"スタイルを確かめる段落が {m} か所ある（2 章）"] if m else []))
-    cli_head = "".join(([f"{names}は{where}に置いています（レポートの 3 章）。"] if left else [])
+    cli_head = "".join(([f"{names}は{where}に置いています（レポートの 3 章）。"] if left else []) + ([wide_text] if wide else [])
                        + ([box_text] if boxes else []) + ([f"スタイルを確かめる段落が {m} か所あります（レポートの 2 章）。"] if m else []))
     if state == "済み" and pdf_unseen(r):
         return _ai_pdf_unseen_action(r)
     if state == "済み":
+        # 2 段にまたがる図形を AI の位置に移したときは、その数も添える（数え方〈asked〉は変えない。点検 review14 利用者向け 4）
+        also = f"（ほかに、2 段にまたがる{float_phrase(plan, moved)}を PDF の位置に移した）" if moved else ""
         return Action(STEP, "ai_finish", required=False, done=True, progress=state,
-                      checklist=(f"- [x] AI が出版版 PDF を見て、図・表 {len(asked)} 個の位置を決めた（2 章・3 章）" if asked
-                                 else "- [x] AI の回答を反映した（2 章）"),
+                      checklist=(f"- [x] AI が出版版 PDF を見て、図・表 {len(asked)} 個の位置を決めた{also}（2 章・3 章）" if asked
+                                 else f"- [x] AI の回答を反映した{also}（2 章）"),
                       box_title=title)
     if state == "失敗":
         reason = (ai.error or "AI の回答が空でした").rstrip("。")
@@ -1411,24 +1424,26 @@ def _ai_finish_action(r):
             box_title=AI_FAILED_TITLE, box_detail=f"{reason}。変換の結果は、AI を使わないときと同じです。{again}",
             cli=f"手順（推奨）: {AI_FAILED_TITLE}。{reason}。変換の結果は、AI を使わないときと同じです。{cli_again}")
     if state == "未実行":
-        detail = (floats + (box_text + "AI が種類を判断します。" if boxes else "") + style_text
+        detail = (floats + wide_text + (box_text + "AI が種類を判断します。" if boxes else "") + style_text
                   + f"{step('ai_choose')}変換し直してください。このまま登載することもできます。")
         cli = (f"手順（推奨）: {base}。{cli_head}--ai manual か --ai api を指定して変換し直すと、{does}（--ai manual では、"
                "書き出した AI依頼文.txt をチャット〈claude.ai など〉に渡し、回答を保存して --ai-response で指定します）。"
                "このまま登載することもできます。")
-        todo = ("AI に出版版 PDF を見せると、PDF と同じ位置に置ける" if left and not boxes else f"AI を使うと、{what}を決められる" if what
+        todo = ("AI に出版版 PDF を見せると、PDF と同じ位置に置ける" if (left or wide) and not boxes else f"AI を使うと、{what}を決められる" if what
                 else "AI を使うと、スタイルの直し方の提案を受けられる" if m else "AI を使うと、リンクなどを補える")
         checklist = f"- [ ] （推奨）{base}: {short}。{todo}{AI_CHOOSE_HOW}"
     elif state == "回答待ち":
-        intro = floats + (box_text + "AI が種類を判断します。" if boxes else "") + style_text
-        send = step("pdf_attach") if left else ""      # 位置を聞く図形があるときは、出版版 PDF を同じメッセージに添付して送る
+        intro = floats + wide_text + (box_text + "AI が種類を判断します。" if boxes else "") + style_text
+        # 位置を聞く図形か、2 段にまたがる機械的な図形があるときは、出版版 PDF を同じメッセージに添付して送る
+        send = step("pdf_attach") if left or wide else ""
         detail = (intro + f"{step('prompt')}を AI（claude.ai などのチャット）に{send}送信し、返ってきた回答を{step('paste')}してください。"
                   "このまま登載することもできます。")
-        cli_pdf = "出版版 PDF と一緒に" if left else ""
+        cli_pdf = "出版版 PDF と一緒に" if left or wide else ""
         cli = (f"手順（推奨）: {base}。{cli_head}手動モードで、AI の回答をまだ反映していません。{prompt} を、{cli_pdf}チャット（claude.ai など）に"
                "送信し、返ってきた回答をファイルに保存して --ai manual --ai-response 回答のファイル を指定し、変換し直すと、"
                f"{does}。このまま登載することもできます。")
-        checklist = (f"- [ ] （推奨）{base}（AI の回答をまだ反映していない）: {short}。{esc(prompt)} を AI に渡し、返ってきた回答を"
+        pdf_with = "を、出版版 PDF を同じメッセージに添付して" if left or wide else "を"
+        checklist = (f"- [ ] （推奨）{base}（AI の回答をまだ反映していない）: {short}。{esc(prompt)} {pdf_with} AI に渡し、返ってきた回答を"
                      "貼り戻して変換し直す（ノートブックは手順 6 に貼り付ける、1 画面版は回答の欄に貼り付けて「反映」、"
                      "コマンドラインは --ai manual --ai-response 回答のファイル）")
     else:       # 一部
@@ -1473,30 +1488,62 @@ def _ai_finish_action(r):
 
 def _ai_pdf_unseen_action(r):
     """推奨の手順 ai_finish の、AI の回答で位置は決まったが、AI が出版版 PDF を見ていない（添付なし・別の論文・ツールの確かめが合わない。
-    AIOutcome.pdf_seen）とき（修正計画 W8 の 4.3・4.4）。位置は AI の答えのまま使い、PDF を添付して依頼し直す手順を残す。"""
-    ai, asked = r.ai, r.plan.asked_floats
+    AIOutcome.pdf_seen）とき（修正計画 W8 の 4.3・4.4）。位置は AI の答えのまま使い、PDF を添付して依頼し直す手順を残す。
+    2 段にまたがる機械的な図形（plan.wide_floats）は機械的な位置のままなので、その数も書く（2 段の図形だけの論文も。点検 review14 原則 1）。
+    14 章の行の直し方は、枠・コマンドラインと同じ分け方にする（API で PDF を渡したか・渡せなかった理由。点検 review14 利用者向け 3）。"""
+    ai, plan = r.ai, r.plan
+    asked = plan.asked_floats
+    wide = [f for f in plan.wide_floats if plan.floats[f].mode == "mechanical"]
     n, seen = len(asked), ai.pdf_seen
     manual = ai.mode == "manual"
+    # 位置を決めた図形の数と、機械的な位置のままの 2 段にまたがる図形（文の頭）
+    done = f"AI の回答で図・表 {n} 個の位置を決めましたが" if n else "AI の回答を反映しましたが"
+    wide_text = (f"2 段にまたがる{float_phrase(plan, wide)}は、AI が出版版 PDF を見た回答のときだけ AI の位置を使うので、機械的に"
+                 "決めた位置のままです。" if wide else "")
+    guess = "（位置は Word の配置からの推定です）" if n else ""
     if seen.startswith("合わない"):
         why = (f"AI は出版版 PDF を見たと答えましたが、{ai.pdf_seen_note}。別の論文の PDF を添付していないか確かめ、この論文の PDF を"
                "添付して依頼し直してください。")
     elif seen == "別の論文":
         why = "AI は、添付された出版版 PDF が別の論文だと答えました。この論文の PDF を添付して依頼し直してください。"
     else:
-        why = "出版版 PDF を見ていない回答でした（位置は Word の配置からの推定です）。PDF を添付して依頼し直すと、PDF と同じ位置に置けます。"
-    plain = f"AI の回答で図・表 {n} 個の位置を決めましたが、{why}"
+        why = f"出版版 PDF を見ていない回答でした{guess}。PDF を添付して依頼し直すと、PDF と同じ位置に置けます。"
+    plain = f"{done}、{why}{wide_text}"
+    todo = "PDF を添付して AI に依頼し直す"
     if manual:
         again = f"チャットで、PDF を添付して依頼文を送り直し、返ってきた回答を{step('repaste')}てください。"
         cli_again = "チャットで、出版版 PDF を添付して AI依頼文.txt を送り直し、返ってきた回答を保存して --ai manual --ai-response で指定し、変換し直すこと。"
+    elif ai.pdf_sent:
+        # PDF を渡したのに見ていない回答は AI回答.json に写さない（pipeline.convert）ので、もう一度変換すると AI を呼び直す（点検 review13 利用者向け 1）
+        if not (seen.startswith("合わない") or seen == "別の論文"):
+            plain = f"{done}、出版版 PDF は AI に渡したのに、PDF を見ていない回答でした{guess}。{wide_text}"
+        # 「…してください」に続ける（1 画面版の語は「押」で終わるので、「すると」に続けない。点検 review14 利用者向け 1）
+        again = f"{step('convert_again')}してください。前の回答を使わずに AI を呼び直します（料金がかかります）。"
+        cli_again = "--ai api でもう一度実行すると、前の回答を使わずに AI を呼び直す（料金がかかる）。"
+        todo = "もう一度変換して、AI を呼び直す（前の回答は使わない。料金がかかる）"
     else:
-        cant = f"PDF を AI に渡せませんでした（{ai.pdf_note or '理由は 2 章'}）。" if not ai.pdf_sent else ""
-        again = cant + f"{step('convert_again')}してください。"
-        cli_again = cant + "--ai api でもう一度実行すること。"
+        # PDF を渡せなかった: もう一度実行しても同じなので、渡せなかった理由に合わせて直し方を書く
+        from .ai_assist import PDF_NONE_MSG, PDF_OFF_MSG
+        plain = f"{done}、出版版 PDF を AI に渡せませんでした（{ai.pdf_note or '理由は 2 章'}）。{wide_text}"
+        if ai.pdf_note == PDF_NONE_MSG:
+            again = f"{step('pdf')}で出版版 PDF を指定して、{step('convert_again')}してください。"
+            cli_again = "--pdf で出版版 PDF を指定して、--ai api でもう一度実行すること。"
+            todo = "出版版 PDF を指定して、もう一度変換する"
+        elif ai.pdf_note == PDF_OFF_MSG:
+            again = f"出版版 PDF を渡す設定にして、{step('convert_again')}してください。"
+            cli_again = "--ai-no-pdf を外して、--ai api でもう一度実行すること。"
+            todo = "出版版 PDF を渡す設定にして、もう一度変換する"
+        else:
+            again = ("理由を確かめて PDF を直すか、手動（チャットに貼り付け）に切り替えて、依頼文と出版版 PDF をチャットに渡してください。")
+            cli_again = "理由を確かめて PDF を直すか、--ai manual に切り替えて、AI依頼文.txt と出版版 PDF をチャットに渡すこと。"
+            todo = "理由を確かめて PDF を直すか、手動（チャットに貼り付け）に切り替えて、依頼文と出版版 PDF をチャットに渡す"
+    head = f"AI の回答で図・表 {n} 個の位置を決めたが" if n else "AI の回答を反映したが"
+    also = f"（2 段にまたがる{esc(float_phrase(plan, wide))}は機械的な位置のまま）" if wide else ""
     return Action(
         STEP, "ai_finish", required=False, progress=f"済み・PDF {seen or '添付なし'}",
-        checklist=(f"- [ ] （推奨）{AI_PDF_TITLE}: AI の回答で図・表 {n} 個の位置を決めたが、AI が出版版 PDF を見ていない"
-                   f"（{seen or '添付なし'}。2 章）。PDF を添付して AI に依頼し直す"),
-        box_title=AI_PDF_TITLE + "（推奨）", box_detail=plain + again + "このまま登載することもできます。",
+        checklist=(f"- [ ] （推奨）{AI_PDF_TITLE}: {head}、AI が出版版 PDF を見ていない{also}"
+                   f"（{seen or '添付なし'}。2 章）。{todo}"),
+        box_title=AI_PDF_TITLE, box_detail=plain + again + "このまま登載することもできます。",
         cli=f"手順（推奨）: {AI_PDF_TITLE}。{plain}{cli_again}このまま登載することもできます。")
 
 
@@ -1561,8 +1608,12 @@ STYLE_SUSPECT_JA = {
 # 機械が挙げても、AI の提案を待たずに直し方が決まっている種類（推奨の手順 ai_finish を出す条件に数えない）
 STYLE_NO_AI_KINDS = ("ref_symbol",)
 STYLE_CHECK_SHOWN = 10      # 要確認 style_check に並べる段落の数（残りは「ほか N か所（2 章）」）
-STYLE_CHECK_HOW = ("見出しや引用のスタイルが違うと、J-STAGE の全文で章立てや引用の形が変わります。違っていれば、Word でスタイルを直して"
-                   "保存し、変換し直してください（AI の提案は、XML には反映していません）。")
+# AI の回答は段落の役割（謝辞・引用・見出しの階層など）を XML に反映しない（所有者の決定 5）ので、Word での直し方を具体的に書く（点検 review13 回帰 1）
+STYLE_CHECK_HOW = ("見出しや引用・謝辞のスタイルが違うと、J-STAGE の全文で章立てや引用・謝辞の形が変わります。AI の提案は、XML には"
+                   "反映していません（AI の回答を入れても、この段落は今の形のまま出ます）。違っていれば、Word でその段落を選び、［ホーム］の"
+                   "スタイルの一覧から正しいスタイル（「節見出し」「ブロック引用」「謝辞見出し」など。下の行の提案）を選んで保存し、"
+                   "変換し直してください。行の提案が段落記号を消して次の段落とつなぐものなら、Word でそのとおりに段落をつないで保存し、"
+                   "変換し直してください。")
 STYLE_KEEP = "このまま"      # StyleFix.verdict の「このままでよい」（もう 1 つは「直す」）
 STYLE_SHOWN_CONFIDENCE = ("高", "中")     # AI だけが見つけた提案のうち、要確認 style_check に載せる確度（低は 2 章だけ）
 
@@ -1660,6 +1711,9 @@ BOUNDARY_LINE_JA = {
     "英文要旨の続き": "英文の部分の{head}の段落からの資料を取り消し、英文要旨の続きにしました",
     "資料の本文": "英文の部分の{head}の段落を、資料の見出しではなく、前の資料の続きにしました",
 }
+# 「資料の本文」にした段落の前に続ける資料がなく、見出しのない資料（XML の資料の見出しが空）になったときの文（点検 review13 原則 3）
+APP_NO_TITLE_LINE = ("英文の部分の{head}の段落を、資料の見出しではなく資料の本文にしました。前に続ける資料がないので、"
+                     "見出しのない資料になりました（XML の資料の見出しは空です）")
 NOTE_BOUNDARY_HOW = ("注の数と、本文の注番号のリンク先を、出版版 PDF と見比べてください。違っていれば、Word で注の番号を「2)」の形に直して"
                      "保存し、AI の回答を入れずに変換し直してください（AI の回答を入れなければ、元の区切りに戻ります）。")
 APP_BOUNDARY_HOW = ("英文要旨の終わりと資料の始まりを、出版版 PDF と見比べてください。違っていれば、Word で資料を英文要旨の後ろの"
@@ -1669,7 +1723,16 @@ APP_BOUNDARY_HOW = ("英文要旨の終わりと資料の始まりを、出版�
 def boundary_text(plan, b) -> str:
     """AI の回答で反映した注の区切り・資料の始まりの直し（ai_assist.Boundary）1 件の、何を直したかの文（根拠と確度は付けない）。"""
     head = f"「{esc(_head(plan.paras.get(b.src), 15))}」"
+    if b.kind == "資料の本文" and b.src in titleless_app_starts(plan):
+        return APP_NO_TITLE_LINE.format(head=head)
     return BOUNDARY_LINE_JA.get(b.kind, "{head}の段落の区切りを直しました").format(head=head)
+
+
+def titleless_app_starts(plan) -> set:
+    """見出しのない資料（AppNode.title が None）の、最初の段落の ID の集合。"""
+    from .structure import Classifier
+    return {q.src for a in plan.apps if a.title is None and a.children
+            for q in Classifier.node_paras(a.children[0])[:1]}
 
 
 def boundary_line(plan, b) -> str:
@@ -1705,6 +1768,39 @@ def _ai_boundary_action(r):
         box_title=title + "（要確認）",
         box_detail="".join(x + "\n" for x in ["・" + y for y in lines]) + how,
         cli=f"要確認: {title}（レポートの冒頭と 2 章）。{how}" + "".join("\n  " + x for x in lines))
+
+
+CARRIED_HOW = ("Word で原稿を直した後の変換に、直す前の依頼文への回答を入れました。段落の先頭の文字で確かめられなかった指定は"
+               "使っていません（2 章の「検証で採用しなかった提案」）。すべての指定を使うには、今の依頼文で AI に依頼し直してください。")
+
+
+def _ai_carried_action(r):
+    """要確認 ai_carried: 原稿を直す前の依頼文への回答を使った（AIOutcome.carried。ai_assist.check_answer の (b)）。なければ None。
+
+    段落の先頭の文字で確かめられなかった指定（head のないものなど）は不採用になり、区切り・リンクが黙って減りうるので、2 章の文だけに
+    せず知らせる（点検 review13 原則 6）。
+    """
+    carried = getattr(r.ai, "carried", "")
+    if not carried:
+        return None
+    title = "原稿を直す前の AI の回答を使いました。確かめてください"
+    return Action(
+        TO_CHECK, "ai_carried",
+        top=f"> **要確認: {title}（2 章）。** {esc(carried)}{CARRIED_HOW}",
+        checklist="- [ ] **原稿を直す前の AI の回答**（2 章）: 使わなかった指定を確かめ、必要なら今の依頼文で AI に依頼し直す",
+        box_title=title + "（要確認）", box_detail=carried + CARRIED_HOW,
+        cli=f"要確認: {title}（レポートの冒頭と 2 章）。{carried}{CARRIED_HOW}")
+
+
+def _with_reused(fin, r):
+    """推奨の手順 ai_finish の枠とコマンドラインの文に、前の変換の回答（AI回答.json）を使って AI を呼ばなかったこと（AIOutcome.reused）を
+    添える（済んだ手順は枠を出さないので添えない。点検 review13 原則 6）。"""
+    reused = getattr(r.ai, "reused", "")
+    if fin is None or fin.done or not reused:
+        return fin
+    fin.box_detail = (fin.box_detail + reused) if fin.box_detail else fin.box_detail
+    fin.cli = (fin.cli + reused) if fin.cli else fin.cli
+    return fin
 
 
 def _textbox_undecided_action(r):
@@ -3084,10 +3180,10 @@ def actions(r) -> list:
     head = [f(r) for f in (_fidelity_action, _supplement_action, _dtd_action, _table_shape_action, _image_names_action,
                            _upload_action, _textbox_undecided_action,
                            _textbox_place_action, _textbox_figure_text_action, _unplaced_action, images_action,
-                           lost_action, _image_same_action, _image_changed_action, lost_autonum_action, _pua_left_action, _abstract_missing_action, _style_hidden_action, _resultless_field_action, _symbol_action, _abstract_ja_action, _app_after_refs_action, _float_end_action, _style_check_action, _ai_boundary_action, _note_overlap_action, _float_ref_action,
+                           lost_action, _image_same_action, _image_changed_action, lost_autonum_action, _pua_left_action, _abstract_missing_action, _style_hidden_action, _resultless_field_action, _symbol_action, _abstract_ja_action, _app_after_refs_action, _float_end_action, _style_check_action, _ai_boundary_action, _ai_carried_action, _note_overlap_action, _float_ref_action,
                            _fn_guess_action, _name_split_action, _newline_action)]
     acts = [a for a in head if a is not None] + pdf_actions(r)
-    fin = _ai_finish_action(r)
+    fin = _with_reused(_ai_finish_action(r), r)
     if fin is not None:
         # 推奨の手順 ai_finish は、要対応と必須の手順の後ろ（14 章の checklist_order と同じく、先に済ませることを上に出す）
         last = max((i for i, a in enumerate(acts) if a.level == NEEDS_ACTION or (a.level == STEP and a.required)), default=-1)
@@ -3114,7 +3210,7 @@ def render(r) -> str:
     ai = r.ai
     api = f"API（{PROVIDERS.get(ai.provider, ai.provider)}: {ai.model}）"
     ai_mode = {"none": "使用しない", "api": api, "manual": "手動（チャットに貼り付け）"}.get(ai.mode, ai.mode)
-    L.append(f"- AI による補完: {ai_mode}")
+    L.append(f"- AI による仕上げ: {ai_mode}")
     L.append(f"- 作り方: {ROUTE_JA.get(r.route, r.route)}"
              + ("（PDF の文字を読めなかったので、docx を補わずに変換した）" if pdf_fallback(r) else ""))
     L.append("")
@@ -3135,13 +3231,13 @@ def render(r) -> str:
              f"数式 {c.get('disp-formula', 0)} / URL {c.get('url', 0) + c.get('word', 0)} / DOI {c.get('doi', 0)}")
     ai_acc = [d for _, d in ai.accepted]
     rows = [
-        ("本文の文字の不変性チェック（AI 補完の後に実施）", fid_line),
+        ("本文の文字の不変性チェック（AI による仕上げの後に実施）", fid_line),
         ("最終出力（目印を取り除いた XML）の再チェック", final_line),
         ("J-STAGE 指定 DTD（JATS 1.1）による検証", "合格" if r.dtd_valid else f"不合格（{len(r.dtd_errors)} 件、12 章）"),
         ("J-STAGE のアップロード時チェック（XML と ZIP で判定できるもの）",
          "問題なし" if not upload_issues(r) else f"要対応 {len(upload_issues(r))} 件（12 章）"),
         ("機械的に付けたリンク", links),
-        ("AI が付けたリンク・判断（2 章）", f"採用 {len(ai_acc)} 件 / 不採用 {len(ai.rejected)} 件" if ai.mode != "none" else "AI 補完なし"),
+        ("AI が付けたリンク・判断（2 章）", f"採用 {len(ai_acc)} 件 / 不採用 {len(ai.rejected)} 件" if ai.mode != "none" else "AI による仕上げなし"),
         ("機械処理で解決できなかった箇所（3 章）", f"{len(r.unresolved_after)} 件"),
         ("画像", image_summary(r)),
         ("警告", f"{len(r.warnings)} 件（10 章）"
@@ -3181,7 +3277,7 @@ def render(r) -> str:
             L.append("")
 
     # ------------------------------------------------------------------ 2. AI
-    L.append("## 2. AI による仕上げ（要確認）")
+    L.append("## 2. AI による仕上げ")
     L.append("")
     state = ai_state(r)
     left = _float_left(plan)
@@ -3194,16 +3290,23 @@ def render(r) -> str:
       + ([("PDF を見たか（ツールの確かめ）", ai_pdf(r))] if ai.pdf_seen else [])))
     L.append("")
     if ai.mode == "none":
-        L.append("AI による補完は行っていません。")
+        L.append("AI による仕上げは行っていません。")
     elif state == "回答待ち":
         # 位置を聞く図形などがなければ、推奨の手順 ai_finish は出さず、ここに 1 行だけ書く（修正計画 W8 の 4.3）
-        L.append(f"AI の回答をまだ反映していません（手動モード）。{esc(r.prompt_path.name if r.prompt_path else 'AI依頼文.txt')} を"
-                 "チャット（claude.ai など）に渡し、返ってきた回答を貼り戻して変換し直すと、AI の判断（リンクの取りこぼしなど）が反映されます。"
-                 "この出力は AI による補完の前の状態です。")
+        # 位置を聞く図形があれば、出版版 PDF の添付と図・表の位置から書く（ai_finish の本文と同じ。点検 review13 利用者向け 7・8）
+        name = esc(r.prompt_path.name if r.prompt_path else "AI依頼文.txt")
+        if left:
+            L.append(f"AI の回答をまだ反映していません（手動モード）。{name} を、出版版 PDF を同じメッセージに添付して"
+                     "チャット（claude.ai など）に渡し、返ってきた回答を貼り戻して変換し直すと、AI が出版版 PDF を見て図・表の位置を合わせ、"
+                     "リンクの取りこぼしなども確かめます。この出力は AI による仕上げの前の状態です。")
+        else:
+            L.append(f"AI の回答をまだ反映していません（手動モード）。{name} をチャット（claude.ai など）に渡し（出版版 PDF を添付すると、"
+                     "AI が体裁を見て答えられます）、返ってきた回答を貼り戻して変換し直すと、AI の判断（リンクの取りこぼしなど）が"
+                     "反映されます。この出力は AI による仕上げの前の状態です。")
     elif state == "失敗":
-        L.append(f"AI による補完は行えませんでした: {ai.error or 'AI の回答が空でした'}")
+        L.append(f"AI による仕上げは行えませんでした: {ai.error or 'AI の回答が空でした'}")
     else:
-        # 文字だけのテキストボックスがある論文では、その判断（placements の kind box・label）も AI が変えられる
+        # 文字だけのテキストボックスがある論文では、その判断（boxes の kind「囲み」「図の注記」）も AI が変えられる
         boxes = ("、文字だけのテキストボックスの囲み・図の注記の判断と囲みの位置"
                  if any(b.kind != "blank" for b in r.plan.textboxes.values()) else "")
         L.append("AI の判断には誤りの可能性があります。特に確度「低」「中」の項目は、PDF と照らして確認してください。"
@@ -3617,7 +3720,7 @@ def render(r) -> str:
     L.append("## 14. J-STAGE に登載する前に")
     L.append("")
     L.append(pdf_checklist_line(r))
-    L.append("- [ ] 2 章（AI による補完）と 3 章（未解決）を PDF と照らして確認する")
+    L.append("- [ ] 2 章（AI による仕上げ）と 3 章（未解決）を PDF と照らして確認する")
     if fx is not None:
         L.append(f"- [ ] **PDF で補った docx（{esc(fx.path.name)}）を Word で開き、変更履歴を確認する**"
                  "（却下したい変更があれば、却下して保存した docx を「docx から作る」で変換し直す）")
@@ -3901,7 +4004,7 @@ def ai_pdf_sent(ai) -> str:
 def ai_check_lines(ai) -> list:
     """依頼の番号と段落の先頭の文字での確かめ（ai_assist.check_answer）の結果の行（2 章と AI の判断一覧）: 前の変換の回答
     （AI回答.json）を使い、API を呼ばなかったこと（AIOutcome.reused）、原稿を直す前の回答を使ったこと（AIOutcome.carried）と、
-    段落の ID を先頭の文字で読み替えた指定（AIOutcome.reread）。"""
+    段落の ID を先頭の文字で読み替えた指定（AIOutcome.reread）、括弧・引用符の違いだけで先頭の文字と合わなかった指定（loose_heads）。"""
     out = []
     if ai.reused:
         out.append(esc(ai.reused))
@@ -3911,13 +4014,18 @@ def ai_check_lines(ai) -> list:
         ex = "、".join(f"{a} → {b}" for _, a, b in ai.reread[:REREAD_SHOWN]) + ("など" if len(ai.reread) > REREAD_SHOWN else "")
         out.append(f"段落の ID が段落の先頭の文字と合わなかった指定 {len(ai.reread)} 件を、同じ先頭の文字の段落に読み替えました"
                    f"（{ex}）。")
+    loose = list(getattr(ai, "loose_heads", None) or [])
+    if loose:
+        ex = "、".join(src for _, src in loose[:REREAD_SHOWN]) + ("など" if len(loose) > REREAD_SHOWN else "")
+        out.append(f"段落の先頭の文字（head）が括弧・引用符の違いだけで合わなかった指定 {len(loose)} 件を、ほかに紛れる段落がないので、"
+                   f"その段落への指定とみなしました（{ex}）。")
     return out
 
 
 def render_ai_only(r) -> str:
     """AI による判断だけをまとめた別ファイル（不確実性のある箇所の一覧）。"""
     ai = r.ai
-    L = [f"# AI による補完の判断一覧: {r.docx_name}", "",
+    L = [f"# AI による仕上げの判断一覧: {r.docx_name}", "",
          "AI（生成 AI）が判断した箇所の一覧です。AI は本文の文字を変更していません（AI の回答で変わるのは、図・表の位置、"
          "文字だけのテキストボックスの種類と位置、リンク、姓名の区切り、注の区切りと資料の始まりのみ。Word のスタイルで直せる"
          "段落の役割は提案だけで、XML には反映していません）。"
@@ -3928,7 +4036,7 @@ def render_ai_only(r) -> str:
     for line in ai_check_lines(ai):
         L += [line, ""]
     if ai.error:
-        L.append(f"AI による補完は行えませんでした: {ai.error}")
+        L.append(f"AI による仕上げは行えませんでした: {ai.error}")
     elif not acc and not ai.rejected:
         L.append("AI の判断はありません。")
     order = {"低": 0, "中": 1, "高": 2}

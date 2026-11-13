@@ -130,6 +130,6 @@ def test_notebook_step5_shows_guide_box_once(monkeypatch, tmp_path):
           "docx_path": FLOAT, "pdf_path": None, "ROUTE_KEY": "docx", "SPLIT_LABELS": None}
     exec(cell_source("#@title 5."), ns)
     page = "".join(x for x in shown if isinstance(x, str))
-    assert page.count("AI で図・表の位置を合わせる（強く推奨。残り 3 個）") == 1       # 依頼文の枠の見出しだけ（ai_finish の枠は出さない）
+    assert page.count("AI で図・表の位置を合わせる（残り 3 個）") == 1       # 依頼文の枠の見出しだけ（ai_finish の枠は出さない）
     assert "出版版 PDF を同じメッセージに添付して" in page and "手順 6 に貼り付けて ▶ を押します。" in page
     assert 5 in ns["DONE"] and ArticleMeta and JournalConfig

@@ -57,7 +57,7 @@ def test_no_ai_does_not_stop_when_a_float_cannot_be_placed(journal, meta, tmp_pa
     acts = {a.key: a for a in actions(res)}
     fin = acts["ai_finish"]
     assert (fin.level, fin.required, fin.done, fin.failed, fin.progress) == (STEP, False, False, False, "未実行・残り 3 個")
-    assert fin.box_title == "AI で図・表の位置を合わせる（強く推奨。残り 3 個）" and fin.top == ""
+    assert fin.box_title == "AI で図・表の位置を合わせる（残り 3 個）" and fin.top == ""
     # 図形の数と、中身の図・表の名前を分けて書く（名前は番号順。図形 1 つに図が 2 つ入っていても数が食い違わない）
     assert fin.box_detail.startswith("Word のテキストボックスなどの図形 3 個（図1・図2・図3・図4）は、本文のどこに出すかを")
     assert "結び付いている段落のすぐ後ろに置いています" in fin.box_detail

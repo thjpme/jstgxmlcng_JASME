@@ -212,7 +212,8 @@ def test_text_shapes_group_with_figure_caption_is_a_drawn_figure(journal, meta, 
     ch9 = chapter9(res)
     assert "### 図形で描いた図（図の本体）" in ch9 and "- 図1（fig01）: 文字の図形の集まり（img1。" in ch9
     assert "### 画像の場所に数えなかった図形（飾り）" not in ch9
-    assert set(acts(res)) == {"textbox_figure_text", "images"}      # 手動の回答待ちは、位置を聞く図形がないので 2 章の 1 行だけ
+    # 手動の回答待ち: 位置を聞く図形はないが、2 段にまたがる機械的な図形（s1）があるので、推奨の手順 ai_finish を出す（点検 review14 利用者向け 5）
+    assert set(acts(res)) == {"textbox_figure_text", "images", "ai_finish"}
     free = run(tmp_path, meta, journal, "drawn_free", name="free")
     [deco] = free.decorations
     assert (deco.kind, deco.figure) == ("textgroup", "") and free.images == []

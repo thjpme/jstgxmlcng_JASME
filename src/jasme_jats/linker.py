@@ -467,7 +467,7 @@ class Linker:
         self.held.append(Unresolved(ref_type, p.src, text, short, start=s, end=e))
         op = "link_figure" if ref_type == "fig" else "link_table"
         self.note("figure" if ref_type == "fig" else "table", p.src,
-                  f"「{text}」は、{why}、リンクしなかった。手で確かめ、リンクが必要なら、AI による補完の {op}（text「{text}」、"
+                  f"「{text}」は、{why}、リンクしなかった。手で確かめ、リンクが必要なら、AI による仕上げの {op}（text「{text}」、"
                   f"occurrence {occurrence_at(p, s, text)}）でリンクできる", applied=False)
         self.plan.float_unlinked.append(UnlinkedRef(word, p.src, text, s, e))
 
@@ -479,7 +479,7 @@ class Linker:
         op = "link_figure" if ref_type == "fig" else "link_table"
         self.note("figure" if ref_type == "fig" else "table", p.src,
                   f"「{text}」は、直前の「{prev}」と続く語の一部（地図1・付表1 など）とみなし、{word} {rid} にリンクしなかった。"
-                  f"{word}{n} への参照なら、AI による補完の {op}（text「{text}」、occurrence {occurrence_at(p, s, text)}）で"
+                  f"{word}{n} への参照なら、AI による仕上げの {op}（text「{text}」、occurrence {occurrence_at(p, s, text)}）で"
                   "リンクできる", applied=False)
 
     def _link_num(self, p, s, e, n, ids, ref_type, word, context):
@@ -526,7 +526,7 @@ class Linker:
         番号の形がはっきりしたもの（strong）と、直前が「注」のもの（after_note）はリンクする。番号だけの上付きの数字（bare）は、
         論文の注番号の書き方が番号だけ（bare_notes）のときだけリンクする。指数・単位の形のもの（exponent。cm²・x²・s⁻¹）は
         リンクしない（種類は _sup_marks）。リンクしなかった数字は、その番号の注があるときだけ判断の一覧に記録する（applied=False。
-        指数・単位は段落ごとに 1 件にまとめる。決定事項 15）。記録には、AI による補完の link_note の text（数字）と occurrence
+        指数・単位は段落ごとに 1 件にまとめる。決定事項 15）。記録には、AI による仕上げの link_note の text（数字）と occurrence
         （段落の中で何回目か。find_in_para と同じ数え方）を書く（AI 依頼文の段落の一覧は、上付きかどうかを示さないため）。
         注のない番号は、指数・単位の形のものを除き、今までどおり「対応する注が見つからない」に出す。
         """
@@ -558,7 +558,7 @@ class Linker:
                 self.held.append(Unresolved("fn", p.src, digit, f"番号だけの上付きの数字で、この論文の注番号の形（「1)」「注1」）と"
                                             f"違う（注 {rid} がある）", start=mk.digit_start, end=mk.digit_end))
                 msg = (f"上付きの「{digit}」は、番号だけの形なので注 {rid} にリンクしなかった（この論文の注番号は「1)」「注1」の"
-                       f"形）。注番号なら、AI による補完の link_note（text「{digit}」、occurrence {k}）でリンクできる")
+                       f"形）。注番号なら、AI による仕上げの link_note（text「{digit}」、occurrence {k}）でリンクできる")
                 records.append((mk.digit_start, msg))
         if exps:
             # 利用者向けの前半は短くし（同じ数字は 1 回だけ書いて件数を添える。x²+y² は「「2」（2 か所）」）、AI 向けの text と
@@ -571,7 +571,7 @@ class Linker:
             rids = "・".join(dict.fromkeys(r for _, _, _, r in exps))
             ops = "／".join(f"text「{d}」、occurrence {k}" for _, d, k, _ in exps)
             msg = (f"上付きの{nums}は、指数・単位（cm²・x² などの形）とみなし、注 {rids} にリンクしなかった。注番号なら、"
-                   f"AI による補完の link_note（{ops}）でリンクできる")
+                   f"AI による仕上げの link_note（{ops}）でリンクできる")
             records.append((exps[0][0], msg))
         for _, msg in sorted(records, key=lambda r: r[0]):
             self.note("note", p.src, msg, applied=False)

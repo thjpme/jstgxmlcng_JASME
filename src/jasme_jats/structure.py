@@ -91,7 +91,7 @@ from .article import (
     TableNode,
     _para_text,
 )
-from .floats import NEAR_PARAS, at_anchor, box_lines, textbox_kind, why_not_at_anchor
+from .floats import NEAR_PARAS, at_anchor, box_lines, spans_columns, textbox_kind, why_not_at_anchor
 from .model import Para, Table, note_key, note_label
 from .ooxml import is_ws
 
@@ -108,7 +108,7 @@ TEXTBOX_TEXT_EXCLUDED = "テキストボックス内の文字（図の一部と�
 # 文字だけのテキストボックス（Classifier.place_boxes）の文字を出力しないときの理由。どれも「テキストボックス内の文字」で始める
 TEXTBOX_LABEL_EXCLUDED = "テキストボックス内の文字（図に重ねた注記とみなして本文から除外）"
 TEXTBOX_UNDECIDED_EXCLUDED = "テキストボックス内の文字（囲みか図の注記か決められないため本文から除外。要確認）"
-TEXTBOX_AI_LABEL_EXCLUDED = "テキストボックス内の文字（AI による補完で図に重ねた注記と判断し、本文から除外）"
+TEXTBOX_AI_LABEL_EXCLUDED = "テキストボックス内の文字（AI による仕上げで図に重ねた注記と判断し、本文から除外）"
 # 引用文献・注の節の、画像だけの段落（文字は 1 文字もない。blank の除外。画像は pipeline.lost_images が知らせる）を除外したときの理由
 REF_IMAGE_EXCLUDED = "画像だけの段落（引用文献の節の中。引用文献には画像を出力できない）"
 FN_IMAGE_EXCLUDED = "画像だけの段落（注の節の中。注が始まる前の段落は注にしない。注には画像を出力できない）"
@@ -1355,7 +1355,9 @@ class Classifier:
         修正計画 W1 の 2.3 の B）。図を置く位置の規則は「Word で表示したときに、図の左上の直上にある本文の文章を含む段落の直後」。
         - AI の指定（placements の after）があれば、指定された段落の直後に置く（AI が答えるのは位置だけ。中身の組み合わせは
           変換ツールが決める）。
-        - なければ、図の左上がアンカー段落の左上の位置にあれば（floats.at_anchor）、機械的にアンカー段落の前に置く。
+        - なければ、図の左上がアンカー段落の左上の位置にあれば（floats.at_anchor）、機械的にアンカー段落の前に置く。そのうち 2 段に
+          またがる図形（floats.spans_columns）は FloatInfo.wide を真にする（AI の指定は、出版版 PDF を見た回答のときだけ pipeline.convert
+          が渡す。修正計画 W8 の 6.5 の 4）。
         - どちらでもなければ「位置を決められない図表」として記録し、仮の位置に置く（利用者が手作業で移す。決定事項 21）。
           仮の位置は、アンカー段落のすぐ後ろ。アンカー段落が本文の段落でないとき（本文の外の段落に結び付いた図形。self.outside）は、
           本文の最後（provisional_target）。
@@ -1409,7 +1411,7 @@ class Classifier:
             if not (info.images or info.tables or groups or any(q.images for q in info.paras)):
                 continue        # 文字だけのテキストボックスは図表ではない（place_boxes で扱う。text_only と同じ判定）
             plan.floats[fl.fid] = info
-            spec = self.placements.get(fl.fid)
+            spec = given = self.placements.get(fl.fid)
             end = bool(spec) and spec.get("where") == "end"     # AI が本文より後ろにあると答えた（本文の最後に置く）
             if spec and not end and spec["after"] not in src_index:
                 spec = None     # AI の役割の指定で、指定された段落が本文でなくなった（pipeline.convert が不採用に記録する）
@@ -1424,6 +1426,11 @@ class Classifier:
                 placed.update(id(b) for b in blocks)
             self.float_entries[fl.fid] = entries
             summary = self.float_summary(info)
+            # 機械的に置ける 2 段にまたがる図形（AI の位置は、出版版 PDF を見た回答のときだけ pipeline.convert が渡す。修正計画 W8 の 6.5 の 4）。
+            # 指定があれば、float_placements が wide の印を付けたもの（1 回目の組み立てで 2 段の機械的な図形だったもの）だけにする
+            # （位置を聞いた図形が、同じ回答の区切りの指定で 2 回目に本文に移っても、wide にしない。点検 review14 原則 6）
+            info.wide = ((given is None or bool(given.get("wide"))) and at_anchor(fl, layout) and not outside
+                         and spans_columns(fl, layout))
             if spec:
                 info.basis, info.page = spec.get("basis", ""), spec.get("page", 0)
                 info.column, info.confidence = spec.get("column", ""), spec.get("confidence", "")
@@ -1556,10 +1563,10 @@ class Classifier:
         """文字だけのテキストボックスの扱いと置き場所を決める（place_floats とは別のパス。doc.textboxes を出現順に回す）。
 
         items は place_floats に渡したものと同じ本文の要素の列、src_index はその段落 ID -> 位置。種類は floats.textbox_kind
-        （AI の指定〈placements の kind box・label〉があればそれ）で決める:
+        （AI の指定〈boxes の kind「囲み」「図の注記」〉があればそれ）で決める:
         - 空白だけ（blank）: 空白だけの段落を exclude_blank するだけ（判断も知らせも出さない）。
         - 図に重ねた注記（label）: 文字のある段落を理由付きで除外し、判断の一覧とアンカー段落ごとの警告（10 章。AI の判断なら
-          AI の判断と分かる別の警告）に記録する（本文の文字なら、AI が placements の kind box で囲みに戻せる。
+          AI の判断と分かる別の警告）に記録する（本文の文字なら、AI が boxes の kind「囲み」で囲みに戻せる。
           ai_assist._box_placement_problem。暫定の判断）。
         - 決められない（undecided）: 文字のある段落を理由付きで除外し、判断の一覧に記録する（applied=False。要確認の知らせは
           report._textbox_undecided_action）。
@@ -1568,7 +1575,7 @@ class Classifier:
           （位置を指定した浮動配置・VML の position:absolute）は、位置を推定してアンカー段落の後ろ（要確認）。アンカー段落が
           箇条書き・引用の途中なら、その終わりの後ろ（run_end）。アンカー段落が本文の外（N7）なら本文の最後（要確認）。
           アンカー段落が本文の要素にない（和文の冒頭の最後のセクション区切りの段落など）なら、テキストボックスの最初の段落の
-          位置（要確認）。AI の指定（kind box）は、指定の段落の後ろ（ずらさない）。
+          位置（要確認）。AI の指定（kind「囲み」）は、指定の段落の後ろ（ずらさない）。
         どの種類でも、空白だけの段落は exclude_blank する。戻り値: (差し込みの一覧〈place_floats と同じ形。同じ位置の図表の後ろ〉,
         扱ったテキストボックスの要素の id の集合〈build_body の役割の決め方に流さない〉)。
         """

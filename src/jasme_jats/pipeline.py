@@ -5,7 +5,7 @@
      構造（同じ種類の後付けの見出し・英文要旨の見出しが 2 つ、著者名の付かない所属。K1・K2）は plan.structure_conflicts に記録され、
      組み立ての直後（AI を呼ぶ前。ルート2 は補った docx を作る前の元の docx で）に StructureConflictError で変換を中止する
   3. 機械的にリンクを付ける（linker, refparse）
-  4. （任意。推奨の手順）AI による補完: AI の回答（種類ごとの一覧）を 1 件ずつ検証し、構造の組み直し・リンクの追加として適用する
+  4. （任意。推奨の手順）AI による仕上げ: AI の回答（種類ごとの一覧）を 1 件ずつ検証し、構造の組み直し・リンクの追加として適用する
      （ai_assist。スタイルの提案は記録だけ）。先に、どの依頼文への回答かを依頼の番号で確かめ、別の論文・図表や文献の並びが
      違う原稿への回答と、番号のない回答は使わない（ai_assist.check_answer。修正計画 W8 の 4.6）。使えた回答の写しは出力フォルダの
      AI回答.json に書き、API モードで次の変換に Options.ai_cache で渡されて meta が同じなら、API を呼ばずに使う（ai_assist.cached_answer）。
@@ -51,7 +51,7 @@ from typing import Optional
 
 from . import __version__
 from .ai_assist import (ANSWER_FILE, DEFAULT_MODEL, REUSED_MSG, AIOutcome, apply_ops, boundary_overrides, box_kinds,
-                        build_request, cache_meta, cache_text, cached_answer, call_provider, check_answer, float_placements, link_ops, missing_answers, name_ops, pdf_attachment, pdf_seen, pdf_will_be_sent,
+                        build_request, cache_meta, cache_text, cached_answer, call_provider, check_answer, float_placements, link_ops, missing_answers, name_ops, pdf_attachment, pdf_seen, pdf_will_be_sent, wide_rejects,
                         parse_cut_response, parse_response, read_answer_meta, record_boundaries, retarget_ops, style_fixes,
                         target_keys, NO_PLACEMENT_WHY)
 from .article import _para_text
@@ -68,7 +68,7 @@ from .package import (XLINK_HREF, apply_images, article_dir, make_zip, unzipped_
                       zip_problems)
 from .pdfdocx import DocxFix, make_fixed_docx, same_file
 from .pdfmatch import PdfCheck, check_pdf
-from .report import (actions, blocking, decoration_where, render, render_ai_only, slot_where, step,
+from .report import (actions, blocking, decoration_where, pdf_unseen, render, render_ai_only, slot_where, step,
                      structure_conflict_text)
 from .report import pdf_fallback as report_pdf_fallback
 from .structure import FN_IMAGE_EXCLUDED, REF_IMAGE_EXCLUDED, classify, conflict_overrides, float_caption
@@ -726,8 +726,9 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
                     outcome = call_provider(opts.ai_provider, request.system_text(), request.data, attachment,
                                             model=opts.ai_model, api_key=opts.ai_api_key)
                 except Exception as e:  # noqa: BLE001
-                    # 各 API の主な誤りの型は call_* が受けて outcome.error にする。それ以外の想定外の例外でも変換は止めない（AI の失敗）
-                    outcome.error = f"AI の呼び出しで想定外の誤りが起きました（{type(e).__name__}: {e}）"
+                    # 各 API の主な誤りの型は call_* が受けて outcome.error にする。それ以外の想定外の例外でも変換は止めない（AI の失敗）。
+                    # 例外の文は書かない（API キーなどが入っていても、2 章・AI判断一覧に出さない。型の名前だけ。点検 review13 原則 5）
+                    outcome.error = f"AI の呼び出しで想定外の誤りが起きました（{type(e).__name__}）"
             if outcome.raw and (not outcome.error or outcome.cut):
                 try:
                     data = parse_response(outcome.raw)
@@ -770,6 +771,12 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
             style_fixes(data, plan, outcome, journal)
             overrides, bounds = boundary_overrides(data, plan, outcome)
             placements = float_placements(data, plan, outcome)
+            if outcome.pdf_status:
+                # AI が出版版 PDF を見て答えたかを、ツールが別に確かめる（修正計画 W8 の 4.4。回答の位置は、合わなくてもそのまま使う）。
+                # 組み直す前の plan と位置の指定で確かめ、機械的に置いた 2 段にまたがる図形への指定は、PDF を見た回答のときだけ使う（6.5 の 4）
+                outcome.pdf_seen, outcome.pdf_seen_note = pdf_seen(outcome, plan, opts.pdf_path, placements)
+            # PDF を見た回答でも、キャプションのある PDF のページと違うページの指定は使わない（点検 review14 原則 2）
+            wide_rejects(placements, outcome, plan, opts.pdf_path)
             placements.update(box_kinds(data, plan, outcome))
             if not outcome.partial:
                 missing_answers(data, plan, outcome)        # 聞いたのに回答に指定がなかった図形・テキストボックス（C079）
@@ -828,10 +835,6 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
             cited = cited_refs(plan)
             plan.uncited_refs = [r.rid for r in plan.refs if r.rid not in cited]
             root, info = build(plan, meta, journal, split)
-
-    if data is not None and outcome.pdf_status:
-        # AI が出版版 PDF を見て答えたかを、ツールが別に確かめる（回答の位置は、合わなくてもそのまま使う。修正計画 W8 の 4.4）
-        outcome.pdf_seen, outcome.pdf_seen_note = pdf_seen(outcome, plan, opts.pdf_path)
 
     # ---------------------------------------------------------------- 出版版 PDF との照合
     pdf_check = None
@@ -964,6 +967,12 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         im.location = slot_where(res, slots[im.key])
     res.decorations = decorations(doc, plan, res)
     write_check(res)
+    if answer_copy is not None and opts.ai_mode == "api" and outcome.pdf_sent and pdf_unseen(res):
+        # 出版版 PDF を渡したのに、AI が PDF を見ていない回答（位置を聞いた図形か、2 段にまたがる機械的な図形があるとき。report.pdf_unseen）
+        # は写さない。もう一度変換すると、前の回答を使わずに AI を呼び直す（手順 ai_finish の文のとおり。PDF を渡せなかった回答は、PDF の
+        # 渡し方が meta に入るので写してよい。点検 review13 利用者向け 1・review14 原則 1）。前の変換の写しが出力フォルダに残っていれば消す（コマンドラインが次の変換で読まないように）
+        answer_copy = None
+        (out_dir / ANSWER_FILE).unlink(missing_ok=True)
     if answer_copy is not None:
         res.ai_answer_path = out_dir / ANSWER_FILE
         res.ai_answer_path.write_text(cache_text(_answer_meta(opts, outcome.request_id, attachment, outcome), answer_copy),

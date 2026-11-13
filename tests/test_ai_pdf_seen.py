@@ -97,7 +97,7 @@ def test_unseen_answer_leaves_ai_finish(journal, meta, tmp_path):
         assert report.pdf_unseen(res) and not report.ai_done(res)
         fin = finish(res)
         assert (fin.done, fin.failed, fin.required) == (False, False, False)
-        assert fin.box_title == report.AI_PDF_TITLE + "（推奨）" and word in fin.box_detail
+        assert fin.box_title == report.AI_PDF_TITLE and word in fin.box_detail
         assert "AI の回答で図・表 4 個の位置を決めましたが" in fin.box_detail and report.step("repaste") in fin.box_detail
         assert fin.progress == f"済み・PDF {status}" and "手順（推奨）" in fin.cli
         assert res.ai.pdf_seen in report.ai_summary(res)

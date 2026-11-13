@@ -1,4 +1,4 @@
-"""生成 AI による補完（推奨は Claude。API モードでは ChatGPT・Gemini・Sakana AI も使える）。
+"""生成 AI による仕上げ（推奨は Claude。API モードでは ChatGPT・Gemini・Sakana AI も使える）。
 
 AI には XML も docx も直接編集させない。AI が返すのは種類ごとの一覧の JSON（RESPONSE_SCHEMA。図・表の位置〈placements〉・
 テキストボックスの種類〈boxes〉・注の区切りと資料の始まり〈boundaries〉・リンク〈links〉・姓名の区切り〈names〉・スタイルの提案
@@ -47,8 +47,9 @@ def cost_note() -> str:
     """API モードの費用の説明（1 画面版の AI の欄・ノートブックの手順 4。修正計画 W8 の 4.7）。数字は DEFAULT_MODEL_INFO の per_run_usd。
     tools/make_notebook.py の COST_NOTE は同じ文を作る（パッケージを import しないので書き方を合わせる。テストが同じ文か確かめる）。"""
     low, high = DEFAULT_MODEL_INFO["per_run_usd"]
-    return (f"出版版 PDF も一緒に送ります。1 回あたりおおむね {low:g}〜{high:g} ドル（論文の長さとページ数で変わります）。"
-            "同じ原稿をもう一度変換するときは、前の回答を使うので料金はかかりません。")
+    return (f"出版版 PDF も一緒に送ります。1 回あたりおおむね {low:g}〜{high:g} ドル（目安。論文の長さとページ数で変わります。"
+            "実際の API で測って直します）。図の画像や書誌だけを直して変換し直すときは、前の回答を使うので料金はかかりません"
+            "（Word で原稿を直したときや、AI・モデル・PDF を変えたときは、AI を呼び直します）。")
 
 ROLES = {
     "sec1": "章見出し", "sec2": "節見出し", "sec3": "項見出し", "p": "本文段落", "fig_caption": "図キャプション",
@@ -224,6 +225,9 @@ class AIOutcome:
     carried: str = ""
     # 段落の先頭の文字で ID を読み替えた指定（一覧の名前, 回答の ID, 読み替えた ID。check_answer。2 章）
     reread: list = field(default_factory=list)
+    # 括弧・引用符の類の違いだけで段落の先頭の文字と合わず、1 つの段落に決まったので同じとみなした指定（一覧の名前, 段落の ID。
+    # check_answer の _bracket_head。2 章）
+    loose_heads: list = field(default_factory=list)
     asked: list = field(default_factory=list)       # AI に聞いたもの（位置を聞いた図形・種類を聞いたテキストボックスの ID。missing_answers）
     pdf_sent: str = ""                # API で出版版 PDF を渡した方法（"pdf"。渡さなかった・やり直しで外したときは ""。PdfAttachment.mode）
     pdf_note: str = ""                # PDF を渡さなかった理由・PDF なしでやり直した理由（2 章。PDF_* の文）
@@ -385,7 +389,8 @@ def request_sections(plan: ArticlePlan, info=None, linker=None) -> list:
     """この論文で頼むことの一覧（RequestSection。依頼文の頼むことの番号つきの一覧・節を出す条件・節の番号を、ここ 1 か所で決める。
     修正計画 W8 の 4.1 の表）。
 
-    - placements: 位置を聞く図形（plan.asked_floats）がある。
+    - placements: 位置を聞く図形（plan.asked_floats。parts の asked）か、出版版 PDF を見たときだけ答える、機械的に置いた 2 段に
+      またがる図形（plan.wide_floats。wide。修正計画 W8 の 6.5 の 4）がある。count は位置を聞く図形の数。
     - boxes: 囲みか図の注記か決められないテキストボックス（parts の undecided）、位置を推定した囲み（estimated）、図の注記とみなした
       テキストボックス（labels）のどれかがある（後の 2 つは「変えるときだけ答える」）。count は決められないものの数。
     - boundaries: 手で書いた注がある（notes）か、資料の始まりを聞く（apps。_appendix_like）。どちらもなければ出さない。
@@ -396,8 +401,9 @@ def request_sections(plan: ArticlePlan, info=None, linker=None) -> list:
     「# 機械がリンクできなかった箇所」（unresolved_section）は links と同じくいつも出すので、linker は節を決めるのに使わない。
     """
     secs = []
-    if plan.asked_floats:
-        secs.append(("placements", "図・表の位置", f"{len(plan.asked_floats)} 個", ()))
+    parts = [k for k, has in (("asked", plan.asked_floats), ("wide", plan.wide_floats)) if has]
+    if parts:
+        secs.append(("placements", "図・表の位置", f"{len(plan.asked_floats)} 個" if plan.asked_floats else "", parts))
     boxes = plan.textboxes
     undecided = plan.undecided_boxes
     parts = [k for k, has in (("undecided", undecided),
@@ -420,11 +426,15 @@ def request_sections(plan: ArticlePlan, info=None, linker=None) -> list:
 
 def human_text(pdf_name: str = "", floats: bool = True) -> str:
     """【作業する方へ】（手動モードの依頼文の最初。AI への依頼と分けて、PDF の添付を勧める）。pdf_name はツールに渡された PDF の
-    ファイル名（なければ名前を出さない）。floats が偽（位置を聞く図形がない）なら、2 行目を PDF の体裁の文にする。"""
+    ファイル名（なければ名前を出さない）。floats が偽（位置を聞く図形も、PDF を見たときだけ答える 2 段の図形もない）なら、PDF の
+    体裁の文を 1 行だけ書き、添付は任意とする。"""
     pdf = f"この論文の出版版 PDF「{pdf_name}」" if pdf_name else "この論文の出版版 PDF "
+    if not floats:
+        # 位置を聞く図形がない論文では、画面の案内の枠（colab.NO_FLOATS_INTRO）と同じ強さにする（任意。点検 review13 利用者向け 9）
+        return "\n".join([HUMAN_HEADING, f"このメッセージを送る前に、{pdf}を同じメッセージに添付すると、AI が PDF の体裁"
+                                         "（見出し・引用の字下げ・著者名）を見て答えられます（任意。添付しなくても回答は得られます）。"])
     second = ("PDF があると、AI が PDF のページを見て、図・表を出版版と同じ位置に置けます。添付しなくても回答は得られますが、"
-              "図・表の位置は Word の配置からの推定になります。" if floats else
-              "PDF があると、AI が PDF の体裁（見出し・引用の字下げ・著者名）を見て答えられます。添付しなくても回答は得られます。")
+              "図・表の位置は Word の配置からの推定になります。")
     return "\n".join([HUMAN_HEADING, f"このメッセージを送る前に、{pdf}を同じメッセージに添付してください（強く推奨）。", second])
 
 
@@ -441,7 +451,12 @@ PDF_TEXT = """## 0. 最初に: PDF を確かめる（pdf）
 - 添付されているが別の論文: status を "別の論文"、pages に総ページ数。この PDF は使わず、「添付なし」と同じやり方で答えます。
 見ていない PDF を見たことにしないでください。「添付なし」の回答も、そのまま使われます。"""
 
-PLACEMENTS_TEXT = """「# 位置を決める図・表」に挙げた図形（s1 など）は、Word では本文の流れの外に置かれていて、本文のどの段落の後ろに出すかを機械では決められません。1 つ残らず答えます。図・表とキャプションの組み合わせは決まっているので、答えるのは位置だけです。1 つの図形に図・表が 2 つ以上入っているとき（「中身」）も、答えは図形ごとに 1 つです（中の図・表は、その順でまとめて置かれます）。
+PLACEMENTS_ASKED = "「# 位置を決める図・表」に挙げた図形（s1 など）は、本文のどの段落の後ろに出すかを機械では決められません。1 つ残らず答えます。"
+# 機械的に置いた 2 段にまたがる図形（plan.wide_floats。修正計画 W8 の 6.5 の 4）: 位置を聞く図形があるときの 1 文と、ないときの書き出し
+PLACEMENTS_WIDE_ALSO = "「# PDF を見たときだけ答える図・表」も、PDF で位置が分かるときだけ答えます。"
+PLACEMENTS_WIDE_ONLY = ("「# PDF を見たときだけ答える図・表」に挙げた図形（s1 など）は、2 段にまたがる図・表で、機械が決めた位置が組版で"
+                        "移されていることがあります。PDF で位置が分かるときだけ答えます（ほかは書きません。placements は [] でもかまいません）。")
+PLACEMENTS_TEXT = """図・表とキャプションの組み合わせは決まっているので、答えるのは位置だけです。1 つの図形に図・表が 2 つ以上入っているとき（「中身」）も、答えは図形ごとに 1 つです（中の図・表は、その順でまとめて置かれます）。
 after = その図・表の直前に読む、本文の段落の ID（図・表は、その段落のすぐ後ろに置かれます）。after に書けるのは、「## 本文」の、行が [d…] で始まる段落だけです（見出しの段落は書けます。字下げした表のセルの行と、図形の中・注・引用文献の段落は書けません）。
 
 PDF を見たとき（basis は "PDF"）:
@@ -452,8 +467,8 @@ PDF を見たとき（basis は "PDF"）:
 5. すぐ上が別の図・表（とそのキャプション）なら、さらにその上の本文の段落です。同じ after に 2 つ以上置くときは、PDF で先に読むものから順に placements に書きます（書いた順に並びます）。
 6. 箇条書き・引用の途中の段落を選んでもかまいません（その終わりの後ろに置かれます）。
 7. 図・表が本文より後ろ（注・引用文献・資料の中）にあるときは、after と after_head を "" にして、reason にどこにあるかを書きます。
-8. 図の番号の順や、本文で最初に参照される位置には合わせません（PDF の位置が正です）。
-9. PDF に見つからない図・表は、次の「PDF を見ていないとき」のやり方で答えます。
+8. 図の番号の順や、本文で最初に参照される位置には合わせません（PDF の位置が正です）。"""
+PLACEMENTS_NOPDF = """9. PDF に見つからない図・表は、次の「PDF を見ていないとき」のやり方で答えます。
 
 PDF を見ていないとき（page は 0、column は ""）:
 - 「仮の位置」は、図形が結び付いた段落（アンカー段落）のすぐ後ろです。「推定」は、docx の配置から計算した、図のすぐ上の本文の段落です。
@@ -504,7 +519,7 @@ STYLE_EXCLUDED_TEXT = "- 「# 出力から除いた段落」は確かめるだ�
 STYLE_NOPDF_TEXT = "- PDF を見ていないときは、番号の形と文脈だけで判断し、確度は \"中\" か \"低\" にします。"
 
 NOTES_TEXT = ("操作にできないが人が確かめるべきことを、1 件 1 文で書きます（文献リストにない引用、図番号の欠番・重複、本文の参照と図表の番号の"
-              "食い違い、リンク済みの箇所のリンク先の誤り、注番号の飛び、数式が抜けて見える箇所、引用文献の 1 件が 2 つに分かれた所など）。誤字らしい所は書きません。同じ種類のものは 1 件にまとめます。"
+              "食い違い、リンク済みの箇所のリンク先の誤り、数式が抜けて見える箇所、引用文献の 1 件が 2 つに分かれた所など）。誤字らしい所は書きません。同じ種類のものは 1 件にまとめます。"
               "なければ []。")
 
 # 「## 回答の形」の見本の、一覧ごとの要素（値は「＜…＞」の説明。写しても操作にならない。_copied_sample。C019）
@@ -531,7 +546,7 @@ def _answer_form(sections, stamp: str) -> list:
     asked = {s.key for s in sections}
     first = "placements" in asked
     out = ["## 回答の形", ANSWER_FIRST_MANUAL + "文字列は半角の二重引用符（\"）で囲みます。"
-           + ("request_id には、見出しの依頼の番号を写します（どの依頼文への回答かを、プログラムが確かめます）。" if stamp else ""),
+           + ("request_id には、見出しの依頼の番号を写します（確かめに使います）。" if stamp else ""),
            "項目はこの順に書きます" + ("（placements を先に書くのは、回答が途中で切れても図・表の位置が残るようにするためです）" if first else "")
            + "。該当がない一覧と、この依頼で頼んでいない一覧は [] にします。＜ ＞ の中は書くものの説明で、この論文の答えではありません。",
            "```json", "{", f'  "request_id": "{stamp}",', '  "pdf": {"status": "＜見た｜添付なし｜別の論文＞", "pages": 0},']
@@ -560,7 +575,12 @@ def request_instructions(sections, stamp: str = "") -> str:
     for s in sections:
         head(s)
         if s.key == "placements":
-            lines.append(PLACEMENTS_TEXT)
+            wide = "wide" in s.parts
+            if "asked" in s.parts:
+                lines.append(PLACEMENTS_ASKED + (PLACEMENTS_WIDE_ALSO if wide else "") + PLACEMENTS_TEXT)
+                lines.append(PLACEMENTS_NOPDF)
+            else:
+                lines.append(PLACEMENTS_WIDE_ONLY + PLACEMENTS_TEXT)
         elif s.key == "boxes":
             text = []
             if "undecided" in s.parts:
@@ -628,7 +648,7 @@ def build_request(plan: ArticlePlan, linker, info=None, pdf_name: str = "", manu
              "styles": [s.src for s in plan.style_suspects], "after": set(after_ids(plan, info))}
     data = "\n".join(_data_lines(plan, linker, info, journal))
     stamp = request_stamp(plan, data)
-    return AIRequest(stamp=stamp, human=human_text(pdf_name, bool(plan.asked_floats)) if manual else "",
+    return AIRequest(stamp=stamp, human=human_text(pdf_name, bool(plan.asked_floats or plan.wide_floats)) if manual else "",
                      instructions=request_instructions(sections, stamp), data=data, asked=asked, sections=sections)
 
 
@@ -1004,6 +1024,7 @@ ESTIMATED_HEADING = "# 位置を推定した囲み（位置が違うときだけ
 LABELS_HEADING = "# 図の注記とみなして除いたテキストボックス（本文の文章のときだけ答える）"
 FIXED_HEADING = "# 位置が決まっている図・表と囲みの中身（答えません。中の参照のリンクにだけ使います）"
 FIXED_FLOATS_TEXT = "位置が決まっている図形（答えません）: "
+WIDE_HEADING = "# PDF を見たときだけ答える図・表（2 段にまたがり、位置は機械で決めた。PDF を見ていなければ答えない）"
 CONTENT_INDENT = "      "       # 図形・テキストボックスの「中身」の 2 つ目からの行の字下げ
 HEAD_SHOWN = 8                  # 仮の位置・推定などで段落 ID に添える、段落の先頭の字数
 
@@ -1120,30 +1141,51 @@ def _float_estimate(plan: ArticlePlan, info, listed) -> str:
 
 def float_section(plan: ArticlePlan, info=None) -> list:
     """「# 位置を決める図・表」（修正計画 W8 の 4.1。位置を聞く図形〈plan.asked_floats〉がなければ出さない）: 本文の体裁の 1 行と、
-    図形ごとに、中身（float_contents）・仮の位置・docx の配置（floats.describe。値は日本語）・推定。位置が決まっている図形
-    （mechanical・caption）は ID を 1 行に並べるだけ（中身は fixed_section）。info は builder.BuildInfo（除外。after_ids）。"""
-    asked = plan.asked_floats
-    if not asked:
+    図形ごとに、中身（float_contents）・仮の位置・docx の配置（floats.describe。値は日本語）・推定。その後ろに、機械的に置いた 2 段に
+    またがる図形（plan.wide_floats）を「# PDF を見たときだけ答える図・表」として分けて挙げる（中身・今の位置・docx の配置。修正計画
+    W8 の 6.5 の 4。位置を聞く図形がなければ、この節だけ）。ほかの位置が決まっている図形（mechanical・caption）は ID を 1 行に並べる
+    だけ（中身は fixed_section）。info は builder.BuildInfo（除外。after_ids）。"""
+    asked, wide = plan.asked_floats, plan.wide_floats
+    if not (asked or wide):
         return []
     listed, excluded = set(after_ids(plan, info)), _excluded(plan, info)
     base = body_style(plan)
     rows = figure_rows(plan)
     lay = plan.layout
-    lines = [FLOATS_HEADING]
+    layout_line = []
     if lay and lay.columns:
-        lines.append(f"本文の体裁: {lay.columns} 段組、1 段の幅 {lay.column_width_cm:.1f} cm（1 行 約 {lay.chars_per_line:.0f} 字）、"
-                     f"行送り {lay.line_pitch_cm:.2f} cm（1 段 約 {lay.text_height_cm / lay.line_pitch_cm:.0f} 行）、"
-                     f"本文の幅 {lay.text_width_cm:.1f} cm")
-    for fid in asked:
-        fi = plan.floats[fid]
-        lines += _content_lines(f"[{fid}] ", float_contents(plan, fi, rows, base, listed, excluded))
-        lines.append(f"  仮の位置: {_float_place(plan, fi, listed)}")
-        lines.append(f"  docx の配置: {describe(fi.float, lay)}")
-        lines.append(f"  推定: {_float_estimate(plan, fi, listed)}")
-    fixed = [fid for fid in plan.floats if fid not in asked]
+        layout_line.append(f"本文の体裁: {lay.columns} 段組、1 段の幅 {lay.column_width_cm:.1f} cm（1 行 約 {lay.chars_per_line:.0f} 字）、"
+                           f"行送り {lay.line_pitch_cm:.2f} cm（1 段 約 {lay.text_height_cm / lay.line_pitch_cm:.0f} 行）、"
+                           f"本文の幅 {lay.text_width_cm:.1f} cm")
+    lines = []
+    if asked:
+        lines += [FLOATS_HEADING] + layout_line
+        for fid in asked:
+            fi = plan.floats[fid]
+            lines += _content_lines(f"[{fid}] ", float_contents(plan, fi, rows, base, listed, excluded))
+            lines.append(f"  仮の位置: {_float_place(plan, fi, listed)}")
+            lines.append(f"  docx の配置: {describe(fi.float, lay)}")
+            lines.append(f"  推定: {_float_estimate(plan, fi, listed)}")
+    if wide:
+        # 機械的に置いた 2 段にまたがる図形（出版版 PDF を見たときだけ答える。修正計画 W8 の 6.5 の 4）: 中身・今の位置・docx の配置
+        lines += ([""] if lines else []) + [WIDE_HEADING] + ([] if asked else layout_line)
+        for fid in wide:
+            fi = plan.floats[fid]
+            lines += _content_lines(f"[{fid}] ", float_contents(plan, fi, rows, base, listed, excluded))
+            lines.append(f"  今の位置: {_wide_place(plan, fi, listed)}")
+            lines.append(f"  docx の配置: {describe(fi.float, lay)}")
+    fixed = [fid for fid in plan.floats if fid not in asked and fid not in wide]
     if fixed:
         lines.append(FIXED_FLOATS_TEXT + "、".join(fixed))
     return lines
+
+
+def _wide_place(plan: ArticlePlan, info, listed) -> str:
+    """機械的に置いた図形の「今の位置」（アンカー段落の前。段落は「## 本文」に載せた段落で示す）。"""
+    src = info.float.anchor_src
+    at = src if src in listed else listed_before(plan, src, listed)
+    where = f"{para_ref(plan, at)}の{'前' if at == src else '後ろ'}" if at else "本文の最初"
+    return where + "（図の左上が、結び付いた段落の左上にあるため、機械的に決めた位置）"
 
 
 def _box_size(plan: ArticlePlan, info) -> str:
@@ -1235,7 +1277,7 @@ def fixed_section(plan: ArticlePlan, info=None) -> list:
     listed, excluded = set(after_ids(plan, info)), _excluded(plan, info)
     base = body_style(plan)
     rows = figure_rows(plan)
-    asked = set(plan.asked_floats)
+    asked = set(plan.asked_floats) | set(plan.wide_floats)      # 中身は float_section に書いた
     lines = []
     for fid, fi in plan.floats.items():
         if fid in asked:
@@ -1271,7 +1313,7 @@ def latest_opus(client) -> str:
 
 
 # ---------------------------------------------------------------------------- PDF を API に渡す（修正計画 W8 の 4.7）
-PDF_MAX_BYTES = 30 * 1024 * 1024    # 事前の確かめの上限（Claude の要求全体の上限は資料により 32 MB・128 MB。余裕をみる）
+PDF_MAX_BYTES = 30 * 1024 * 1024    # 事前の確かめの上限（Claude API〈第一者〉の要求全体の上限は 128 MB。base64 で約 1.33 倍になる。余裕をみる）
 PDF_MAX_PAGES = 100                 # 文脈が 100 万未満のモデルの上限に合わせる
 PDF_PROVIDERS = ("claude", "openai", "gemini", "sakana")    # PDF を渡す AI（どれも依頼と同じ呼び出しに入れる）
 PDF_SAKANA_BYTES = 4 * 1024 * 1024  # Sakana Namazu に PDF のまま渡す大きさの上限（公式。超えるとページの画像にする）
@@ -1415,7 +1457,8 @@ def call_api(system_text, request_text, attachment, model=DEFAULT_MODEL, api_key
                                              **kwargs) as stream:
                 return stream.get_final_message()
         except anthropic.BadRequestError:
-            # ベータ機能が使えない環境・モデルでは通常の呼び出しでやり直す
+            # ベータ機能が使えない環境・モデルでは通常の呼び出しでやり直す（400 はベータ以外の理由〈PDF が読めないなど〉でも出るので、
+            # そのときは同じ要求をもう 1 回送ってから send_checked が PDF なしでやり直す。動作は変わらず、1 回分だけ余分に送る）
             with client.messages.stream(**kwargs) as stream:
                 return stream.get_final_message()
 
@@ -1473,8 +1516,23 @@ def call_api(system_text, request_text, attachment, model=DEFAULT_MODEL, api_key
     if msg.stop_reason == "refusal":
         out.error = "AI が回答を断りました（安全上の判定）。手動モードで再試行してください"
         return out
-    text = next((b.text for b in msg.content if b.type == "text"), "")
+    # 出力の途中で断られて別のモデルに切り替わったとき（fallbacks）、content は「断られたモデルの途中までの text → fallback の部 →
+    # 引き継いだモデルの続きの text」になる（stream では途中までの出力も残り、引き継いだモデルはその続きから書く）。text の部を
+    # つないで 1 つの回答にする（切り替わらなければ text の部は 1 つで、その文字のまま）
+    text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
     out.raw = text
+    served = getattr(msg, "model", None)
+    if isinstance(served, str) and served and served != model:
+        # 断られて切り替わったと書くのは、content に fallback の部があるときだけ（別名のモデル名で頼むと、応答の model が解決後の
+        # ID になることがあるので、名前の違いだけでは断られたと書かない。点検 review14 原則 3）
+        if any(getattr(b, "type", "") == "fallback" for b in msg.content):
+            note = f"安全上の判定で断られたため、{served} が回答した"
+        else:
+            note = f"API の応答のモデル名は {served}（指定は {model}）"
+        out.model_note = f"{out.model_note}。{note}" if out.model_note else note
+        out.model = served
+    if not text and msg.stop_reason != "max_tokens":
+        out.error = "AI から回答が返ってきませんでした"            # 文字の部分がない（call_openai などと同じ）
     u = getattr(msg, "usage", None)
     if u is not None:
         out.usage = {"input_tokens": getattr(u, "input_tokens", None), "output_tokens": getattr(u, "output_tokens", None)}
@@ -1907,8 +1965,9 @@ def _answer_data(data) -> dict:
 
 # AI の回答の文字列から取り除く制御文字（タブ・改行・復帰は残す）。U+0000 は画面の操作の目印（report.STEP_MARK）に使うので、AI の文に
 # 残すと、知らせの枠を出すとき（colab.step_text）に知らない目印として落ちるか、画面の案内に化ける。docx の文字（w:t）・リンクの文字には
-# 入らない文字なので、照合（リンクの text）は変わらない
-RE_AI_CONTROLS = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+# 入らない文字なので、照合（リンクの text）は変わらない。対になっていない代理の符号（U+D800〜U+DFFF。JSON の "\ud800" の
+# エスケープで読めてしまう）も除く。UTF-8 にできないので、AI回答.json・レポートを書くときに変換が止まる（点検 review13 原則 1）
+RE_AI_CONTROLS = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ud800-\udfff]")
 
 
 def strip_controls(v):
@@ -2118,6 +2177,28 @@ def same_head(answer, p) -> bool:
     return a == real or (len(a) >= HEAD_MIN and real.startswith(a))
 
 
+# 括弧・引用符の類（NFKC の後）。段落の先頭の文字の確かめで、この類の取り違え・書き落としだけの違いは、1 つの段落に決まるときに
+# 同じとみなす（_bracket_head。「《」を飛ばした head、リンクの印 « » と取り違えた head など。実験 1 の評価）
+HEAD_BRACKETS = frozenset("《》«»〈〉‹›<>「」『』【】〔〕〖〗[](){}\"'“”‘’„‟‚‛〝〞〟｢｣")
+
+
+def _no_brackets(s: str) -> str:
+    return "".join(c for c in s if c not in HEAD_BRACKETS)
+
+
+def _bracket_head(answer, p) -> bool:
+    """AI の head（answer）が、括弧・引用符の類（HEAD_BRACKETS）を除けば段落 p の先頭の文字と合うか（HEAD_MIN 字以上のときだけ）。
+    比べるのは、括弧の類を除いた AI の head と、括弧の類を除いた段落の文字の同じ字数の先頭（AI が括弧を飛ばして、段落の 9 字目以降まで
+    書いた形も受ける）。"""
+    if p is None:
+        return False
+    a = _no_brackets(head_key(answer)[:HEAD_LEN])
+    if len(a) < HEAD_MIN:
+        return False
+    real = _no_brackets(head_key(p.text_only()))
+    return bool(real) and real[:len(a)] == a
+
+
 def _head_problem(head, p, src) -> str:
     """head の確かめ（same_head）で合わないときの不採用の理由（合えば ''）。"""
     return "" if same_head(head, p) else HEAD_WHY.format(head=head_key(head)[:HEAD_LEN], src=src, real=head_of(p))
@@ -2184,12 +2265,12 @@ def set_role_problem(p, plan: ArticlePlan, role: str) -> str:
 
     回答の区切りの検証（boundary_problem・boundary_overrides）で使う（依頼文の除外の一覧の案内〈set_role_hint〉は W8 の手順 15 で
     なくした。修正計画の N6）。上から順に見て、最初に当たった理由を返す。
-    浮動配置の図形（float_id）の段落は、すべて placements で指定させる。浮動配置でないテキストボックス（行内・VML）の段落には
-    fig_caption・table_caption・exclude だけを受け付け（VML のキャプションへの fig_caption は今までどおり効く）、ほかの役割は
-    囲みか図の注記かを placements の kind box・label で指定させる（修正計画の F の (1)）。囲みとして位置を機械的に決めた
-    文字だけのテキストボックス（placements でも変えられないもの。_box_placement_problem）の段落と、囲み・図の注記の判断の
-    対象でないテキストボックス（plan.textboxes にないもの: 図表の入ったテキストボックス、本文の外・表のセルのものなど）の段落には、
-    placements を案内しない（案内が行き止まりにならないように）。
+    浮動配置の図形（float_id）の段落には区切りを指定させず、図・表の位置は placements、テキストボックスの種類は boxes で答えさせる。
+    浮動配置でないテキストボックス（行内・VML）の段落には fig_caption・table_caption・exclude のほかを受け付けず（回答の boundaries の
+    役割〈BOUNDARY_KINDS〉はどれも当たる）、囲みか図の注記かを boxes の kind「囲み」「図の注記」で答えさせる（修正計画の F の (1)）。
+    囲みとして位置を機械的に決めた文字だけのテキストボックス（boxes でも変えられないもの。_box_placement_problem）の段落と、囲み・
+    図の注記の判断の対象でないテキストボックス（plan.textboxes にないもの: 図表の入ったテキストボックス、本文の外・表のセルのものなど）の
+    段落には、boxes を案内しない（案内が行き止まりにならないように）。
     """
     if role not in ROLES:
         return f"役割「{role}」は指定できない"
@@ -2197,15 +2278,15 @@ def set_role_problem(p, plan: ArticlePlan, role: str) -> str:
     fixed = (f"テキストボックス {p.textbox_id} は囲み（boxed-text）として扱いと位置を機械的に決めたので、変更できない"
              if box is not None and box.kind == "box" and not box.estimated else "")
     if p.float_id:
-        return fixed or "テキストボックス・グループ図形の中の段落の役割は placements で指定する"
+        return fixed or ("テキストボックス・グループ図形の中の段落には区切りを指定できない（図・表の位置は placements、"
+                         "テキストボックスの種類は boxes で答える）")
     if p.textbox_id and role not in ("fig_caption", "table_caption", "exclude"):
         if fixed:
-            return fixed + "（浮動配置でないテキストボックスの段落に指定できる役割は fig_caption・table_caption・exclude だけ）"
+            return fixed + "（テキストボックスの段落には区切りを指定できない）"
         if box is None:
             return (f"テキストボックス {p.textbox_id} は囲み・図の注記の判断の対象でない（図表の入ったテキストボックス・本文の外の"
-                    "テキストボックスなど）ので、段落に指定できる役割は fig_caption・table_caption・exclude だけ")
-        return ("浮動配置でないテキストボックスの段落に指定できる役割は fig_caption・table_caption・exclude だけ"
-                "（囲みか図の注記かは placements の kind box・label で指定する）")
+                    "テキストボックスなど）ので、段落に区切りを指定できない")
+        return "テキストボックスの段落には区切りを指定できない（囲みか図の注記かは boxes の kind「囲み」「図の注記」で答える）"
     if p.src in plan.note_of:
         # 参照のない注も含めて、Word の脚注・文末脚注の段落すべて（構造の組み立てで役割を見ないので、指定しても何も変わらない）
         return "Word の脚注・文末脚注の段落の役割は変えられない（注の区切りは Word のとおりにする）"
@@ -2474,7 +2555,8 @@ def answerable_boxes(plan: ArticlePlan) -> list:
 
 
 def structure_lines(plan: ArticlePlan) -> list:
-    """依頼の番号の構造の印にする行: リンク先（文献・図・表・式・注）と、位置を聞く図形・種類を書けるテキストボックスの、ID と
+    """依頼の番号の構造の印にする行: リンク先（文献・図・表・式・注）と、位置を聞く図形（PDF を見たときだけ答える図形も）・種類を書ける
+    テキストボックスの、ID と
     先頭の文字（head_of。NFKC にして空白を除くので、ルート2 で全角・半角が補われても変わらない）。回答の ID（B3・F1・s1・x1 など）が
     指すものが、依頼文と同じかを決める。"""
     def first(paras):
@@ -2486,7 +2568,9 @@ def structure_lines(plan: ArticlePlan) -> list:
         out.append(f"T\t{t.tid}\t{head_of(t.caption) if t.caption is not None else ''}")
     out += [f"FD\t{fm.fid}\t{head_of(fm.para)}" for fm in plan.formulas]
     out += [f"fn\t{fn.fid}\t{first(fn.paras)}" for fn in plan.fns]
-    out += [f"s\t{fid}\t{first(plan.floats[fid].paras)}" for fid in plan.asked_floats]
+    # 位置を聞く図形と、PDF を見たときだけ答える 2 段にまたがる機械的な図形（plan.wide_floats。どちらも placements に書く。docx の順）
+    shown = set(plan.asked_floats) | set(plan.wide_floats)
+    out += [f"s\t{fid}\t{first(plan.floats[fid].paras)}" for fid in plan.floats if fid in shown]
     out += [f"x\t{xid}\t{first(plan.textboxes[xid].paras)}" for xid in answerable_boxes(plan)]
     return out
 
@@ -2543,7 +2627,7 @@ def check_answer(data, request, plan: ArticlePlan, outcome: AIOutcome) -> str:
             if not isinstance(src, str) or not isinstance(head, str) or not src or (key == "boxes" and it.get("kind") != "囲み"):
                 kept.append(it)         # 段落を指さない項目・型の誤り（種類ごとの検証が記録する）
                 continue
-            why = _head_check(it, key, ptr, head, src, ranges[where], plan, carried, outcome)
+            why = _head_check(it, key, ptr, head, src, ranges[where], plan, carried, outcome, hkey)
             if why:
                 outcome.rejected.append((_check_rec(key, it), why))
                 dropped += 1
@@ -2559,8 +2643,10 @@ def check_answer(data, request, plan: ArticlePlan, outcome: AIOutcome) -> str:
 HEAD_RANGE_JA = {"after": "「## 本文」の段落", "all": "依頼文の段落"}
 
 
-def _head_check(it, key, ptr, head, src, rng, plan: ArticlePlan, carried: bool, outcome: AIOutcome) -> str:
-    """check_answer の 1 項目: 使えれば ''（読み替えたら it[ptr] を書き換える）、使えなければ不採用の理由。"""
+def _head_check(it, key, ptr, head, src, rng, plan: ArticlePlan, carried: bool, outcome: AIOutcome, hkey: str = "") -> str:
+    """check_answer の 1 項目: 使えれば ''（読み替えたら it[ptr] を書き換える）、使えなければ不採用の理由。
+    同じ先頭の文字の段落がなければ、括弧・引用符の類の違いだけを無視して比べ（_bracket_head）、その範囲で 1 つの段落に決まれば
+    その段落とみなす（it[hkey] を段落の先頭の文字にして、後の検証〈same_head〉に渡す。文字は変えない）。"""
     a = head_key(head)[:HEAD_LEN]
     if not a:
         return CARRIED_NO_HEAD_WHY if carried else ""
@@ -2577,6 +2663,14 @@ def _head_check(it, key, ptr, head, src, rng, plan: ArticlePlan, carried: bool, 
         outcome.reread.append((key, src, cands[0]))
         return ""
     if not cands:
+        loose = [s for s in dict.fromkeys(([src] if src in plan.paras else []) + list(rng)) if _bracket_head(head, plan.paras[s])]
+        if len(loose) == 1 and hkey:
+            if loose[0] != src:
+                it[ptr] = loose[0]
+                outcome.reread.append((key, src, loose[0]))
+            it[hkey] = head_of(plan.paras[loose[0]])
+            outcome.loose_heads.append((key, loose[0]))
+            return ""
         return HEAD_NONE_WHY.format(head=a, src=src, real=real, where=where)
     return HEAD_MANY_WHY.format(head=a, src=src, real=real, where=where, n=len(cands))
 
@@ -2598,6 +2692,9 @@ def float_placements(data, plan: ArticlePlan, outcome: AIOutcome) -> dict:
     段落の後ろの指定も採用し、指定に {"where": "end", "region": 領域} を足す（本文の外には図表を置けないので、本文の最後に置く。
     structure.Classifier.place_floats。要確認 float_end。修正計画 W8 の 3.3・手順 11）。同じ図形の 2 回目の指定は採用しない。
     テキストボックスの ID は boxes に書かせる（box_kinds）。
+    機械的に置いた 2 段にまたがる図形（plan.wide_floats）は、basis が PDF で本文の段落の後ろを指定したものだけを、指定に
+    {"wide": True} を足して受ける（AI が出版版 PDF を見たか〈pdf_seen〉で、使うかを pipeline.convert が決める〈wide_rejects〉。
+    修正計画 W8 の 6.5 の 4）。
     """
     out = {}
     body = set(plan.body_seq)
@@ -2606,7 +2703,7 @@ def float_placements(data, plan: ArticlePlan, outcome: AIOutcome) -> dict:
         op = _place_rec(pl)
         fid, after = pl["float"], pl["after"]
         end = after_body(after, plan, body)
-        why = _placement_problem(fid, after, plan, body, out, end)
+        why = _placement_problem(fid, after, plan, body, out, end, BASES.get(pl["basis"], ""))
         if not why and after in plan.paras:
             why = _head_problem(pl["after_head"], plan.paras[after], after)
         if why:
@@ -2618,7 +2715,48 @@ def float_placements(data, plan: ArticlePlan, outcome: AIOutcome) -> dict:
         if end:
             # region: 指定の段落の領域（組み直す前の領域。place_floats の判断の記録に書く。本文の外の領域は組み立ての途中で決まるため）
             out[fid].update(where="end", region=plan.region.get(after, ""))
+        if fid in plan.wide_floats:
+            out[fid]["wide"] = True
     return out
+
+
+# 機械的に置いた 2 段にまたがる図形（plan.wide_floats）への指定を使わない理由（修正計画 W8 の 6.5 の 4。2 章の不採用の一覧）
+WIDE_NOT_PDF_WHY = ("図形 {fid} は位置を機械的に決めた 2 段にまたがる図表で、AI の位置は出版版 PDF を見た答え（basis が PDF）のときだけ"
+                    "使うので、機械的な位置のままにした")
+WIDE_END_WHY = ("図形 {fid} は位置を機械的に決めた 2 段にまたがる図表で、本文より後ろという答えは使わないので、機械的な位置のままにした")
+WIDE_UNSEEN_WHY = ("図形 {fid} は位置を機械的に決めた 2 段にまたがる図表で、AI の位置は AI が出版版 PDF を見た回答のときだけ使うが、"
+                   "PDF を見たかの確かめが「{seen}」だったので、機械的な位置のままにした")
+WIDE_CUT_WHY = ("図形 {fid} は位置を機械的に決めた 2 段にまたがる図表で、AI の位置は AI が出版版 PDF を見た回答のときだけ使うが、"
+                "途中で切れた回答なので PDF を見たかを確かめられず、機械的な位置のままにした")
+WIDE_PAGE_WHY = ("図形 {fid} は位置を機械的に決めた 2 段にまたがる図表で、AI の答えのページ（{page}）が、キャプションのある PDF のページ"
+                 "（{found}）と違うので、機械的な位置のままにした")
+
+
+def wide_rejects(placements: dict, outcome: AIOutcome, plan: ArticlePlan = None, pdf_path=None) -> list:
+    """float_placements が受けた、機械的に置いた 2 段にまたがる図形への指定（{"wide": True}）を、AI が出版版 PDF を見た回答
+    （AIOutcome.pdf_seen が PDF_SEEN_OK。「見た（確かめられない）」も含む。4.4 の ai_done と同じ扱い）でなければ不採用にして
+    placements から除く（修正計画 W8 の 6.5 の 4）。途中で切れた回答（outcome.partial）は、PDF を見たかを確かめられないので除く。
+    PDF を見た回答でも、plan とツールの PDF（pdf_path）があれば指定ごとにキャプションのページ（caption_page）を探し、ページが決まって
+    指定の page と違うものは除く（pdf_seen には数えない。wide の指定が ai_done に効かないように。点検 review14 原則 2）。
+    戻り値: PDF を見た回答でないので除いた図形の ID（ページの違いで除いたものは入れない）。PDF を見ていない回答の知らせと、
+    AI回答.json に写さないことは、2 段の図形があるかで決める（report.pdf_unseen。点検 review14 原則 1）。"""
+    wide = [f for f, spec in placements.items() if spec.get("wide")]
+    if not wide:
+        return []
+    if outcome.pdf_seen in PDF_SEEN_OK and not outcome.partial:
+        squeezed = _pdf_texts(pdf_path) if plan is not None else None
+        for fid in wide:
+            if not squeezed or fid not in plan.floats:
+                continue
+            found = caption_page(float_caption_texts(plan.floats[fid]), squeezed)
+            if found and found != placements[fid].get("page", 0):
+                spec = placements.pop(fid)
+                outcome.rejected.append((spec["op"], WIDE_PAGE_WHY.format(fid=fid, page=spec.get("page", 0), found=found)))
+        return []
+    for fid in wide:
+        why = WIDE_CUT_WHY if outcome.partial else WIDE_UNSEEN_WHY
+        outcome.rejected.append((placements.pop(fid)["op"], why.format(fid=fid, seen=outcome.pdf_seen or "添付なし")))
+    return wide
 
 
 def after_body(after, plan: ArticlePlan, body: set) -> bool:
@@ -2626,10 +2764,11 @@ def after_body(after, plan: ArticlePlan, body: set) -> bool:
     return after == "" or (after not in body and plan.region.get(after) in AFTER_BODY_REGIONS)
 
 
-def _placement_problem(fid, after, plan: ArticlePlan, body: set, done: dict, end: bool = False) -> str:
+def _placement_problem(fid, after, plan: ArticlePlan, body: set, done: dict, end: bool = False, basis: str = "") -> str:
     """図形 fid を段落 after の後ろに置く指定を採用しない理由（採用できれば ''）。図形の ID と置く位置（本文の段落か。end が真なら
     本文より後ろという答え〈after_body〉で、本文の最後に置く）だけを検証する（中身の組み合わせは変換ツールが決める。
-    structure.Classifier.float_units。修正計画 W1 の 2.7）。"""
+    structure.Classifier.float_units。修正計画 W1 の 2.7）。機械的に置いた 2 段にまたがる図形（plan.wide_floats）は、basis
+    （BASES の値）が pdf で本文の段落を指定したものだけ（修正計画 W8 の 6.5 の 4）。"""
     if fid in plan.textboxes:
         return f"{fid} はテキストボックスなので、種類と位置は boxes に書く"
     info = plan.floats.get(fid)
@@ -2638,7 +2777,12 @@ def _placement_problem(fid, after, plan: ArticlePlan, body: set, done: dict, end
     if info.mode == "caption":
         # 本文の図キャプションの図に含めた図形（structure.Classifier.take_float。修正計画 W1 の 2.3 の B6）
         return f"図形 {fid} は本文の図キャプション [{info.caption_src}] の図に含めて配置した図形なので、位置を変更できない"
-    if info.mode != "unplaced":
+    if info.wide and info.mode == "mechanical":
+        if end:
+            return WIDE_END_WHY.format(fid=fid)
+        if basis != "pdf":
+            return WIDE_NOT_PDF_WHY.format(fid=fid)
+    elif info.mode != "unplaced":
         return f"図形 {fid} は位置を機械的に決めた図表なので、位置を変更できない"
     if fid in done:
         return f"図形 {fid} の指定が 2 回ある（最初の指定を採用）"
@@ -2756,7 +2900,19 @@ def caption_page(texts, pages) -> int:
     return 0
 
 
-def pdf_seen(outcome: AIOutcome, plan: ArticlePlan, pdf_path=None) -> tuple:
+def _pdf_texts(pdf_path):
+    """ツールの PDF のページごとの文字（空白を詰めたもの。caption_page で探す）。PDF がない・開けない・pypdfium2 がないときは None。"""
+    if not pdf_path:
+        return None
+    try:
+        from .pdfmatch import extract_pages
+        pages = extract_pages(pdf_path)
+    except Exception:  # noqa: BLE001  PDF を開けない・pypdfium2 がない: 確かめられない
+        return None
+    return [_squeeze(pg) for pg in pages] if pages else None
+
+
+def pdf_seen(outcome: AIOutcome, plan: ArticlePlan, pdf_path=None, placements=None) -> tuple:
     """AI が PDF を見て答えたかを、ツールが別に確かめる（修正計画 W8 の 4.4）。戻り値: (PDF_SEEN の語か "", 説明)。
 
     回答に pdf がなければ ""。AI の答えが「添付なし」「別の論文」ならそのまま（確かめない）。「見た」のときは、API で PDF を渡していなければ
@@ -2764,6 +2920,9 @@ def pdf_seen(outcome: AIOutcome, plan: ArticlePlan, pdf_path=None) -> tuple:
     違えば「合わない（ページ数）」。ページ数が合えば、PDF を見て決めた図形（FloatInfo.basis が pdf）のうち、キャプションが PDF の
     ちょうど 1 ページだけに見つかるものの page を比べ、合うものが半分に満たなければ「合わない（図のページ）」。それ以外は「見た」。
     "合わない" のときも、回答の位置はそのまま使う（呼び出し側が決める）。
+    placements（float_placements の戻り値）を渡すと、組み直す前の plan で、その指定（2 段にまたがる機械的な図形への指定〈wide〉と
+    テキストボックスの指定を除く。basis・page は指定のもの）を比べる（pipeline.convert が、組み直す前に、wide の指定を使うかを決めるため）。
+    渡さなければ plan.answered_floats（FloatInfo.basis・page）を比べる。
     """
     status = outcome.pdf_status
     if not status:
@@ -2772,27 +2931,24 @@ def pdf_seen(outcome: AIOutcome, plan: ArticlePlan, pdf_path=None) -> tuple:
         return status, ""
     if outcome.mode == "api" and not outcome.pdf_sent:
         return "合わない（PDF を渡していない）", "API で出版版 PDF を AI に渡していないのに、PDF を見たと答えています"
-    pages = None
-    if pdf_path:
-        try:
-            from .pdfmatch import extract_pages
-            pages = extract_pages(pdf_path)
-        except Exception:  # noqa: BLE001  PDF を開けない・pypdfium2 がない: 確かめられない
-            pages = None
-    if not pages:
+    squeezed = _pdf_texts(pdf_path)
+    if not squeezed:
         return "見た（確かめられない）", ""
-    if outcome.pdf_pages != len(pages):
-        return "合わない（ページ数）", f"ページ数が合いません（AI の答えは {outcome.pdf_pages} ページ、この PDF は {len(pages)} ページ）"
-    squeezed = [_squeeze(pg) for pg in pages]
+    if outcome.pdf_pages != len(squeezed):
+        return "合わない（ページ数）", f"ページ数が合いません（AI の答えは {outcome.pdf_pages} ページ、この PDF は {len(squeezed)} ページ）"
+    if placements is None:
+        answered = [(plan.floats[fid], plan.floats[fid].basis, plan.floats[fid].page) for fid in plan.answered_floats]
+    else:
+        answered = [(plan.floats[fid], spec.get("basis", ""), spec.get("page", 0)) for fid, spec in placements.items()
+                    if fid in plan.floats and not spec.get("wide") and "kind" not in spec]
     same = total = 0
-    for fid in plan.answered_floats:
-        info = plan.floats[fid]
-        if info.basis != "pdf" or info.page <= 0:
+    for info, basis, at in answered:
+        if basis != "pdf" or at <= 0:
             continue
         page = caption_page(float_caption_texts(info), squeezed)
         if page:
             total += 1
-            same += page == info.page
+            same += page == at
     if total and same * 2 < total:
         return "合わない（図のページ）", f"図・表のページが PDF と合いません（比べられた {total} 個のうち、合ったのは {same} 個）"
     return "見た", ""
@@ -2801,7 +2957,7 @@ def pdf_seen(outcome: AIOutcome, plan: ArticlePlan, pdf_path=None) -> tuple:
 def read_answer_meta(data, outcome: AIOutcome):
     """回答の request_id と pdf を AIOutcome に写す（answered_id・pdf_status・pdf_pages）。pdf の status が PDF_STATUSES の語でなければ
     「添付なし」、pages が整数でなければ 0 として記録する（修正計画 W8 の 4.2）。回答に pdf がなければ pdf_status は ""。
-    依頼の番号の確かめは check_answer、PDF を見たかの確かめは pdf_seen（位置を反映した後に pipeline.convert が呼ぶ）。"""
+    依頼の番号の確かめは check_answer、PDF を見たかの確かめは pdf_seen（組み直す前の plan と位置の指定で pipeline.convert が呼ぶ。wide の指定を使うかを決めるため）。"""
     outcome.answered_id = data.get("request_id", "") if isinstance(data.get("request_id"), str) else ""
     pdf = data.get("pdf")
     if isinstance(pdf, dict) and pdf:
@@ -2948,8 +3104,10 @@ def apply_ops(ops, plan: ArticlePlan, doc, outcome: AIOutcome, split: bool = Fal
                 continue
             from .linker import find_in_para, find_width_insensitive
             rng = find_in_para(p, text, op["occurrence"])
-            if rng is None:
-                # 全角・半角だけ違う文字（AI が「（」を「(」で書いた、など）は、1 か所に決まるときだけ段落の文字の範囲でリンクする（C141。文字は変えない）
+            if rng is None and op["occurrence"] <= 1:
+                # 全角・半角だけ違う文字（AI が「（」を「(」で書いた、など）は、1 か所に決まるときだけ段落の文字の範囲でリンクする（C141。文字は変えない）。
+                # 1 回目の指定だけ（find_in_para と同じく 1 未満は 1 回目）。2 回目以降の指定は、回数の数え違いか別の箇所かを
+                # 決められないので、同じ文字が 1 か所だけの段落への「2 回目」を 1 回目に読み替えない（点検 review13 原則 2）
                 rng = find_width_insensitive(p, text)
             if rng is None:
                 outcome.rejected.append((op, f"段落 {src} に「{text}」（{op['occurrence']} 回目）が見つからない"))

@@ -8,7 +8,8 @@ def test_prompt_box_escapes_text_and_has_copy_button():
     html = prompt_box('依頼文 <b>&"')
     assert "依頼文 &lt;b&gt;&amp;&quot;" in html          # 依頼文はエスケープして textarea に入れる
     assert "依頼文をコピー" in html and "jasmeCopy(" in html
-    assert "手順 6" in html and "添付" not in html           # docx の画像は AI に渡さない（修正計画 W1）
+    assert "手順 6" in html and "画像" not in html           # docx の画像は AI に渡さない（修正計画 W1）
+    assert "（任意）" in html and "出版版 PDF" in html          # 位置を聞く図形のない論文では、PDF の添付は任意（点検 review13 利用者向け 9）
 
 
 def test_error_box_and_check_box():
@@ -204,7 +205,7 @@ def test_result_boxes_follow_actions(journal, tmp_path, monkeypatch):
     assert "変換の結果は、AI を使わないときと同じです。" in html
     report = res.report_path.read_text(encoding="utf-8")
     assert not res.needs_action or [a.key for a in blocking(actions(res))] == ["images"]
-    assert "AI による補完は行えませんでした: API の利用制限に達しました" in report.split("## 2.")[1].split("## 3.")[0]
+    assert "AI による仕上げは行えませんでした: API の利用制限に達しました" in report.split("## 2.")[1].split("## 3.")[0]
 
 
 def test_result_boxes_before_answer_in_manual_mode(journal, meta, tmp_path):
@@ -221,7 +222,7 @@ def test_result_boxes_before_answer_in_manual_mode(journal, meta, tmp_path):
     assert result_boxes(res, level="要対応") == ""
     assert result_boxes(res, blocking=True) == ""           # 手順 8 は、回答待ちでは止めない
     html = result_boxes(res)
-    assert "手順（推奨）: AI で図・表の位置を合わせる（強く推奨。残り 3 個）" in html and "手順 6" in html
+    assert "手順（推奨）: AI で図・表の位置を合わせる（残り 3 個）" in html and "手順 6" in html
     assert "#2563eb" in html and "#eff6ff" in html
 
 
@@ -238,7 +239,7 @@ def test_result_boxes_show_textbox_notices(journal, meta, tmp_path):
     assert "囲みか図の注記か決められなかったテキストボックスが 3 件あります（要確認）" in html
     assert "#d97706" in html and "#dc2626" not in html             # 要確認は黄色い枠
     assert "テキストボックスの外（本文の段落）に出してから変換し直してください" in html and "位置を推定して置いた囲みが 1 件あります（要確認）" in html
-    assert "AI による補完" not in html          # AI を勧める文は推奨の手順 ai_finish の枠だけ（修正計画 W8 の手順 7）
+    assert "AI による補完" not in html and "AI による仕上げ" not in html         # AI を勧める文は推奨の手順 ai_finish の枠だけ（修正計画 W8 の手順 7）
     assert result_boxes(res, level="要対応") == ""
     res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "m", ai_mode="manual"))
     html = result_boxes(res)
@@ -376,11 +377,11 @@ def test_ai_required_message_names_the_modes_of_each_screen(journal, meta, tmp_p
     res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "a"))
     fin = next(a for a in actions(res) if a.key == "ai_finish")
     note = step_text(fin.box_detail)                                # ノートブック（既定）
-    assert ("手順 4 で AI による補完の方法を「API で自動実行」か「手動（チャットに貼り付け）」にして ▶ を押し、手順 5 から"
+    assert ("手順 4 で AI による仕上げの方法を「API で自動実行」か「手動（チャットに貼り付け）」にして ▶ を押し、手順 5 から"
             "変換し直してください。") in note and "\x00" not in note
     page = step_text(fin.box_detail, "app")
     labels = [label for label, _ in app.AI_MODES]
-    assert "「AI による補完の方法」の欄を「手動（チャットに貼り付け）」か「API（Claude）」にして「" in page
+    assert "「AI による仕上げの方法」の欄を「手動（チャットに貼り付け）」か「API（Claude）」にして「" in page
     assert "手動（チャットに貼り付け）" in labels and "API（Claude）" in labels             # 画面の選択肢の名前と同じ
     assert "API で自動実行" not in page and "\x00" not in page
     st = app.AppState(tmp_path / "work")

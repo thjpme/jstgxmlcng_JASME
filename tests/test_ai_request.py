@@ -37,7 +37,7 @@ def test_sections_follow_the_paper(path, journal, meta):
     リンク・スタイル・気づきはいつも。番号は出す節だけで 1 から振り、頼むことの一覧・節の見出しと合う。"""
     plan, info, req = _request(path, journal, meta)
     keys = [s.key for s in req.sections]
-    assert ("placements" in keys) == bool(plan.asked_floats)
+    assert ("placements" in keys) == bool(plan.asked_floats or plan.wide_floats)
     assert ("boxes" in keys) == bool(plan.textboxes and any(b.kind in ("undecided", "label") or b.estimated
                                                             for b in plan.textboxes.values()))
     bound = next((s for s in req.sections if s.key == "boundaries"), None)
@@ -125,8 +125,10 @@ def test_human_part_is_manual_only_and_names_the_pdf(journal, meta):
     _, _, req = _request(FLOAT, journal, meta)
     assert "この論文の出版版 PDF を同じメッセージに" in req.human and "「" not in req.human.splitlines()[1]
     _, _, req = _request(FULL, journal, meta, pdf_name="架空論文.pdf")
-    assert req.human.splitlines()[2] == ("PDF があると、AI が PDF の体裁（見出し・引用の字下げ・著者名）を見て答えられます。"
-                                         "添付しなくても回答は得られます。")
+    # 位置を聞く図形のない論文では、PDF の添付を任意にして 1 行だけ書く（画面の案内の枠と同じ強さ。点検 review13 利用者向け 9）
+    assert req.human.splitlines()[1:] == ["このメッセージを送る前に、この論文の出版版 PDF「架空論文.pdf」を同じメッセージに添付すると、"
+                                          "AI が PDF の体裁（見出し・引用の字下げ・著者名）を見て答えられます（任意。添付しなくても回答は得られます）。"]
+    assert "強く推奨" not in req.human
     _, _, req = _request(FLOAT, journal, meta, pdf_name="架空論文.pdf", manual=False)
     assert req.human == "" and not req.manual_text().startswith(HUMAN_HEADING)
 
@@ -148,7 +150,7 @@ def test_parts_and_texts(journal, meta):
 
 def test_instructions_are_shorter_than_before():
     """指示の部分は、すべての節・項目を出したときでも、今の形の前（7.4 千字）より短い（W8 の 4.1）。"""
-    every = {"boxes": {"undecided", "estimated", "labels"}, "boundaries": {"notes", "apps"}, "links": {"notes"},
+    every = {"placements": {"asked", "wide"}, "boxes": {"undecided", "estimated", "labels"}, "boundaries": {"notes", "apps"}, "links": {"notes"},
              "style_fixes": {"suspects", "excluded"}}
     sections = [ai_assist.RequestSection(k, i, TITLES.get(k, "注の区切り・資料の始まり"), "3 個", frozenset(every.get(k, ())))
                 for i, k in enumerate(ai_assist.ANSWER_LISTS + ("notes",), 1)]

@@ -130,6 +130,9 @@ def test_b_answer_to_previous_draft_is_reread(journal, meta, tmp_path):
     assert [why for _, why in res.ai.rejected] == [CARRIED_NO_HEAD_WHY]
     assert res.ai.carried == ai_assist.CARRIED_MSG.format(n=4, m=3) and ai_state(res) != "失敗"
     assert "原稿を直す前の回答です。" in _sec2(res)
+    # 冒頭・14 章・枠・コマンドラインにも、要確認 ai_carried で知らせる（点検 review13 原則 6。終了コードは変えない）
+    act = next(a for a in actions(res) if a.key == "ai_carried")
+    assert act.level == "要確認" and res.ai.carried in act.box_detail and res.ai.carried in act.cli and act.checklist
     # links も読み替わる（FULL の d18 の前に段落を足す）
     resp = answers.answer(links=[("文献", "d18", "2001", 1, "B2")], docx=FULL)
     _, plan0, _ = _mechanical(FULL, journal)
@@ -192,3 +195,37 @@ def test_cut_answer_keeps_request_id(journal, meta, tmp_path):
     assert res.ai.partial and [op["src"] for op, _ in res.ai.accepted] == ["s1"]
     res = _manual(FLOAT, cut.replace(json.loads(resp)["request_id"], "", 1), meta, journal, tmp_path / "b")
     assert res.ai.error == NO_REQUEST_ID_MSG and not res.ai.partial and ai_state(res) == "失敗"
+
+
+# ---------------------------------------------------------------------------- 括弧・引用符の類の違いだけの head（実験 1 の評価）
+def test_bracket_only_head_difference_is_same_when_unique(journal, meta, tmp_path):
+    """head が段落の先頭の文字と括弧・引用符の類（「《」の書き落とし、« » との取り違えなど）だけ違うときは、ほかの段落と紛れない
+    （括弧の類を除いて比べて 1 つに決まる）場合に限って、その段落への指定とみなす（ID の書き違いも読み替える）。紛れるときは今までどおり
+    不採用。文字は変えない（XML の文字は回答なしと同じ）。"""
+    _, plan0, _ = _mechanical(FULL, journal)
+    before = plan0.paras["d18"].text_only()[:12]
+    new = edited_docx(FULL, tmp_path / "one.docx", before, "《架空の語》について，架空の説明を書いた段落である。")
+    _, plan, _ = _mechanical(new, journal)
+    src = next(s for s, p in plan.paras.items() if p.plain().startswith("《架空の語》"))
+    other = next(s for s in plan.body_seq if s != src and head_of(plan.paras[s]))
+    for i, (at, head) in enumerate(((src, "架空の語について，"), (src, "«架空の語»について"), (other, "架空の語について，"))):
+        resp = json.loads(answers.answer(docx=new))
+        resp["style_fixes"] = [dict(answers.style_fix(at, "quote"), head=head)]
+        res = _manual(new, json.dumps(resp, ensure_ascii=False), meta, journal, tmp_path / f"a{i}")
+        assert res.ai.rejected == [] and [f.src for f in res.ai.style_fixes] == [src], (head, res.ai.rejected)
+        assert res.ai.loose_heads == [("style_fixes", src)]
+        assert res.ai.reread == ([] if at == src else [("style_fixes", other, src)])
+        assert "括弧・引用符の違いだけで合わなかった指定 1 件" in _sec2(res)
+        assert res.fidelity.ok and res.fidelity.final_ok
+    # 括弧の類を除くと 2 つの段落に当たるときは、紛れるので使わない
+    two = edited_docx(new, tmp_path / "two.docx", "《架空の語》", "「架空の語」について，もう一つの架空の段落である。", where="after")
+    resp = json.loads(answers.answer(docx=two))
+    _, plan2, _ = _mechanical(two, journal)
+    src2 = next(s for s, p in plan2.paras.items() if p.plain().startswith("《架空の語》"))
+    resp["style_fixes"] = [dict(answers.style_fix(src2, "quote"), head="架空の語について，")]
+    res = _manual(two, json.dumps(resp, ensure_ascii=False), meta, journal, tmp_path / "b")
+    assert res.ai.style_fixes == [] and res.ai.loose_heads == [] and len(res.ai.rejected) == 1
+    assert "同じ先頭の文字の段落が" in res.ai.rejected[0][1]
+    # 括弧の類だけでなく文字も違う head は、今までどおり合わない
+    assert not ai_assist._bracket_head("架空の話について", plan.paras[src])
+    assert not ai_assist._bracket_head("《》《》", plan.paras[src])                    # 括弧を除くと短すぎる

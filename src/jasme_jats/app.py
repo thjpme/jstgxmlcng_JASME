@@ -275,7 +275,7 @@ class AppState:
         if self.res is None or self.run is None:
             return ""
         if self.inputs["ai_mode"] != self.run.ai_mode or _model_value(self.inputs["model"]) != self.run.model:
-            return _app_text("「AI による補完の方法」の欄・MODEL の変更は、次に変換するときに使われます（今の結果は前の設定のままです。"
+            return _app_text("「AI による仕上げの方法」の欄・MODEL の変更は、次に変換するときに使われます（今の結果は前の設定のままです。"
                              "変えた設定で作るには、" + rp.step("convert_again") + "してください）。")
         return ""
 
@@ -385,7 +385,7 @@ class AppState:
 
         AI による仕上げが済んでいない（report.ai_done が偽。回答待ち・失敗・一部）あいだは、貼り付け直せるように見せたままにする
         （知らせの key ではなく状態で決める。修正計画 W8 の 4.3）。
-        手動モードで変換した結果のときだけ見せる（変換したときの入力の写し run.ai_mode で決める。変換の後に「AI による補完の方法」の
+        手動モードで変換した結果のときだけ見せる（変換したときの入力の写し run.ai_mode で決める。変換の後に「AI による仕上げの方法」の
         欄を変えても変わらない。O3）。
         """
         if self.res is None or self.run is None or self.run.ai_mode != "manual" or self.res.ai.mode != "manual" or not self.res.prompt_path:
@@ -664,9 +664,10 @@ def build_app(state: AppState, io: "IO | None" = None):
             accepted = gr.Textbox(label="受理日")
             corresp = gr.Textbox(label="責任著者", info="何番目の著者か。例: 1（複数なら 1,2）")
             doi = gr.Textbox(label="DOI", info="空欄なら 10.24529/jasme.巻.号_開始ページ")
-        ai_mode = gr.Radio(AI_MODES, value=DEFAULTS["ai_mode"], label="AI による補完の方法",
+        ai_mode = gr.Radio(AI_MODES, value=DEFAULTS["ai_mode"], label="AI による仕上げの方法",
                            info=("API は、Colab のシークレットに ANTHROPIC_API_KEY を登録しておく（利用料がかかります。" + cost_note()
-                                 + "）。手動は、依頼文をチャットに貼り付け、回答を貼り戻す（API キー不要）"))
+                                 + "）。手動は、依頼文を出版版 PDF と一緒にチャット（claude.ai など）に送り、回答を貼り戻す"
+                                 "（API キー不要。PDF の添付は強く推奨）"))
         with gr.Accordion("詳細設定", open=False):
             model = gr.Dropdown([DEFAULT_MODEL, AUTO_MODEL], value=DEFAULTS["model"], allow_custom_value=True,
                                 label="MODEL（Claude のモデル。通常は変更不要）")

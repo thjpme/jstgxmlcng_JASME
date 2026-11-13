@@ -114,7 +114,7 @@ def test_result_boxes_blocking_only(journal, meta, tmp_path):
     assert "図の画像を入れてください" in colab.result_boxes(res, blocking=True)     # 必須の手順は止める
     fill_images(res)
     assert colab.result_boxes(res, blocking=True) == ""                           # 推奨の手順（ai_finish）は止めない
-    assert "AI で図・表の位置を合わせる（強く推奨。残り " in colab.result_boxes(res)
+    assert "AI で図・表の位置を合わせる（残り " in colab.result_boxes(res)
     keys = {a.key for a in report.actions(res)} - {"ai_finish", "images"}
     assert colab.result_boxes(res, skip=("ai_finish", "images") + tuple(keys)) == ""
 
@@ -194,7 +194,7 @@ def test_ai_finish_has_five_states(journal, meta, tmp_path):
         assert got[name][1].level == STEP and got[name][1].required is False and got[name][1].top == "", name
     res, fin = got["未実行"]
     assert report.ai_state(res) == "未実行" and (fin.done, fin.failed, fin.progress) == (False, False, "未実行・残り 3 個")
-    assert fin.box_title == "AI で図・表の位置を合わせる（強く推奨。残り 3 個）"
+    assert fin.box_title == "AI で図・表の位置を合わせる（残り 3 個）"
     assert "AI に出版版 PDF を見せると、PDF と同じ位置に置けます。" in fin.box_detail and report.step("ai_choose") in fin.box_detail
     res, fin = got["回答待ち"]
     assert report.ai_state(res) == "回答待ち" and (fin.done, fin.failed, fin.progress) == (False, False, "回答待ち・残り 3 個")
@@ -259,6 +259,6 @@ def test_textbox_only_original_titles_ai_finish_for_boxes(journal, meta, tmp_pat
     res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path))
     assert not res.plan.asked_floats and res.plan.undecided_boxes
     fin = _finish(res)
-    assert fin.box_title == "AI にテキストボックスの種類を判断させる（推奨）" and fin.progress == "未実行"
+    assert fin.box_title == "AI にテキストボックスの種類を判断させる" and fin.progress == "未実行"
     assert "囲みか図の注記か決められないテキストボックス 3 個の文字は、XML に出していません。AI が種類を判断します。" in fin.box_detail
     assert "AI がテキストボックスの種類を決めます" in fin.cli

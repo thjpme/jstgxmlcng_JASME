@@ -62,7 +62,7 @@ def test_manual_mode_applies_valid_ops_and_rejects_invalid(journal, meta, tmp_pa
     assert [x.text for x in names[2]] == ["研究", "次郎"]
     assert res.unresolved_after == []
     report = res.report_path.read_text(encoding="utf-8")
-    assert "## 2. AI による仕上げ（要確認）" in report and "| 状態 | 済み |" in report and "久保は" in report
+    assert "## 2. AI による仕上げ" in report and "| 状態 | 済み |" in report and "久保は" in report
 
 
 def test_manual_mode_without_response_writes_prompt(journal, meta, tmp_path):
@@ -776,6 +776,9 @@ def test_set_role_overrides_appendix_heading_text(journal, meta, tmp_path):
     root = load(res)
     assert _abstract(root) == ["Small article abstract.", "Appendix A: questionnaire items"]
     assert _apps(root) == [("資料1\u3000架空の授業プリント", ["架空のプリントの本文。", "資料2：架空の回答の例", "架空の回答の本文。"])]
+    from jasme_jats.report import actions
+    act = next(x for x in actions(res) if x.key == "ai_boundary")
+    assert "前の資料の続きにしました" in act.box_detail and "見出しのない資料" not in act.box_detail
 
 
 def test_set_role_p_on_first_appendix_heading(journal, meta, tmp_path):
@@ -797,6 +800,10 @@ def test_set_role_p_on_first_appendix_heading(journal, meta, tmp_path):
     assert _abstract(root) == ["Small article abstract."]
     assert _apps(root) == [("", ["資料1\u3000架空の授業プリント", "問1\u3000架空の問い。", "問2\u3000もう一つの架空の問い。"])]
     assert res.plan.region[src] == "app" and res.plan.apps[0].title is None
+    # 要確認 ai_boundary の行で、見出しのない資料になったことを知らせる（点検 review13 原則 3）
+    from jasme_jats.report import APP_NO_TITLE_LINE, actions
+    act = next(x for x in actions(res) if x.key == "ai_boundary")
+    assert APP_NO_TITLE_LINE.format(head="「資料1\u3000架空の授業プリント」") in act.box_detail and "前の資料の続き" not in act.box_detail
 
 
 def test_set_role_p_after_abstract_keeps_abstract(journal, meta, tmp_path):
@@ -1053,7 +1060,7 @@ def test_ai_kind_box_and_label_for_undecided_textboxes(journal, meta, tmp_path):
     assert set(accepted) == {hint, note} and accepted[hint] is res.plan.float_decisions[hint]
     assert accepted[hint].category == "box" and "囲み（boxed-text）として段落「囲みの後の段落である。」の後に置いた" in accepted[hint].message
     reasons = {t: why for _, why, t in res.fidelity.excluded}
-    assert reasons["注"] == "テキストボックス内の文字（AI による補完で図に重ねた注記と判断し、本文から除外）"
+    assert reasons["注"] == "テキストボックス内の文字（AI による仕上げで図に重ねた注記と判断し、本文から除外）"
     # 10 章の警告は、AI の判断だと分かるように書き、AI に出し直してもらうことを勧める（機械的な判断の警告とは別の文面）
     [warn] = [w for w in res.warnings if f"テキストボックス {note} の文字を" in w]
     assert f"AI が図に重ねた注記と判断したテキストボックス {note} の文字を、本文から除外しました（2 章・6 章）。" in warn
@@ -1129,7 +1136,7 @@ def test_textbox_undecided_advice_when_ai_failed_and_checklist_follows_mode(jour
         assert any(a.key == "ai_finish" for a in actions(res))
     assert len(texts) == 2      # 件数（AI の答えで決めた分が減る）だけが違う
     fin = next(a for a in actions(none) if a.key == "ai_finish")
-    assert not none.plan.asked_floats and fin.box_title == "AI にテキストボックスの種類を判断させる（推奨）"
+    assert not none.plan.asked_floats and fin.box_title == "AI にテキストボックスの種類を判断させる"
     assert "AI が種類を判断します" in fin.box_detail
 
 
@@ -1228,7 +1235,7 @@ def test_ai_textbox_placement_twice_and_estimated_box(journal, meta, tmp_path):
 
 def test_set_role_on_textbox_paragraphs(journal, meta, tmp_path):
     # 浮動配置でないテキストボックス（VML・行内）の段落に set_role で指定できるのは fig_caption・table_caption・exclude だけ
-    # （ほかは placements の kind box・label を案内して採用しない。修正計画の F の (1)。依頼文の案内〈set_role_hint〉の判定）。
+    # （回答の boundaries の役割はどれも当たり、boxes の kind「囲み」「図の注記」を案内して採用しない。修正計画の F の (1)）。
     # スタイルの提案（style_fixes）は、どの段落でも記録するだけで XML には反映しない（所有者の決定 5。W8 の手順 5・10。VML の
     # キャプションは、Word でスタイルを図キャプションにすれば図のキャプションになる）。同じ段落の 2 件目の提案は不採用
     from jasme_jats.ai_assist import set_role_problem
@@ -1237,9 +1244,12 @@ def test_set_role_on_textbox_paragraphs(journal, meta, tmp_path):
     floating = next(p for p in plan.paras.values() if p.plain() == "（ヒント）")
     assert vml.textbox_id and not vml.float_id and floating.float_id
     for role in ("p", "quote", "sec2"):
-        assert "placements の kind box・label で指定する" in set_role_problem(vml, plan, role)
+        assert set_role_problem(vml, plan, role) == ("テキストボックスの段落には区切りを指定できない（囲みか図の注記かは boxes の"
+                                                     " kind「囲み」「図の注記」で答える）")
     assert set_role_problem(vml, plan, "exclude") == "" and set_role_problem(vml, plan, "fig_caption") == ""
-    assert "placements で指定する" in set_role_problem(floating, plan, "exclude")
+    assert "図・表の位置は placements、テキストボックスの種類は boxes で答える" in set_role_problem(floating, plan, "exclude")
+    for why in (set_role_problem(vml, plan, "p"), set_role_problem(floating, plan, "p")):     # 前の形の名前を書かない（点検 review13 原則 4）
+        assert "kind box" not in why and "fig_caption" not in why
     # 囲みとして位置を機械的に決めたもの（placements でも変えられない）の段落には、placements を案内せず「機械的に決めたので
     # 変更できない」と返す（0.25.0 の最初の実装は placements を案内し、placements も採用しないので行き止まりになっていた）
     at_anchor = next(p for p in plan.paras.values() if p.plain().startswith("問1　架空の三角形"))
@@ -1248,8 +1258,7 @@ def test_set_role_on_textbox_paragraphs(journal, meta, tmp_path):
     for role in ("p", "exclude", "fig_caption"):
         assert set_role_problem(at_anchor, plan, role) == f"テキストボックス {at_anchor.textbox_id} {fixed}"
     assert set_role_problem(inline, plan, "p") == (
-        f"テキストボックス {inline.textbox_id} {fixed}（浮動配置でないテキストボックスの段落に指定できる役割は fig_caption・"
-        "table_caption・exclude だけ）")
+        f"テキストボックス {inline.textbox_id} {fixed}（テキストボックスの段落には区切りを指定できない）")
     assert set_role_problem(inline, plan, "exclude") == ""      # 浮動配置でない段落の exclude は今までどおり受け付ける
     res = _manual(STRUCTURE, answers.answer(style_fixes=[(vml.src, "exclude"), (vml.src, "p")]), meta, journal, tmp_path / "s")
     assert [w for op, w in res.ai.rejected if op["src"] == vml.src] == [ai_assist.STYLE_TWICE_WHY]
@@ -1623,6 +1632,11 @@ def test_c141_link_text_width_variant_links_single_place(journal):
     ai_assist.apply_ops([_op(op="link_figure", src=target.src, text="(2019)", target=fid)], plan, None, out)
     assert len(out.accepted) == 1, out.rejected
     assert target.plain() == before + plan_text                     # 文字は変わらない
+    # 2 回目以降の指定は救わない（同じ文字が 1 か所だけの段落で、回数の違う指定を黙って 1 回目に読み替えない。点検 review13 原則 2）
+    for occ, text in ((2, "(2019)"), (999, "(2019)"), (2, plan_text)):
+        out = ai_assist.AIOutcome()
+        ai_assist.apply_ops([_op(op="link_figure", src=target.src, text=text, target=fid, occurrence=occ)], plan, None, out)
+        assert out.accepted == [] and [w for _, w in out.rejected] == [f"段落 {target.src} に「{text}」（{occ} 回目）が見つからない"]
 
 
 def test_f6_final_check_rejects_entity_declaration_without_reading(tmp_path):

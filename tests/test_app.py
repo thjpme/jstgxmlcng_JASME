@@ -50,7 +50,7 @@ def test_convert_shows_summary_and_download(tmp_path):
     assert res is st.res and not st.waiting_for_answer
     html = st.result_html()
     assert "結果の要約" in html and "AI による仕上げ: 使わない。状態: 未実行" in html      # 「使わない」でも赤い枠は出さない（W8 の手順 4）
-    assert "AI による補完を「使わない」" not in html
+    assert "AI による補完を「使わない」" not in html and "AI による仕上げを「使わない」" not in html
     # 図の画像を入れるまでは、必須の手順が残るのでダウンロードを止める（修正計画 W1）
     assert st.needs_action and st.download()[0] is None and "図の画像を入れてください" in st.download()[1]
     fill_images(st.res)
@@ -538,7 +538,7 @@ def test_app_words_match_the_real_labels(tmp_path):
     st = AppState(tmp_path / "work")
     demo = app.build_app(st, app.IO())
     labels = {getattr(b, "label", None) for b in demo.blocks.values()} | {getattr(b, "value", None) for b in demo.blocks.values()}
-    for label in (colab.ANSWER_LABEL, colab.APPLY_LABEL, colab.CONVERT_LABEL, "作り方", "AI による補完の方法",
+    for label in (colab.ANSWER_LABEL, colab.APPLY_LABEL, colab.CONVERT_LABEL, "作り方", "AI による仕上げの方法",
                   "docx（論文の Word ファイル）", "PDF（J-STAGE に登載する PDF）"):
         assert label in labels, label
     words = colab.STEP_WORDS["app"]
