@@ -588,6 +588,9 @@ class AppState:
         if self.needs_action and not accept_todo:
             return None, ("残っていることがあります: " + "／".join(self.todo_titles())
                           + "。このままダウンロードするときは、「このままダウンロード」にチェックを入れてもう一度押してください。")
+        if not self.out_dir.is_dir():
+            # Python 3.10 の shutil.make_archive は、フォルダがなくても例外を出さずに空の ZIP を作る。空の ZIP を渡さない
+            raise FileNotFoundError(f"出力フォルダがありません: {self.out_dir}")
         archive = shutil.make_archive(str(self.work / f"変換結果_{self.res.xml_path.stem}"), "zip", self.out_dir)
         return archive, ""
 
