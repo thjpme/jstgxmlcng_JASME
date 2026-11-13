@@ -162,7 +162,10 @@ class AppState:
         self.run: Optional[RunInputs] = None   # 変換したときの入力の写し（入力が写しと違えば、結果を残したまま断る）
         self.paper_changed = False             # 直前の convert() で docx の中身が前回と違った（on_convert が回答の欄を空にするか決める）
         self._last_docx = None                 # 最後に convert() が手順 3 まで進んだときの docx の digest（変換が後で失敗しても残す）
-        self._last_answer = None               # (依頼文の sha256, docx_name, 回答を strip した文字)。最後に反映に成功した回答
+        # 最後に API モードで反映した AI の回答の写し（出力フォルダの AI回答.json の中身）。_run は出力フォルダを消すので、ここに持ち、
+        # Options.ai_cache で渡す（依頼の番号・モデルが同じなら API を呼ばない。修正計画 W8 の 4.6）。reset() では消さない
+        # （別の論文では依頼の番号が違うので使われない）
+        self.ai_cache: Optional[str] = None
 
     @property
     def out_dir(self) -> Path:
@@ -309,13 +312,16 @@ class AppState:
         step = progress or (lambda fraction, desc="": None)
         run = self.run
         opts = Options(out_dir=self.out_dir, ai_mode=ai_mode, ai_provider="claude", ai_model=run.model, ai_api_key=run.api_key,
-                       ai_response=ai_response, pdf_path=run.pdf, route=run.route, split_labels=run.split_labels)
+                       ai_response=ai_response, pdf_path=run.pdf, route=run.route, split_labels=run.split_labels,
+                       ai_cache=self.ai_cache)
         self.res = None                        # 出力フォルダを消すので、前の結果は先に捨てる（途中で止まったとき、消えたファイルを指さないため）
         shutil.rmtree(self.out_dir, ignore_errors=True)
         try:
             res = convert(run.docx, run.meta, run.journal, opts)
         except StructureConflictError as e:
             raise InputError(step_text(str(e), "app"), structure_conflict_box(str(e), "app"))
+        if res.ai.mode == "api" and res.ai_answer_path is not None:
+            self.ai_cache = res.ai_answer_path.read_text(encoding="utf-8")
         step(0.9, "画像を入れ直しています…")
         if self.kept:
             reapply_images(res, self.kept)     # 変換をやり直したときに、前に入れた画像を、同じ図だと確かめられたものだけ入れ直す
@@ -394,17 +400,11 @@ class AppState:
             raise InputError(self.stale_text(changed))
         if not (text or "").strip():
             raise InputError("AI の回答が貼り付けられていません。")
-        prompt_digest = hashlib.sha256(self.prompt_text().encode("utf-8")).hexdigest()    # _run は出力フォルダを消すので先に取る
-        last = self._last_answer
-        if last is not None and last[2] == text.strip() and last[0] != prompt_digest:
-            raise InputError(_app_text("貼り付けられているのは、前に別の依頼文（" + last[1] + " のとき）に対して反映した AI の回答です。今の"
-                                       + rp.step("prompt") + "を AI に渡し、返ってきた回答に貼り替えてから" + rp.step("apply_button")
-                                       + "を押してください。"))
+        # 前の論文・図表や文献の並びが違う原稿への回答は、変換の中で依頼の番号で確かめて使わない（ai_assist.check_answer。
+        # 「失敗」として知らせる。修正計画 W8 の 4.6）
         (progress or (lambda fraction, desc="": None))(0.2, "回答を反映して変換し直しています…")
         self.kept = kept_images(self.res)      # _run は出力フォルダを消すので、入れた画像は先に覚える
-        res = self._run("manual", text)
-        self._last_answer = (prompt_digest, self.run.docx_name, text.strip())
-        return res
+        return self._run("manual", text)
 
     # ---- 図の画像（修正計画 W1 の 4.5）。残りの数・図の一覧の文は report.images_action、行は report.image_rows から作る。
     # ここに書くのは、行のラベルと操作の案内だけ

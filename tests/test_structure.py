@@ -335,18 +335,21 @@ def test_sentence_paragraphs_do_not_start_appendix(journal, meta, tmp_path):
     assert d.message == ("段落「資料1\u3000架空の授業プリント」を資料の見出しとした（「資料」「付録」「附録」「Appendix」で始まる見出しの"
                          "形のため）。資料の見出しでなければ、AI の仕上げで資料の始まりを取り消せる（英文要旨の続きに戻る）")
     assert d.applied and d.location == "資料1（見出し）" and d.category == "style"
-    assert f"- [{src}] 推定: 段落「資料1\u3000架空の授業プリント」を資料の見出しとした" in res.prompt_path.read_text(encoding="utf-8")
+    # AI 依頼文には前の形の「推定:」の行を書かず、「## 英文の部分」の資料の見出しの行の前に資料の始まりの 1 行を書く（W8 の手順 15）
+    prompt = res.prompt_path.read_text(encoding="utf-8")
+    assert "推定: " not in prompt.split("# 論文（ここから下はデータ）")[1].split("# 位置を決められなかった")[0]
+    assert f"（ここから資料。次の段落を、変換ツールが資料の見出しとしました）\n[{src}]" in prompt
     report = res.report_path.read_text(encoding="utf-8")
     assert "| 資料1（見出し） | 段落「資料1\u3000架空の授業プリント」を資料の見出しとした" in report.split("## 4.")[1].split("## 5.")[0]
-    # 見出しの形に合うが文とみなした段落も、判断の一覧（applied=False）と AI 依頼文の推定に載せる（見出しを文と誤ったときに
-    # 気づけるように。英文要旨の段落なら見出しのスタイルで、資料の中の段落なら AI の仕上げで資料にできる）
+    # 見出しの形に合うが文とみなした段落も、判断の一覧（applied=False）に載せる（見出しを文と誤ったときに気づけるように。英文要旨の
+    # 段落なら見出しのスタイルで、資料の中の段落なら AI の仕上げで資料にできる）。AI 依頼文では、資料の始まりの行を付けない段落として載る
     sentences = {}
     for t in ("(Appendix 1) lists the fictional tasks used in the lesson.", "資料2（後掲）に示すように、架空の問いを並べた。"):
         src2 = next(s for s, p in res.plan.paras.items() if p.plain() == t)
         [d] = [d for d in res.plan.decisions if d.src == src2]
         assert not d.applied and d.category == "style"
         sentences[t] = d
-        assert f"- [{src2}] 推定: 段落「{t[:20]}」は「資料」「付録」「附録」「Appendix」で始まるが、" in res.prompt_path.read_text(encoding="utf-8")
+        assert f"\n[{src2}]" in prompt and f"次の段落を、変換ツールが資料の見出しとしました）\n[{src2}]" not in prompt
     d = sentences["(Appendix 1) lists the fictional tasks used in the lesson."]
     assert d.location == "英文要旨 第2段落" and d.message == (
         "段落「(Appendix 1) lists t」は「資料」「付録」「附録」「Appendix」で始まるが、番号などの後ろが英小文字の語で、「.」などで"
@@ -677,8 +680,10 @@ def test_text_only_textbox_becomes_boxed_text(journal, meta, tmp_path):
     src = next(s for s, p in plan.paras.items() if "二次方程式" in p.plain())
     resp = answers.answer(style_fixes=[(src, "p", "x")])
     res2 = convert(path, meta, journal, Options(out_dir=tmp_path / "ai", ai_mode="manual", ai_response=resp))
-    assert res2.ai.rejected and res2.ai.rejected[0][1].endswith("は囲み（boxed-text）として扱いと位置を機械的に決めたので、変更できない")
+    # 囲みの中の段落へのスタイルの提案は、記録するだけで XML は変えない（所有者の決定 5。W8 の手順 10）
+    assert res2.ai.rejected == [] and [f.src for f in res2.ai.style_fixes] == [src]
     assert text(load(res2).find(".//boxed-text")).startswith("問1　次の二次方程式を解きなさい。")
+    assert res2.xml_path.read_bytes() == res.xml_path.read_bytes()
 
 
 BOX_Q = "問Ａ　架空の町の二つの公園の間の道のりを，地図の縮尺を使って求めなさい。"
@@ -785,16 +790,15 @@ def test_text_in_figure_textbox_is_notified(journal, meta, tmp_path):
     assert "- [ ] **図の画像に写るものとして XML の本文に出していない文字（図形 1 つ）**（6 章）" in ch14
     assert "図の画像に写るものとして、XML の本文に出していない文字があります（図形 1 つ。要確認）" == act.box_title
     assert "docx で図形の外（本文の段落）に出して変換し直すこと" in act.cli and "図1（fig01）の図形: 25 字" in act.cli
-    # AI の set_role p は採用しない。placements の kind box・label の対象でもないので、理由で placements を案内しない
+    # AI のスタイルの提案は記録だけ（XML は変えない）。boxes の種類の対象でもないので、種類の指定は採用しない
     _, plan, _ = _mechanical(path, journal)
     xid = plan.paras[src].textbox_id
     after = next(s for s, p in plan.paras.items() if p.plain().startswith("図1から"))
     resp = answers.answer(boxes=[(xid, "囲み", after, "x")], style_fixes=[(src, "p", "x")])
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "ai", ai_mode="manual", ai_response=resp))
     why = {op["op"]: w for op, w in res.ai.rejected}
-    assert why["set_role"] == (f"テキストボックス {xid} は囲み・図の注記の判断の対象でない（図表の入ったテキストボックス・本文の外の"
-                               "テキストボックスなど）ので、段落に指定できる役割は fig_caption・table_caption・exclude だけ")
-    assert "placements" not in why["set_role"] and why["place_float"].startswith(f"{xid} は「位置を決められなかった図表」")
+    assert list(why) == ["place_float"] and why["place_float"].startswith(f"{xid} は「囲みか図の注記か決められなかった")
+    assert [f.src for f in res.ai.style_fixes] == [src]
     assert "textbox_figure_text" in [a.key for a in actions(res)] and excluded(res)[SOURCE_NOTE] == TEXTBOX_TEXT_EXCLUDED
 
 
@@ -1187,21 +1191,21 @@ def test_fn_guess_advice_is_executable(journal, meta, tmp_path, monkeypatch):
         res4 = convert(path4, meta, journal, Options(out_dir=tmp_path / name))
         assert res4.fidelity.ok and res4.fidelity.final_ok and res4.dtd_valid and len(fn_guess_action(res4)) == want
         assert "表の下の説明である。" in text(load(res4).find("body")) and res4.plan.fns == []
-    # (5) AI の補完が役割を指定した段落も推定しない（利用者への案内にはしないが、仕組みとして働く）。推定した注の一覧（領域 fn）の
-    # 「注」への p は注の区切りの直し（注の続き）で、XML に反映する（所有者の決定 5。W8 の手順 5）
+    # (5) 推定した注の一覧（領域 fn）の「注」（注の見出しで、どの注の中の段落でもない）への p は、注の区切りの直しではない（注の領域
+    # そのものを本文に戻してしまう）。スタイルの提案（style_fixes）は記録だけで、XML は変えない（所有者の決定 5。W8 の点検 review12 の原則 1）
     import jasme_jats.ai_assist as ai_assist
     assert res.plan.region[src] == "fn"
-    res5 = _manual_roles(path, answers.answer(boundaries=[(src, "注の続き")]), meta, journal, tmp_path / "out5")
-    assert res5.ai.rejected == [] and res5.fidelity.ok and res5.fidelity.final_ok and res5.dtd_valid
-    assert [(b.src, b.kind) for b in res5.ai.boundaries] == [(src, "注の続き")]
-    assert res5.plan.fns == [] and res5.plan.fn_guess_checks == [] and fn_guess_action(res5) == []
-    assert "注" in [text(q) for q in load(res5).find("body").iter("p")]
-    # 見出しへの fn_heading は Word のスタイルで直す提案（XML に反映しない）。組み立ての仕組みは、区切り以外の役割も反映する形に
-    # 差し替えて確かめる
+    res5 = _manual_roles(path, answers.answer(style_fixes=[(src, "p")]), meta, journal, tmp_path / "out5")
+    assert res5.ai.rejected == [] and res5.ai.boundaries == []
+    assert [(f.src, f.role) for f in res5.ai.style_fixes] == [(src, "p")]
+    assert res5.fidelity.ok and res5.fidelity.final_ok and res5.dtd_valid
+    assert res5.xml_path.read_bytes() == res.xml_path.read_bytes() and len(fn_guess_action(res5)) == 1
+    # 見出しへの fn_heading は Word のスタイルで直す提案（XML に反映しない）。組み立ての仕組みは、区切りの検証を差し替えて
+    # （answers.force_boundaries）確かめる
     res6 = _manual_roles(path, answers.answer(style_fixes=[(src, "fn_heading")]), meta, journal, tmp_path / "prop6")
-    assert [why for _, why in res6.ai.rejected] == [ai_assist.STYLE_ONLY_WHY] and len(fn_guess_action(res6)) == 1
-    monkeypatch.setattr(ai_assist, "boundary_kind", lambda p, plan, role: "試験の区切り")
-    res6 = _manual_roles(path, answers.answer(style_fixes=[(src, "fn_heading")]), meta, journal, tmp_path / "out6")
+    assert res6.ai.rejected == [] and len(fn_guess_action(res6)) == 1
+    answers.force_boundaries(monkeypatch, {src: "fn_heading"})
+    res6 = _manual_roles(path, answers.answer(), meta, journal, tmp_path / "out6")
     assert res6.ai.rejected == [] and res6.fidelity.ok and len(res6.plan.fns) == 1 and fn_guess_action(res6) == []
 
 

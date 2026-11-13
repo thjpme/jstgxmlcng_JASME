@@ -12,18 +12,30 @@ import make_fixtures as mf
 from conftest import DATA, FLOAT, FULL, STRUCTURE
 from jasme_jats import ai_assist
 from jasme_jats import pipeline
-from jasme_jats.ai_assist import DEFAULT_MODEL, parse_response, parse_mathml
+from jasme_jats.ai_assist import DEFAULT_MODEL, parse_response
 from jasme_jats.model import Para
 from jasme_jats.pipeline import Options, _mechanical, convert
 from jasme_jats.report import actions
 
 RESPONSE = (DATA / "ai_response_sample_full.json").read_text(encoding="utf-8")
 FLOAT_RESPONSE = json.loads((DATA / "ai_response_sample_float.json").read_text(encoding="utf-8"))
+# 前の形の回答（operations を持つ。W8 の手順 10 で断るようになった形）
+FLOAT_OLD = json.dumps({"placements": [{"float": "s1", "after": "d17", "items": [], "reason": "x", "confidence": "中"}],
+                        "operations": [], "notes": []})
 
 
-def example_block():
-    """依頼文の見本（MANUAL_EXAMPLE）のコードブロックの中身を JSON として読む（parse_response は見本そのものを断るので通さない）。"""
-    return json.loads(ai_assist.RE_FENCE.search(ai_assist.MANUAL_EXAMPLE).group(1))
+ALL_SECTIONS = [ai_assist.RequestSection(k, i, k, "", frozenset()) for i, k in enumerate(ai_assist.ANSWER_LISTS + ("notes",), 1)]
+
+
+def example_block(sections=ALL_SECTIONS):
+    """依頼文の「## 回答の形」の見本（既定は、頼むことの節をすべて出したとき）のコードブロックの中身を JSON として読む
+    （parse_response は見本そのものを断るので通さない）。"""
+    return json.loads(ai_assist.RE_FENCE.search(ai_assist.request_instructions(sections)).group(1))
+
+
+def _info(exclusions=(), unsplit_names=(), name_splits=()):
+    """build_request に渡す builder.BuildInfo の代わり（依頼文が読む 3 つだけ）。"""
+    return types.SimpleNamespace(exclusions=list(exclusions), unsplit_names=list(unsplit_names), name_splits=list(name_splits))
 
 
 def load(res):
@@ -36,15 +48,13 @@ def test_manual_mode_applies_valid_ops_and_rejects_invalid(journal, meta, tmp_pa
     root = load(res)
     bibr = {(x.text, x.get("rid")) for x in root.iter("xref") if x.get("ref-type") == "bibr"}
     assert {("2001", "B2"), ("2025", "B7"), ("2016", "B4"), ("1977", "B10")} <= bibr
-    rejected = {op["text"] for op, _ in res.ai.rejected if op["op"] not in ("formula_image", "set_role")}
+    rejected = {op["text"] for op, _ in res.ai.rejected}
     assert rejected == {"Claude", "図9"}           # 年以外へのリンク・存在しない図は不採用
-    # 章見出しへの set_role は、Word のスタイルで直す提案にして XML には反映しない（所有者の決定 5。W8 の手順 5）
-    assert [why for op, why in res.ai.rejected if op["op"] == "set_role"] == [ai_assist.STYLE_ONLY_WHY]
+    # 章見出しのスタイルの提案（style_fixes）は、記録するだけで XML には反映しない（所有者の決定 5。W8 の手順 5・10）
     assert [(f.src, f.role, f.style, f.how) for f in res.ai.style_fixes] == [
         ("d46", "sec1", "章見出し", "Word で段落のスタイルを「章見出し」にする")]
     assert res.ai.boundaries == []
-    # 画像の数式の書き起こし（formula_image）は、docx の画像を AI に渡さなくなったので採用しない（修正計画 W1）
-    assert [why for op, why in res.ai.rejected if op["op"] == "formula_image"] == [ai_assist.FORMULA_IMAGE_WHY]
+    # 画像の数式の書き起こしは、回答の形にない（docx の画像を AI に渡さない。修正計画 W1・W8）
     assert root.find(".//disp-formula/alternatives") is None and not res.fidelity.ai_additions
     names = [n for n in root.iter("name") if n.get("name-style") == "eastern"]
     assert [x.text for x in names[2]] == ["研究", "次郎"]
@@ -56,13 +66,14 @@ def test_manual_mode_applies_valid_ops_and_rejects_invalid(journal, meta, tmp_pa
 def test_manual_mode_without_response_writes_prompt(journal, meta, tmp_path):
     res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual"))
     prompt = res.prompt_path.read_text(encoding="utf-8")
-    assert "[d18]" in prompt and "link_citation" in prompt
-    # docx の画像は AI に渡さない（修正計画 W1）: 添付画像のフォルダを作らず、依頼文に添付の案内を書かない
-    assert not (tmp_path / "AI添付画像").exists() and "AI添付画像" not in prompt and "添付" not in prompt.split("---")[0]
+    assert "[d18]" in prompt and "… links" in prompt
+    # docx の画像は AI に渡さない（修正計画 W1）: 添付画像のフォルダを作らない。添付を勧めるのは出版版 PDF だけ（【作業する方へ】。W8 の 4.1）
+    assert not (tmp_path / "AI添付画像").exists() and "AI添付画像" not in prompt
+    assert prompt.startswith(ai_assist.HUMAN_HEADING) and "画像を添付" not in prompt
     assert res.fidelity.ok
-    # チャットの AI が JSON を崩さないよう、回答の書き方（コードブロック 1 つ・半角の引用符）と見本を示す
-    assert "## 回答の書き方" in prompt and "```json" in prompt
-    assert example_block()["operations"]
+    # チャットの AI が JSON を崩さないよう、回答の形（コードブロック 1 つ・半角の引用符）と見本を示す
+    assert "## 回答の形" in prompt and "```json" in prompt and ai_assist.ANSWER_FIRST_MANUAL in prompt
+    assert example_block()["links"]
 
 
 def test_parse_response_does_not_guess_on_curly_quotes():
@@ -89,10 +100,10 @@ def test_parse_response_reports_missing_json():
 def test_parse_response_accepts_code_fence():
     """```json（```JSON も）のコードブロックの中身を読む（閉じの ``` の後ろの説明の { } は使わない）。"""
     data = parse_response("以下が回答です。\n```json\n" + RESPONSE + "\n```")
-    assert len(data["operations"]) == 9
+    assert (len(data["links"]), len(data["names"]), len(data["style_fixes"])) == (6, 1, 1)
     for fence in ("```json", "```JSON"):
         data = parse_response(fence + "\n" + RESPONSE + "\n```\n補足: {placements} は空です。")
-        assert len(data["operations"]) == 9
+        assert len(data["links"]) == 6
 
 
 def test_parse_response_reads_json_before_trailing_text(journal, meta, tmp_path):
@@ -112,13 +123,6 @@ def test_parse_response_reads_json_before_trailing_text(journal, meta, tmp_path)
     # 手動モードで貼り戻しても、ふつうの回答と同じく反映する
     res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=unclosed))
     assert res.ai.error == "" and res.ai.partial == "" and res.plan.unplaced_floats == [] and res.fidelity.ok
-
-
-def test_parse_mathml_rejects_foreign_elements():
-    ok, _ = parse_mathml('<math><mi>x</mi></math>')
-    assert ok is not None
-    bad, why = parse_mathml('<math xmlns="http://www.w3.org/1998/Math/MathML"><script/></math>')
-    assert bad is None and "script" in why
 
 
 def test_api_mode_with_fake_client(journal, meta, tmp_path, monkeypatch):
@@ -151,7 +155,7 @@ def test_api_mode_with_fake_client(journal, meta, tmp_path, monkeypatch):
     assert calls["output_config"]["format"]["type"] == "json_schema"
     assert calls["fallbacks"] == "default"
     assert not res.ai.error
-    # 7 件のうち formula_image は採用しない（修正計画 W1）。章見出しへの set_role は提案にする（決定 5）
+    # 章見出しへの指定は提案（style_fixes）にする（決定 5）
     assert len(res.ai.accepted) == 5 and res.fidelity.ok and len(res.ai.style_fixes) == 1
     content = calls["messages"][0]["content"]
     assert not any(isinstance(c, dict) and c.get("type") == "image" for c in content)     # docx の画像は渡さない
@@ -176,9 +180,17 @@ def test_default_model_is_written_once(tmp_path):
 
 
 def test_response_schema_is_strict():
-    op = ai_assist.OP_SCHEMA
-    assert op["additionalProperties"] is False
-    assert set(op["required"]) == set(op["properties"])
+    """回答のスキーマは、どの object もすべての項目を必須にし、ほかの項目を許さない（ChatGPT の strict な構造化出力）。"""
+    def objects(sch):
+        if isinstance(sch, dict):
+            if sch.get("type") == "object":
+                yield sch
+            for v in sch.values():
+                yield from objects(v)
+    found = list(objects(ai_assist.RESPONSE_SCHEMA))
+    assert len(found) == 8                         # 回答・pdf・6 つの一覧の要素
+    for o in found:
+        assert o["additionalProperties"] is False and o["required"] == list(o["properties"])
     json.dumps(ai_assist.RESPONSE_SCHEMA)
 
 
@@ -268,7 +280,9 @@ def test_openai_api_mode_with_fake_client(journal, meta, tmp_path, monkeypatch):
     assert fmt["type"] == "json_schema" and fmt["strict"] is True and fmt["schema"] is ai_assist.RESPONSE_SCHEMA
     content = kw["input"][0]["content"]
     assert not any(c["type"] == "input_image" for c in content)        # docx の画像は渡さない（修正計画 W1）
-    assert "link_citation" in kw["instructions"]
+    # system（instructions）に指示の部分、利用者の内容にデータの部分（修正計画 W8 の手順 13）
+    assert kw["instructions"].startswith(ai_assist.REQUEST_TITLE) and ai_assist.ANSWER_FIRST_API in kw["instructions"]
+    assert ai_assist.DATA_HEADING not in kw["instructions"].splitlines() and content[-1]["text"].startswith(ai_assist.DATA_HEADING)
     assert not res.ai.error and res.ai.provider == "openai"
     assert len(res.ai.accepted) == 5 and res.fidelity.ok and res.fidelity.final_ok   # set_role の sec1 は提案（決定 5）
     report = res.report_path.read_text(encoding="utf-8")
@@ -281,17 +295,17 @@ def test_openai_errors_are_reported(journal, meta, tmp_path, monkeypatch):
     req = httpx2.Request("POST", "https://api.openai.com/v1/responses")
     err = openai.AuthenticationError("bad key", response=httpx2.Response(401, request=req), body=None)
     _fake_openai(monkeypatch, [], error=err)
-    out = ai_assist.call_provider("openai", "x", [], model="gpt-test", api_key="t")
+    out = ai_assist.call_provider("openai", "指示", "x", [], model="gpt-test", api_key="t")
     assert "OPENAI_API_KEY" in out.error
     _fake_openai(monkeypatch, [], content_type="refusal")
-    assert "断りました" in ai_assist.call_provider("openai", "x", [], model="gpt-test", api_key="t").error
+    assert "断りました" in ai_assist.call_provider("openai", "指示", "x", [], model="gpt-test", api_key="t").error
     _fake_openai(monkeypatch, [], status="incomplete")
-    assert "途中で切れました" in ai_assist.call_provider("openai", "x", [], model="gpt-test", api_key="t").error
+    assert "途中で切れました" in ai_assist.call_provider("openai", "指示", "x", [], model="gpt-test", api_key="t").error
     # API キーが見つからない（クライアントを作れない）ときも、止まらずにエラーとして記録する
     def no_key(*a, **k):
         raise openai.OpenAIError("The api_key client option must be set")
     monkeypatch.setattr(openai, "OpenAI", no_key)
-    assert "OPENAI_API_KEY を確認" in ai_assist.call_provider("openai", "x", [], model="gpt-test").error
+    assert "OPENAI_API_KEY を確認" in ai_assist.call_provider("openai", "指示", "x", [], model="gpt-test").error
 
 
 def _fake_gemini(monkeypatch, calls, error=None, finish="STOP", text=RESPONSE):
@@ -336,27 +350,27 @@ def test_gemini_errors_are_reported(monkeypatch):
     bad_key = errors.ClientError(400, {"error": {"code": 400, "message": "API key not valid. Please pass a valid API key.",
                                                  "status": "INVALID_ARGUMENT"}})
     _fake_gemini(monkeypatch, [], error=bad_key)
-    out = ai_assist.call_provider("gemini", "x", [], model="gemini-test", api_key="t")
+    out = ai_assist.call_provider("gemini", "指示", "x", [], model="gemini-test", api_key="t")
     assert "GEMINI_API_KEY" in out.error
     not_found = errors.ClientError(404, {"error": {"code": 404, "message": "not found", "status": "NOT_FOUND"}})
     _fake_gemini(monkeypatch, [], error=not_found)
-    assert "gemini-test が見つかりません" in ai_assist.call_provider("gemini", "x", [], model="gemini-test").error
+    assert "gemini-test が見つかりません" in ai_assist.call_provider("gemini", "指示", "x", [], model="gemini-test").error
     _fake_gemini(monkeypatch, [], finish="MAX_TOKENS")
-    assert "途中で切れました" in ai_assist.call_provider("gemini", "x", [], model="gemini-test").error
+    assert "途中で切れました" in ai_assist.call_provider("gemini", "指示", "x", [], model="gemini-test").error
     _fake_gemini(monkeypatch, [], finish="SAFETY")
-    assert "SAFETY" in ai_assist.call_provider("gemini", "x", [], model="gemini-test").error
+    assert "SAFETY" in ai_assist.call_provider("gemini", "指示", "x", [], model="gemini-test").error
     from google import genai
 
     def no_key(*a, **k):
         raise ValueError("Missing key inputs argument!")
     monkeypatch.setattr(genai, "Client", no_key)
-    assert "GEMINI_API_KEY または GOOGLE_API_KEY を確認" in ai_assist.call_provider("gemini", "x", [], model="g").error
+    assert "GEMINI_API_KEY または GOOGLE_API_KEY を確認" in ai_assist.call_provider("gemini", "指示", "x", [], model="g").error
 
 
 def test_other_providers_require_a_model_name(journal, meta, tmp_path):
     # ChatGPT・Gemini ではモデル名を利用者が指定する（Claude のモデル名・「自動」・空欄は受け付けない）
     for model in ("", "auto", DEFAULT_MODEL):
-        out = ai_assist.call_provider("openai", "x", [], model=model)
+        out = ai_assist.call_provider("openai", "指示", "x", [], model=model)
         assert "モデルの名前を指定" in out.error and "Opus と同等以上" in out.error
     res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_provider="gemini", ai_model=""))
     assert "Gemini の API を使うときは" in res.ai.error and res.fidelity.ok
@@ -404,7 +418,10 @@ def test_sakana_api_mode_with_fake_client(journal, meta, tmp_path, monkeypatch):
     assert kw["response_format"]["type"] == "json_schema"
     assert kw["response_format"]["json_schema"]["schema"] is ai_assist.RESPONSE_SCHEMA
     system, user = kw["messages"]
-    assert "## 回答の書き方" in system["content"] and "link_citation" in system["content"]
+    # system に指示の部分（「## 回答の形」に見本がある。見本を足さない）、利用者の内容にデータの部分（修正計画 W8 の手順 13）
+    assert system["content"].startswith(ai_assist.REQUEST_TITLE) and system["content"].count("```json") == 1
+    assert ai_assist.ANSWER_FIRST_API in system["content"] and ai_assist.HUMAN_HEADING not in system["content"]
+    assert user["content"][-1]["text"].startswith(ai_assist.DATA_HEADING)
     assert not any(isinstance(c, dict) and c.get("type") == "image_url" for c in user["content"])   # docx の画像は渡さない
     assert not res.ai.error and res.ai.provider == "sakana"
     assert len(res.ai.accepted) == 5 and res.fidelity.ok and res.fidelity.final_ok   # set_role の sec1 は提案（決定 5）
@@ -416,56 +433,54 @@ def test_sakana_retries_without_schema_and_never_sends_openai_key(monkeypatch):
     # JSON スキーマの指定を断られたら、指定なしで 1 回だけやり直す（依頼文に回答の形式があるので JSON で返る）
     calls = []
     _fake_sakana(monkeypatch, calls, reject_schema=True)
-    out = ai_assist.call_provider("sakana", "x", [], model="fugu", api_key="sk-sakana")
+    out = ai_assist.call_provider("sakana", "指示", "x", [], model="fugu", api_key="sk-sakana")
     creates = [c for c in calls if "messages" in c]
     assert len(creates) == 2 and "response_format" not in creates[1]
-    assert not out.error and parse_response(out.raw)["operations"] and "指定なしでやり直した" in out.model_note
+    assert not out.error and parse_response(out.raw)["links"] and "指定なしでやり直した" in out.model_note
     _fake_sakana(monkeypatch, [], finish="length")
-    assert "途中で切れました" in ai_assist.call_provider("sakana", "x", [], model="fugu", api_key="k").error
+    assert "途中で切れました" in ai_assist.call_provider("sakana", "指示", "x", [], model="fugu", api_key="k").error
     # Sakana のキーがないときに、環境変数の OpenAI のキーを Sakana に送らない
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-should-not-be-sent")
     calls = []
     _fake_sakana(monkeypatch, calls)
-    out = ai_assist.call_provider("sakana", "x", [], model="fugu")
+    out = ai_assist.call_provider("sakana", "指示", "x", [], model="fugu")
     assert "SAKANA_API_KEY" in out.error and calls == []
 
 
 # ---------------------------------------------------------------------------- 回答の順と、途中で切れた回答
+CUT_LINKS = [answers.link("文献", "d18", "2001", 1, "B2", "第1章の段落の引用と判断した例")] * 2
+
+
 def head_first(indent=1):
-    """sample_float の模擬回答を、placements を先頭にして書いたもの（operations を長くして、切る位置を作る）。"""
-    d = FLOAT_RESPONSE
-    return json.dumps({"placements": d["placements"], "operations": d["operations"] * 3, "notes": ["気づき"]},
-                      ensure_ascii=False, indent=indent)
+    """sample_float の模擬回答を、依頼文の回答の形の順（placements が一覧の最初）で書いたもの（links を長くして、切る位置を作る）。"""
+    d = dict(FLOAT_RESPONSE, links=CUT_LINKS, notes=["気づき"])
+    return json.dumps({k: d[k] for k in ai_assist.RESPONSE_SCHEMA["required"]}, ensure_ascii=False, indent=indent)
 
 
 def cut_cases():
     """途中で切れた回答。(a)〜(d) は最後まで書かれた placements の要素を読む。(e)(f) は読まない。"""
     full = head_first()
-    ops = full.index('"operations"')
-    in_ops = full[:full.index('"reason"', ops) + 15]                     # operations の文字列の途中
-    ops_first = json.dumps(FLOAT_RESPONSE, ensure_ascii=False)           # 0.21.0 の見本の順（operations が先頭）
+    ops = full.index('"links"')
+    in_ops = full[:full.index('"reason"', ops) + 15]                     # links の文字列の途中
+    ops_first = json.dumps(dict({"links": CUT_LINKS}, **FLOAT_RESPONSE), ensure_ascii=False)   # links が先頭の回答
     return {
         "a": in_ops,
-        "b": full[:ops + len('"operations":')],                          # "operations": の直後
+        "b": full[:ops + len('"links":')],                               # "links": の直後
         "c": full[:full.index('"float": "s2"') + 30],                    # 2 つ目の placements の要素の途中
         "d": "```json\n" + in_ops,                                       # 閉じのないコードブロック
-        "e": ops_first[:ops_first.index('"placements"') - 20],           # operations が先頭で、placements の前で切れた
+        "e": ops_first[:ops_first.index('"placements"') - 20],           # links が先頭で、placements の前で切れた
         "f": full.replace('"after": "d17"', '"after": “d17”')[:len(in_ops)],   # 途中に飾りの引用符（書き損じ）
     }
 
 
 def test_response_format_puts_placements_first():
     """依頼文の見本・項目の説明・回答の書き方と、API の構造化出力のスキーマで、placements を回答の最初に書かせる。"""
-    assert list(example_block()) == ["placements", "operations", "notes"]
     schema = ai_assist.RESPONSE_SCHEMA
-    assert list(schema["properties"]) == schema["required"] == ["placements", "operations", "notes"]
-    assert "回答の最初に書く" in schema["properties"]["placements"]["description"]
-    assert "回答の JSON は、placements、operations、notes の順に書いてください" in ai_assist.system_prompt()
-    guide = ai_assist.FIELD_GUIDE
-    assert guide.startswith("回答は placements、operations、notes の順に書く") and guide.index("placements（") < guide.index(
-        "operations の各項目")
-    prompt = ai_assist.manual_prompt("（依頼）", [])
-    assert "JSON は placements、operations、notes の順に書いてください" in prompt
+    assert list(schema["properties"]) == schema["required"] == list(example_block()) == [
+        "request_id", "pdf", "placements", "boxes", "boundaries", "links", "names", "style_fixes", "notes"]
+    assert "回答の最初の一覧として書く" in schema["properties"]["placements"]["description"]
+    ins = ai_assist.request_instructions(ALL_SECTIONS)
+    assert "項目はこの順に書きます（placements を先に書くのは、回答が途中で切れても図・表の位置が残るようにするためです）" in ins
     # 読み取りはキーの順によらない（0.21.0 の順の回答も読める）
     assert parse_response(json.dumps(FLOAT_RESPONSE))["placements"] == parse_response(head_first())["placements"]
 
@@ -473,7 +488,7 @@ def test_response_format_puts_placements_first():
 @pytest.mark.parametrize("name, floats", [("a", ["s1", "s2", "s3", "s4"]), ("b", ["s1", "s2", "s3", "s4"]),
                                           ("c", ["s1"]), ("d", ["s1", "s2", "s3", "s4"])])
 def test_cut_response_keeps_finished_placements(name, floats):
-    """途中で切れた回答から、最後まで書かれた placements の要素だけを読む（途中で切れた要素と operations・notes は使わない）。
+    """途中で切れた回答から、最後まで書かれた placements の要素だけを読む（途中で切れた要素と links・notes などは使わない）。
     JSON の読み取りの誤りが文字列の途中で切れた形（Unterminated string）でも、「途中で切れている」の案内を出す。"""
     from jasme_jats.ai_assist import parse_cut_response
     text = cut_cases()[name]
@@ -485,7 +500,7 @@ def test_cut_response_keeps_finished_placements(name, floats):
     data = parse_cut_response(text)
     assert [p["float"] for p in data["placements"]] == floats
     assert data["placements"] == FLOAT_RESPONSE["placements"][:len(floats)]
-    assert data["operations"] == [] and data["notes"] == []
+    assert data["links"] == [] and data["notes"] == [] and data["style_fixes"] == []
 
 
 @pytest.mark.parametrize("name", ["e", "f"])
@@ -529,7 +544,7 @@ def test_cut_inside_string_with_smart_quotes_is_cut():
     切れた回答として、最後まで書かれた placements の要素を読む。読み取りの誤りの案内も「途中で切れている」にする。"""
     from jasme_jats.ai_assist import parse_cut_response
     full = head_first()
-    ops = full.index('"reason"', full.index('"operations"'))
+    ops = full.index('"reason"', full.index('"links"'))
     for tail in ("第1章の“主張”についての途中", "第1章の“主張”"):
         text = full[:ops] + '"reason": "' + tail
         data = parse_cut_response(text)
@@ -542,14 +557,14 @@ def test_cut_inside_string_with_smart_quotes_is_cut():
 def test_code_fence_marks_inside_strings_are_not_blocks():
     """JSON の文字列の中の ``` は、コードブロックの始まり・閉じとみなさない（コードブロックなしの回答・コードブロックの中の
     回答・前置きの説明のある回答）。前置きの説明と同じ行から始まるコードブロックも読む。"""
-    body = json.dumps({"placements": FLOAT_RESPONSE["placements"], "operations": [], "notes": ["```の記号の説明"]},
+    body = json.dumps({"placements": FLOAT_RESPONSE["placements"], "links": [], "notes": ["```の記号の説明"]},
                       ensure_ascii=False, indent=1)
     for text in (body, "```json\n" + body + "\n```", "以下が回答です。\n" + body, "以下が回答です：```json\n" + body + "\n```",
                  "```text\n補足\n```\n```json\n" + body + "\n```"):
         data = parse_response(text)
         assert data["placements"] == FLOAT_RESPONSE["placements"] and data["notes"] == ["```の記号の説明"]
     # { で始まる回答（コードブロックの中身だけをコピーしたもの）は、文字列の中に「```{」があってもコードブロックを探さない
-    body = json.dumps({"placements": FLOAT_RESPONSE["placements"], "operations": [], "notes": ["```{ で始まる記号"]},
+    body = json.dumps({"placements": FLOAT_RESPONSE["placements"], "links": [], "notes": ["```{ で始まる記号"]},
                       ensure_ascii=False)
     assert parse_response(body)["notes"] == ["```{ で始まる記号"]
 
@@ -563,20 +578,20 @@ def test_api_cut_answers_are_kept(monkeypatch):
     text = _cut_text()
     calls = []
     _fake_anthropic(monkeypatch, calls, text=text, stop="max_tokens")
-    out = ai_assist.call_provider("claude", "x", [], api_key="t")
+    out = ai_assist.call_provider("claude", "指示", "x", [], api_key="t")
     assert (out.raw, out.cut) == (text, True) and "途中で切れました" in out.error and out.usage["output_tokens"] == 50
     _fake_openai(monkeypatch, [], status="incomplete", text=text)
-    out = ai_assist.call_provider("openai", "x", [], model="gpt-test", api_key="t")
+    out = ai_assist.call_provider("openai", "指示", "x", [], model="gpt-test", api_key="t")
     assert (out.raw, out.cut) == (text, True) and "途中で切れました" in out.error
     _fake_gemini(monkeypatch, [], finish="MAX_TOKENS", text=text)
-    out = ai_assist.call_provider("gemini", "x", [], model="gemini-test")
+    out = ai_assist.call_provider("gemini", "指示", "x", [], model="gemini-test")
     assert (out.raw, out.cut) == (text, True) and "途中で切れました" in out.error
     _fake_sakana(monkeypatch, [], finish="length", text=text)
-    out = ai_assist.call_provider("sakana", "x", [], model="fugu", api_key="k")
+    out = ai_assist.call_provider("sakana", "指示", "x", [], model="fugu", api_key="k")
     assert (out.raw, out.cut) == (text, True) and "途中で切れました" in out.error
     # 切れていない回答は cut にならない
     _fake_anthropic(monkeypatch, [], text=RESPONSE)
-    out = ai_assist.call_provider("claude", "x", [], api_key="t")
+    out = ai_assist.call_provider("claude", "指示", "x", [], api_key="t")
     assert not out.cut and out.raw == RESPONSE and not out.error
 
 
@@ -625,7 +640,7 @@ def test_call_api_reports_missing_key(monkeypatch):
             self.beta = types.SimpleNamespace(messages=types.SimpleNamespace(stream=no_key))
             self.messages = self.beta.messages
     monkeypatch.setattr(anthropic, "Anthropic", FakeClient)
-    out = ai_assist.call_api("x", [], model="claude-test")
+    out = ai_assist.call_api("指示", "x", [], model="claude-test")
     assert "API キーが見つかりません" in out.error and "ANTHROPIC_API_KEY" in out.error and not out.raw
 
 
@@ -641,10 +656,10 @@ def test_call_api_other_type_error_is_not_api_key(monkeypatch):
             self.beta = types.SimpleNamespace(messages=types.SimpleNamespace(stream=old_sdk))
             self.messages = self.beta.messages
     monkeypatch.setattr(anthropic, "Anthropic", FakeClient)
-    out = ai_assist.call_api("x", [], model="claude-test", api_key="sk-test")
+    out = ai_assist.call_api("指示", "x", [], model="claude-test", api_key="sk-test")
     assert out.error == "AI の呼び出しに失敗しました: stream() got an unexpected keyword argument 'fallbacks'"
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    out = ai_assist.call_api("x", [], model="claude-test")       # API キーがどこにもなければ、API キーの知らせ
+    out = ai_assist.call_api("指示", "x", [], model="claude-test")       # API キーがどこにもなければ、API キーの知らせ
     assert "API キーが見つかりません" in out.error
 
 
@@ -693,15 +708,16 @@ def test_set_role_app_heading_starts_appendix(journal, meta, tmp_path):
 
 
 def test_set_role_on_english_title_is_rejected(journal, meta, tmp_path):
-    # 英文の題目への set_role は、どの役割も採用しない（暫定の判断。0.23.1 は英文題目を exclude・abstract にすると、英文副題が
-    # XML から落ちていた）。英文題目・副題はそのまま
+    # 英文の題目への区切りの指定は、どれも採用しない（暫定の判断。0.23.1 は英文題目を exclude・abstract にすると、英文副題が
+    # XML から落ちていた）。スタイルの提案は記録だけ。英文題目・副題はそのまま
     path = tmp_path / "title.docx"
     mf.make_article(path, "英文題目の検証用文書", _body)
     _, plan, _ = _mechanical(path, journal)
     title = plan.title_en[0].src
     res = _manual(path, answers.answer(boundaries=[(title, "資料の見出し"), (title, "英文要旨の続き")],
                                       style_fixes=[(title, "exclude")]), meta, journal, tmp_path / "out")
-    assert [why for _, why in res.ai.rejected] == ["英文の題目・副題の段落の役割は変えられない（変えると英文の題目・副題が XML から落ちる）"] * 3
+    assert [why for _, why in res.ai.rejected] == ["英文の題目・副題の段落の役割は変えられない（変えると英文の題目・副題が XML から落ちる）"] * 2
+    assert [f.src for f in res.ai.style_fixes] == [title]
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     root = load(res)
     assert _text(root.find(".//article-meta/title-group/trans-title-group/trans-title")) == "A Small Article"
@@ -725,8 +741,8 @@ def test_set_role_abstract_returns_heading_style_appendix(journal, meta, tmp_pat
     assert _abstract(root) == ["Small article abstract.", "Supplementary note", "The rest of the abstract."]
     assert _apps(root) == [("資料1\u3000架空の授業プリント", ["架空のプリントの本文。"])]
     assert not any(d.src == src and "から資料とした" in d.message for d in res.plan.decisions)
-    # 資料の途中の段落（資料の見出しでない段落）への abstract は、英文要旨のスタイルで直す提案にして XML には反映しない
-    # （英文要旨の続き〈abstract〉を指定できるのは、今、資料の見出しになっている段落だけ。所有者の決定 5。W8 の手順 5）
+    # 資料の途中の段落（資料の見出しでない段落）を英文要旨にする提案（style_fixes）は、XML には反映しない
+    # （英文要旨の続きを指定できるのは、今、資料の見出しになっている段落だけ。所有者の決定 5。W8 の手順 5・10）
     path = tmp_path / "middle.docx"
     mf.make_article(path, "英文要旨に戻す検証用文書", _body,
                     appendix=[mf.para(S["abs"], "資料1\u3000架空の授業プリント"), mf.para(S["abs"], "架空のプリントの本文。"),
@@ -736,7 +752,7 @@ def test_set_role_abstract_returns_heading_style_appendix(journal, meta, tmp_pat
     src = next(s for s, p in plan.paras.items() if p.plain() == "The rest of the abstract.")
     assert plan.region[src] == "app"
     res = _manual(path, answers.answer(style_fixes=[(src, "abstract")]), meta, journal, tmp_path / "out2")
-    assert [why for _, why in res.ai.rejected] == [ai_assist.STYLE_ONLY_WHY] and res.fidelity.ok and res.dtd_valid
+    assert res.ai.rejected == [] and res.fidelity.ok and res.dtd_valid
     assert [(f.src, f.style) for f in res.ai.style_fixes] == [(src, "英文要旨")] and res.ai.boundaries == []
     assert load(res) is not None and res.xml_path.read_bytes() == _manual(path, None, meta, journal, tmp_path / "none").xml_path.read_bytes()
 
@@ -796,8 +812,8 @@ def test_set_role_p_after_abstract_keeps_abstract(journal, meta, tmp_path):
                                                "The fictional third abstract paragraph.", "資料2\u3000架空の授業プリント"))
     assert plan.region[third] == "app" and [a.title.src for a in plan.apps] == [head, head2]
     res = _manual(path, answers.answer(boundaries=[(head, "英文要旨の続き")], style_fixes=[(third, "p")]), meta, journal, tmp_path / "out")
-    # 資料の見出しでない段落への p は、Word のスタイルで直す提案にして XML には反映しない（所有者の決定 5。W8 の手順 5）
-    assert [(op["src"], why) for op, why in res.ai.rejected] == [(third, ai_assist.STYLE_ONLY_WHY)]
+    # 資料の見出しでない段落を本文にする提案（style_fixes）は、XML には反映しない（所有者の決定 5。W8 の手順 5・10）
+    assert res.ai.rejected == [] and [f.src for f in res.ai.style_fixes] == [third]
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     assert [(b.src, b.kind) for b in res.ai.boundaries] == [(head, "英文要旨の続き")]
     root = load(res)
@@ -806,13 +822,13 @@ def test_set_role_p_after_abstract_keeps_abstract(journal, meta, tmp_path):
     assert _apps(root) == [("資料2\u3000架空の授業プリント", ["架空のプリントの本文。"])]
     res = _manual(path, answers.answer(boundaries=[(head, "英文要旨の続き"), (head2, "資料の本文")], style_fixes=[(third, "p")]),
                   meta, journal, tmp_path / "out2")
-    assert [op["src"] for op, _ in res.ai.rejected] == [third] and res.fidelity.ok and res.dtd_valid
+    assert res.ai.rejected == [] and [f.src for f in res.ai.style_fixes] == [third] and res.fidelity.ok and res.dtd_valid
     assert [(b.src, b.kind) for b in res.ai.boundaries] == [(head, "英文要旨の続き"), (head2, "資料の本文")]
     root = load(res)
     assert _abstract(root) == ["Small article abstract.", "Appendix 1: The fictional second abstract paragraph",
                                "The fictional third abstract paragraph."]
     assert _apps(root) == [("", ["資料2\u3000架空の授業プリント", "架空のプリントの本文。"])]
-    assert [d.message for op, d in res.ai.accepted if op["src"] == head2] == ["段落の役割を「本文段落」とした。試験"]
+    assert [d.message for op, d in res.ai.accepted if op["src"] == head2] == ["段落を「資料の本文」（本文段落）とした。試験"]
     # 英文要旨の段落への abstract（指定しても変わらない）の後ろでも、最初の資料の見出し（見出しのスタイルの段落）への p は、見出しの
     # ない資料の最初の段落になる（見出しと資料の段落を英文要旨に入れない）
     path = tmp_path / "style.docx"
@@ -822,8 +838,8 @@ def test_set_role_p_after_abstract_keeps_abstract(journal, meta, tmp_path):
     by_text = {p.plain(): s for s, p in plan.paras.items()}
     res = _manual(path, answers.answer(boundaries=[(by_text["授業の記録"], "資料の本文")],
                                       style_fixes=[(by_text["Small article abstract."], "abstract")]), meta, journal, tmp_path / "out3")
-    # 英文要旨の段落への abstract は提案（英文要旨の続きは、資料の見出しの段落にだけ指定できる）
-    assert [(op["role"], why) for op, why in res.ai.rejected] == [("abstract", ai_assist.STYLE_ONLY_WHY)]
+    # 英文要旨の段落を英文要旨にする提案は、記録だけ（英文要旨の続きは、資料の見出しの段落にだけ指定できる）
+    assert res.ai.rejected == [] and [f.role for f in res.ai.style_fixes] == ["abstract"]
     assert res.fidelity.ok and res.dtd_valid
     root = load(res)
     assert _abstract(root) == ["Small article abstract."]
@@ -832,8 +848,8 @@ def test_set_role_p_after_abstract_keeps_abstract(journal, meta, tmp_path):
 
 def test_sentence_decision_is_not_recorded_for_ai_roles(journal, meta, tmp_path):
     # 見出しの形に合うが文とみなした段落の判断（「…資料の見出しにしなかった」。applied=False）は、AI が役割を指定した段落には
-    # 記録しない（AI が決めたことなので、4 章と依頼文で、資料の見出しにできるという案内を繰り返さない）。資料の見出しでない段落への
-    # abstract・p は、Word のスタイルで直す提案にして XML に反映しない（所有者の決定 5）ので、その判断は残る
+    # 記録しない（AI が決めたことなので、4 章と依頼文で、資料の見出しにできるという案内を繰り返さない）。資料の見出しでない段落を
+    # 英文要旨・本文にする提案（style_fixes）は XML に反映しない（所有者の決定 5）ので、その判断は残る
     path = tmp_path / "sentence.docx"
     mf.make_article(path, "文の形の段落の検証用文書", _body, abstract=["Small article abstract.", "(Appendix 1) lists the fictional tasks."],
                     appendix=[mf.para(S["abs"], "資料1\u3000架空の授業プリント"),
@@ -846,7 +862,7 @@ def test_sentence_decision_is_not_recorded_for_ai_roles(journal, meta, tmp_path)
         return [d.src for d in plan.decisions if "資料の見出しにしなかった" in d.message]
     assert sentence_decisions(plan) == [s1, s2]               # 機械処理では記録する
     res = _manual(path, answers.answer(style_fixes=[(s1, "abstract"), (s2, "p")]), meta, journal, tmp_path / "out")
-    assert [why for _, why in res.ai.rejected] == [ai_assist.STYLE_ONLY_WHY] * 2 and res.fidelity.ok and res.dtd_valid
+    assert res.ai.rejected == [] and len(res.ai.style_fixes) == 2 and res.fidelity.ok and res.dtd_valid
     assert sentence_decisions(res.plan) == [s1, s2]
     # 資料の見出しにした段落（app_heading）には記録しない
     res = _manual(path, answers.answer(boundaries=[(s2, "資料の見出し")]), meta, journal, tmp_path / "out_h")
@@ -860,7 +876,8 @@ def test_sentence_decision_is_not_recorded_for_ai_roles(journal, meta, tmp_path)
 def test_boundary_problem_allows_only_five_kinds(journal):
     """段落の役割の補正の最小の形（所有者の決定 5。W8 の手順 5）: XML に反映するのは、注の区切り・資料の始まりの直し
     （BOUNDARY_KINDS の 5 つ）だけ。判定は boundary_problem の 1 か所で、set_role_problem を先に通す。"""
-    from jasme_jats.ai_assist import BOUNDARY_KINDS, STYLE_ONLY_WHY, boundary_kind, boundary_problem, role_style
+    from jasme_jats.ai_assist import (ABSTRACT_FIRST_WHY, BOUNDARY_KINDS, STYLE_ONLY_WHY, boundary_kind, boundary_problem,
+                                      role_style)
     assert BOUNDARY_KINDS == {"注の始まり": "fn_start", "注の続き": "p", "資料の見出し": "app_heading",
                               "英文要旨の続き": "abstract", "資料の本文": "p"}
     _, plan, _ = _mechanical(STRUCTURE, journal)
@@ -870,8 +887,9 @@ def test_boundary_problem_allows_only_five_kinds(journal):
     app_title = by_text["資料（授業プリント）"]
     app_para = by_text["問1\u3000架空の問題文である。"]
     endnote = next(fn.paras[0] for fn in plan.fns if fn.word_id == "endnote:5")
-    # 区切りの直し
-    assert boundary_problem(abstract, plan, "app_heading") == "" and boundary_kind(abstract, plan, "app_heading") == "資料の見出し"
+    # 区切りの直し（英文要旨の最初の段落を資料の見出しにすると英文要旨が空になるので、それだけは断る）
+    assert plan.abstract[0] is abstract and boundary_kind(abstract, plan, "app_heading") == "資料の見出し"
+    assert boundary_problem(abstract, plan, "app_heading") == ABSTRACT_FIRST_WHY
     assert boundary_problem(app_para, plan, "app_heading") == ""
     assert boundary_kind(app_title, plan, "abstract") == "英文要旨の続き" and boundary_kind(app_title, plan, "p") == "資料の本文"
     # Word のスタイルで直せる指定は提案
@@ -888,9 +906,8 @@ def test_boundary_problem_allows_only_five_kinds(journal):
 
 @pytest.mark.parametrize("role", ["sec1", "quote", "exclude", "fig_caption", "abstract"])
 def test_style_only_set_role_does_not_change_xml(role, journal, meta, tmp_path):
-    """区切りの 5 つ以外の set_role（章見出し・引用・除外・図キャプション・資料の見出しでない段落への英文要旨）は、XML を 1 バイトも
-    変えず、不採用の理由が STYLE_ONLY_WHY で、AIOutcome.style_fixes にスタイル名つきで入る（所有者の決定 5。W8 の手順 5）。
-    AI の除外で本文が落ちない（C042）。"""
+    """スタイルの提案（style_fixes。章見出し・引用・除外・図キャプション・資料の見出しでない段落への英文要旨）は、XML を 1 バイトも
+    変えず、AIOutcome.style_fixes にスタイル名つきで入る（所有者の決定 5。W8 の手順 5・10）。AI の除外で本文が落ちない（C042）。"""
     path = tmp_path / "style.docx"
     mf.make_article(path, "提案の検証用文書", lambda b: [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "本文の文である。"),
                                                        mf.para(S["body"], "見出しに見える段落")],
@@ -901,12 +918,13 @@ def test_style_only_set_role_does_not_change_xml(role, journal, meta, tmp_path):
     none = _manual(path, None, meta, journal, tmp_path / "none")
     res = _manual(path, answers.answer(style_fixes=[(src, role)]), meta, journal, tmp_path / "out")
     assert res.xml_path.read_bytes() == none.xml_path.read_bytes()
-    assert [why for _, why in res.ai.rejected] == [ai_assist.STYLE_ONLY_WHY] and res.ai.accepted == [] and res.ai.boundaries == []
+    assert res.ai.rejected == [] and res.ai.accepted == [] and res.ai.boundaries == []
     [fix] = res.ai.style_fixes
-    assert (fix.src, fix.role, fix.verdict, fix.reason, fix.confidence) == (src, role, "直す", "試験", "高")
+    assert (fix.src, fix.role, fix.verdict, fix.reason, fix.confidence) == (
+        src, "" if role == "exclude" else role, "直す", "試験", "高")
     assert fix.style == ai_assist.role_style(journal, role) and (fix.style or role == "exclude")
     assert not any(e.reason.startswith("AI") for e in res.plan.exclusions)
-    assert ai_assist.STYLE_ONLY_WHY in res.report_path.read_text(encoding="utf-8")       # 2 章の不採用の一覧
+    assert "### スタイルの提案（XML には反映していない）" in res.report_path.read_text(encoding="utf-8")       # 2 章
 
 
 def test_set_role_problem_rules(journal):
@@ -940,30 +958,41 @@ def test_set_role_problem_rules(journal):
 
 
 def test_request_hints_follow_set_role_problem(journal, tmp_path):
-    # 依頼文の除外の一覧の案内は、set_role_problem で指定できる役割だけを勧める（0.23.1 は、冒頭・著者表・Word の注の段落にも
-    # 「本文の一部なら set_role を提案」と書き、必ず捨てられる set_role を勧めていた。N6）
-    from jasme_jats.ai_assist import ROLES, build_request, system_prompt
+    # 依頼文の「# 出力から除いた段落（確かめるだけ）」は、除いた理由と文字だけを書き、操作の案内を添えない（0.23.1 は、冒頭・
+    # 著者表・Word の注の段落にも「本文の一部なら set_role を提案」と書き、必ず捨てられる set_role を勧めていた〈N6〉。W8 の手順 15 で
+    # 案内〈set_role_hint〉をなくした。直すのは style_fixes の提案で、指示の部分に書く）
+    from jasme_jats.ai_assist import BOUNDARY_KINDS, EXCLUDED_HEADING, build_request
 
     def hints(path):
         _, plan, linker = _mechanical(path, journal)
-        req, _ = build_request(plan, linker)
-        return {ln.split("]")[0][3:]: ln for ln in req.splitlines() if ln.startswith("- [") and "出力から除外" in ln}, plan
+        req = build_request(plan, linker).data
+        sec = req.split(EXCLUDED_HEADING + "\n", 1)[1].split("\n\n", 1)[0] if EXCLUDED_HEADING in req else ""
+        return {ln.split("]")[0][3:]: ln for ln in sec.splitlines() if ln.startswith("- [")}, plan
     lines, plan = hints(STRUCTURE)
     _, plan2, linker = _mechanical(STRUCTURE, journal)
-    req = build_request(plan2, linker)[0]
-    # 文末脚注の参照は「⟦Word の文末脚注参照⟧」、注の一覧の Word の注は「（Word の文末脚注 5）」と書く
-    assert "脚注を付けた文⟦Word の脚注参照⟧と文末脚注を付けた文⟦Word の文末脚注参照⟧。" in req
-    assert "[fn2]（Word の文末脚注 5）注" in req and "[fn1]（Word の脚注 5）注" in req
-    journal_line = next(e.src for e in plan.exclusions if e.reason.startswith("冒頭部のテンプレート装飾"))
-    # 除外した段落の役割の指定は Word のスタイルで直す提案になる（XML は変えない。所有者の決定 5）ので、案内は 1 通り
-    assert lines[journal_line].endswith("（確かめるだけ。本文に必要なら set_role で提案）")
-    assert "set_role で指定できる役割:" not in req and "本文の一部なら set_role を提案" not in req
+    request = build_request(plan2, linker)
+    req = request.data
+    # 文末脚注の参照は「⟦文末脚注⟧」、「## 注」の Word の注は、行頭の注の ID に「（Word の文末脚注 5）」を添え、段落の行を続ける
+    # （修正計画 W8 の 4.1。続きの段落は字下げ）
+    assert "脚注を付けた文⟦脚注⟧と文末脚注を付けた文⟦文末脚注⟧。" in req
+    notes = req.split("\n## 注（", 1)[1].split("\n\n", 1)[0].splitlines()[1:]
+    first = {fn.word_id: fn.paras[0].src for fn in plan2.fns if fn.word_note}
+    assert notes[0].startswith(f"[fn1]（Word の脚注 5）[{first['footnote:5']}]")
+    assert notes[1].startswith(f"[fn2]（Word の文末脚注 5）[{first['endnote:5']}]")
+    assert notes[2].startswith("      [") and all(ln.lstrip().startswith("[") for ln in notes)
+    journal_line = next(e for e in plan.exclusions if e.reason.startswith("冒頭部のテンプレート装飾"))
+    assert lines[journal_line.src] == f"- [{journal_line.src}] {journal_line.reason}:「{journal_line.text.strip()[:60]}" + (
+        "…」" if len(journal_line.text.strip()) > 60 else "」")
+    # 手順 15 の節（未解決の一覧・除外）に、操作の名前を書かない（図形の節は手順 16 で作り直す）
+    mine = "\n".join(req.split(h, 1)[1].split("\n\n", 1)[0] for h in ("# 機械がリンクできなかった箇所", EXCLUDED_HEADING))
+    assert all(w not in mine for w in ("set_role", "placements", "split_name", "link_", "推定: "))
     unref = next(s for s, k in plan.note_of.items() if k == "footnote:9")
-    assert lines[unref].endswith("（この段落の役割は set_role では変えられない）")
+    assert unref in lines                                   # どの役割にもできない段落も、除いたことは載せる
     lines, plan = hints(FULL)
     dup = next(e.src for e in plan.exclusions if e.reason.startswith("重複する所属"))
-    assert lines[dup].endswith("（この段落の役割は set_role では変えられない）")      # 著者表の中の段落
-    # 本文の段落（浮動配置でないテキストボックスの中の文字）は、今までどおり p を勧める
+    assert dup in lines                                     # 著者表の中の段落
+    # 囲みか図の注記か決められなかったテキストボックス（浮動配置でない VML）の段落は、テキストボックスの節に載せ、除外の一覧には
+    # 載せない（二重に載せない）
     vml = ('<w:r><w:pict><v:shape style="width:200pt;height:40pt"><v:textbox><w:txbxContent>'
            + mf.para(S["body"], "囲みの中の架空の問題文。") + "</w:txbxContent></v:textbox></v:shape></w:pict></w:r>")
     path = tmp_path / "vml.docx"
@@ -971,16 +1000,18 @@ def test_request_hints_follow_set_role_problem(journal, tmp_path):
                                                                mf.para(S["body"], "囲みを付けた本文。", vml)])
     lines, plan = hints(path)
     box = next(s for s, p in plan.paras.items() if p.plain() == "囲みの中の架空の問題文。")
-    # 囲みか図の注記か決められなかったテキストボックス（浮動配置でない VML）の段落には、placements の kind box・label を勧める
-    # （set_role p は採用されないので勧めない。修正計画の F）
-    assert lines[box].endswith("（囲みなら placements の kind box、図の注記なら label で指定）")
-    # 依頼文の役割の一覧と説明に、資料の見出し（app_heading）がある
-    assert "app_heading（資料の見出し（英文要旨の後ろの、資料・付録の始まり））" in system_prompt()
-    assert "資料の見出しの段落を app_heading にしてください" in system_prompt() and "app_heading" in ROLES
-    assert "見出しではなく、前の資料の続きにします。前に資料がなければ" in system_prompt()
-    # XML に反映するのは注の区切りと資料の始まりの直しだけで、ほかの役割は提案（所有者の決定 5。W8 の手順 5）
-    assert "XML に反映するのは、注の区切りと資料の始まりの直しだけです" in system_prompt()
-    assert "Word のスタイルで直す\n   提案として作業する人に知らせるだけで、XML は変えません" in system_prompt()
+    assert box in {e.src for e in plan.exclusions} and box not in lines
+    _, plan3, linker3 = _mechanical(path, journal)
+    assert f"[{box}]" in build_request(plan3, linker3).data.split("# 囲みか図の注記か決められなかった", 1)[1]
+    # 回答で直すのは注の区切りと資料の始まりだけで、ほかの役割はスタイルの提案（所有者の決定 5。W8 の手順 5・13）。依頼文の区切りの
+    # 語は BOUNDARY_KINDS と同じ
+    ins = request.instructions
+    assert "Word のスタイルでは直しにくい" in ins and "スタイルの付け間違いは、あなたの回答では直りません" in ins
+    bound = next((s for s in request.sections if s.key == "boundaries"), None)
+    kinds = (("注の始まり", "注の続き") if bound and "notes" in bound.parts else ()) + (
+        ("資料の見出し", "英文要旨の続き", "資料の本文") if bound and "apps" in bound.parts else ())
+    assert all(f'"{k}"' in ins for k in kinds) and set(kinds) <= set(BOUNDARY_KINDS)
+    assert "app_heading" not in ins and "set_role" not in ins
 
 
 # ----------------------------------------------------------------------------- 文字だけのテキストボックス（修正計画の D1）
@@ -994,20 +1025,14 @@ def _src(plan, head):
     return next(s for s, p in plan.paras.items() if p.plain().startswith(head))
 
 
-def _box_pl(xid, after, kind="box", **kw):
-    item = {"kind": kind, "caption": [], "body": []}
-    item.update(kw)
-    return {"float": xid, "after": after, "items": [item], "reason": "試験の回答", "confidence": "中"}
-
-
 def _hint_and_note(plan, hint, note):
     """囲みのテキストボックス hint を「囲みの後の段落」の後ろの囲みに、note を図の注記にする回答。"""
     return answers.answer(boxes=[(hint, "囲み", _src(plan, "囲みの後の段落である。")), (note, "図の注記", "")])
 
 
-def _manual_pl(path, placements, meta, journal, out):
-    """placements を手で書いた回答（items の書き方そのものを試す）を手動モードで貼り戻して変換する。"""
-    resp = json.dumps({"placements": placements, "operations": [], "notes": []}, ensure_ascii=False)
+def _manual_boxes(path, boxes, meta, journal, out):
+    """boxes を手で書いた回答（項目の書き方そのものを試す）を手動モードで貼り戻して変換する。"""
+    resp = json.dumps(dict(answers.empty(), boxes=list(boxes)), ensure_ascii=False)
     return convert(path, meta, journal, Options(out_dir=out, ai_mode="manual", ai_response=resp))
 
 
@@ -1106,28 +1131,6 @@ def test_textbox_undecided_advice_when_ai_failed_and_checklist_follows_mode(jour
     assert "AI が種類を判断します" in fin.box_detail
 
 
-@pytest.mark.parametrize("empty", ["", 0, False, None])
-def test_g5_falsy_caption_body_are_empty_lists(empty, journal, meta, tmp_path):
-    """G5: placements の items の caption・body が falsy な値（""・0・false・null）のときは、以前どおり空の一覧として扱う
-    （テキストボックスの box・label の指定は採用される）。真の値で一覧でないもの（"d16"・5）だけが不採用。"""
-    plan, ids = _boxes_by_text(journal)
-    hint, note = ids["（ヒント）"], ids["注"]
-    res = _manual_pl(STRUCTURE, [_box_pl(hint, _src(plan, "囲みの後の段落である。"), caption=empty, body=empty),
-                                 _box_pl(note, "", kind="label", caption=empty, body=empty)], meta, journal, tmp_path)
-    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
-    assert {op["src"] for op, _ in res.ai.accepted if op["op"] == "place_float"} == {hint, note}
-    assert res.ai.rejected == []
-    assert (res.plan.textboxes[hint].kind, res.plan.textboxes[note].kind) == ("box", "label")
-
-
-def test_g5_truthy_non_list_caption_is_still_rejected(journal, meta, tmp_path):
-    plan, ids = _boxes_by_text(journal)
-    hint = ids["（ヒント）"]
-    res = _manual_pl(STRUCTURE, [_box_pl(hint, _src(plan, "囲みの後の段落である。"), caption="d16", body=5)], meta, journal, tmp_path)
-    assert res.fidelity.ok and [why for _, why in res.ai.rejected] == ["items の caption は一覧（[ ]）で書く"]
-    assert res.plan.textboxes[hint].kind == "undecided"
-
-
 def test_ai_kind_box_restores_mechanical_label(journal, meta, tmp_path):
     # 図に重ねた注記と機械的に判断したテキストボックスも、本文の文字（問題文など）なら、AI が placements の kind box で本文の
     # 囲みに戻せる（F の確かめで足した暫定の判断。それまでは「扱いを機械的に決めたので変更できない」で採用せず、図の近くの
@@ -1137,9 +1140,10 @@ def test_ai_kind_box_restores_mechanical_label(journal, meta, tmp_path):
     label, a_src, after = ids["A 点"], _src(plan, "A 点"), _src(plan, "図1の点に名前を付けた。")
     assert plan.textboxes[label].kind == "label"
     _, plan1, linker = _mechanical(STRUCTURE, journal)
-    req, _ = build_request(plan1, linker)
-    assert (f"- [{a_src}] 出力から除外: テキストボックス内の文字（図に重ねた注記とみなして本文から除外）: 「A 点」"
-            "（図の注記でなく本文の文章なら、placements の kind box で囲みに指定）") in req
+    req = build_request(plan1, linker).data
+    # 図の注記とみなしたテキストボックスの段落は、その節に載せ、「# 出力から除いた段落」には載せない（二重に載せない。W8 の手順 15）
+    assert f"[{a_src}]A 点" in req.split("# 図の注記とみなして除いたテキストボックス", 1)[1]
+    assert f"- [{a_src}]" not in req.split("# 出力から除いた段落", 1)[-1].split("\n\n", 1)[0]
     res = _manual(STRUCTURE, answers.answer(boxes=[(label, "囲み", after)]), meta, journal, tmp_path)
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
     bt = next(bt for bt in load(res).iter("boxed-text") if _text(bt) == "A 点")
@@ -1147,7 +1151,8 @@ def test_ai_kind_box_restores_mechanical_label(journal, meta, tmp_path):
     [(op, d)] = [(op, d) for op, d in res.ai.accepted if op["op"] == "place_float"]
     assert op["src"] == label and d is res.plan.float_decisions[label] and d.category == "box"
     assert "を囲み（boxed-text）として段落「図1の点に名前を付けた。」の後に置いた（機械的には図に重ねた注記と判断していた）。" in d.message
-    assert "A 点" not in {t for _, _, t in res.fidelity.excluded} and res.ai.rejected == []
+    assert "A 点" not in {t for _, _, t in res.fidelity.excluded}
+    assert [why for _, why in res.ai.rejected] == [ai_assist.NO_BOX_WHY] * len(plan.undecided_boxes)   # 聞いたのに答えのないもの
     assert not any("図に重ねた注記と判断したテキストボックス" in w for w in res.warnings)
     info = res.plan.textboxes[label]
     assert (info.kind, info.mode, info.where, info.estimated) == ("box", "ai", "ai", False)
@@ -1155,8 +1160,8 @@ def test_ai_kind_box_restores_mechanical_label(journal, meta, tmp_path):
     assert "| テキストボックスの文字（2 章・3 章・4 章・6 章） |" in res.report_path.read_text(encoding="utf-8").split("## 2.")[0]
     # kind label（注記のまま）は採用しない。注記のまま除外し、10 章の警告に、本文の文字なら囲みに指定できることを書く
     res = _manual(STRUCTURE, answers.answer(boxes=[(label, "図の注記", "")]), meta, journal, tmp_path / "label")
-    assert [why for _, why in res.ai.rejected] == [
-        f"テキストボックス {label} は図に重ねた注記とみなして除外したので、指定できるのは box（本文の囲みに戻す）だけ（図の注記のままなら書かない）"]
+    assert [why for op, why in res.ai.rejected if op["src"] == label] == [
+        f"テキストボックス {label} は図の注記とみなして除いたので、指定できるのは「囲み」（本文の囲みに戻す）だけ（図の注記のままなら書かない）"]
     assert {t: w for _, w, t in res.fidelity.excluded}["A 点"] == "テキストボックス内の文字（図に重ねた注記とみなして本文から除外）"
     [warn] = [w for w in res.warnings if "図に重ねた注記と判断したテキストボックス" in w]
     assert warn.endswith("（6 章）。図の注記でなく本文の文字（問題文など）なら、Word で文字を"
@@ -1164,62 +1169,66 @@ def test_ai_kind_box_restores_mechanical_label(journal, meta, tmp_path):
 
 
 @pytest.mark.parametrize("make, why", [
-    (lambda p, ids: _box_pl(ids["（ヒント）"], _src(p, "問1　架空の三角形")), "本文の段落ではない"),     # 囲みの中の段落
+    (lambda p, ids: answers.box(ids["（ヒント）"], "囲み", _src(p, "問1　架空の三角形")), "本文の段落ではない"),     # 囲みの中の段落
     # 浮動配置でない（行内の）囲みの中の段落（textbox_id だけで plan.body_seq から除く。修正計画の F の (4)）
-    (lambda p, ids: _box_pl(ids["（ヒント）"], _src(p, "問2　架空の問い")), "本文の段落ではない"),
-    (lambda p, ids: _box_pl(ids["（ヒント）"], _src(p, "試験七郎（2025）")), "本文の段落ではない"),        # 引用文献の段落
-    (lambda p, ids: _box_pl(ids["（ヒント）"], _src(p, "試験　七郎")), "本文の段落ではない"),             # 著者表のセル
-    (lambda p, ids: _box_pl(ids["問1　架空の三角形の面積を求めよ。底辺と高さは図に示す。"], _src(p, "囲みの後の段落")),
+    (lambda p, ids: answers.box(ids["（ヒント）"], "囲み", _src(p, "問2　架空の問い")), "本文の段落ではない"),
+    (lambda p, ids: answers.box(ids["（ヒント）"], "囲み", _src(p, "試験七郎（2025）")), "本文の段落ではない"),   # 引用文献の段落
+    (lambda p, ids: answers.box(ids["（ヒント）"], "囲み", _src(p, "試験　七郎")), "本文の段落ではない"),        # 著者表のセル
+    (lambda p, ids: answers.box(ids["問1　架空の三角形の面積を求めよ。底辺と高さは図に示す。"], "囲み", _src(p, "囲みの後の段落")),
      "は囲み（boxed-text）として扱いと位置を機械的に決めたので、変更できない"),
-    (lambda p, ids: _box_pl(ids["問2　架空の問いを二つの式で考えよ。"], "", kind="label"),     # 行内の囲み
+    (lambda p, ids: answers.box(ids["問2　架空の問いを二つの式で考えよ。"], "図の注記", ""),     # 行内の囲み
      "は囲み（boxed-text）として扱いと位置を機械的に決めたので、変更できない"),
-    (lambda p, ids: _box_pl(ids[""], _src(p, "囲みの後の段落")), "は扱いを機械的に決めたので、変更できない"),   # 空白だけ
-    # 図に重ねた注記とみなしたもの: 本文の囲みに戻す box だけを受け付ける（注記のままなら書かない）
-    (lambda p, ids: _box_pl(ids["A 点"], "", kind="label"), "指定できるのは box（本文の囲みに戻す）だけ（図の注記のままなら書かない）"),
-    (lambda p, ids: _box_pl(ids["A 点"], _src(p, "問1　架空の三角形")), "本文の段落ではない"),
-    (lambda p, ids: _box_pl(ids["問3　架空の数の列の規則を説明せよ。"], "", kind="label"), "box だけを指定できる"),
-    (lambda p, ids: _box_pl(ids["（ヒント）"], _src(p, "囲みの後の段落"), caption=[_src(p, "（ヒント）")]), "空の一覧 [] にする"),
-    (lambda p, ids: {**_box_pl(ids["（ヒント）"], _src(p, "囲みの後の段落")),
-                     "items": [{"kind": "box", "caption": [], "body": []}] * 2}, "1 つだけ書く"),
-    (lambda p, ids: _box_pl(ids["（ヒント）"], _src(p, "囲みの後の段落"), kind="fig"), "1 つだけ書く"),
-    (lambda p, ids: _box_pl("x99", _src(p, "囲みの後の段落")), "にない"),
+    (lambda p, ids: answers.box(ids[""], "囲み", _src(p, "囲みの後の段落")), "は扱いを機械的に決めたので、変更できない"),   # 空白だけ
+    # 図の注記とみなしたもの: 本文の囲みに戻す「囲み」だけを受け付ける（注記のままなら書かない）
+    (lambda p, ids: answers.box(ids["A 点"], "図の注記", ""), "指定できるのは「囲み」（本文の囲みに戻す）だけ（図の注記のままなら書かない）"),
+    (lambda p, ids: answers.box(ids["A 点"], "囲み", _src(p, "問1　架空の三角形")), "本文の段落ではない"),
+    (lambda p, ids: answers.box(ids["問3　架空の数の列の規則を説明せよ。"], "図の注記", ""), "「囲み」だけを指定できる"),
+    (lambda p, ids: dict(answers.box(ids["（ヒント）"], "囲み", _src(p, "囲みの後の段落")), kind="box"), "「囲み」か「図の注記」でない"),
+    (lambda p, ids: dict(answers.box(ids["（ヒント）"], "囲み", _src(p, "囲みの後の段落")), kind="fig"), "「囲み」か「図の注記」でない"),
+    (lambda p, ids: answers.box("x99", "囲み", _src(p, "囲みの後の段落")), "にない"),
+    (lambda p, ids: answers.box("s1", "囲み", _src(p, "囲みの後の段落")), "にない"),
+    # after_head が段落の先頭の文字と合わない（段落の ID の書き違いの疑い）
+    (lambda p, ids: answers.box(ids["（ヒント）"], "囲み", _src(p, "囲みの後の段落"), after_head="違う段落の先頭"), "と合わない"),
 ])
 def test_ai_textbox_placements_are_validated(journal, make, why):
-    from jasme_jats.ai_assist import AIOutcome, float_placements
+    from jasme_jats.ai_assist import AIOutcome, box_kinds
     plan, ids = _boxes_by_text(journal)
     out = AIOutcome()
-    got = float_placements({"placements": [make(plan, ids)]}, plan, out)
+    got = box_kinds({"boxes": [make(plan, ids)]}, plan, out)
     assert got == {} and len(out.rejected) == 1 and why in out.rejected[0][1]
 
 
 def test_ai_textbox_placement_twice_and_estimated_box(journal, meta, tmp_path):
-    # 同じテキストボックスの 2 回目の指定は採用しない。位置を推定した囲みは、kind box で位置だけを指定し直せる（要確認は消える）
-    from jasme_jats.ai_assist import AIOutcome, float_placements
+    # 同じテキストボックスの 2 回目の指定は採用しない。位置を推定した囲みは、kind 囲みで位置だけを指定し直せる（要確認は消える）
+    from jasme_jats.ai_assist import AIOutcome, box_kinds, float_placements
     plan, ids = _boxes_by_text(journal)
     hint, est = ids["（ヒント）"], ids["問3　架空の数の列の規則を説明せよ。"]
     out = AIOutcome()
-    got = float_placements({"placements": [_box_pl(hint, "", kind="label"), _box_pl(hint, _src(plan, "囲みの後の段落"))]},
-                           plan, out)
-    assert got[hint]["kind"] == "label" and "2 回ある" in out.rejected[0][1]
+    after = _src(plan, "囲みの後の段落")
+    got = box_kinds({"boxes": [answers.box(hint, "図の注記", ""),
+                               answers.box(hint, "囲み", after, after_head=ai_assist.head_of(plan.paras[after]))]}, plan, out)
+    assert got[hint]["kind"] == "label" and got[hint]["after"] == "" and "2 回ある" in out.rejected[0][1]
     assert plan.estimated_boxes == [est]
     res = _manual(STRUCTURE, answers.answer(boxes=[(est, "囲み", _src(plan, "空の囲みを置いた。"))]), meta, journal, tmp_path)
     assert res.fidelity.ok and res.dtd_valid and res.plan.estimated_boxes == []
     bt = next(bt for bt in load(res).iter("boxed-text") if _text(bt).startswith("問3"))
     assert _text(bt.getprevious()) == "空の囲みを置いた。"
     assert "textbox_place" not in [a.key for a in actions(res)]
-    # 浮動配置の図形（位置を決められなかった図表）に kind box を書いたものは、位置（after）だけを使う（items は読まない。
-    # 修正計画 W1 の 2.7）。テキストボックスの kind にはしない
+    # 図形（位置を決められなかった図表）の位置は placements に書き、テキストボックスの ID を placements に書いた指定は採用しない
     _, fplan, _ = _mechanical(FLOAT, journal)
     out = AIOutcome()
-    got = float_placements({"placements": [_box_pl("s1", "d13")]}, fplan, out)
+    got = float_placements({"placements": [answers.placement("s1", "d13")]}, fplan, out)
     assert list(got) == ["s1"] and got["s1"]["after"] == "d13" and "kind" not in got["s1"] and out.rejected == []
+    out = AIOutcome()
+    assert float_placements({"placements": [answers.placement(hint, after)]}, plan, out) == {}
+    assert [why for _, why in out.rejected] == [f"{hint} はテキストボックスなので、種類と位置は boxes に書く"]
 
 
 def test_set_role_on_textbox_paragraphs(journal, meta, tmp_path):
     # 浮動配置でないテキストボックス（VML・行内）の段落に set_role で指定できるのは fig_caption・table_caption・exclude だけ
-    # （ほかは placements の kind box・label を案内して採用しない。修正計画の F の (1)）。浮動配置の図形の段落は今までどおり
-    # すべて placements で指定させる。指定できる fig_caption・exclude も、Word のスタイルで直す提案にして XML には反映しない
-    # （所有者の決定 5。W8 の手順 5。VML のキャプションは、Word でスタイルを図キャプションにすれば図のキャプションになる）
+    # （ほかは placements の kind box・label を案内して採用しない。修正計画の F の (1)。依頼文の案内〈set_role_hint〉の判定）。
+    # スタイルの提案（style_fixes）は、どの段落でも記録するだけで XML には反映しない（所有者の決定 5。W8 の手順 5・10。VML の
+    # キャプションは、Word でスタイルを図キャプションにすれば図のキャプションになる）。同じ段落の 2 件目の提案は不採用
     from jasme_jats.ai_assist import set_role_problem
     _, plan, _ = _mechanical(STRUCTURE, journal)
     vml = next(p for p in plan.paras.values() if p.plain().startswith("問3　架空の数の列"))
@@ -1240,10 +1249,9 @@ def test_set_role_on_textbox_paragraphs(journal, meta, tmp_path):
         f"テキストボックス {inline.textbox_id} {fixed}（浮動配置でないテキストボックスの段落に指定できる役割は fig_caption・"
         "table_caption・exclude だけ）")
     assert set_role_problem(inline, plan, "exclude") == ""      # 浮動配置でない段落の exclude は今までどおり受け付ける
-    res = _manual(STRUCTURE, answers.answer(style_fixes=[(vml.src, "p"), (vml.src, "exclude")]), meta, journal, tmp_path / "s")
-    rej = [(op["role"], w) for op, w in res.ai.rejected if op["src"] == vml.src]
-    assert [r for r, _ in rej] == ["p", "exclude"] and "placements" in rej[0][1] and rej[1][1] == ai_assist.STYLE_ONLY_WHY
-    assert [(f.role, f.style, f.how) for f in res.ai.style_fixes] == [("exclude", "", ai_assist.EXCLUDE_HOW)]
+    res = _manual(STRUCTURE, answers.answer(style_fixes=[(vml.src, "exclude"), (vml.src, "p")]), meta, journal, tmp_path / "s")
+    assert [w for op, w in res.ai.rejected if op["src"] == vml.src] == [ai_assist.STYLE_TWICE_WHY]
+    assert [(f.role, f.style, f.how) for f in res.ai.style_fixes] == [("", "", ai_assist.EXCLUDE_HOW)]
     assert not {t: w for _, w, t in res.fidelity.excluded}.get(vml.plain(), "").startswith("AI 補完で")   # AI の除外で本文を落とさない（C042）
     assert res.fidelity.ok and res.dtd_valid
 
@@ -1259,16 +1267,16 @@ def test_set_role_on_textbox_paragraphs(journal, meta, tmp_path):
     cap = next(s for s, p in p2.paras.items() if p.plain().startswith("図1　架空の図形"))
     assert cap in {e.src for e in p2.exclusions}            # 「。」で終わるのでキャプションの形でなく、文字だけのテキストボックス
     res = _manual(path, answers.answer(style_fixes=[(cap, "fig_caption"), (cap, "p")]), meta, journal, tmp_path / "v")
-    assert res.ai.accepted == [] and [op["role"] for op, w in res.ai.rejected if "placements" in w] == ["p"]
+    assert res.ai.accepted == [] and [w for op, w in res.ai.rejected if op["src"] == cap] == [ai_assist.STYLE_TWICE_WHY]
     assert [(f.src, f.role, f.style) for f in res.ai.style_fixes] == [(cap, "fig_caption", "図キャプション")]
     assert res.xml_path.read_bytes() == _manual(path, None, meta, journal, tmp_path / "v0").xml_path.read_bytes()
     assert res.fidelity.ok and res.dtd_valid
 
 
 def test_textbox_placement_is_used_when_set_role_is_a_proposal(journal, meta, tmp_path):
-    # 同じ回答で、決められない（浮動配置でない）テキストボックスの段落を set_role で図キャプションにし、そのテキストボックスに
-    # placements の kind label も指定したとき: set_role は Word のスタイルで直す提案にして XML に反映しない（所有者の決定 5。
-    # W8 の手順 5）ので、テキストボックスは組み直した後も文字だけのテキストボックスのままで、kind の指定を採用する
+    # 同じ回答で、決められない（浮動配置でない）テキストボックスの段落を図キャプションにする提案と、そのテキストボックスの種類
+    # 「図の注記」を指定したとき: 提案は XML に反映しない（所有者の決定 5。W8 の手順 5・10）ので、テキストボックスは組み直した後も
+    # 文字だけのテキストボックスのままで、種類の指定を採用する
     def parts(b):
         return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "試験（2024）の札。", mf.vml_textbox(mf.para(S["body"], "（ヒント）"))),
                 mf.para(S["body"], "札の後の段落。")]
@@ -1279,103 +1287,110 @@ def test_textbox_placement_is_used_when_set_role_is_a_proposal(journal, meta, tm
     src = plan.textboxes[xid].paras[0].src
     res = _manual(path, answers.answer(boxes=[(xid, "図の注記", "")], style_fixes=[(src, "fig_caption")]), meta, journal, tmp_path / "out")
     assert [op["op"] for op, _ in res.ai.accepted] == ["place_float"] and res.plan.paras[src].role != "fig_caption"
-    assert [(op["op"], why) for op, why in res.ai.rejected] == [("set_role", ai_assist.STYLE_ONLY_WHY)]
+    assert res.ai.rejected == [] and [f.src for f in res.ai.style_fixes] == [src]
     assert res.plan.undecided_boxes == [] and res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
-    # set_role がなければ、kind label を採用する（今までどおり）
+    # 提案がなくても、種類の指定を採用する（今までどおり）
     res = _manual(path, answers.answer(boxes=[(xid, "図の注記", "")]), meta, journal, tmp_path / "label")
     assert [op["op"] for op, _ in res.ai.accepted] == ["place_float"] and res.ai.rejected == []
 
 
 def test_textbox_placement_after_excluded_paragraph_is_kept(journal, meta, tmp_path):
-    # 同じ回答で、本文の段落を set_role exclude にし、その段落を after にした kind box も指定したとき: exclude は Word で消す
-    # 提案にして XML に反映しない（AI の除外で本文を落とさない。所有者の決定 5・C042。W8 の手順 5）ので、after は本文の段落の
-    # ままで、kind box を採用する
+    # 同じ回答で、本文の段落を除く提案（style_fixes の除外）と、その段落を after にした種類「囲み」も指定したとき: 除外は Word で
+    # 消す提案で XML に反映しない（AI の除外で本文を落とさない。所有者の決定 5・C042。W8 の手順 5・10）ので、after は本文の段落の
+    # ままで、種類の指定を採用する
     plan, ids = _boxes_by_text(journal)
     hint, after = ids["（ヒント）"], _src(plan, "囲みの後の段落である。")
     res = _manual(STRUCTURE, answers.answer(boxes=[(hint, "囲み", after)], style_fixes=[(after, "exclude")]), meta, journal, tmp_path)
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
-    assert [(op["op"], why) for op, why in res.ai.rejected] == [("set_role", ai_assist.STYLE_ONLY_WHY)]
-    assert [op["op"] for op, _ in res.ai.accepted] == ["place_float"]
+    assert [why for op, why in res.ai.rejected] == [ai_assist.NO_BOX_WHY] * (len(plan.undecided_boxes) - 1)
+    assert [op["op"] for op, _ in res.ai.accepted] == ["place_float"] and [f.src for f in res.ai.style_fixes] == [after]
     assert res.plan.textboxes[hint].kind == "box" and hint not in res.plan.undecided_boxes
     assert "囲みの後の段落である。" not in {t for _, _, t in res.fidelity.excluded}
 
 
 def test_request_lists_textboxes(journal):
-    # 依頼文: 囲みか図の注記か決められなかったもの（placements の指定が必要）、位置を推定した囲み（違うときだけ指定）、扱いを
-    # 機械的に決めたもの（変更不可）の節。テキストボックスの段落の場所は「テキストボックス x… の中」
+    # 依頼文（修正計画 W8 の手順 16）: 囲みか図の注記か決められなかったもの（中身・仮の位置・大きさ・決められなかった理由）、位置を
+    # 推定した囲み（違うときだけ答える）、図の注記とみなしたもの（本文の文章のときだけ答える）の節。位置を機械的に決めた囲みは、
+    # 答えない「中身」の節に中身だけを載せる（中の参照にリンクできるように）
     from jasme_jats.ai_assist import build_request
     _, plan, linker = _mechanical(STRUCTURE, journal)
     _, ids = _boxes_by_text(journal)
-    req, _ = build_request(plan, linker)
-    undecided = req.split("# 囲みか図の注記か決められなかったテキストボックス\n", 1)[1].split("\n# ", 1)[0]
-    assert all(f"[{ids[t]}]" in undecided for t in ("（ヒント）", "注", "Area model"))
-    assert "判定できなかった理由: 文字 5 字" in undecided and "画像の近く: いいえ" in undecided
-    est = req.split("# 位置を推定した囲み", 1)[1].split("\n# ", 1)[0]
-    assert f"[{ids['問3　架空の数の列の規則を説明せよ。']}]" in est and "position:absolute" in est
-    fixed = req.split("# 囲みとして位置を機械的に決めたテキストボックス（変更不可。placements に書かないこと）", 1)[1]
+    req = build_request(plan, linker).data
+    undecided = req.split("\n# 囲みか図の注記か決められなかったテキストボックス\n", 1)[1].split("\n\n", 1)[0]
+    assert all(f"[{ids[t]}] 中身: " in undecided for t in ("（ヒント）", "注", "Area model"))
+    assert "  決められなかった理由: 文字 5 字" in undecided and "画像の近く: いいえ" in undecided
+    assert "（結び付いた段落の位置）" in undecided and "判定できなかった" not in undecided
+    est = req.split("\n# 位置を推定した囲み（位置が違うときだけ答える）\n", 1)[1].split("\n\n", 1)[0]
+    x = ids['問3　架空の数の列の規則を説明せよ。']
+    assert est.startswith(f"[{x}] 置いた位置: [") and "ページの上の位置の指定" in est
+    assert f"  中身: [{_src(plan, '問3　架空の数の列の規則を説明せよ。')}]問3" in est
+    fixed = req.split("\n# 位置が決まっている図・表と囲みの中身（", 1)[1].split("\n\n", 1)[0]
     a, c, b = ids["問1　架空の三角形の面積を求めよ。底辺と高さは図に示す。"], ids["問2　架空の問いを二つの式で考えよ。"], ids["A 点"]
-    assert f"[{a}] 囲み: 段落 [" in fixed and "] の前に配置済み" in fixed and f"[{c}] 囲み:" in fixed
-    # 図に重ねた注記とみなしたものは、変更不可の節ではなく、本文の文章なら kind box で戻せる節に載せる（中身の段落も示す）
+    assert f"[{a}] 囲み（[" in fixed and "」の前）。中身: [" in fixed and f"[{c}] 囲み（" in fixed
+    # 図に重ねた注記とみなしたものは、答えない節ではなく、本文の文章なら kind 囲みで戻せる節に載せる（中身の段落も示す）
     assert f"[{b}]" not in fixed
-    labels = req.split("# 図に重ねた注記とみなして除外したテキストボックス（本文の文章のときだけ placements で kind box と after を"
-                       "指定）\n", 1)[1].split("\n# ", 1)[0].rstrip("\n")
+    labels = req.split("\n# 図の注記とみなして除いたテキストボックス（本文の文章のときだけ答える）\n", 1)[1].split("\n\n", 1)[0]
     a_src = _src(plan, "A 点")
-    assert labels == (f"[{b}] 段落 [{_src(plan, '図1の点に名前を付けた。')}] の図の注記（{plan.textboxes[b].why}）: "
-                      f"[{a_src}] A 点")
-    # 段落の場所: 浮動配置のテキストボックスは「（浮動配置）」を付ける（set_role で役割を変えられないことが分かるように）
+    assert labels == (f"[{b}] [{_src(plan, '図1の点に名前を付けた。')}] の図の注記（{plan.textboxes[b].why}）: "
+                      f"[{a_src}]A 点")
+    # テキストボックスの中の段落は「## 本文」に載せず（after に書けない）、テキストボックスの節に中身として載せる（修正計画 W8 の 4.1。
+    # 位置を機械的に決めた囲みの中身も、中の参照にリンクできるように載せる）
+    body = req.split("\n## 本文（", 1)[1].split("\n\n", 1)[0]
     hint_src = next(s for s, p in plan.paras.items() if p.plain() == "（ヒント）")
-    assert f"[{hint_src}]（body / テキストボックス {ids['（ヒント）']}（浮動配置）の中 /" in req
     inline_src = _src(plan, "問2　架空の問い")
-    assert f"[{inline_src}]（p / テキストボックス {c} の中 /" in req
+    assert f"[{hint_src}]" not in body and f"[{inline_src}]" not in body
+    assert f"中身: [{hint_src}]（ヒント）" in undecided and f"中身: [{inline_src}]問2" in fixed
     # テキストボックスのない原稿の依頼文には、これらの節を出さない
     _, fplan, flinker = _mechanical(FULL, journal)
-    assert "テキストボックス" not in build_request(fplan, flinker)[0].split("---", 1)[-1].split("# 論文の段落一覧")[-1]
+    assert "テキストボックス" not in build_request(fplan, flinker).data
 
 
-def test_prompts_explain_box_and_label():
+def test_prompts_explain_box_and_label(journal):
     a = ai_assist
-    assert a.PLACEMENT_SCHEMA["properties"]["items"]["items"]["properties"]["kind"]["enum"] == ["fig", "table", "box", "label"]
-    assert "テキストボックスの ID（x1 など）" in a.PLACEMENT_SCHEMA["properties"]["float"]["description"]
-    assert "囲みか図の注記か決められなかったテキストボックス" in a.RESPONSE_SCHEMA["properties"]["placements"]["description"]
-    sp = a.system_prompt()
-    assert "「# 囲みか図の注記か決められなかったテキストボックス」に挙げたもの（x1 など）は、1 つ残らず" in sp
-    assert '{"kind": "box" か "label", "caption": [], "body": []}' in sp
-    assert "浮動配置でないテキストボックスの段落に set_role で指定できるのは\n     fig_caption・table_caption・exclude だけ" in sp
-    assert "浮動配置のテキストボックス（段落一覧の位置が「テキストボックス x1（浮動配置）の中」の段落）の" in sp
-    assert ("「# 図に重ねた注記とみなして除外したテキストボックス」に挙げたものは、図の注記ではなく本文として読まれる文章"
-            "（問題文・ヒントなど）の\n     ときだけ、kind box で after を指定してください") in sp
-    assert "「# 囲みとして位置を機械的に決めたテキストボックス（変更不可）」に挙げたものは placements に書かないでください。" in sp
-    assert "「# 図に重ねた注記とみなして除外したテキストボックス」に挙げたものは、変えるときだけ\nkind box で書く" in a.FIELD_GUIDE
-    assert "kind を box（本文の囲み。問題文・ヒントなど）か label（図に重ねた注記。矢印のラベルなど）" in a.FIELD_GUIDE
-    assert "- float: 図形の ID（s1 など）か、テキストボックスの ID（x1 など）" in a.FIELD_GUIDE
-    example = example_block()
-    assert example["placements"][1]["float"] == "x2" and example["placements"][1]["items"][0]["kind"] == "box"
-    assert "（kind は box か label）" in a.manual_prompt("依頼文", [])
-    assert ("「# 図に重ねた注記とみなして除外したテキストボックス」に挙げたものは、本文の文章（問題文・ヒントなど）のときだけ、"
-            "placements に kind box で書いてください。") in a.manual_prompt("依頼文", [])
-    assert "「図に重ねた注記とみなして除外したテキストボックス」に挙げたもの" in a.PLACEMENT_SCHEMA["properties"]["float"]["description"]
+    # 回答の形（W8 の手順 10）: テキストボックスの種類は boxes の kind（囲み・図の注記）
+    assert a.BOX_SCHEMA["properties"]["kind"]["enum"] == ["囲み", "図の注記"]
+    assert "テキストボックスの ID（x1 など）" in a.BOX_SCHEMA["properties"]["box"]["description"]
+    assert a.RESPONSE_SCHEMA["properties"]["boxes"]["items"] is a.BOX_SCHEMA
+    # 依頼文の指示（W8 の手順 13）: 決められないもの・位置を推定した囲み・図の注記とみなしたものがある原稿では、3 つの答え方を書く
+    _, plan, linker = _mechanical(STRUCTURE, journal)
+    req = a.build_request(plan, linker)
+    box = next(s for s in req.sections if s.key == "boxes")
+    assert box.parts == {"undecided", "estimated", "labels"} and box.count == f"{len(plan.undecided_boxes)} 個"
+    ins = req.instructions
+    assert f"{box.n}. テキストボックスの種類（{box.count}）… boxes" in ins
+    assert "「# 囲みか図の注記か決められなかったテキストボックス」に挙げたもの（x1 など）は、1 つ残らず答えます。" in ins
+    assert 'kind は、"囲み"（問題文・ヒント・まとめなど' in ins and '"図の注記"（矢印・点・辺の名前など' in ins
+    assert "「# 位置を推定した囲み」に挙げたものは、置いた位置が違うときだけ" in ins
+    assert "「# 図の注記とみなして除いたテキストボックス」に挙げたものは、図の注記ではなく本文として読まれる文章のときだけ" in ins
+    assert "どちらも、変えないなら書きません。" in ins
+    # 位置を聞く図形のない原稿では、囲みの after の決め方を、図・表の位置の節を指さずに書く
+    if "placements" not in {s.key for s in req.sections}:
+        assert a.BOX_AFTER_TEXT in ins and "「1. 図・表の位置」" not in ins
+    example = example_block(req.sections)
+    assert example["boxes"][0]["kind"] == "＜囲み｜図の注記＞" and "float" not in example["boxes"][0]
+    # テキストボックスのない原稿では、節も見本の要素も出さない
+    _, fplan, flinker = _mechanical(FULL, journal)
+    freq = a.build_request(fplan, flinker)
+    assert "boxes" not in {s.key for s in freq.sections} and "テキストボックスの種類" not in freq.instructions
+    assert example_block(freq.sections)["boxes"] == []
 
 
 def test_prompts_ask_only_positions_of_floats(journal):
-    """依頼文・項目の説明・スキーマ・見本は、図形には位置（after）だけを聞く（修正計画 W8 の手順 6）。中身の組み合わせ（items）の
-    組み方・数式の画像の書き起こし（formula_image）・画像の添付の説明はない。items は必須のまま（ChatGPT の strict な構造化出力
-    のため）で、図形では空の一覧 []、テキストボックスだけ kind の組 1 つ。"""
+    """依頼文・スキーマ・見本は、図形には位置（after）だけを聞く（修正計画 W8 の手順 6・13）。中身の組み合わせ（items）の組み方・
+    数式の画像の書き起こし（formula_image）・画像の添付の説明はない。"""
     a = ai_assist
     _, plan, linker = _mechanical(FLOAT, journal)
-    texts = {"system": a.system_prompt(), "guide": a.FIELD_GUIDE,
-             "manual": a.manual_prompt(a.build_request(plan, linker)[0]), "schema": json.dumps(a.RESPONSE_SCHEMA, ensure_ascii=False)}
+    req = a.build_request(plan, linker, manual=False)
+    texts = {"system": req.system_text(), "manual": a.build_request(plan, linker).manual_text(),
+             "schema": json.dumps(a.RESPONSE_SCHEMA, ensure_ascii=False)}
     for name, t in texts.items():
-        assert "formula_image" not in t and "MathML" not in t, name
+        assert "formula_image" not in t and "MathML" not in t and "operations" not in t, name
         assert "組み合わせ（items）" not in t and "位置と組み合わせ" not in t and "画像 ID" not in t, name
-        assert "添付" not in t and "画像だけの段落 ID" not in t, name
-    assert "答えるのは位置（after）だけです" in texts["system"] and "items は、空の一覧 [] にしてください" in texts["system"]
-    assert "- items: 図形（s1 など）では空の一覧 []" in texts["guide"]
-    assert "formula_image" not in a.OP_SCHEMA["properties"]["op"]["enum"]
-    sch = a.PLACEMENT_SCHEMA
-    assert "items" in sch["required"] and sch["properties"]["items"]["description"].startswith("図形（s1 など）では空の一覧 []")
-    example = example_block()
-    assert example["placements"][0]["float"] == "s1" and example["placements"][0]["items"] == []
-    assert example["placements"][1]["items"][0]["kind"] == "box"
+        assert "画像を添付" not in t and "画像だけの段落 ID" not in t, name
+    assert "答えるのは位置だけです" in texts["system"] and "items" not in texts["system"]
+    assert "items" not in a.PLACEMENT_SCHEMA["properties"] and "operations" not in a.RESPONSE_SCHEMA["properties"]
+    example = example_block(req.sections)
+    assert list(example["placements"][0]) == list(a.PLACEMENT_SCHEMA["properties"])
 
 
 def test_fullwidth_space_paragraphs_in_textboxes_keep_fidelity(journal, meta, tmp_path):
@@ -1430,7 +1445,7 @@ def test_unsplit_names_come_from_build_info(journal, meta, tmp_path):
     _, plan, _ = _mechanical(FULL, journal)
     assert build(plan, meta, journal, None)[1].unsplit_names == [("d11", "研究次郎", "ja")]
     res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual"))
-    assert "- [d11] 姓と名の区切りがない氏名: 「研究次郎」" in res.prompt_path.read_text(encoding="utf-8")
+    assert "- [d11]「研究次郎」: 姓と名の間に空白がない" in res.prompt_path.read_text(encoding="utf-8")
     assert 'split("「"' not in inspect.getsource(pipeline.convert)
     # 氏名の前後の空白（全角も）は AI の split_name の検証と同じく除き、間に空白のある氏名は載せない
     path = names_article(tmp_path / "names.docx", ["研究次郎", "架空四郎\u3000", "\u3000架空五郎", "試験\u3000太郎", "試験 三郎"],
@@ -1441,15 +1456,16 @@ def test_unsplit_names_come_from_build_info(journal, meta, tmp_path):
 
 
 def test_build_request_lists_unsplit_names_with_language(journal):
-    """build_request は (段落の ID, 氏名, 言語) の組を受け取り、英文の氏名も載せる（利用者の決定事項 17: 英文 1 語の氏名も、
-    今までどおり AI 依頼文に載せる）。split_name は和文の氏名にしか使えない（apply_ops）ので、英文の行には提案しないことを添える
-    （10 章の警告の「AI による補完では、英文の著者名は分けられません」と同じ言い分）。"""
-    from jasme_jats.ai_assist import build_request
+    """build_request は (段落の ID, 氏名, 言語) の組を受け取り、「# 姓と名の区切りを確かめる氏名」には和文の氏名だけを載せる
+    （AI の回答の names は和文の氏名にしか使えない。修正計画 W8 の 4.1・C043。W8 の手順 15 までは、決定事項 17 で英文の氏名も
+    載せ、split_name を提案しないことを添えていた。英文 1 語の氏名は、今までどおり 10 章の警告で知らせる）。"""
+    from jasme_jats.ai_assist import NAMES_HEADING, build_request
     _, plan, linker = _mechanical(FULL, journal)
-    req, _ = build_request(plan, linker, (), [("d11", "研究次郎", "ja"), ("d12", "KENKYU", "en")])
-    assert "- [d11] 姓と名の区切りがない氏名: 「研究次郎」" in req
-    assert ("- [d12] 姓と名の区切りがない氏名（英文の氏名。split_name は和文の氏名にだけ使えるので、提案しない）: 「KENKYU」"
-            in req)
+    req = build_request(plan, linker, _info(unsplit_names=[("d11", "研究次郎", "ja"), ("d12", "KENKYU", "en")])).data
+    sec = req.split(NAMES_HEADING + "\n", 1)[1].split("\n\n", 1)[0].splitlines()
+    assert sec == ["- [d11]「研究次郎」: 姓と名の間に空白がない"]
+    req = build_request(plan, linker, _info(unsplit_names=[("d12", "KENKYU", "en")])).data
+    assert NAMES_HEADING not in req
 
 
 def test_build_request_shows_newline_in_unsplit_name(journal):
@@ -1457,31 +1473,32 @@ def test_build_request_shows_newline_in_unsplit_name(journal):
     BuildInfo.unsplit_names には改行の文字のまま入る）。"""
     from jasme_jats.ai_assist import build_request
     _, plan, linker = _mechanical(FULL, journal)
-    req, _ = build_request(plan, linker, (), [("d11", "研究次郎\n", "ja")])
-    [line] = [ln for ln in req.splitlines() if "姓と名の区切りがない氏名" in ln]
-    assert line == "- [d11] 姓と名の区切りがない氏名: 「研究次郎⏎」"
+    req = build_request(plan, linker, _info(unsplit_names=[("d11", "研究次郎\n", "ja")])).data
+    [line] = [ln for ln in req.splitlines() if "姓と名の間に空白がない" in ln]
+    assert line == "- [d11]「研究次郎⏎」: 姓と名の間に空白がない"
 
 
 def test_english_one_word_name_is_listed_and_warned(journal, meta, tmp_path):
-    """英文 1 語の著者名は、全体を姓として出力し、4 章の記録（今までどおり）・AI 依頼文（決定事項 17。split_name を提案しないことを
-    添える）・10 章の警告（決定事項 17 の後半）に出す。要対応・要確認は増えない。和文の「研究　次郎」は分けられるので載せない。"""
+    """英文 1 語の著者名は、全体を姓として出力し、4 章の記録（今までどおり）・10 章の警告（決定事項 17 の後半）に出す。AI 依頼文には
+    載せない（AI の names は和文の氏名だけ。C043。W8 の手順 15 までは決定事項 17 で載せていた）。要対応・要確認は増えない。和文の
+    「研究　次郎」は分けられるので載せない。"""
     path = names_article(tmp_path / "en.docx", ["研究\u3000次郎"], ["KENKYU"])
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     [warn] = [w for w in res.warnings if "英文の著者名" in w]
     assert "「KENKYU」" in warn and "全体を姓として" in warn and "Word で" in warn
     assert any(d.category == "name" and "「KENKYU」" in d.message for d in res.build_notes)
-    names = [ln for ln in res.prompt_path.read_text(encoding="utf-8").splitlines() if "姓と名の区切りがない氏名" in ln]
-    assert len(names) == 1 and names[0].endswith("「KENKYU」") and "split_name は和文の氏名にだけ使える" in names[0]
+    # AI 依頼文の「# 姓と名の区切りを確かめる氏名」には、英文の氏名を載せない（C043。W8 の手順 15。決定事項 17 で載せていた）
+    assert "# 姓と名の区切りを確かめる氏名" not in res.prompt_path.read_text(encoding="utf-8")
     assert [a.key for a in actions(res)] == []      # 手動の回答待ちは、位置を聞く図形がないので 2 章の 1 行だけ
     root = load(res)
     [en] = [n for n in root.iter("name") if n.get("name-style") == "western"]
     assert [(x.tag, x.text) for x in en] == [("surname", "KENKYU")]
-    # AI が英文の氏名に split_name を提案しても採用しない（依頼文の添え書きと 10 章の警告のとおり。XML も変わらない）
-    src = names[0].split("]", 1)[0].removeprefix("- [")
+    # AI が英文の氏名の姓と名を答えても採用しない（確かめてもらう氏名は和文だけ。C043。XML も変わらない）
+    src = res.plan.authors[0].name_en.src
     resp = answers.answer(names=[(src, "KEN", "KYU", "試しの分割", "低")])
     res2 = convert(path, meta, journal, Options(out_dir=tmp_path / "out2", ai_mode="manual", ai_response=resp))
-    assert [why for _, why in res2.ai.rejected] == ["英文氏名は空白の位置で姓と名を分けるため、分割の指定は和文氏名だけに使える"]
+    assert [why for _, why in res2.ai.rejected] == [ai_assist.NAME_UNLISTED_WHY]
     assert res2.ai.accepted == [] and res2.xml_path.read_bytes() == res.xml_path.read_bytes()
 
 
@@ -1493,61 +1510,56 @@ def _op(**kw):
     return base
 
 
-def _manual_raw(ops, meta, journal, out, notes=(), placements=()):
-    resp = json.dumps({"operations": ops, "placements": list(placements), "notes": notes}, ensure_ascii=False)
+def _manual_raw(items, meta, journal, out, notes=(), placements=(), key="links"):
+    """回答の一覧 key（既定は links）と placements・notes を手で書いた回答（項目の型の誤りそのものを試す）で変換する。"""
+    resp = json.dumps({"request_id": answers.THIS_REQUEST, key: list(items), "placements": list(placements), "notes": notes},
+                      ensure_ascii=False)
     return convert(FULL, meta, journal, Options(out_dir=out, ai_mode="manual", ai_response=resp))
 
 
 def test_a1_op_field_types(journal, meta, tmp_path):
-    """A1: 操作の項目が一覧・辞書・bool だと理由付きで不採用、数値は文字列にして照合に使う（変換は止まらない）。"""
-    ops = [_op(op="link_citation", src=["d18"], text="2001", target="B2"),
-           _op(op="link_citation", src="d18", text={"a": 1}, target="B2"),
-           _op(op="set_role", src="d46", role=True),
-           _op(op="formula_image", image="img3", mathml=2001),
-           _op(op="link_citation", src="d18", text=2001, target="B2")]
-    res = _manual_raw(ops, meta, journal, tmp_path)
+    """A1: 回答の項目が一覧・辞書・bool だと理由付きで不採用、数値は文字列にして照合に使う（変換は止まらない）。"""
+    links = [answers.link("文献", ["d18"], "2001", 1, "B2"), answers.link("文献", "d18", {"a": 1}, 1, "B2"),
+             answers.link("文献", "d18", 2001, 1, "B2")]
+    res = _manual_raw(links, meta, journal, tmp_path)
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     whys = [why for _, why in res.ai.rejected]
-    assert sum("文字列でない" in w for w in whys) == 4
-    assert any("項目 mathml" in w for w in whys)
+    assert sum("文字列でない" in w for w in whys) == 2 and len(whys) == 2
+    assert [op["text"] for op, _ in res.ai.accepted] == ["2001"]
+    res = _manual_raw([dict(answers.boundary("d46", "資料の見出し"), kind=True), dict(answers.name("d11", "研究", "次郎"), given=[1]),
+                       "d46"], meta, journal, tmp_path / "b", key="boundaries")
+    assert [why for _, why in res.ai.rejected] == [
+        "項目 kind が文字列でない（bool）ので使わなかった", "boundaries の要素が { } のまとまりでない（str）ので使わなかった",
+        ai_assist.BOUNDARY_KIND_WHY.format(kind="")]            # 区切りの一覧に書かれた氏名の指定（kind がない）
 
 
 def test_a1_placements_types(journal, meta, tmp_path):
-    """A1: placements の各欄の型が違っても変換は止まらず、理由付きで不採用（float・after の型）。浮動配置の図形の items は
-    読まないので（修正計画 W1 の 2.7）、items の型の違いは理由にならず、図形の ID で不採用になる（この原稿に図形 s1 はない）。"""
-    it = {"kind": "fig", "caption": ["d16"], "body": ["t2"]}
-    pls = [{"float": ["s1"], "after": "d18", "items": [], "reason": "x", "confidence": "高"},
-           {"float": 1.5, "after": "d18", "items": [it], "reason": "x", "confidence": "高"},
-           {"float": "s1", "after": {"x": 1}, "items": [], "reason": 5, "confidence": "高"},
-           {"float": "s1", "after": 7, "items": [it], "reason": "x", "confidence": "高"},
-           {"float": "s1", "after": "d18", "items": [{"kind": "fig", "caption": [["a"]], "body": [{}]}],
-            "reason": "x", "confidence": "高"},
-           {"float": "s1", "after": "d18", "items": [dict(it, caption=5)], "reason": "x", "confidence": "高"},
-           {"float": "s1", "after": "d18", "items": [dict(it, body=5)], "reason": "x", "confidence": "高"},
-           {"float": "s1", "after": "d18", "items": [dict(it, body=2.5)], "reason": "x", "confidence": "高"},
-           {"float": "s1", "after": "d18", "items": [dict(it, caption="d16")], "reason": "x", "confidence": "高"},
-           {"float": "s1", "after": "d18", "items": [dict(it, body={"a": 1})], "reason": "x", "confidence": "高"}]
+    """A1: placements の各欄の型が違っても変換は止まらず、理由付きで不採用（文字列でない項目）。数値は文字列にして照合し、図形の
+    ID で不採用になる（この原稿に図形 s1 はない）。"""
+    pl = answers.placement("s1", "d18")
+    pls = [dict(pl, float=["s1"]), dict(pl, float=1.5), dict(pl, after={"x": 1}), dict(pl, after=7), dict(pl, reason=5),
+           dict(pl, page="三")]
     res = _manual_raw([], meta, journal, tmp_path, placements=pls)
     assert res.fidelity.ok and len(res.ai.rejected) == len(pls)
     whys = [why for _, why in res.ai.rejected]
-    assert sum("float と after は文字列で書く" in w for w in whys) == 4
-    assert sum("s1 は「位置を決められなかった図表」" in w for w in whys) == 6 and not any("一覧（[ ]）" in w for w in whys)
+    assert sum("が文字列でない" in w for w in whys) == 2
+    assert sum("は「位置を決める図・表」にない" in w for w in whys) == 4
 
 
 def test_a1_a2_parse_paths_do_not_raise():
-    data = parse_response(json.dumps({"operations": [_op(op="link_figure", text=1.5)], "placements": [], "notes": 3}))
+    data = parse_response(json.dumps({"links": [answers.link("図", "d18", 1.5, 1, "F1")], "placements": [], "notes": 3}))
     out = ai_assist.AIOutcome()
-    ops = ai_assist.split_ops(data, out)
+    plan_like = types.SimpleNamespace(body_seq=[], floats={}, textboxes={}, region={}, paras={})
+    ops = ai_assist.link_ops(data, plan_like, out)
     assert ops[0]["text"] == "1.5" and out.rejected == []
-    cut = ai_assist.parse_cut_response('{"placements": [{"float": ["s1"], "after": 3, "items": 1}, {"fl')
+    cut = ai_assist.parse_cut_response('{"placements": [{"float": ["s1"], "after": 3}, {"fl')
     out2 = ai_assist.AIOutcome()
-    plan_like = types.SimpleNamespace(body_seq=[], floats={}, textboxes={}, region={})
     assert ai_assist.float_placements(cut, plan_like, out2) == {} and len(out2.rejected) == 1
 
 
 def test_a2_notes_types():
     def notes(v):
-        return parse_response(json.dumps({"operations": [], "placements": [], "notes": v}))["notes"]
+        return parse_response(json.dumps({"links": [], "placements": [], "notes": v}))["notes"]
     assert notes("気づき") == ["気づき"]
     assert notes(["a", 2, ["b"]])[:2] == ["a", "2"] and "使わなかった" in notes(["a", 2, ["b"]])[2]
     [n] = notes(5)
@@ -1561,17 +1573,6 @@ def test_a2_notes_in_convert(journal, meta, tmp_path):
     assert res.ai.notes == ["気づき"]
     res = _manual_raw([], meta, journal, tmp_path / "b", notes=7)
     assert len(res.ai.notes) == 1 and "使わなかった" in res.ai.notes[0]
-
-
-def test_a3_mathml_entities_comments_pi():
-    m = '<math xmlns="http://www.w3.org/1998/Math/MathML">{}</math>'
-    for inner in ("<mi>&foo;</mi>", "<!-- c --><mi>a</mi>", "<?pi x?><mi>a</mi>"):
-        s = '<!DOCTYPE math [<!ENTITY foo "abc">]>' + m.format(inner)
-        assert parse_mathml(s)[0] is None
-    assert parse_mathml(m.format("<mi>&foo;</mi>"))[0] is None
-    assert parse_mathml(m.format("<!-- c --><mi>a</mi>"))[0] is None
-    assert parse_mathml(m.format("<?pi x?><mi>a</mi>"))[0] is None
-    assert parse_mathml(m.format("<mi>a</mi>"))[0] is not None
 
 
 def test_a3_final_check_unreadable_entity():
@@ -1596,17 +1597,6 @@ def test_a6_links_in_nolink_paragraphs_rejected(journal):
     ai_assist.apply_ops(ops, plan, None, out)
     assert out.accepted == [] and len(out.rejected) == 2
     assert "題目" in out.rejected[0][1] and "引用文献" in out.rejected[1][1]
-
-
-def test_a8_formula_image_is_always_rejected(journal):
-    """docx の画像を AI に渡さなくなった（修正計画 W1 の 2.7）ので、formula_image は中身にかかわらず不採用に記録し、図に数式を
-    付けない（操作そのものは W8 が消す）。"""
-    _, plan, _ = _mechanical(FULL, journal, {}, {})
-    fig = next(f for f in plan.figures if any(i.image_id == "img3" for ip in f.image_paras for i in ip.images))
-    mml = '<math xmlns="http://www.w3.org/1998/Math/MathML"><mi>a</mi></math>'
-    out = ai_assist.AIOutcome()
-    ai_assist.apply_ops([_op(op="formula_image", image="img3", mathml=mml)], plan, None, out)
-    assert out.accepted == [] and out.rejected[0][1] == ai_assist.FORMULA_IMAGE_WHY and fig.formula is None
 
 
 def test_f6_final_check_rejects_entity_declaration_without_reading(tmp_path):
@@ -1656,10 +1646,23 @@ def test_f7_link_on_label_range_rejected_when_split(journal, meta, tmp_path):
     assert len(res.ai.accepted) == 1 and [x for x in load(res).iter("xref") if x.get("ref-type") == "fig"]
 
 
-def test_a8_formula_image_on_real_docx_with_table_and_moved_image(journal, meta, tmp_path):
-    """A8: 図形の中の画像と表を formula_image にしようとしても、表が残り、不変性チェックも通る。W1 からは、キャプションのない
-    図形（画像を直接持たないテキストボックス）の画像と表は別々の要素として出る（float_units の B4。AI の items は読まない）ので、
-    画像はキャプションなしの図、表は表のまま。"""
+def test_formula_image_is_gone():
+    """数式の画像の書き起こし（操作 formula_image・MathML の読み取り parse_mathml・DTD 不合格のときの取り消し・FigNode.formula）は
+    なくした（修正計画 W8 の手順 12。docx の画像を AI に渡さないので、AI は読めない）。"""
+    from pathlib import Path
+    import jasme_jats
+    from jasme_jats.article import FigNode
+    src = Path(jasme_jats.__file__).resolve().parent
+    for path in src.glob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        assert "formula_image" not in text and "parse_mathml" not in text and "MATHML_ELEMENTS" not in text, path.name
+    assert "formula" not in FigNode.__dataclass_fields__ and not hasattr(ai_assist, "FORMULA_IMAGE_WHY")
+
+
+def test_a8_float_with_image_and_table_keeps_the_table(journal, meta, tmp_path):
+    """A8: 画像と表の入った図形の位置を AI が指定しても、表が残り、不変性チェックも通る。W1 からは、キャプションのない
+    図形（画像を直接持たないテキストボックス）の画像と表は別々の要素として出る（float_units の B4）ので、画像はキャプションなしの図、
+    表は表のまま（前は数式の画像の書き起こし〈formula_image〉も試していたが、W8 の手順 12 で操作ごとなくした）。"""
     cm = 360000
 
     def parts(b):
@@ -1674,25 +1677,19 @@ def test_a8_formula_image_on_real_docx_with_table_and_moved_image(journal, meta,
     mf.make_article(p, "検証用文書", parts)
     _, plan, _ = _mechanical(p, journal)
     fid, info = next((k, v) for k, v in plan.floats.items() if v.tables)
-    img = next(i.image_id for q in info.paras for i in q.images)
     anchor = next(x for x in plan.body_seq if plan.paras[x].plain().startswith("本文である"))
-    tid = info.tables[0].tid
-    mml = '<math xmlns="http://www.w3.org/1998/Math/MathML"><mi>a</mi></math>'
-    pl = {"float": fid, "after": anchor, "items": [{"kind": "fig", "caption": [], "body": [img, tid]}], "reason": "x",
-          "confidence": "中"}
-    resp = json.dumps({"operations": [_op(op="formula_image", image=img, mathml=mml)], "placements": [pl], "notes": []})
+    resp = answers.answer(placements=[(fid, anchor)])
     res = convert(p, meta, journal, Options(out_dir=tmp_path / "o", ai_mode="manual", ai_response=resp))
-    assert res.fidelity.ok and res.fidelity.final_ok
-    assert not any(op["op"] == "place_float" for op, _ in res.ai.rejected)
+    assert res.fidelity.ok and res.fidelity.final_ok and res.ai.error == ""
+    assert res.plan.floats[fid].mode == "ai" and res.ai.rejected == []
     root = load(res)
     assert "表の文字甲" in res.xml_path.read_text(encoding="utf-8")
     assert not any(f.find("table-wrap") is not None for f in root.iter("fig"))      # 表は図の中に入らない
 
 
 # ---------------------------------------------------------------------------- 回答の形（A9・A10・{ } でない操作）
-_OP1 = {"op": "set_role", "src": "d5", "text": "", "occurrence": 1, "target": "", "role": "sec1", "image": "",
-        "mathml": "", "surname": "", "given": "", "reason": "試験", "confidence": "高"}
-_EMPTY_ANS = {"placements": [], "operations": [], "notes": []}
+_OP1 = answers.link("文献", "d5", "2001", 1, "B1")          # 回答の一覧の要素 1 件（回答全体ではない）
+_EMPTY_ANS = answers.empty()
 
 
 @pytest.mark.parametrize("text", [
@@ -1712,17 +1709,27 @@ def test_parse_response_empty_array_is_not_found():
         parse_response("[]")
 
 
-def test_parse_response_requires_operations():
-    with pytest.raises(ValueError, match="操作 1 件だけ"):
+def test_parse_response_requires_answer_items():
+    """回答は種類ごとの一覧を持つ { }（W8 の手順 10）。指定 1 件だけの回答・回答の項目のない回答・一覧でない項目は断る。前の形の
+    回答（operations を持つもの）は、古い形式だと断る（古い形を読む経路は持たない）。ない一覧は [] とみなす。"""
+    with pytest.raises(ValueError, match="指定 1 件だけ"):
         parse_response(json.dumps(_OP1))
-    for d in ({"placements": []}, {"notes": []}):
-        with pytest.raises(ValueError, match="operations の一覧がありません"):
+    for d in ({}, {"request_id": "R-AAAA-BBBB"}, {"pdf": {"status": "見た", "pages": 3}}):
+        with pytest.raises(ValueError, match="回答の項目（placements・boxes・boundaries・links・names・style_fixes・notes）がありません"):
             parse_response(json.dumps(d))
-    with pytest.raises(ValueError, match="operations が一覧"):
-        parse_response(json.dumps({"operations": {}}))
-    assert parse_response(RESPONSE)["operations"]
-    assert parse_response(json.dumps(_EMPTY_ANS))["operations"] == []
-    assert example_block()["operations"]
+    for key in ("placements", "boxes", "boundaries", "links", "names", "style_fixes"):
+        with pytest.raises(ValueError, match=f"JSON の {key} が一覧"):
+            parse_response(json.dumps({key: {}}))
+    for old in ({"operations": []}, {"placements": [], "operations": [], "notes": []}, json.loads(FLOAT_OLD)):
+        with pytest.raises(ValueError, match="古い形式です（operations があります）"):
+            parse_response(json.dumps(old, ensure_ascii=False))
+    assert parse_response(RESPONSE)["links"]
+    data = parse_response(json.dumps({"notes": ["気づきだけ"]}, ensure_ascii=False))
+    assert data["links"] == data["placements"] == [] and data["notes"] == ["気づきだけ"] and data["pdf"] == {}
+    assert parse_response(json.dumps(_EMPTY_ANS))["links"] == []
+    # 依頼文の見本（値が「＜…＞」の説明）は、そのまま貼ると見本の写しとして断る（C019。W8 の手順 13）
+    with pytest.raises(ValueError, match="見本と同じ内容の項目"):
+        parse_response(json.dumps(example_block(), ensure_ascii=False))
 
 
 def test_manual_array_answer_is_ai_error(journal, meta, tmp_path):
@@ -1751,24 +1758,26 @@ def test_cut_top_level_array_is_not_partial(journal, meta, tmp_path):
     assert "一覧" in res.ai.error and not res.ai.partial
 
 
-def test_split_ops_records_non_dict_ops(journal, meta, tmp_path):
-    outcome = types.SimpleNamespace(rejected=[])
-    assert ai_assist.split_ops({"operations": ["link_citation d18", [1]]}, outcome) == []
+def test_non_dict_items_are_recorded(journal, meta, tmp_path):
+    """一覧の要素が { } のまとまりでないもの（文字列・一覧）は、理由付きで不採用に記録する（黙って落とさない）。"""
+    outcome = ai_assist.AIOutcome()
+    plan_like = types.SimpleNamespace(paras={})
+    assert ai_assist.link_ops({"links": ["文献 d18", [1]]}, plan_like, outcome) == []
     assert len(outcome.rejected) == 2
     assert "str" in outcome.rejected[0][1] and "list" in outcome.rejected[1][1]
-    assert outcome.rejected[0][0]["text"] == "link_citation d18"
-    res = _manual_raw(["link_citation d18", [1]], meta, journal, tmp_path)
+    assert outcome.rejected[0][0]["text"] == "文献 d18"
+    res = _manual_raw(["文献 d18", [1]], meta, journal, tmp_path)
     assert len(res.ai.rejected) == 2 and res.fidelity.ok
     report = res.report_path.read_text(encoding="utf-8")
     sec2 = report.split("\n## 2.")[1].split("\n## 3.")[0]                              # 2 章の不採用の表
-    assert "link_citation d18" in sec2
-    assert sum("操作が { } のまとまりでない（str）" in ln for ln in sec2.splitlines()) == 1
-    assert sum("操作が { } のまとまりでない（list）" in ln for ln in sec2.splitlines()) == 1
+    assert "文献 d18" in sec2
+    assert sum("links の要素が { } のまとまりでない（str）" in ln for ln in sec2.splitlines()) == 1
+    assert sum("links の要素が { } のまとまりでない（list）" in ln for ln in sec2.splitlines()) == 1
 
 
 # ----------------------------------------------------------------------------- 英文要旨が見つからないとき（u5-exclusions）
 def test_set_role_abstract_for_missing_abstract_is_a_proposal(journal, meta, tmp_path):
-    """英文要旨のスタイルも見出しもない原稿では、依頼文が「英文要旨の段落が見つからない」と書き、AI の set_role の abstract を案内する。
+    """英文要旨のスタイルも見出しもない原稿では、依頼文が「英文要旨の段落が見つからない」と書く（AI は style_fixes で提案する）。
     英文要旨のスタイルのない段落を英文要旨にする指定は、Word のスタイルで直す提案にして XML には反映しない（所有者の決定 5。
     W8 の手順 5）。abstract_missing は残り、XML は回答なしと同じ。"""
     from test_structure import _no_abstract_style_docx
@@ -1778,12 +1787,14 @@ def test_set_role_abstract_for_missing_abstract_is_a_proposal(journal, meta, tmp
     assert "abstract_missing" in [a.key for a in actions(before)] and before.plan.abstract == []
     prompt = before.prompt_path.read_text(encoding="utf-8")
     assert "英文要旨の段落が見つからない" in prompt
-    assert "set_role の abstract を提案（XML には反映せず、作業する人に知らせる）" in prompt
+    # 操作の案内（前の形の set_role）は書かず、事実だけを「# 出力から除いた段落」の最初に書く（W8 の手順 15）
+    sec = prompt.split("# 出力から除いた段落（確かめるだけ）\n", 1)[1]
+    assert sec.startswith("英文要旨の段落が見つからないため、英文の部分の段落（") and "set_role" not in prompt
     first = next(s for s, why, _ in before.fidelity.excluded if why == EN_OTHER_EXCLUDED)
     assert first in prompt
     res = _manual(path, answers.answer(style_fixes=[(first, "abstract")]), meta, journal, tmp_path / "after")
     assert res.plan.abstract == [] and res.fidelity.ok and res.dtd_valid
-    assert [why for _, why in res.ai.rejected] == [ai_assist.STYLE_ONLY_WHY]
+    assert res.ai.rejected == []
     assert [(f.src, f.role, f.style) for f in res.ai.style_fixes] == [(first, "abstract", "英文要旨")]
     assert "abstract_missing" in [a.key for a in actions(res)]
     assert res.xml_path.read_bytes() == _manual(path, None, meta, journal, tmp_path / "none").xml_path.read_bytes()
@@ -1830,32 +1841,24 @@ CONFLICT_ROLE_CASES = {
 }
 
 
-def _reflect_all_roles(monkeypatch):
-    """区切りの 5 つ（ai_assist.BOUNDARY_KINDS）以外の set_role も XML に反映する形に差し替える。
-
-    所有者の決定 5（W8 の手順 5）で、見出し・除外・題目などの set_role は Word のスタイルで直す提案になり、構造の衝突（K1・K2）を
-    作る指定は区切りの直しにほとんど残らない。構造の衝突の守り（pipeline._reject_roles・structure.conflict_overrides。変えない）を
-    確かめ続けるため、衝突を作りやすい役割の指定で試す。"""
-    monkeypatch.setattr(ai_assist, "boundary_kind", lambda p, plan, role: "試験の区切り")
-
-
 @pytest.mark.parametrize("name", list(CONFLICT_ROLE_CASES))
 def test_set_role_that_makes_conflict_is_rejected(name, journal, meta, tmp_path, monkeypatch):
-    """AI の set_role で組み直すと構造の衝突（同じ種類の後付けの見出しが 2 つ・著者名に付かない所属。K1・K2）ができるときは、中止せず、
-    その set_role を不採用（2 章。CONFLICT_ROLE_WHY）にして組み直す。不変性チェックは合格し、衝突は残らない。
-    今の判定（決定 5）では、これらの指定は Word のスタイルで直す提案で、XML には反映しない（組み直さない）。"""
+    """AI の区切りの指定で組み直すと構造の衝突（同じ種類の後付けの見出しが 2 つ・著者名に付かない所属。K1・K2）ができるときは、
+    中止せず、その指定を不採用（2 章。CONFLICT_ROLE_WHY）にして組み直す。不変性チェックは合格し、衝突は残らない。
+    今の判定（決定 5）では、これらの役割はスタイルの提案（style_fixes）で、XML には反映しない（組み直さない）。構造の衝突の守り
+    （pipeline._reject_roles・structure.conflict_overrides）は、区切りの検証を差し替えて（answers.force_boundaries）確かめる。"""
     kw, text, role = CONFLICT_ROLE_CASES[name]
     path = mf.make_conflict(tmp_path / f"{name}.docx", **kw)
     _, plan, _ = _mechanical(path, journal)
     src = _src_of(plan, text)
     assert plan.structure_conflicts == [] and _mechanical(path, journal, {src: role})[1].structure_conflicts
     res = _manual(path, answers.answer(style_fixes=[(src, role)]), meta, journal, tmp_path / "proposal")
-    assert [(op["src"], why) for op, why in res.ai.rejected] == [(src, ai_assist.STYLE_ONLY_WHY)], name
+    assert res.ai.rejected == [], name
     assert [f.src for f in res.ai.style_fixes] == [src] and res.plan.structure_conflicts == [], name
-    _reflect_all_roles(monkeypatch)
-    res = _manual(path, answers.answer(style_fixes=[(src, role)]), meta, journal, tmp_path / "out")
+    answers.force_boundaries(monkeypatch, {src: role})
+    res = _manual(path, answers.answer(), meta, journal, tmp_path / "out")
     assert [(op["src"], op["role"], why) for op, why in res.ai.rejected] == [(src, role, pipeline.CONFLICT_ROLE_WHY)], name
-    assert not [op for op, _ in res.ai.accepted if op["op"] == "set_role"] and res.ai.boundaries == [], name
+    assert not [op for op, _ in res.ai.accepted if op["op"] == "boundary"] and res.ai.boundaries == [], name
     assert res.plan.structure_conflicts == [] and res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid, name
     assert pipeline.CONFLICT_ROLE_WHY in res.report_path.read_text(encoding="utf-8")       # 2 章の不採用の一覧
     assert "set_role" not in pipeline.CONFLICT_ROLE_WHY
@@ -1874,36 +1877,29 @@ def _count_mechanical(monkeypatch):
 
 @pytest.mark.parametrize("role", ["exclude", "title", "subtitle"])
 def test_conflict_range_keeps_other_set_roles(role, journal, meta, tmp_path, monkeypatch):
-    """AI の set_role で衝突ができたとき、1 段目は衝突の範囲（落ちる所属から次の所属まで。前付けの中）の段落への set_role だけを
-    不採用にして組み直す: 本文の見出しへの set_role は採用されたまま、著者 1 への set_role だけが不採用（組み立ては 3 回: 機械的な
-    組み立て・回答を反映・1 段目）。同じ段落への set_role を 2 つ書いた回答では、両方とも不採用になる。"""
+    """AI の区切りの指定で衝突ができたとき、1 段目は衝突の範囲（落ちる所属から次の所属まで。前付けの中）の段落への指定だけを
+    不採用にして組み直す: 本文の見出しへの指定は採用されたまま、著者 1 への指定だけが不採用（組み立ては 3 回: 機械的な
+    組み立て・回答を反映・1 段目）。区切りの検証を差し替えて（answers.force_boundaries）、衝突を作る役割で確かめる。"""
     path = mf.make_conflict(tmp_path / "k2.docx", **_K2_AUTHORS)
     _, plan, _ = _mechanical(path, journal)
     author, head = _src_of(plan, "試験　六郎"), _src_of(plan, "１．はじめに")
-    _reflect_all_roles(monkeypatch)                  # 区切り以外の役割も反映する形で、衝突の守りを確かめる
+    answers.force_boundaries(monkeypatch, {author: role, head: "sec2"})   # 区切り以外の役割も反映する形で、衝突の守りを確かめる
     calls = _count_mechanical(monkeypatch)
-    res = _manual(path, answers.answer(style_fixes=[(author, role), (head, "sec2")]), meta, journal, tmp_path / "a")
+    res = _manual(path, answers.answer(), meta, journal, tmp_path / "a")
     assert [(op["src"], why) for op, why in res.ai.rejected] == [(author, pipeline.CONFLICT_ROLE_WHY)]
-    assert [op["src"] for op, _ in res.ai.accepted if op["op"] == "set_role"] == [head]
+    assert [op["src"] for op, _ in res.ai.accepted if op["op"] == "boundary"] == [head]
     assert [b.src for b in res.ai.boundaries] == [head]          # 使わなかった指定は、反映した直しの一覧から除く
     assert calls == [{}, {author: role, head: "sec2"}, {head: "sec2"}]
     assert res.plan.structure_conflicts == [] and res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     assert [x for x in res.plan.decisions if x.stage == "ai" and x.src == head]           # 本文の見出しの指定は判断の一覧に残る
     assert [[x.ja.plain() for x in a.affs] for a in res.plan.authors] == [["第一大学"], ["第二大学"]]   # 著者 1 は元のまま
-    # 同じ段落への set_role が 2 つ（後ろの指定が使われる）: 両方とも不採用（2 章に 2 件）
-    calls.clear()
-    res = _manual(path, answers.answer(style_fixes=[(author, role), (author, "exclude")]), meta, journal, tmp_path / "b")
-    assert [(op["src"], op["role"], why) for op, why in res.ai.rejected] == [
-        (author, role, pipeline.CONFLICT_ROLE_WHY), (author, "exclude", pipeline.CONFLICT_ROLE_WHY)]
-    assert not res.ai.accepted and calls == [{}, {author: "exclude"}, {}]
-    assert res.plan.structure_conflicts == [] and res.fidelity.ok
 
 
 def test_conflict_outside_range_rejects_all_set_roles(journal, meta, tmp_path, monkeypatch):
     """衝突の範囲の中に AI の指定がない衝突（範囲の外の set_role だけでできた衝突）では、1 段目を飛ばし、2 段目で set_role をすべて
     不採用にして組み直す。形: 本文スタイルの「注」が 2 つ続いた後ろに章見出しがあるので、機械的には先の「注」から章見出しの前までを
     本文に戻す（K5）。AI がその章見出しを本文の段落（p）にすると、本文に戻さなくなり、注の見出しが 2 つになる（衝突の範囲は 2 つの
-    「注」の間で、章見出しは範囲の外）。本文の見出しへの別の set_role も不採用になる。"""
+    「注」の間で、章見出しは範囲の外）。本文の見出しへの別の指定も不採用になる。"""
     from jasme_jats.structure import conflict_overrides
     path = mf.make_conflict(tmp_path / "k5.docx", body=[_p("body", "注"), _p("body", "1) 注の本文である。"), _p("body", "注"),
                                                        _p("body", "2) 二つ目の注。"), _p("sec1", "２．続き"),
@@ -1914,9 +1910,9 @@ def test_conflict_outside_range_rejects_all_set_roles(journal, meta, tmp_path, m
     _, plan_p, _ = _mechanical(path, journal, {chapter: "p", head: "sec1"})
     [c] = plan_p.structure_conflicts
     assert c.kind == "fn_heading" and conflict_overrides(plan_p, {chapter: "p", head: "sec1"}) == set()
-    _reflect_all_roles(monkeypatch)                  # 区切り以外の役割も反映する形で、衝突の守りを確かめる
+    answers.force_boundaries(monkeypatch, {chapter: "p", head: "sec1"})   # 区切り以外の役割も反映する形で、衝突の守りを確かめる
     calls = _count_mechanical(monkeypatch)
-    res = _manual(path, answers.answer(style_fixes=[(chapter, "p"), (head, "sec1")]), meta, journal, tmp_path / "out")
+    res = _manual(path, answers.answer(), meta, journal, tmp_path / "out")
     assert [(op["src"], why) for op, why in res.ai.rejected] == [(chapter, pipeline.CONFLICT_ROLE_WHY),
                                                                  (head, pipeline.CONFLICT_ROLE_WHY)]
     assert calls == [{}, {chapter: "p", head: "sec1"}, {}]       # 1 段目の組み直しはない
@@ -1946,7 +1942,7 @@ def test_conflict_overrides_range(journal, tmp_path):
 
 # ---- C019: 依頼文・見本を回答の欄に貼ったときは、回答全体を断る
 def _real_answer_block():
-    d = {"placements": [], "operations": [dict(_OP1, reason="本物の回答の理由")], "notes": []}
+    d = answers.data(links=[("文献", "d5", "2001", 1, "B1", "本物の回答の理由")])
     return "```json\n" + json.dumps(d, ensure_ascii=False, indent=1) + "\n```"
 
 
@@ -1962,44 +1958,50 @@ def test_pasted_request_is_refused(journal, meta, tmp_path):
     assert res.fidelity.ok
     # 依頼文の見出しの行と同じ文字でも、行頭の見出しの行でなければ（notes や reason に引用しても）断らない
     ok = json.loads(RESPONSE)
-    ok["notes"] = [ai_assist.REQUEST_HEADING + " の見出しは" + ai_assist.MANUAL_ANSWER_HEADING + "と同じ"]
-    assert parse_response(json.dumps(ok, ensure_ascii=False))["operations"]
+    ok["notes"] = [ai_assist.REQUEST_TITLE + " の見出しは" + ai_assist.DATA_HEADING + "と同じ"]
+    assert parse_response(json.dumps(ok, ensure_ascii=False))["links"]
 
 
 def test_several_code_blocks_are_refused():
     # 見本のあとに本物の回答が続く回答も、どれを読むか推測せず断る
     with pytest.raises(ValueError, match="2 つ"):
-        parse_response(f"見本はこうです。\n{ai_assist.MANUAL_EXAMPLE}\n\n回答です。\n{_real_answer_block()}\n")
+        parse_response(f"見本はこうです。\n{ai_assist.request_instructions(ALL_SECTIONS).split('## 回答の形', 1)[1]}\n\n"
+                       f"回答です。\n{_real_answer_block()}\n")
     # コードブロックが 1 つなら、前後の説明があっても今までどおり読む。{ で始まる回答（中身だけのコピー）も同じ
-    assert parse_response("回答です。\n" + _real_answer_block() + "\n以上")["operations"]
-    assert parse_response(_real_answer_block().split("\n", 1)[1].rsplit("\n", 1)[0])["operations"]
+    assert parse_response("回答です。\n" + _real_answer_block() + "\n以上")["links"]
+    assert parse_response(_real_answer_block().split("\n", 1)[1].rsplit("\n", 1)[0])["links"]
+
+
+def _sample_answer():
+    """依頼文の「## 回答の形」の見本と同じ形（値が「＜…＞」の説明）の回答（修正計画 W8 の 4.1。依頼文の見本は手順 13 で入る）。"""
+    return {"request_id": "R-AAAA-BBBB", "pdf": {"status": "＜見た｜添付なし｜別の論文＞", "pages": 0},
+            "placements": [{"float": "＜s1 など＞", "after": "＜段落 ID か 空＞", "after_head": "＜その段落の先頭 8 字か 空＞",
+                            "page": 0, "column": "＜左｜右｜両方｜空＞", "basis": "＜PDF｜配置の情報｜仮の位置＞",
+                            "reason": "＜根拠＞", "confidence": "＜高｜中｜低＞"}],
+            "links": [{"kind": "＜文献｜図｜表｜注｜式＞", "src": "＜段落 ID＞", "head": "＜先頭 8 字＞", "text": "＜リンクにする文字＞",
+                       "occurrence": 1, "target": "＜B3・F1・T2・fn1・FD1 など＞", "reason": "＜根拠＞", "confidence": "＜高｜中｜低＞"}],
+            "notes": ["＜気づき＞"]}
 
 
 def test_sample_items_in_answer_are_refused():
-    # 見本のコードブロックそのもの。断る文は件数だけを言い、内部の項目名・ID は出さない
-    ex = example_block()
-    n = len(ex["operations"]) + len(ex["placements"])
+    """見本の写し（値がまるごと「＜…＞」の項目）は、回答ごと断る。断る文は件数だけを言い、内部の項目名・ID は出さない。"""
     with pytest.raises(ValueError, match="見本") as ei:
-        parse_response(ai_assist.MANUAL_EXAMPLE)
+        parse_response(json.dumps(_sample_answer(), ensure_ascii=False))
     msg = str(ei.value)
-    assert f"{n} 件" in msg and "operations" not in msg and "placements" not in msg and "link_" not in msg
-    assert not any(x["src"] in msg for x in ex["operations"]) and not any(x["float"] in msg for x in ex["placements"])
+    assert "3 件" in msg and "placements" not in msg and "links" not in msg and "＜" not in msg
     # 画面ごとの操作（手順番号・欄の名前・ファイル名）は書かない（レポート・コマンドラインにもそのまま出る文）
     for m in (ai_assist.PASTED_REQUEST_MSG, msg):
         assert "手順" not in m and "欄" not in m and ".txt" not in m
-    # 見本の操作が 1 件だけ入った回答（ほかは本物）
-    d = {"placements": [], "operations": [example_block()["operations"][1], dict(_OP1, reason="本物の回答の理由")], "notes": []}
+    # 見本の項目が 1 件だけ入った回答（ほかは本物）
+    d = answers.data(links=[("文献", "d5", "2001", 1, "B1", "本物の回答の理由")])
+    d["links"].append(_sample_answer()["links"][0])
     with pytest.raises(ValueError, match="見本"):
         parse_response(json.dumps(d, ensure_ascii=False))
-    # 見本の図表の位置が 1 件
-    d = {"placements": [example_block()["placements"][0]], "operations": [], "notes": []}
-    with pytest.raises(ValueError, match="見本"):
-        parse_response(json.dumps(d, ensure_ascii=False))
-    # 見本と ID だけが同じで理由の違うもの（本物の回答）は読む
-    d = {"placements": [], "operations": [dict(example_block()["operations"][1], reason="本物の理由")], "notes": []}
-    assert parse_response(json.dumps(d, ensure_ascii=False))["operations"]
+    # 文字の一部に「＜」「＞」がある本物の回答は読む
+    d = answers.data(links=[("文献", "d5", "2001", 1, "B1", "本文の「＜注意＞」の後ろの引用")])
+    assert parse_response(json.dumps(d, ensure_ascii=False))["links"]
     # 途中で切れた回答から読む位置の指定でも、見本の写しは使わない
-    cut = json.dumps(example_block()["placements"][:1], ensure_ascii=False)
+    cut = json.dumps(_sample_answer()["placements"], ensure_ascii=False)
     assert ai_assist.parse_cut_response('{"placements": ' + cut[:-1] + ', {"float": "s9"') is None
 
 

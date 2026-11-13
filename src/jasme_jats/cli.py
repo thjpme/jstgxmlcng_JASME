@@ -2,7 +2,10 @@
 
   python -m jasme_jats 論文.docx --meta 書誌情報.toml --out 出力フォルダ [--ai api|manual|none]
                        [--ai-provider claude|openai|gemini|sakana] [--ai-model モデル名] [--pdf 記事.pdf [--route docx|pdf]]
-                       [--ai manual --ai-response 回答のファイル]
+                       [--ai manual --ai-response 回答のファイル] [--ai api --ai-refresh]
+
+--ai api では、出力フォルダに前の変換の AI回答.json（反映した AI の回答の写し）があり、依頼の番号・AI・モデル・PDF の渡し方が
+今回と同じなら、API を呼ばずにその回答を使う（--ai-refresh で読まずに呼び直す。修正計画 W8 の 4.6）。
 
 書誌情報ファイル（TOML）の例は examples/meta_example.toml を参照。
 
@@ -20,7 +23,7 @@ import re
 import sys
 from pathlib import Path
 
-from .ai_assist import API_KEY_NAMES, DEFAULT_MODEL
+from .ai_assist import ANSWER_FILE, API_KEY_NAMES, DEFAULT_MODEL
 from .colab import step_text
 from .config import ArticleMeta, JournalConfig
 from .images import match_names
@@ -45,6 +48,9 @@ def main(argv=None):
                          "使えなければ最新の Opus に切り替える）。claude 以外では必ず指定する（Claude Opus と同等以上のモデルを推奨）")
     ap.add_argument("--ai-response", type=Path,
                     help="手動モード（--ai manual と一緒に指定する）: AI の回答（JSON）を保存したファイル")
+    ap.add_argument("--ai-refresh", action="store_true",
+                    help=f"API モード（--ai api と一緒に指定する）: 出力フォルダの {ANSWER_FILE}（前の変換の AI の回答）を使わず、"
+                         "AI を呼び直す（既定では、依頼の番号・AI・モデルが同じなら、API を呼ばずにその回答を使う）")
     ap.add_argument("--pdf", type=Path, help="記事の PDF（J-STAGE への登載に必須。指定すると ZIP に入れる。"
                                           "指定しなければ、記事フォルダに前の変換の PDF が残っていても ZIP に入れない）")
     ap.add_argument("--route", choices=["docx", "pdf"],
@@ -67,6 +73,8 @@ def main(argv=None):
         # 回答のファイルは --ai manual のときだけ読む（--ai の既定は none）。黙って無視すると、AI の回答を反映していない結果になる
         ap.error("--ai-response（AI の回答のファイル）は --ai manual のときだけ読みます"
                  f"（今は --ai {a.ai}）。AI の回答を反映するときは --ai manual を一緒に指定してください")
+    if a.ai_refresh and a.ai != "api":
+        ap.error(f"--ai-refresh は --ai api のときだけ使います（今は --ai {a.ai}）")
     for opt, path in (("変換する docx", a.docx), ("--meta", a.meta), ("--pdf", a.pdf), ("--ai-response", a.ai_response)):
         # 通常のファイルでなくても読めるもの（/dev/stdin・プロセス置換の /dev/fd/NN など）は通す。フォルダは誤り
         if path is not None and (not path.exists() or path.is_dir()):
@@ -93,7 +101,7 @@ def main(argv=None):
     opts = Options(out_dir=a.out, split_labels=None if a.split_labels is None else a.split_labels == "yes",
                    ai_mode=a.ai, ai_provider=a.ai_provider, ai_model=a.ai_model or DEFAULT_MODEL, ai_api_key=api_key,
                    ai_response=a.ai_response.read_text(encoding="utf-8") if a.ai_response else None,
-                   pdf_path=a.pdf, route=a.route)
+                   pdf_path=a.pdf, route=a.route, ai_cache=None if a.ai != "api" or a.ai_refresh else _read_cache(a.out))
     try:
         res = convert(a.docx, meta, journal, opts)
     except StructureConflictError as e:
@@ -120,6 +128,8 @@ def main(argv=None):
         print(f"AI 判断一覧: {res.ai_report_path}")
     if res.prompt_path:
         print(f"AI 依頼文: {res.prompt_path}")
+    if res.ai_answer_path:
+        print(f"AI の回答の写し: {res.ai_answer_path}" + ("（前の変換の回答を使い、AI は呼んでいません）" if res.ai.reused else ""))
     if a.images or a.no_image:
         try:
             supplied = images_in(a.images, res) if a.images else {}
@@ -174,6 +184,14 @@ def image_table(res) -> list:
         state = {"missing": "未", "skipped": "入れない"}.get(row.status) or f"入れた（{row.detail}）"
         out.append(f"  {row.key.ljust(width)}  {(row.label or '—').ljust(4)}  {state}")
     return out
+
+
+def _read_cache(out_dir: Path):
+    """出力フォルダの AI回答.json の中身（なければ・読めなければ None。中身の確かめは ai_assist.cached_answer）。"""
+    try:
+        return (Path(out_dir) / ANSWER_FILE).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 if __name__ == "__main__":

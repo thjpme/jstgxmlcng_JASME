@@ -193,12 +193,35 @@ def body_paragraphs(plan: ArticlePlan):
 
 
 # ---------------------------------------------------------------------------- 個別のリンク
+class Unresolved(NamedTuple):
+    """機械がリンクできなかった参照 1 か所（Linker.unresolved・Linker.held の要素。修正計画 W8 の 4.1）。
+
+    先頭の 4 つ（kind: 参照の種類〈fig・table・fn・bibr〉、src: 段落 ID、text: 参照の文字、detail: 理由）と 5・6 番目（ref_kind:
+    文献の照合の種別〈missing・year_mismatch など〉、year: 引用の年）は、添字で読む所（レポートの 3 章・pipeline.convert）のために
+    前の組と同じ並びにしてある。text は前の組と同じ文字（文献は NFKC の引用の文字。レポートの 3 章に出す）。
+    start・end は、リンクにする文字の段落の文字（Para.plain()）の中の範囲（図・表・注は参照の表記、文献は年。位置を持たない項目は
+    -1）、context はその参照を含む表記（段落の文字のまま。「図1、3」の「3」なら「図1、3」、文献なら引用の全体。範囲の文字と同じなら
+    ""）。AI 依頼文の「# 機械がリンクできなかった箇所」に、段落にあるとおりの表記と何回目か（occurrence_at）を書くために持つ。"""
+    kind: str
+    src: str
+    text: str
+    detail: str
+    ref_kind: str = ""
+    year: object = None
+    start: int = -1
+    end: int = -1
+    context: str = ""
+
+
 class Linker:
     def __init__(self, plan: ArticlePlan, ref_doi: str = "pub-id"):
         self.plan = plan
         self.ref_doi = ref_doi      # 引用文献中の DOI: "uri"（リンクとして表示）/ "pub-id"（DOI として登録）
         self.count = {"fig": 0, "table": 0, "disp-formula": 0, "fn": 0, "bibr": 0, "url": 0, "doi": 0, "word": 0}
-        self.unresolved = []    # (category, src, text, detail)
+        self.unresolved = []    # Unresolved: リンク先が見つからなかった参照（レポートの 3 章）
+        # Unresolved: リンク先はあるが、機械の判断でリンクしなかった参照（どの図か決められない・語の一部・番号だけの上付きの数字・
+        # 指数の形。レポートでは判断の一覧〈4 章〉と要確認に出し、ここは AI 依頼文の「# 機械がリンクできなかった箇所」にだけ使う）
+        self.held = []
         # 番号だけの上付きの数字（「主張である¹」の ¹）を注番号とみなすか。論文ごとに run の note_style で決める
         # （run を通らずに fn_marks を呼んだときは、0.26.0 までと同じく注番号とみなす）
         self.bare_notes = True
@@ -417,6 +440,10 @@ class Linker:
             why = f"{word}{n} のキャプションに枝番がある（{caps}）ので、どの枝番の{word}への参照か決められず"
         else:
             why = f"{word}{n} のキャプションが複数ある（{caps}）ので、どの{word}への参照か決められず"
+        short = (f"枝番つきの{word}の参照とみなし、どの{word}か決められない" if branched else
+                 f"{word}{n} のキャプションに枝番があり、どの{word}か決められない" if has_branch else
+                 f"{word}{n} のキャプションが 2 つ以上あり、どの{word}か決められない")
+        self.held.append(Unresolved(ref_type, p.src, text, short, start=s, end=e))
         op = "link_figure" if ref_type == "fig" else "link_table"
         self.note("figure" if ref_type == "fig" else "table", p.src,
                   f"「{text}」は、{why}、リンクしなかった。手で確かめ、リンクが必要なら、AI による補完の {op}（text「{text}」、"
@@ -426,6 +453,8 @@ class Linker:
     def _word_part(self, p, plain, s, e, prev, n, rid, ref_type, word):
         """語の一部とみなしてリンクしなかった図・表の参照（plain[s:e]。「図1」）を、判断の一覧に記録する。"""
         text = plain[s:e]
+        self.held.append(Unresolved(ref_type, p.src, text, f"直前の「{prev}」と続く語の一部（地図1・付表1 など）とみなした",
+                                    start=s, end=e))
         op = "link_figure" if ref_type == "fig" else "link_table"
         self.note("figure" if ref_type == "fig" else "table", p.src,
                   f"「{text}」は、直前の「{prev}」と続く語の一部（地図1・付表1 など）とみなし、{word} {rid} にリンクしなかった。"
@@ -435,7 +464,9 @@ class Linker:
     def _link_num(self, p, s, e, n, ids, ref_type, word, context):
         rid = ids.get(n)
         if rid is None:
-            self.unresolved.append((ref_type, p.src, context, f"{word}{n} に対応する{word}が見つからない"))
+            text = p.plain()[s:e]
+            self.unresolved.append(Unresolved(ref_type, p.src, context, f"{word}{n} に対応する{word}が見つからない",
+                                              start=s, end=e, context=context if context != text else ""))
             return
         if apply_span(p, s, e, LinkSpec(kind="xref", attrs={"ref-type": ref_type, "rid": rid})):
             self.count[ref_type] += 1
@@ -489,7 +520,8 @@ class Linker:
                 raw = plain[mk.start:mk.end]
                 if rid is None:
                     if mk.kind != "exponent":      # 指数・単位の形のものは、注がなくても知らせない
-                        self.unresolved.append(("fn", p.src, raw, f"上付きの「{raw}」に対応する注が見つからない"))
+                        self.unresolved.append(Unresolved("fn", p.src, raw, f"上付きの「{raw}」に対応する注が見つからない",
+                                                          start=mk.start, end=mk.end))
                     continue
                 if mk.kind in ("strong", "after_note") or (mk.kind == "bare" and self.bare_notes):
                     if apply_span(p, mk.start, mk.end, LinkSpec(kind="xref", attrs={"ref-type": "fn", "rid": rid})):
@@ -499,7 +531,11 @@ class Linker:
                 k = occurrence_at(p, mk.digit_start, digit)
                 if mk.kind == "exponent":
                     exps.append((mk.digit_start, digit, k, rid))
+                    self.held.append(Unresolved("fn", p.src, digit, f"上付きの数字を指数・単位（cm²・x² などの形）とみなした（注 {rid} がある）",
+                                                start=mk.digit_start, end=mk.digit_end))
                     continue
+                self.held.append(Unresolved("fn", p.src, digit, f"番号だけの上付きの数字で、この論文の注番号の形（「1)」「注1」）と"
+                                            f"違う（注 {rid} がある）", start=mk.digit_start, end=mk.digit_end))
                 msg = (f"上付きの「{digit}」は、番号だけの形なので注 {rid} にリンクしなかった（この論文の注番号は「1)」「注1」の"
                        f"形）。注番号なら、AI による補完の link_note（text「{digit}」、occurrence {k}）でリンクできる")
                 records.append((mk.digit_start, msg))
@@ -531,7 +567,8 @@ class Linker:
             n = fw_int(m.group(1) or m.group(2))
             rid = fn_ids.get(n)
             if rid is None:
-                self.unresolved.append(("fn", p.src, m.group(0), f"「{m.group(0)}」に対応する注が見つからない"))
+                self.unresolved.append(Unresolved("fn", p.src, m.group(0), f"「{m.group(0)}」に対応する注が見つからない",
+                                                  start=s, end=e))
                 continue
             if apply_span(p, s, e, LinkSpec(kind="xref", attrs={"ref-type": "fn", "rid": rid})):
                 self.count["fn"] += 1

@@ -110,9 +110,9 @@ def test_ai_can_split_notes_and_link_to_the_new_note(journal, meta, tmp_path):
 
 def test_ai_note_boundaries_are_reflected_and_recorded(journal, meta, tmp_path):
     """注の区切りの直し（注の始まり fn_start・注の続き p）は XML に反映し、AIOutcome.boundaries に（段落、kind、理由、確度）を
-    記録する。注の一覧の段落へのほかの役割（見出し・除外）は、Word のスタイルで直す提案にして XML に反映しない（所有者の決定 5。
-    W8 の手順 5）。"""
-    from jasme_jats.ai_assist import EXCLUDE_HOW, STYLE_ONLY_WHY
+    記録する。注の一覧の段落へのスタイルの提案（見出し・除外。style_fixes）は、記録だけで XML に反映しない（所有者の決定 5。
+    W8 の手順 5・10）。"""
+    from jasme_jats.ai_assist import EXCLUDE_HOW
     _, plan, _ = _mechanical(NOTES, journal)
     start = next(s for s, p in plan.paras.items() if p.plain().startswith("※4"))
     fn3 = next(fn for fn in plan.fns if len(fn.paras) > 1)
@@ -124,9 +124,9 @@ def test_ai_note_boundaries_are_reflected_and_recorded(journal, meta, tmp_path):
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     assert [(b.src, b.kind, b.role, b.reason, b.confidence) for b in res.ai.boundaries] == [
         (start, "注の始まり", "fn_start", "番号で始まる", "高"), (cont, "注の始まり", "fn_start", "試験", "中")]
-    assert [(op["role"], why) for op, why in res.ai.rejected] == [("fn_heading", STYLE_ONLY_WHY), ("exclude", STYLE_ONLY_WHY)]
+    assert res.ai.rejected == []
     assert [(f.src, f.role, f.style, f.how) for f in res.ai.style_fixes] == [
-        (start, "fn_heading", "注見出し", "Word で段落のスタイルを「注見出し」にする"), (cont, "exclude", "", EXCLUDE_HOW)]
+        (start, "fn_heading", "注見出し", "Word で段落のスタイルを「注見出し」にする"), (cont, "", "", EXCLUDE_HOW)]
     assert [len(fn.findall("p")) for fn in load(res).findall(".//fn-group/fn")] == [1, 1, 1, 1, 1]
     # 注の続き（p）: 2 つ目の注の最初の段落を、前の注の続きにする（注が 1 つ減る）
     second = next(fn for fn in plan.fns if not fn.word_note and fn is not plan.fns[0]).paras[0].src
@@ -573,8 +573,8 @@ def test_note_overlap_is_reported_only_for_same_numbers(journal, meta, tmp_path)
 
 
 def test_ai_cannot_set_role_on_word_notes(journal, meta, tmp_path):
-    # Word の脚注・文末脚注の段落（参照のない注も）への set_role は、どの役割も採用しない（修正計画の N6。0.23.1 は p・exclude を
-    # 「採用」と記録しながら何も変えていなかった）
+    # Word の脚注・文末脚注の段落（参照のない注も）への区切りの指定は、どれも採用しない（修正計画の N6。0.23.1 は p・exclude を
+    # 「採用」と記録しながら何も変えていなかった）。スタイルの提案は記録だけ（XML は変えない）
     _, plan, _ = _mechanical(STRUCTURE, journal)
     endnote = next(fn.paras[0].src for fn in plan.fns if fn.word_id == "endnote:5")
     footnote = next(fn.paras[0].src for fn in plan.fns if fn.word_id == "footnote:5")
@@ -582,8 +582,9 @@ def test_ai_cannot_set_role_on_word_notes(journal, meta, tmp_path):
     resp = answers.answer(boundaries=[(endnote, "注の続き"), (footnote, "注の始まり"), (unref, "注の続き")],
                           style_fixes=[(endnote, "exclude")])
     res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=resp))
-    assert [why for _, why in res.ai.rejected] == [WORD_NOTE_ROLE] * 4
-    assert not any(op["op"] == "set_role" for op, _ in res.ai.accepted)
+    assert [why for op, why in res.ai.rejected if op["op"] == "boundary"] == [WORD_NOTE_ROLE] * 3
+    assert not any(op["op"] == "boundary" for op, _ in res.ai.accepted) and res.ai.boundaries == []
+    assert [f.src for f in res.ai.style_fixes] == [endnote]
     assert res.fidelity.ok and list(fn_list(load(res))) == ["fn1", "fn2", "fn3", "fn4", "fn5"]
 
 
@@ -665,9 +666,19 @@ def test_table_in_notes_section_is_output(journal, meta, tmp_path):
     assert len(msgs) == 1 and msgs[0].startswith(NOTE_TABLE_MSG + "（注の段落の間、docx の順）")
     assert "プレビューで確かめる" in msgs[0]
     assert ("要確認", "excluded_unsure") not in [(a.level, a.key) for a in actions(res)]
-    # AI の依頼文: 注の表は「図・表・注・数式」に表として載り、「出力から除外」には載らない
+    # AI の依頼文: 注の表は「## 注」のその位置に字下げして載り（修正計画 W8 の 4.1）、「図・表・式の一覧」にキャプションのない表として
+    # 載り、「出力から除外」には載らない
     req = (tmp_path / "fn_table" / "AI依頼文.txt").read_text(encoding="utf-8")
-    assert "[T2] 表 （キャプションなし）" in req and "出力から除外: " + BACK_TABLE_EXCLUDED not in req
+    notes = req.split("\n## 注（", 1)[1].split("\n\n", 1)[0].splitlines()[1:]
+    first = res.plan.fns[0].paras[0].src
+    assert notes[0].endswith("注") and "〔" in notes[0]          # 注見出しの段落
+    assert notes[1].startswith(f"[fn1] [{first}]") and notes[1].endswith("1) 注の本文。")
+    # セルは参照らしい文字（「注」など）のあるものだけ、さらに字下げして載せる
+    assert notes[2] == "      〔表 T2: セル 2 個のうち、参照らしい文字のない 1 個は省略〕"
+    assert notes[3].startswith("        [") and notes[3].endswith("〔表のセル〕注の表A")
+    assert notes[4].startswith("      [") and notes[4].endswith("続きの段落。") and notes[5].startswith("[fn2] [")
+    assert f"[T2]（キャプションのない表。最初のセル「注の表A」。[{first}] の後ろ）" in req
+    assert "出力から除外: " + BACK_TABLE_EXCLUDED not in req
 
 
 def test_table_before_first_note_goes_after_first_paragraph(journal, meta, tmp_path):

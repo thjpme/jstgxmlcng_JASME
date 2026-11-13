@@ -5,11 +5,14 @@
      構造（同じ種類の後付けの見出し・英文要旨の見出しが 2 つ、著者名の付かない所属。K1・K2）は plan.structure_conflicts に記録され、
      組み立ての直後（AI を呼ぶ前。ルート2 は補った docx を作る前の元の docx で）に StructureConflictError で変換を中止する
   3. 機械的にリンクを付ける（linker, refparse）
-  4. （任意。推奨の手順）AI による補完: AI が返した操作を検証し、構造の組み直し・リンクの追加として適用する（ai_assist）。
+  4. （任意。推奨の手順）AI による補完: AI の回答（種類ごとの一覧）を 1 件ずつ検証し、構造の組み直し・リンクの追加として適用する
+     （ai_assist。スタイルの提案は記録だけ）。先に、どの依頼文への回答かを依頼の番号で確かめ、別の論文・図表や文献の並びが
+     違う原稿への回答と、番号のない回答は使わない（ai_assist.check_answer。修正計画 W8 の 4.6）。使えた回答の写しは出力フォルダの
+     AI回答.json に書き、API モードで次の変換に Options.ai_cache で渡されて meta が同じなら、API を呼ばずに使う（ai_assist.cached_answer）。
      AI を使わなくても中止しない（位置を決められない図表は、結び付いた段落の後ろか本文の最後に置く。修正計画 W8 の決定 4）。
-     回答が途中で切れていたら、最後まで書かれた図表の位置の指定（placements）だけを読んで反映し、要対応として知らせる。
-     AI の役割の指定（set_role）で組み直すと構造の衝突（K1・K2）ができるときは、衝突の範囲の set_role を、なお残ればすべての
-     set_role を不採用（CONFLICT_ROLE_WHY。レポートの 2 章）にして組み直す（中止しない）
+     回答が途中で切れていたら、最後まで書かれた図表の位置の指定（placements）だけを読んで反映し、推奨の手順で知らせる。
+     AI の区切りの指定（boundaries）で組み直すと構造の衝突（K1・K2）ができるときは、衝突の範囲の指定を、なお残ればすべての
+     区切りの指定を不採用（CONFLICT_ROLE_WHY。レポートの 2 章）にして組み直す（中止しない）
   5. XML を組み立てる（builder）
   6. 文字の不変性チェック（fidelity）… AI 補完を行った場合も、必ずこの最終段階で行う
   7. 目印を取り除き、画像の置き場所をすべて書いた XML（Result.xml_base）を作り、入れた画像を反映した最終出力
@@ -38,16 +41,19 @@
 """
 from __future__ import annotations
 
+import copy
 import datetime as _dt
+import json
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 from . import __version__
-from .ai_assist import (DEFAULT_MODEL, AIOutcome, apply_ops, build_request, call_provider, float_placements,
-                        manual_prompt, parse_cut_response, parse_response, retarget_ops, role_overrides,
-                        split_ops, target_keys)
+from .ai_assist import (ANSWER_FILE, DEFAULT_MODEL, REUSED_MSG, AIOutcome, apply_ops, boundary_overrides, box_kinds,
+                        build_request, cache_meta, cache_text, cached_answer, call_provider, check_answer, float_placements, link_ops, missing_answers, name_ops,
+                        parse_cut_response, parse_response, read_answer_meta, record_boundaries, retarget_ops, style_fixes,
+                        target_keys, NO_PLACEMENT_WHY)
 from .article import _para_text
 from .builder import build, finalize, serialize, word_note_marks
 from .config import ArticleMeta, JournalConfig
@@ -86,27 +92,45 @@ class StructureConflictError(Exception):
         super().__init__(structure_conflict_text(plan))
 
 
-# AI の set_role を、構造の衝突（K1・K2）ができるので使わなかったときの理由（レポートの 2 章の不採用の一覧に出る。_reject_roles）
-CONFLICT_ROLE_WHY = ("この回答の役割の指定を合わせて組み直すと、同じ種類の後付けの見出し（英文要旨の見出し）が 2 つになるか、所属が著者名に付かなくなり、"
+# AI の区切りの指定（boundaries）を、構造の衝突（K1・K2）ができるので使わなかったときの理由（レポートの 2 章の不採用の一覧に出る。_reject_roles）
+CONFLICT_ROLE_WHY = ("この回答の区切りの指定を合わせて組み直すと、同じ種類の後付けの見出し（英文要旨の見出し）が 2 つになるか、所属が著者名に付かなくなり、"
                      "段落の文字が XML に入らなくなるので使わなかった")
 
 
-def _reject_roles(ops, outcome, pred):
-    """AI の set_role のうち、pred(op) が真で、まだ不採用の一覧にないものを、構造の衝突（CONFLICT_ROLE_WHY）で不採用にする（2 章）。
+# AI の区切りの直しを、反映すると手で書いた注がなくなるか英文要旨が空になるので使わなかったときの理由（boundary_losses。_reject_roles）
+BOUNDARY_LOST_WHY = ("この区切りの指定を反映して組み直すと、手で書いた注が 1 つもなくなるか、英文要旨が空になるので使わなかった")
 
-    同じ段落への set_role が複数あれば、すべて不採用にする（AIOutcome.boundaries からも除く）。apply_ops は不採用の一覧にある操作（同じ dict）を飛ばすので、
-    採用の一覧には入らない。"""
+
+def boundary_losses(before, after, outcome) -> set:
+    """区切りの直し（outcome.boundaries）を反映して組み直した plan（after）で、組み直す前（before）にあった手で書いた注が 1 つも
+    なくなったら注の区切りの直しの段落、英文要旨が空になったら資料の始まりの直しの段落の ID の集まり（なければ空）。"""
+    lost = set()
+    def written(plan):
+        return [fn for fn in plan.fns if not fn.word_note]
+    # 注の区切りの直しは、組み直す前に注の一覧（領域 fn）にあった段落への指定（kind ではなく領域で分ける）
+    note_srcs = {b.src for b in outcome.boundaries if before.region.get(b.src) == "fn"}
+    if written(before) and not written(after):
+        lost |= note_srcs
+    if before.abstract and not after.abstract:
+        lost |= {b.src for b in outcome.boundaries} - note_srcs
+    return lost
+
+
+def _reject_roles(ops, outcome, pred, why=CONFLICT_ROLE_WHY):
+    """AI の区切りの指定（ai_assist.boundary_overrides が反映するとした操作）のうち、pred(op) が真で、まだ不採用の一覧にないものを、
+    理由 why（既定は構造の衝突〈CONFLICT_ROLE_WHY〉）で不採用にし、AIOutcome.boundaries からも除く（2 章）。
+    ai_assist.record_boundaries は不採用の一覧にある操作（同じ dict）を飛ばすので、採用の一覧には入らない。"""
     for op in ops:
-        if op.get("op") == "set_role" and pred(op) and not any(r[0] is op for r in outcome.rejected):
-            outcome.rejected.append((op, CONFLICT_ROLE_WHY))
-            # 反映した注の区切り・資料の始まりの直し（ai_assist.role_overrides）からも除く
+        if op.get("op") == "boundary" and pred(op) and not any(r[0] is op for r in outcome.rejected):
+            outcome.rejected.append((op, why))
+            # 反映した注の区切り・資料の始まりの直し（ai_assist.boundary_overrides）からも除く
             outcome.boundaries = [b for b in outcome.boundaries if b.src != op["src"]]
 
 
 # 途中で切れた回答から、図表の位置の指定の一部だけを反映したときの説明（AIOutcome.partial。レポートの 2 章と、推奨の手順 ai_finish の
 # 「一部」の文。出し直しの頼み方は report._ai_finish_action が書く）
 PARTIAL_MSG = ("図表の位置の指定（placements）のうち、最後まで書かれていた {n} 件だけを読み取って反映しました（検証で"
-               "採用しなかったものは 2 章）。リンクなどの操作（operations）と気づき（notes）は反映していません。")
+               "採用しなかったものは 2 章）。リンクなどのほかの一覧と気づき（notes）は反映していません。")
 
 
 def _read_cut(outcome, text):
@@ -147,6 +171,9 @@ class Options:
     ai_response: Optional[str] = None         # 手動モード: AI の回答（JSON）
     pdf_path: Optional[Path] = None
     route: str = "docx"                       # docx（ルート1: docx から作る）/ pdf（ルート2: docx から作り、出版版 PDF で補う）
+    # 前の変換の AI回答.json（ai_assist.ANSWER_FILE）の中身。API モードで meta（依頼の番号・提供元・モデル・PDF の渡し方）が今回と
+    # すべて同じなら、API を呼ばずにその回答を使う（ai_assist.cached_answer。修正計画 W8 の 4.6）。手動モードでは使わない
+    ai_cache: Optional[str] = None
 
 
 @dataclass
@@ -209,6 +236,7 @@ class Result:
     check_path: Optional[Path] = None       # 図の確かめの一覧（imagelist.write_check。出力フォルダの {記事識別子}_図の確かめ.html。ZIP には入らない）
     prompt_path: Optional[Path] = None
     ai_report_path: Optional[Path] = None
+    ai_answer_path: Optional[Path] = None   # 反映した AI の回答の写し（出力フォルダの AI回答.json。記事フォルダの外なので ZIP には入らない）
 
     @property
     def ok(self) -> bool:
@@ -672,13 +700,28 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
                         provider=opts.ai_provider)
     prompt_path = None
     data = None                 # AI の回答（読めたもの）
+    answer_copy = None          # AI回答.json に書く回答（依頼の番号の確かめで書き換える前の写し。使えた回答だけ）
 
     # ---------------------------------------------------------------- AI 補完
     if opts.ai_mode in ("api", "manual"):
-        # docx の画像は AI に渡さない（図・表の画像は作業する人が用意する。修正計画 W1。call_provider の画像の引数は W8 が消す）
-        req_text, _ = build_request(plan, linker, info.exclusions, info.unsplit_names, info.name_splits)
+        # 依頼文（修正計画 W8 の 4.1）: 手動では【作業する方へ】・指示・データをつないで AI依頼文.txt に書き、API では system に指示、
+        # 利用者の内容にデータを渡す。docx の画像は AI に渡さない（図・表の画像は作業する人が用意する。修正計画 W1。call_provider の
+        # 画像の引数は W8 の手順 20 で PDF に置き換える）
+        request = build_request(plan, linker, info, pdf_name=Path(opts.pdf_path).name if opts.pdf_path else "",
+                                manual=opts.ai_mode == "manual", journal=journal)
         if opts.ai_mode == "api":
-            outcome = call_provider(opts.ai_provider, req_text, [], model=opts.ai_model, api_key=opts.ai_api_key)
+            cached = cached_answer(opts.ai_cache, _answer_meta(opts, request.stamp))
+            if cached is not None:
+                # 前の変換と同じ依頼・同じ AI への回答（AI回答.json）があるので、API を呼ばない（修正計画 W8 の 4.6）
+                outcome = AIOutcome(mode="api", model=opts.ai_model, provider=opts.ai_provider, reused=REUSED_MSG,
+                                    raw=json.dumps(cached, ensure_ascii=False))
+            else:
+                try:
+                    outcome = call_provider(opts.ai_provider, request.system_text(), request.data, [], model=opts.ai_model,
+                                            api_key=opts.ai_api_key)
+                except Exception as e:  # noqa: BLE001
+                    # 各 API の主な誤りの型は call_* が受けて outcome.error にする。それ以外の想定外の例外でも変換は止めない（AI の失敗）
+                    outcome.error = f"AI の呼び出しで想定外の誤りが起きました（{type(e).__name__}: {e}）"
             if outcome.raw and (not outcome.error or outcome.cut):
                 try:
                     data = parse_response(outcome.raw)
@@ -689,7 +732,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
                         outcome.error = f"AI の回答を JSON として読めませんでした: {e}"
         else:
             prompt_path = out_dir / "AI依頼文.txt"
-            prompt_path.write_text(manual_prompt(req_text), encoding="utf-8")
+            prompt_path.write_text(request.manual_text(), encoding="utf-8")
             if opts.ai_response and opts.ai_response.strip():
                 outcome.raw = opts.ai_response
                 try:
@@ -698,52 +741,81 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
                     data = _read_cut(outcome, opts.ai_response)  # 途中で切れた回答: 最後まで書かれた位置の指定だけを読む
                     if data is None:
                         outcome.error = f"貼り付けられた回答を JSON として読めませんでした: {e}"
+        outcome.request_id = request.stamp
         if data is not None:
-            ops = split_ops(data, outcome)
+            read_answer_meta(data, outcome)
+            kept_answer = copy.deepcopy(data)       # check_answer が読み替える前の回答（AI回答.json に書く）
+            other = check_answer(data, request, plan, outcome)
+            if other:
+                # 依頼の番号がない・構造の印が違う（図・表・文献・注・図形の数や並びが違う原稿か、別の論文への回答）: リンク先の ID
+                # （B3・F1 など）は並び順なので、黙って別の文献・図に付けないよう、回答を 1 件も使わない（AI の失敗。修正計画 W8 の 4.6）
+                outcome.error = other
+                outcome.rejected = []
+                outcome.partial = ""
+                data = None
+            elif not outcome.error and not outcome.cut and not outcome.partial:
+                answer_copy = kept_answer   # 途中で切れた回答は写さない（使い回すと、次の変換も「一部」のままになる）
+        if data is not None:
+            # 回答を種類ごとに検証する（修正計画 W8 の 3.1・4.2）: リンク・姓名の区切りは操作の形に写して apply_ops が適用し、
+            # 区切り・図表の位置・テキストボックスの種類は構造の組み立てをやり直すときに使い、スタイルの提案は記録だけ（XML は変えない）
             outcome.notes = [n for n in data.get("notes", []) if isinstance(n, str) and n.strip()]
-            overrides = role_overrides(ops, plan, outcome, journal)
+            ops = link_ops(data, plan, outcome)
+            ops += name_ops(data, plan, outcome, info)
+            style_fixes(data, plan, outcome, journal)
+            overrides, bounds = boundary_overrides(data, plan, outcome)
             placements = float_placements(data, plan, outcome)
+            placements.update(box_kinds(data, plan, outcome))
+            if not outcome.partial:
+                missing_answers(data, plan, outcome)        # 聞いたのに回答に指定がなかった図形・テキストボックス（C079）
             keys = target_keys(plan)
             # 構造を最初から組み直し（docx を読み直す）、AI の操作を適用する。リンク先は組み直した後の ID に読み替える
+            first = plan
             doc, plan, linker = _mechanical(docx_path, journal, overrides, placements)
+            lost = boundary_losses(first, plan, outcome)
+            if lost:
+                # 守り: 区切りの直しで、手で書いた注がなくなった・英文要旨が空になった（ai_assist.boundary_problem が断る形のほかに
+                # 起きたとき）。その直しを使わずに組み直す（2 章の不採用の一覧に理由）
+                _reject_roles(bounds, outcome, lambda op: op["src"] in lost, BOUNDARY_LOST_WHY)
+                overrides = {s: r for s, r in overrides.items() if s not in lost}
+                doc, plan, linker = _mechanical(docx_path, journal, overrides, placements)
             if plan.structure_conflicts:
-                # 元の docx に衝突がないことは上で確かめたので、AI の回答の set_role で衝突ができた（同じ種類の見出し・英文要旨の
-                # 見出しが 2 つになる、所属が著者名に付かなくなる）。中止せず、その set_role を不採用（2 章）にして組み直す。
+                # 元の docx に衝突がないことは上で確かめたので、AI の回答の区切りの指定で衝突ができた（同じ種類の見出し・英文要旨の
+                # 見出しが 2 つになる、所属が著者名に付かなくなる）。中止せず、その指定を不採用（2 章）にして組み直す。
                 # 1 段目: 衝突の範囲（落ちる段落から置き換えた段落まで。著者名の続かない所属は和文の冒頭の中まで。conflict_overrides）
-                # の段落への set_role だけを使わない（範囲に指定がなければ飛ばす）。2 段目: なお衝突が残れば、set_role をすべて使わない
+                # の段落への指定だけを使わない（範囲に指定がなければ飛ばす）。2 段目: なお衝突が残れば、区切りの指定をすべて使わない
                 dropped = conflict_overrides(plan, overrides)
                 if dropped:
-                    _reject_roles(ops, outcome, lambda op: op["src"] in dropped)
+                    _reject_roles(bounds, outcome, lambda op: op["src"] in dropped)
                     overrides = {s: r for s, r in overrides.items() if s not in dropped}
                     doc, plan, linker = _mechanical(docx_path, journal, overrides, placements)
                 if plan.structure_conflicts:
-                    _reject_roles(ops, outcome, lambda op: True)
+                    _reject_roles(bounds, outcome, lambda op: True)
                     overrides = {}
                     doc, plan, linker = _mechanical(docx_path, journal, overrides, placements)
                 if plan.structure_conflicts:
-                    # 守り（ここには来ない）: set_role をすべて使わない組み立ては、上で衝突がないと確かめた組み立てと同じになる。
+                    # 守り（ここには来ない）: 区切りの指定をすべて使わない組み立ては、上で衝突がないと確かめた組み立てと同じになる。
                     # placements は build_body（place_floats・place_boxes）でしか使わず、衝突を作る split_regions・build_front_ja・
                     # build_back・build_front_en は overrides だけで決まる。補った docx は残さない
                     _drop_fixed(docx_fix, fixed_path)
                     raise StructureConflictError(plan)
+            record_boundaries(bounds, plan, outcome)
             retarget_ops(ops, keys, plan)
             for sid, spec in placements.items():
                 if sid in plan.float_decisions:
                     outcome.accepted.append((spec["op"], plan.float_decisions[sid]))
                 elif "kind" in spec:
-                    # 文字だけのテキストボックスへの kind の指定で、組み直した後に使えなくなったもの（同じ回答の set_role で中の段落を
-                    # 図表キャプション・除外にして文字だけのテキストボックスでなくなった、kind box の置く位置の段落が本文の段落で
-                    # なくなった）。黙って捨てずに、不採用として 2 章に示す
-                    why = (f"テキストボックス {sid} は、AI の役割の指定（set_role）を反映して組み直した後に文字だけのテキストボックスで"
-                           "なくなったか、置く位置の段落が本文の段落でなくなったので、kind の指定は使わなかった")
+                    # 文字だけのテキストボックスへの種類の指定で、組み直した後に使えなくなったもの（kind 囲みの置く位置の段落が、同じ
+                    # 回答の区切りの指定で本文の段落でなくなったなど）。黙って捨てずに、不採用として 2 章に示す
+                    why = (f"テキストボックス {sid} は、AI の区切りの指定を反映して組み直した後に文字だけのテキストボックスで"
+                           "なくなったか、置く位置の段落が本文の段落でなくなったので、種類の指定は使わなかった")
                     outcome.rejected.append((spec["op"], why))
-                elif spec.get("where") != "end":
-                    # 浮動配置の図形の位置の指定で、組み直した後に使えなくなったもの（同じ回答の set_role で、置く位置の段落が本文の
-                    # 段落でなくなった。structure.Classifier.place_floats）。黙って捨てずに、不採用として 2 章に示す（本文の外の段落の
-                    # 後ろの指定〈where end〉は、検証のときに不採用に記録してある）
-                    why = (f"図形 {sid} の置く位置の段落 {spec['after']} は、AI の役割の指定（set_role）を反映して組み直した後に本文の"
+                else:
+                    # 浮動配置の図形の位置の指定で、組み直した後に使えなくなったもの（同じ回答の区切りの指定で、置く位置の段落が本文の
+                    # 段落でなくなった。structure.Classifier.place_floats）。黙って捨てずに、不採用として 2 章に示す。本文より後ろという
+                    # 答え〈where end〉は、place_floats が本文の最後に置いて plan.float_decisions に記録するので、ここには来ない
+                    why = (f"図形 {sid} の置く位置の段落 {spec['after']} は、AI の区切りの指定を反映して組み直した後に本文の"
                            "段落でなくなったので、位置の指定は使わなかった" if sid in plan.floats else
-                           f"図形 {sid} は、AI の役割の指定（set_role）を反映して組み直した後に図表の入った図形でなくなったので、"
+                           f"図形 {sid} は、AI の区切りの指定を反映して組み直した後に図表の入った図形でなくなったので、"
                            "位置の指定は使わなかった")
                     outcome.rejected.append((spec["op"], why))
             apply_ops(ops, plan, doc, outcome, split)
@@ -769,22 +841,6 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     xml_bytes = apply_images(xml_base, images)      # 最終の XML（入れていない任意の置き場所を取り除く）。確かめはこの XML で
     final_check(root, xml_bytes, fid)
     valid, errors = validate(xml_bytes, dtd_places(plan))
-    if not valid and any(getattr(f, "formula", None) is not None for f in plan.figures):
-        # AI が書き起こした MathML が DTD に合わない場合は取り消して作り直す
-        for f in plan.figures:
-            f.formula = None
-        for _, d in outcome.accepted:
-            if d.category == "formula":
-                d.applied = False
-                d.message += "（※ DTD 検証で不適合だったため取り消し、画像のみ出力した）"
-        root, info = build(plan, meta, journal, split)
-        fid = verify(docx_path, root, plan.exclusions + info.exclusions)
-        final_root = finalize(root)
-        xml_base = serialize(final_root)
-        images = slot_images(info)
-        xml_bytes = apply_images(xml_base, images)
-        final_check(root, xml_bytes, fid)
-        valid, errors = validate(xml_bytes, dtd_places(plan))
 
     # 補完の確かめ（ルート2 で補った docx を作ったときだけ）: 補った docx が元の docx から、組版の違い（(A)）と 13.1 に報告した
     # 校正の直し（(B)）以外に変わっていないか。AI の再変換・DTD 検証の作り直しで docx は変わらないので、1 回でよい
@@ -822,22 +878,27 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
                 if op["op"].startswith("link_")]
     unresolved_after = []
     for u in linker.unresolved:
-        src, raw = u[1], unicodedata.normalize("NFKC", u[2])
-        year = unicodedata.normalize("NFKC", u[5]) if len(u) > 5 else None
+        src, raw = u.src, unicodedata.normalize("NFKC", u.text)
+        year = unicodedata.normalize("NFKC", u.year) if u.year is not None else None
         if any(s == src and (t == year or (t and t in raw)) for s, t in ai_links):
             continue
         unresolved_after.append(u)
     # AI に位置を聞いたが、答えを採用しなかった図表（結び付いた段落のすぐ後ろか、本文の最後に置いている。決定事項 21・修正計画 W8 の 4.3）。
     # 3 章の「理由」には置いた位置と理由だけを書く（AI を勧める文は推奨の手順 ai_finish の 1 か所。手作業で XML の中で移させない）
     pending_ai = opts.ai_mode == "manual" and data is None and not outcome.error   # 手動モードで AI の回答を待っている
-    read = {op.get("src") for op, _ in outcome.rejected if op.get("op") == "place_float"}   # 指定を読めた（採用しなかった）図形
+    read = {op.get("src") for op, why in outcome.rejected                # 指定を読めた（採用しなかった）図形
+            if op.get("op") == "place_float" and why != NO_PLACEMENT_WHY}
     for sid in plan.unplaced_floats:
         fi = plan.floats[sid]
         place = plan.float_place(sid)
         if fi.end_why == "ai":
-            region = REGION_JA.get(plan.region.get(fi.end_after, ""), "本文の外")
-            detail = (f"AI が本文の外（{region}）の段落 {fi.end_after} の後ろを指定したので、本文の最後に置いた"
-                      f"（位置を機械的に決められない理由: {fi.reason}）")
+            if fi.end_after:
+                region = REGION_JA.get(plan.region.get(fi.end_after, ""), "本文の外")
+                said = f"AI が本文の外（{region}）の段落 {fi.end_after} の後ろを指定した"
+            else:
+                reason = fi.end_reason.strip().rstrip("。")
+                said = f"AI が本文より後ろ{'（' + reason + '）' if reason else ''}にあると答えた"
+            detail = f"{said}ので、本文の最後に置いた（位置を機械的に決められない理由: {fi.reason}）"
         else:
             if fi.end_why == "anchor":
                 head = f"結び付いた段落が本文の段落でないので、本文の最後に置いた（位置を機械的に決められない理由: {fi.reason}）"
@@ -893,6 +954,9 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         im.location = slot_where(res, slots[im.key])
     res.decorations = decorations(doc, plan, res)
     write_check(res)
+    if answer_copy is not None:
+        res.ai_answer_path = out_dir / ANSWER_FILE
+        res.ai_answer_path.write_text(cache_text(_answer_meta(opts, outcome.request_id), answer_copy), encoding="utf-8")
     report_path = out_dir / f"{aid}_変換レポート.md"
     report_path.write_text(render(res), encoding="utf-8")
     res.report_path = report_path
@@ -900,6 +964,11 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         res.ai_report_path = out_dir / f"{aid}_AI判断一覧.md"
         res.ai_report_path.write_text(render_ai_only(res), encoding="utf-8")
     return res
+
+
+def _answer_meta(opts: Options, request_id: str) -> dict:
+    """AI回答.json の meta（ai_assist.cache_meta）。PDF の渡し方と中身の sha256 は、PDF を API に渡す W8 の手順 20 まで ""。"""
+    return cache_meta(opts.ai_mode, request_id, opts.ai_provider, opts.ai_model)
 
 
 def slot_images(info) -> list:

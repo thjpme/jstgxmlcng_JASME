@@ -54,7 +54,7 @@ U6 で本体を変えずに移した。これまでどおり、ここからも i
   表の番号 table_label）。
 - 除外の理由の文言は定数（FRONT_*・BACK_*・EN_*_EXCLUDED など）で書き、位置を決められずに除く理由は UNPLACED_EXCLUSIONS に
   まとめる（report が要確認 excluded_unsure・要対応 abstract_missing で知らせる）。
-- pipeline.convert が使う関数: conflict_overrides（AI の set_role で構造の衝突ができたときに、まず使わない指定〈衝突の範囲の中の
+- pipeline.convert が使う関数: conflict_overrides（AI の区切りの指定〈boundaries〉で構造の衝突ができたときに、まず使わない指定〈衝突の範囲の中の
   段落への指定〉）。
 """
 from __future__ import annotations
@@ -87,6 +87,7 @@ from .article import (
     RefNode,
     Sec,
     StructureConflict,
+    StyleSuspect,
     TableNode,
     _para_text,
 )
@@ -582,6 +583,12 @@ def block_id(b) -> str:
     return b.src if isinstance(b, Para) else b.tid
 
 
+def symbol_only(text: str) -> bool:
+    """段落の文字が、空白でない記号（約物・記号の文字）だけでできているか（「.」「・」など。文字・数字・画像の位置の文字を含まない）。"""
+    t = "".join(ch for ch in text if not ch.isspace())
+    return bool(t) and "\ufffc" not in t and all(unicodedata.category(ch)[0] in "PS" for ch in t)
+
+
 def appendix_heading(text: str) -> bool:
     """段落の文字が資料（付録）の見出しの形か（英文要旨の後ろの資料の始まり〈build_front_en〉と、引用文献などの後ろの資料の
     知らせ〈build_back〉で使う）。RE_APPENDIX に合い、文の形（appendix_sentence）でないもの。
@@ -850,6 +857,22 @@ class Classifier:
                 f"「{name(j.used)}」にした（Word で承諾した後のスタイルと同じかは確かめていない。Word で変更をすべて承諾した後の"
                 "この段落のスタイル〈見出しか本文かなど〉を確かめ、違えば、Word で承諾して保存してから変換し直す）")
 
+    def after_ref(self, src: str, strip: bool = True) -> str:
+        """AI が置く位置に指定した段落 src の、判断の記録での言い方（「「先頭の字」」。strip が偽なら先頭の空白も残す）。空の段落なら、
+        その前の文字のある段落で書く（「d103（空の段落。「先頭の字」の次）」。空の段落の後ろを指定されても、作業する人に位置が
+        分かるように）。"""
+        p = self.plan.paras.get(src)
+        if p is None:
+            return f"「{src}」"
+        raw = _para_text(p)
+        if raw.strip():
+            return f"「{(raw.strip() if strip else raw)[:20]}」"
+        k = self._top_index.get(src)
+        prev = ""
+        if k is not None:
+            prev = next((t for t in (_para_text(b).strip() for b in reversed(self._top[:k]) if isinstance(b, Para)) if t), "")
+        return f"{src}（空の段落。「{prev[:20]}」の次）" if prev else f"{src}（空の段落）"
+
     def table_roles(self, t: Table) -> set:
         return {self.role_of(p) for p in t.paragraphs()}
 
@@ -1083,8 +1106,7 @@ class Classifier:
     def back_heading_by_text(self, para: Para, role: str) -> Optional[str]:
         """スタイル違反の後付け見出し（「引用文献」を章見出しスタイルで書いた等）をテキストから推定。
 
-        AI の補完が役割を指定した段落（overrides。後付けの見出しの役割 BACK_HEADINGS なら呼ぶ前に決まっている）は推定しない:
-        「注」だけの段落に set_role の p を指定すれば、後付けの見出しと推定されない本文の段落にできる（表の注の見出しなど）。
+        AI の補完が役割を指定した段落（overrides。ai_assist.boundary_overrides の区切りの指定）は推定しない。
         """
         if role not in ("sec1", "normal", "p") or para.src in self.overrides:
             return None
@@ -1328,13 +1350,15 @@ class Classifier:
 
         中身は、AI の指定の有無にかかわらず float_units が組む（組み方を決められない形だけ、中身を docx の順にそのまま出す。
         修正計画 W1 の 2.3 の B）。図を置く位置の規則は「Word で表示したときに、図の左上の直上にある本文の文章を含む段落の直後」。
-        - AI の指定（placements の after）があれば、指定された段落の直後に置く（中身の組み合わせの指定 items は使わない。書かれて
-          いれば、判断の記録にそう書き添える）。
+        - AI の指定（placements の after）があれば、指定された段落の直後に置く（AI が答えるのは位置だけ。中身の組み合わせは
+          変換ツールが決める）。
         - なければ、図の左上がアンカー段落の左上の位置にあれば（floats.at_anchor）、機械的にアンカー段落の前に置く。
         - どちらでもなければ「位置を決められない図表」として記録し、仮の位置に置く（利用者が手作業で移す。決定事項 21）。
-          仮の位置は、アンカー段落のすぐ後ろ。AI が本文の外（注・引用文献など）の段落の後ろを指定したとき（ai_assist.float_placements
-          の印 where="end"）と、アンカー段落が本文の段落でないとき（本文の外の段落に結び付いた図形。self.outside）は、本文の最後
-          （provisional_target）。
+          仮の位置は、アンカー段落のすぐ後ろ。アンカー段落が本文の段落でないとき（本文の外の段落に結び付いた図形。self.outside）は、
+          本文の最後（provisional_target）。
+        - AI が図形は本文より後ろにあると答えた（after が ""）か、本文の外（注・引用文献など）の段落の後ろを指定した（ai_assist.float_placements
+          の where="end"）ときは、AI の答えを採用して本文の最後に置く（mode は unplaced のまま、end_why は ai。判断の記録は AI の判断で、
+          plan.float_decisions に入れる。修正計画 W8 の 3.3）。
         - 本文の外（引用文献・注・付記・謝辞・英文の部分）の段落に結び付いた図形（修正計画の N7。2 回目の組み立てで、中身は
           split_regions が本文の最後に回している）は、図の左上の位置にかかわらず「位置を決められない図表」にする（決定事項 10）。
           グループ図形の画像は、アンカー段落（本文の外の段落）から集める。
@@ -1346,8 +1370,9 @@ class Classifier:
         戻り値: (並べ直した items, [(items での位置, 同じ位置での順番, [(役割, 要素)])], 中身をそのまま出す図形の要素の id →
         その図形の差し込みの一覧, [(図形の中身を、その外の要素と組にしない差し込みの items での位置, その差し込みの一覧)])。
         最後の一覧は、位置を決められない図表（仮の位置）と、中身をそのまま出した図形（どの位置でも）。items での位置は
-        「その位置の要素の前」で、アンカー段落の後ろは アンカー段落の位置 + 1、本文の最後は BODY_END。同じ位置に置くものは
-        キャプションの番号順（番号がなければ後ろ）、同じ番号なら docx の順
+        「その位置の要素の前」で、アンカー段落の後ろは アンカー段落の位置 + 1、本文の最後は BODY_END。同じ位置に置くものは、
+        AI の指定のある図形が先で placements に書かれた順（指定の order。C075）、その後ろに指定のない図形がキャプションの番号順
+        （番号がなければ後ろ）、同じ番号なら docx の順（float_order）
         """
         plan = self.plan
         src_index = {b.src: k for k, (b, _) in enumerate(items) if isinstance(b, Para)}
@@ -1382,7 +1407,7 @@ class Classifier:
                 continue        # 文字だけのテキストボックスは図表ではない（place_boxes で扱う。text_only と同じ判定）
             plan.floats[fl.fid] = info
             spec = self.placements.get(fl.fid)
-            end = bool(spec) and spec.get("where") == "end"     # AI が本文の外の段落の後ろを指定した（本文の最後に仮に置く）
+            end = bool(spec) and spec.get("where") == "end"     # AI が本文より後ろにあると答えた（本文の最後に置く）
             if spec and not end and spec["after"] not in src_index:
                 spec = None     # AI の役割の指定で、指定された段落が本文でなくなった（pipeline.convert が不採用に記録する）
             # 中身を組む（位置の決め方にかかわらず同じ。組めなければ None で、中身をそのまま出す）
@@ -1399,15 +1424,9 @@ class Classifier:
             if spec and not end:
                 target = src_index[spec["after"]] + 1
                 info.mode = "ai"
-                after = plan.paras.get(spec["after"])
-                # 中身の組み合わせ（items）を書いた回答（前の形の依頼文への回答）だけ、その指定を使わないことを書き添える
-                # （依頼文は items を空の一覧 [] にさせる。修正計画 W8 の手順 6）
-                items_note = ("（中身の組み合わせの指定は使わない。組み合わせは変換ツールが決める）"
-                              if (spec.get("op") or {}).get("text") else "")
                 plan.float_decisions[fl.fid] = plan.decide(
                     "ai", "figure", spec["after"],
-                    f"テキストボックス・グループ図形 {fl.fid}（{summary}）を、段落"
-                    f"「{_para_text(after)[:20] if after else spec['after']}」の後に置いた{items_note}。"
+                    f"テキストボックス・グループ図形 {fl.fid}（{summary}）を、段落{self.after_ref(spec['after'], strip=False)}の後に置いた。"
                     f"{spec.get('reason', '')}", spec.get("confidence", ""))
             elif at_anchor(fl, layout) and not end and not outside:
                 target = src_index[fl.anchor_src]
@@ -1421,21 +1440,27 @@ class Classifier:
                 if outside:
                     info.reason = f"図形が本文の外（{OUTSIDE_JA.get(outside, outside)}）の段落に結び付いている"
                 else:
-                    info.reason = why_not_at_anchor(fl, layout) if not at_anchor(fl, layout) else "AI が本文の外の段落の後ろを指定した"
+                    info.reason = why_not_at_anchor(fl, layout) if not at_anchor(fl, layout) else "AI が本文より後ろにあると答えた"
                 info.where, info.end_why, info.end_after, target = self.provisional_target(
                     fl, spec if end else None, src_index, body)
                 if info.where == "anchor":
                     # アンカー段落が箇条書き・引用の途中なら、その最後の段落の後ろにずらす（箇条書き・引用を 2 つに分けない）
                     last = self.run_end(items, target - 1)
                     info.after_src, target = items[last][0].src, last + 1
-                place = ("AI が本文の外の段落の後ろを指定したので、本文の最後に仮に置く" if info.end_why == "ai"
-                         else f"指定がなければ{plan.float_place(fl.fid)}に仮に置く")
-                self.float_place_decision[fl.fid] = plan.decide(
-                    "mechanical", "figure", fl.anchor_src,
-                    f"テキストボックス・グループ図形 {fl.fid}（{summary}）は、位置を機械的に"
-                    f"決められない（{info.reason}）。AI を使うと、位置を合わせられる（{place}）",
-                    applied=False)
-            inserts.append((target, (self.float_number(info), len(inserts)), entries))
+                if info.end_why == "ai":
+                    info.end_reason = spec.get("reason", "")
+                    plan.float_decisions[fl.fid] = self.float_place_decision[fl.fid] = plan.decide(
+                        "ai", "figure", info.end_after or fl.anchor_src,
+                        f"テキストボックス・グループ図形 {fl.fid}（{summary}）を、{self.ai_end_phrase(info, spec)}ので、"
+                        "本文の最後に置いた", spec.get("confidence", ""))
+                else:
+                    self.float_place_decision[fl.fid] = plan.decide(
+                        "mechanical", "figure", fl.anchor_src,
+                        f"テキストボックス・グループ図形 {fl.fid}（{summary}）は、位置を機械的に"
+                        f"決められない（{info.reason}）。AI を使うと、位置を合わせられる"
+                        f"（指定がなければ{plan.float_place(fl.fid)}に仮に置く）",
+                        applied=False)
+            inserts.append((target, self.float_order(info, spec, len(inserts)), entries))
             if info.mode == "unplaced" or info.built == "raw":
                 prov.append((target, entries))
         rest = [(b, r) for b, r in items if id(b) not in placed]
@@ -1600,13 +1625,12 @@ class Classifier:
             if spec:
                 target = src_index[spec["after"]] + 1
                 info.where, info.after_src = "ai", spec["after"]
-                after = plan.paras.get(spec["after"])
                 # 機械的な判定を変えたときは、それも書く（図に重ねた注記とみなしたものを、AI が本文の囲みに戻したときなど）
                 was = {"label": "（機械的には図に重ねた注記と判断していた）",
                        "undecided": "（機械的には囲みか図の注記か決められなかった）"}.get(kind, "")
                 plan.float_decisions[tb.xid] = plan.decide(
                     "ai", "box", spec["after"],
-                    f"{what}を囲み（boxed-text）として段落「{_para_text(after).strip()[:20] if after else spec['after']}」の後に"
+                    f"{what}を囲み（boxed-text）として段落{self.after_ref(spec['after'])}の後に"
                     f"置いた{was}。{spec.get('reason', '')}", spec.get("confidence", ""))
             elif info.outside:
                 target, info.where, info.estimated = BODY_END, "end", True
@@ -1658,7 +1682,8 @@ class Classifier:
     def provisional_target(fl, end_spec, src_index, body) -> tuple:
         """位置を決められない図表を仮に置く位置（決定事項 21）。戻り値: (where, end_why, end_after, items での差し込み位置)。
 
-        - AI が本文の外（注・引用文献など）の段落の後ろを指定した（end_spec。ai_assist.float_placements の印）: 本文の最後
+        - AI が本文より後ろにあると答えた（after が ""）か、本文の外（注・引用文献など）の段落の後ろを指定した（end_spec。
+          ai_assist.float_placements の where="end"）: 本文の最後（end_after は指定の after。"" の答えなら ""）
         - アンカー段落が本文の段落（body。plan.body_seq）でない（本文の外の段落に結び付いた図形。修正計画の N7。self.outside）:
           本文の最後
         - それ以外: アンカー段落のすぐ後ろ（AI の指定の after と同じ形）。アンカー段落が箇条書き・引用の途中なら、place_floats が
@@ -1730,6 +1755,26 @@ class Classifier:
             if m:
                 return int(nfkc(m.group(1)))
         return float("inf")
+
+    def float_order(self, info, spec, k) -> tuple:
+        """同じ差し込み位置に置く図形の並びの鍵（place_floats の inserts の 2 つ目。小さい方が先）。AI の指定（spec。本文の最後と
+        答えたものを含む）のある図形は placements に書かれた順（order）で先に、指定のない図形はその後ろにキャプションの番号順
+        （float_number）。同じ鍵なら docx の順（k。place_floats がこの図形を何番目に組んだか）。place_boxes の囲みの鍵
+        （BODY_END, …）より前に来る。"""
+        if spec:
+            return (0, spec.get("order", self.float_number(info)), k)
+        return (1, self.float_number(info), k)
+
+    def ai_end_phrase(self, info, spec) -> str:
+        """AI が本文より後ろと答えた図形（end_why が ai）の、判断の記録・3 章・画像の置き場所の備考に書く答えの言い方
+        （「…と答えた」「…を指定した」。修正計画 W8 の 3.3）。"""
+        if info.end_after:
+            # 本文の外の段落の領域は、この組み立てではまだ決まっていないことがあるので、検証のときの領域（指定の region）で書く
+            region = OUTSIDE_JA.get((spec or {}).get("region") or self.plan.region.get(info.end_after, ""), "本文の外")
+            return f"AI が本文の外（{region}）の段落 {info.end_after} の後ろを指定した"
+        reason = (spec or {}).get("reason", "").strip().rstrip("。")
+        who = "AI が PDF で" if (spec or {}).get("basis") == "pdf" else "AI が"
+        return f"{who}本文より後ろ{'（' + reason + '）' if reason else ''}にあると答えた"
 
     def float_captions(self, paras, roles):
         """テキストボックスの段落からキャプションを探す。戻り値: ([(役割, [段落…])], キャプションでも画像でもない段落)"""
@@ -2998,6 +3043,10 @@ class Classifier:
             if state == "refs":
                 plan.refs.append(RefNode(para=b))
                 plan.locations[b.src] = f"引用文献 {len(plan.refs)}件目"
+                if symbol_only(_para_text(b)):
+                    # 記号だけの段落（「.」など。テンプレートの残り）も文献の 1 件として出す（文字は変えない。除外もしない。所有者の
+                    # 決定 5: 除外は Word で直す）。要確認 style_check に挙げて、Word で消してもらう
+                    plan.style_suspects.append(StyleSuspect("ref_symbol", b.src))
             elif state == "fn":
                 # 番号（Word の自動番号の「1)」、手で打った「1)」「（注1）」、上付きの数字）で始まる段落から新しい注。
                 # 番号のない段落は前の注の続き。AI の指定（fn_start: 新しい注の始まり / p: 前の注の続き）があればそれに従う
@@ -3609,6 +3658,8 @@ class Classifier:
         if info is None or info.mode != "unplaced" or info.where != "end":
             return ""
         if info.end_why == "ai":
+            if not info.end_after:
+                return "AI が本文より後ろにあると答えたため、本文の最後に置いています"
             region = OUTSIDE_JA.get(self.plan.region.get(info.end_after, ""), "本文の外")
             return f"AI が本文の外（{region}）の段落の後ろを指定したため、本文の最後に置いています"
         return f"{OUTSIDE_JA.get(self.outside.get(fid, ''), '本文の外')}の段落に結び付いているため、本文の最後に置いています"
@@ -3743,7 +3794,7 @@ FRONT_JA_REGIONS = ("front_ja", "authors", "excluded")   # conflict_overrides: �
 
 
 def conflict_overrides(plan, overrides) -> set:
-    """AI の set_role（overrides。段落 ID -> 役割）のうち、構造の衝突（plan.structure_conflicts。K1・K2）の範囲の中の段落への指定の、
+    """AI の区切りの指定（overrides。段落 ID -> 役割。ai_assist.boundary_overrides）のうち、構造の衝突（plan.structure_conflicts。K1・K2）の範囲の中の段落への指定の、
     段落 ID の集合。pipeline.convert が、AI の回答で組み直した後に衝突ができたとき、まずこれらの指定だけを使わずに組み直す。
 
     範囲は衝突ごとに、落ちる段落（lost）と置き換えた段落（by）の、plan.paras の並び（docx の順）での最初から最後まで。著者名が

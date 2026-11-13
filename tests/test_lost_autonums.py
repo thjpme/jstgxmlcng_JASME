@@ -14,7 +14,6 @@ from conftest import ALL_DOCS, FULL, META_EXAMPLE
 from lxml import etree
 
 from jasme_jats import pipeline
-from jasme_jats.ai_assist import STYLE_ONLY_WHY
 from jasme_jats.builder import BuildInfo, Builder
 from jasme_jats.cli import main as cli_main
 from jasme_jats.model import LostImage, LostNumber
@@ -164,7 +163,8 @@ def test_guard_ignores_intentional_paths(journal, meta, tmp_path, monkeypatch):
     src = next(s for s, p in plan.paras.items() if p.plain() == "除外する箇条")
     resp = answers.answer(style_fixes=[(src, "exclude")])
     res, root, info = convert_tracking(monkeypatch, path, journal, meta, tmp_path / "out", ai_mode="manual", ai_response=resp)
-    assert [why for _, why in res.ai.rejected] == [STYLE_ONLY_WHY] and src not in {e.src for e in res.plan.exclusions}
+    assert res.ai.rejected == [] and [f.src for f in res.ai.style_fixes] == [src]
+    assert src not in {e.src for e in res.plan.exclusions}
     check_ok(res, root)
     assert [u[2] for u in res.unshown_numbers] == ["題目"]
     assert any(sp.get("src") == src for sp in root.iter(SPAN))
@@ -239,41 +239,6 @@ def _record_guards(monkeypatch):
 
 def _rows_in_tree(root, info):
     return sum(1 for tbl, t, _ in info.tables if t.rows and any(a is root for a in tbl.iterancestors()))
-
-
-def test_guard_uses_final_tree_after_dtd_retraction(journal, meta, tmp_path, monkeypatch):
-    """DTD 不合格の数式の取り消しで組み立てをやり直した後は、lost_autonums も table_problems も、やり直した後の木と BuildInfo を見る。"""
-    from test_ai import RESPONSE
-    seen = _record_guards(monkeypatch)
-    built = []
-    orig_build = pipeline.build
-
-    def spy_build(*a, **k):
-        root, info = orig_build(*a, **k)
-        built.append((root, info))
-        return root, info
-    monkeypatch.setattr(pipeline, "build", spy_build)
-    orig_validate, calls = pipeline.validate, []
-
-    def validate(xml, where=None):
-        calls.append(1)
-        return (False, ["強制的な不適合"]) if len(calls) == 1 else orig_validate(xml, where)
-    monkeypatch.setattr(pipeline, "validate", validate)
-    # AI の画像の数式（formula_image）は採用しなくなった（修正計画 W1）ので、AI の回答の反映の後に数式を付けて、取り消しの道を通す
-    orig_apply = pipeline.apply_ops
-
-    def apply_ops(ops, plan, *a, **k):
-        orig_apply(ops, plan, *a, **k)
-        from jasme_jats.ai_assist import parse_mathml
-        fig = next(f for f in plan.figures if f.caption is None and f.image_paras)
-        fig.formula = parse_mathml('<math xmlns="http://www.w3.org/1998/Math/MathML"><mi>a</mi></math>')[0]
-    monkeypatch.setattr(pipeline, "apply_ops", apply_ops)
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=RESPONSE))
-    assert len(built) >= 2 and len(calls) == 2           # 取り消して組み立てをやり直した
-    root, info = built[-1]
-    assert [r is root and i is info for r, i in seen["autonums"]] == [True] and [r is root and i is info for r, i in seen["tables"]] == [True]
-    assert res.tables_checked == _rows_in_tree(root, info) and res.tables_checked > 0
-    assert res.lost_autonums == []
 
 
 def test_guard_uses_final_tree_after_route2_numbers(journal, meta, tmp_path, monkeypatch):

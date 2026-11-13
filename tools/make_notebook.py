@@ -342,10 +342,14 @@ meta = ArticleMeta.from_dict(meta_input)
 try:
     res = convert(docx_path, meta, journal, Options(out_dir=OUT, ai_mode=AI, ai_provider=PROVIDER, ai_model=API_MODEL,
                                                   ai_api_key=api_key, pdf_path=pdf_path, route=ROUTE_KEY,
-                                                  split_labels=SPLIT_LABELS))
+                                                  split_labels=SPLIT_LABELS, ai_cache=globals().get("AI_CACHE")))
 except StructureConflictError as e:
     display(HTML(structure_conflict_box(str(e))))
     raise SystemExit("上の赤い枠のとおり Word で原稿を直して保存し、手順 2 から選び直してやり直してください。")
+if AI == "api" and res.ai_answer_path:
+    # API の回答の写し（AI回答.json）を覚えておく。出力フォルダは毎回消すので、変数に持ち、同じ依頼・同じモデルで変換し直すときは
+    # API を呼ばずに使う（画像を入れただけ・書誌を直しただけのやり直しで料金がかからない）
+    AI_CACHE = res.ai_answer_path.read_text(encoding="utf-8")
 if KEPT:
     _again = reapply_images(res, KEPT)
     if _again:
@@ -375,9 +379,7 @@ AI_RESPONSE = r'''
     raise SystemExit("この手順は手動モードのときだけ使います。手順 4 で「手動（チャットに貼り付け）」を選び、手順 5 からやり直してください。")
 if not AI_RESPONSE.strip() or "ここに AI の回答を貼り付ける" in AI_RESPONSE:
     raise SystemExit("AI の回答が貼り付けられていません。上の r''' と ''' の間に貼り付けてから実行してください。")
-if globals().get("PREVIOUS") and AI_RESPONSE.strip() == PREVIOUS.get("ai_response"):
-    raise SystemExit(f"貼り付けられているのは、前の論文（{PREVIOUS['docx']}）の AI の回答です。今回の論文の依頼文（手順 5 の枠）を "
-                     "AI に渡し、返ってきた回答に貼り替えてから ▶ を押してください。")
+# 前の論文・図表や文献の並びが違う原稿への回答は、変換の中で依頼の番号で確かめて使わない（「失敗」として枠に出る）
 """ + unmark(5) + """KEPT = kept_images(res) if globals().get("res") is not None else {}      # 手順 7 で入れた画像があれば覚え、変換の後に同じ図へ入れ直す
 try:
     res = convert(docx_path, meta, journal, Options(out_dir=OUT, ai_mode="manual", ai_response=AI_RESPONSE,
@@ -385,7 +387,6 @@ try:
 except StructureConflictError as e:     # 手順 5 で確かめ済みなので通常は来ない（守り）
     display(HTML(structure_conflict_box(str(e))))
     raise SystemExit("上の赤い枠のとおり Word で原稿を直して保存し、手順 2 から選び直してやり直してください。")
-LAST_AI_RESPONSE = AI_RESPONSE.strip()
 if KEPT:
     _again = reapply_images(res, KEPT)
     if _again:
@@ -502,9 +503,8 @@ if 5 in DONE and 8 not in DONE and globals().get("_DISCARD_OK") != str(globals()
     raise SystemExit(f"この論文（{docx_path.name}）の結果を、まだダウンロードしていません。手順 8 でダウンロードしてから、"
                      "もう一度この ▶ を押してください。ダウンロードせずに次の論文へ進むときは、そのままもう一度この ▶ を押します。")
 if "docx_path" in globals():
-    PREVIOUS = {"docx": docx_path.name, "meta": dict(globals().get("meta_input") or {}),
-                "ai_response": globals().get("LAST_AI_RESPONSE", "")}
-for _name in ("docx_path", "pdf_path", "meta_input", "meta", "res", "manual_prompt", "LAST_AI_RESPONSE", "_DISCARD_OK",
+    PREVIOUS = {"docx": docx_path.name, "meta": dict(globals().get("meta_input") or {})}
+for _name in ("docx_path", "pdf_path", "meta_input", "meta", "res", "manual_prompt", "_DISCARD_OK",
               "_SAME_PAGE_OK", "KEPT", "_NEEDS_ACTION_OK"):
     globals().pop(_name, None)
 _work = Path("/content/jasme_work")

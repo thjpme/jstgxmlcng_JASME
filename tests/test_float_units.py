@@ -214,19 +214,18 @@ def test_mechanical_float_placement_is_rejected(journal, meta, tmp_path):
 
 
 def test_placement_after_paragraph_that_is_no_longer_body_is_rejected(journal, meta, tmp_path, monkeypatch):
-    """同じ回答の set_role で、置く位置の段落が本文の段落でなくなった指定は、黙って捨てずに不採用として 2 章に記録する
-    （図形は位置を決められない図表のまま）。本文の段落への ack_heading は、今は Word のスタイルで直す提案で XML に反映しない
-    （所有者の決定 5。W8 の手順 5）ので、位置の指定を採用する。守りは、区切り以外の役割も反映する形に差し替えて確かめる。"""
-    import jasme_jats.ai_assist as ai_assist
+    """同じ回答の区切りの指定で、置く位置の段落が本文の段落でなくなった指定は、黙って捨てずに不採用として 2 章に記録する
+    （図形は位置を決められない図表のまま）。本文の段落への ack_heading の提案（style_fixes）は XML に反映しない（所有者の決定 5。
+    W8 の手順 5・10）ので、位置の指定を採用する。守りは、区切りの検証を差し替えて（answers.force_boundaries）確かめる。"""
     path = tmp_path / "group_down.docx"
     mf.make_float_figs(path, "group_down")
     _, plan, _ = _mechanical(path, journal)
     after = src_of(plan, "以上で終わる。")
     resp = answers.answer(placements=[("s1", after)], style_fixes=[(after, "ack_heading", "試験", "低")])
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "prop", ai_mode="manual", ai_response=resp))
-    assert [w for _, w in res.ai.rejected] == [ai_assist.STYLE_ONLY_WHY]
+    assert res.ai.rejected == [] and [f.src for f in res.ai.style_fixes] == [after]
     assert after in res.plan.body_seq and res.plan.unplaced_floats == [] and res.fidelity.ok
-    monkeypatch.setattr(ai_assist, "boundary_kind", lambda p, plan, role: "試験の区切り")
+    answers.force_boundaries(monkeypatch, {after: "ack_heading"})
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", ai_response=resp))
     assert res.fidelity.ok and res.fidelity.final_ok
     assert after not in res.plan.body_seq and res.plan.unplaced_floats == ["s1"]

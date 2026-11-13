@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -1217,20 +1218,34 @@ def _upload_action(r):
              + "\n".join(f"  {mid}: {msg}" for mid, msg in issues)))
 
 
+FLOAT_NAMES_SHOWN = 4      # float_names に並べる図・表の名前の数（残りは「ほか N 個」）
+
+
 def float_names(plan, fids) -> str:
-    """図形 fids の中身の図・表の名前（「図２・図５・表３」。FloatInfo.nodes のキャプションの番号を XML の順に並べる。4 つ以上は
-    「図２・図５・表３ほか」。キャプションのないものは「キャプションのない図」）。推奨の手順 ai_finish の文に使う（修正計画 W8 の 4.3）。"""
+    """図形 fids の中身の図・表の名前（「図2・図5・表3」）。図・表の順に番号順で並べ、FLOAT_NAMES_SHOWN を超える分は「ほか N 個」。
+    キャプションのないものは数でまとめる（「キャプションのない図 2 個」）。推奨の手順 ai_finish の文に使う（修正計画 W8 の 4.3）。"""
     from .structure import figure_rows
     want = set(fids)
-    names = []
+    named, nocap = [], {}
     for row in figure_rows(plan):
         if row.float_id in want and row.node is not None:
-            name = row.label or ("キャプションのない表" if row.kind == "table" else "キャプションのない図")
-            if name not in names:
-                names.append(name)
-    if not names:
-        return "キャプションのない図"
-    return "・".join(names[:3]) + ("ほか" if len(names) > 3 else "")
+            if row.label:
+                if row.label not in [x[1] for x in named]:
+                    m = re.search(r"(\d+)", unicodedata.normalize("NFKC", row.label))
+                    named.append(((0 if row.kind != "table" else 1, int(m.group(1)) if m else 0), row.label))
+            else:
+                what = "キャプションのない表" if row.kind == "table" else "キャプションのない図"
+                nocap[what] = nocap.get(what, 0) + 1
+    names = [name for _, name in sorted(named, key=lambda x: x[0])]
+    shown = names[:FLOAT_NAMES_SHOWN]
+    rest = len(names) - len(shown)
+    parts = shown + ([f"ほか {rest} 個"] if rest else []) + [f"{what} {k} 個" for what, k in nocap.items()]
+    return "・".join(parts) or "キャプションのない図"
+
+
+def float_phrase(plan, fids) -> str:
+    """図形 fids の言い方（「図形 3 個（図1・図3・図4・図6）」。図形の数と、中の図・表の名前を分ける）。"""
+    return f"図形 {len(fids)} 個（{float_names(plan, fids)}）"
 
 
 def _float_left(plan) -> list:
@@ -1310,15 +1325,20 @@ def _ai_finish_action(r):
     state = ai_state(r)
     asked, left, boxes = plan.asked_floats, _float_left(plan), plan.undecided_boxes
     skip = set(abstract_missing_srcs(plan))
-    m = len({x.src for x in plan.style_suspects if x.src not in skip})
+    m = len({x.src for x in plan.style_suspects if x.src not in skip and x.kind not in STYLE_NO_AI_KINDS})
     if not (asked or boxes or _boxes_answered(plan) or m or state in ("失敗", "一部")):
         return None
     manual = ai.mode == "manual"
     n, k = len(left), len(boxes)
-    names = float_names(plan, left) if left else ""
-    sp = " " if names[-1:].isascii() else ""        # 名前と助詞の間の空白（「図3 の」「図3ほかの」）
-    where = ("結び付いている段落のすぐ後ろ（結び付いている段落が本文の外なら、本文の最後）" if any(plan.floats[f].where == "end" for f in left)
-             else "結び付いている段落のすぐ後ろ")
+    names = float_phrase(plan, left) if left else ""
+    ends = [f for f in left if plan.floats[f].where == "end"]
+    if ends and len(ends) == len(left):
+        where = "本文の最後（結び付いている段落が本文の外にあるため）"
+    elif ends:
+        where = (f"結び付いている段落のすぐ後ろ（うち{float_phrase(plan, ends)}は、結び付いている段落が本文の外にあるので、"
+                 "本文の最後）")
+    else:
+        where = "結び付いている段落のすぐ後ろ"
     # 見出し: 残っている図形があれば位置、なければ残っているテキストボックス、どちらもなければ（途中で切れた回答など）回答の反映
     if left or (asked and state == "済み"):
         base = AI_FINISH_TITLE
@@ -1332,17 +1352,17 @@ def _ai_finish_action(r):
     progress = state + (f"・残り {n} 個" if left else "")
     prompt = r.prompt_path.name if r.prompt_path else "AI依頼文.txt"
     # 位置を聞く図形・テキストボックスの説明（未実行・回答待ち）
-    floats = (f"{names}{sp}の {n} 個は、Word のテキストボックスなどの図形に入っていて、本文のどこに出すかを原稿から決められないため、"
+    floats = (f"Word のテキストボックスなどの{names}は、本文のどこに出すかを原稿から決められないため、"
               f"{where}に置いています（出版版 PDF の位置とは数段落ずれていることがあります。置いた位置はレポートの 3 章）。"
               "AI を使うと、図・表の位置を合わせられます。" if left else "")
     box_text = f"囲みか図の注記か決められないテキストボックス {k} 個の文字は、XML に出していません。" if boxes else ""
     style_text = f"スタイルを確かめる段落 {m} か所について、AI が Word での直し方を提案します。" if m else ""
     what = "と".join(([("図・表の位置")] if left else []) + (["テキストボックスの種類"] if boxes else []))
     does = f"AI が{what}を決めます" if what else ("AI がスタイルの直し方を提案します" if m else "AI がリンクなどを決めます")
-    short = "、".join(([f"{esc(names)}{sp}の {n} 個を、{where}に置いている（3 章）"] if left else [])
+    short = "、".join(([f"{esc(names)}を、{where}に置いている（3 章）"] if left else [])
                      + ([f"囲みか図の注記か決められないテキストボックス {k} 個の文字を XML に出していない（3 章）"] if boxes else [])
                      + ([f"スタイルを確かめる段落が {m} か所ある（2 章）"] if m else []))
-    cli_head = "".join(([f"{names}{sp}の {n} 個は{where}に置いています（レポートの 3 章）。"] if left else [])
+    cli_head = "".join(([f"{names}は{where}に置いています（レポートの 3 章）。"] if left else [])
                        + ([box_text] if boxes else []) + ([f"スタイルを確かめる段落が {m} か所あります（レポートの 2 章）。"] if m else []))
     if state == "済み":
         return Action(STEP, "ai_finish", required=False, done=True, progress=state,
@@ -1386,7 +1406,7 @@ def _ai_finish_action(r):
     else:       # 一部
         parts = []
         if left:
-            parts.append(f"AI の回答で位置が決まったのは {len(asked)} 個のうち {len(asked) - n} 個です。{names}{sp}は、{where}に"
+            parts.append(f"AI の回答で位置が決まったのは {len(asked)} 個のうち {len(asked) - n} 個です。残りの{names}は、{where}に"
                          "置いたままです（理由はレポートの 2 章・3 章）。")
         if boxes:
             parts.append(f"囲みか図の注記か決められないテキストボックス {k} 個は、AI の回答でも種類が決まらず、文字を XML に出していません（3 章）。")
@@ -1401,8 +1421,9 @@ def _ai_finish_action(r):
             again = f"{step('convert_again')}してください（また途中で切れるときは、手動に切り替えます）。"
             cli_again = "--ai api でもう一度実行すると、AI が出し直します（また途中で切れるときは --ai manual に切り替える）。"
         elif manual:
-            ask = "・".join((["位置を決められなかった図表"] if left else []) + (["種類を決められなかったテキストボックス"] if boxes else []))
-            again = (f"AI に出し直してもらうときは、チャットで「{ask}をすべて placements に書いて、回答の書き方に従って"
+            ask = "・".join((["「位置を決める図・表」の図形"] if left else [])
+                           + (["「囲みか図の注記か決められなかったテキストボックス」"] if boxes else []))
+            again = (f"AI に出し直してもらうときは、チャットで「{ask}をすべて回答に書いて、依頼文の『回答の形』のとおりに"
                      f"出し直してください」と頼んで{step('repaste')}てください。")
             cli_again = "AI に出し直してもらった回答で変換し直すと、残りも合わせられます。"
         else:
@@ -1425,12 +1446,13 @@ def _ai_finish_action(r):
 def _float_end_action(r):
     """要確認 float_end: 結び付いた段落が本文の外なので、本文の最後に置いた図・表（修正計画 W8 の 4.3）。なければ None。
 
-    W8 の手順 1 の形: end_why が anchor の図形だけ（AI が本文の外と答えた図形は、W8 の手順 11 で足す）。引用文献などの後ろの資料の
-    要確認（app_after_refs）が出る原稿では出さない（直し方が同じなので重ねない。図の位置は 3 章に出る）。
+    結び付いた段落が本文の外の図形（end_why が anchor）と、AI が本文より後ろにあると答えた図形（end_why が ai。行に AI の答えを
+    添える。W8 の手順 11）。引用文献などの後ろの資料の要確認（app_after_refs）が出る原稿では出さない（直し方が同じなので重ねない。
+    図の位置は 3 章に出る）。
     """
     from .structure import OUTSIDE_JA, figure_rows
     plan = r.plan
-    fids = [fid for fid in plan.unplaced_floats if plan.floats[fid].end_why == "anchor"]
+    fids = [fid for fid in plan.unplaced_floats if plan.floats[fid].end_why in ("anchor", "ai")]
     if not fids or plan.app_after_refs:
         return None
     rows = figure_rows(plan)
@@ -1443,6 +1465,9 @@ def _float_end_action(r):
         else:
             text = next((q.plain().strip() for q in info.paras if q.plain().strip()), "")
             name = f"キャプションのない図（「{esc(text, 20)}」）" if text else f"キャプションのない図（図形 {fid}）"
+        if info.end_why == "ai":
+            lines.append(f"{name} — AI の答え: {_float_end_answer(plan, info)}")
+            continue
         region = OUTSIDE_JA.get(plan.region.get(info.float.anchor_src, ""), "本文の外")
         lines.append(f"{name} — {region}の段落に結び付いています")
     n = len(fids)
@@ -1457,6 +1482,16 @@ def _float_end_action(r):
         cli=f"要確認: {title}（レポートの冒頭と 3 章）。{how}" + "".join("\n  " + x for x in lines))
 
 
+def _float_end_answer(plan, info) -> str:
+    """要確認 float_end の行の「AI の答え」（AI が本文より後ろと答えた図形。end_why が ai）。after が "" なら根拠（reason）、本文の外の
+    段落を指定したなら、その領域。"""
+    from .structure import OUTSIDE_JA
+    if info.end_after:
+        return f"{OUTSIDE_JA.get(plan.region.get(info.end_after, ''), '本文の外')}の段落の後ろにあります"
+    reason = ai_text(info.end_reason).strip().rstrip("。")
+    return reason[:40] + ("…" if len(reason) > 40 else "") if reason else "本文より後ろにあります"
+
+
 # 機械が挙げたスタイルを確かめる段落（article.StyleSuspect）の種類ごとの、決まった見立てと一般の直し方（AI を使っていないとき、
 # AI の提案がないときに使う。要確認 style_check。修正計画 W8 の 4.3）
 STYLE_SUSPECT_JA = {
@@ -1464,7 +1499,10 @@ STYLE_SUSPECT_JA = {
     "heading_level": ("見出しのスタイルの階層と、番号の形が合いません", "番号の形に合う階層の見出しのスタイルにする"),
     "quote_like": ("本文のスタイルですが、引用の形をしています", "引用なら、ブロック引用のスタイルにする"),
     "heading_guess": ("見出しのスタイルがなく、文字の形から見出しと推定しました", "見出しなら、見出しのスタイルを付ける"),
+    "ref_symbol": ("記号だけの段落が、引用文献の 1 件として XML に出ます", "文献でなければ、Word でこの段落を消す"),
 }
+# 機械が挙げても、AI の提案を待たずに直し方が決まっている種類（推奨の手順 ai_finish を出す条件に数えない）
+STYLE_NO_AI_KINDS = ("ref_symbol",)
 STYLE_CHECK_SHOWN = 10      # 要確認 style_check に並べる段落の数（残りは「ほか N か所（2 章）」）
 STYLE_CHECK_HOW = ("見出しや引用のスタイルが違うと、J-STAGE の全文で章立てや引用の形が変わります。違っていれば、Word でスタイルを直して"
                    "保存し、変換し直してください（AI の提案は、XML には反映していません）。")
@@ -1480,13 +1518,26 @@ def _style_fix_of(ai) -> dict:
     return out
 
 
+def ai_text(s) -> str:
+    """知らせに入れる AI の文（根拠など）: 画面の操作の目印の文字（STEP_MARK）を除き、改行・タブを esc と同じ見える印にする
+    （AI の文が画面の案内や偽の行に化けないように。回答を読むときにも ai_assist.strip_controls が制御文字を除いている）。"""
+    return esc(("" if s is None else str(s)).replace(STEP_MARK, ""))
+
+
 def _ai_style_text(f) -> str:
     """AI のスタイルの提案 1 件の文（「AI の提案: …（確度 高。理由）」か「AI の見立て: このままでよい（理由）」）。"""
-    reason = (f.reason or "").strip().rstrip("。")
+    reason = ai_text(f.reason).strip().rstrip("。")
     if f.verdict == STYLE_KEEP:
         return "AI の見立て: このままでよい" + (f"（{reason}）" if reason else "")
     note = "。".join(x for x in ((f"確度 {f.confidence}" if f.confidence else ""), reason) if x)
     return f"AI の提案: {f.how}" + (f"（{note}）" if note else "")
+
+
+def _style_ref(plan, src) -> str:
+    """要確認 style_check の行の段落の指し方: 段落の ID（場所）「文字の先頭」。文字は 2 章の表と同じ _head（画像・数式の位置の文字を含めない）。"""
+    place = plan.locations.get(src, "")
+    head = _head(plan.paras.get(src), 15)
+    return f"{src}{'（' + esc(place) + '）' if place else ''}" + (f"「{esc(head)}」" if head else "")
 
 
 def style_check_rows(r) -> tuple:
@@ -1508,13 +1559,13 @@ def style_check_rows(r) -> tuple:
         what, how = STYLE_SUSPECT_JA.get(sus.kind, ("スタイルを確かめてください", ""))
         f = fixes.get(sus.src)
         tail = _ai_style_text(f) if f is not None else (f"直し方: {how}" if how else "")
-        rows.append((sus.src, f"{_para_ref(plan, sus.src)}: {sus.detail or what}。" + (tail + "。" if tail else "")))
+        rows.append((sus.src, f"{_style_ref(plan, sus.src)}: {sus.detail or what}。" + (tail + "。" if tail else "")))
     only = []
     for src, f in fixes.items():
         if src in seen or src in skip:
             continue
         if f.verdict != STYLE_KEEP and f.confidence in STYLE_SHOWN_CONFIDENCE:
-            rows.append((src, f"{_para_ref(plan, src)}: {_ai_style_text(f)}。"))
+            rows.append((src, f"{_style_ref(plan, src)}: {_ai_style_text(f)}。"))
         else:
             only.append(f)
     rows.sort(key=lambda x: order.get(x[0], len(order)))
@@ -1567,9 +1618,10 @@ def boundary_text(plan, b) -> str:
 def boundary_line(plan, b) -> str:
     """boundary_text に AI の根拠と確度を添えた文（要確認 ai_boundary の行）。"""
     text = boundary_text(plan, b)
-    reason = (b.reason or "").strip().rstrip("。")
-    note = "。".join(x for x in ((f"AI の根拠: {reason}" if reason else ""), (f"確度 {b.confidence}" if b.confidence else "")) if x)
-    return text + (f"（{esc(note)}）" if note else "")
+    reason = ai_text(b.reason).strip().rstrip("。")
+    note = "。".join(x for x in ((f"AI の根拠: {reason}" if reason else ""), (f"確度 {ai_text(b.confidence)}" if b.confidence else ""))
+                     if x)
+    return text + (f"（{note}）" if note else "")
 
 
 def _ai_boundary_action(r):
@@ -2966,18 +3018,24 @@ PDF_KEYS = ("pdf_fallback", "pdf_unread", "pdf_diff", "pdf_unfixed", "pdf_suspec
 
 
 def actions(r) -> list:
-    """利用者に知らせること（要対応・要確認）の一覧。並びはレポートの冒頭の順。
+    """利用者に知らせること（要対応・要確認）の一覧。並びはレポートの冒頭の順（推奨の手順 ai_finish は、要対応と必須の手順の後ろ）。
 
     ルート2 の「出版版 PDF で校正の直しを補ってから変換しました」の案内と、14 章の「Word で開き、変更履歴を確認する」は、
     すべて直せたときにも出すものなので、ここには入れない（render の固定の部分。直せなかった箇所は pdf_unfixed の枠）。
     記事フォルダにあるのに ZIP に入れなかったファイル（Result.not_zipped）は 10 章の警告のまま。
     """
     head = [f(r) for f in (_fidelity_action, _supplement_action, _dtd_action, _table_shape_action, _image_names_action,
-                           _upload_action, _ai_finish_action, _textbox_undecided_action,
+                           _upload_action, _textbox_undecided_action,
                            _textbox_place_action, _textbox_figure_text_action, _unplaced_action, images_action,
                            lost_action, _image_same_action, _image_changed_action, lost_autonum_action, _pua_left_action, _abstract_missing_action, _style_hidden_action, _resultless_field_action, _symbol_action, _abstract_ja_action, _app_after_refs_action, _float_end_action, _style_check_action, _ai_boundary_action, _note_overlap_action, _float_ref_action,
                            _fn_guess_action, _name_split_action, _newline_action)]
-    return [a for a in head if a is not None] + pdf_actions(r)
+    acts = [a for a in head if a is not None] + pdf_actions(r)
+    fin = _ai_finish_action(r)
+    if fin is not None:
+        # 推奨の手順 ai_finish は、要対応と必須の手順の後ろ（14 章の checklist_order と同じく、先に済ませることを上に出す）
+        last = max((i for i, a in enumerate(acts) if a.level == NEEDS_ACTION or (a.level == STEP and a.required)), default=-1)
+        acts.insert(last + 1, fin)
+    return acts
 
 
 def checklist_order(acts) -> list:
@@ -3098,6 +3156,8 @@ def render(r) -> str:
         if ai.partial:
             L.append(f"**AI の回答が途中で切れていました。** {esc(ai.partial)}")
             L.append("")
+        for line in ai_check_lines(ai):
+            L += [line, ""]
         if ai_acc:
             order = {"低": 0, "中": 1, "高": 2}
             rows = []
@@ -3315,15 +3375,6 @@ def render(r) -> str:
                  "手がかりにしてください）:")
         L.append("")
         L.append(table(["XML の注", "Word の注", "番号", "注の書き出し", "本文からのリンク"], note_rows))
-        L.append("")
-
-    if fid.ai_additions:
-        L.append("### AI が画像から読み取って併記した数式（docx の文字ではない）")
-        L.append("")
-        L.append("数式が画像で貼られていた箇所に、AI が読み取った MathML を元の画像と並べて（`<alternatives>`）出力しました。"
-                 "本文の文字ではありませんが、読み取りに誤りがないか確認してください。")
-        L.append("")
-        L.append(table(["判断の番号", "読み取った数式（MathML の文字）"], fid.ai_additions))
         L.append("")
 
     # ------------------------------------------------------------------ 9. 画像
@@ -3775,6 +3826,25 @@ def ai_style_section(r) -> list:
     return L
 
 
+REREAD_SHOWN = 5        # 段落の ID を読み替えた指定を、2 章に例として挙げる数
+
+
+def ai_check_lines(ai) -> list:
+    """依頼の番号と段落の先頭の文字での確かめ（ai_assist.check_answer）の結果の行（2 章と AI の判断一覧）: 前の変換の回答
+    （AI回答.json）を使い、API を呼ばなかったこと（AIOutcome.reused）、原稿を直す前の回答を使ったこと（AIOutcome.carried）と、
+    段落の ID を先頭の文字で読み替えた指定（AIOutcome.reread）。"""
+    out = []
+    if ai.reused:
+        out.append(esc(ai.reused))
+    if ai.carried:
+        out.append(f"**原稿を直す前の回答です。** {esc(ai.carried)}")
+    if ai.reread:
+        ex = "、".join(f"{a} → {b}" for _, a, b in ai.reread[:REREAD_SHOWN]) + ("など" if len(ai.reread) > REREAD_SHOWN else "")
+        out.append(f"段落の ID が段落の先頭の文字と合わなかった指定 {len(ai.reread)} 件を、同じ先頭の文字の段落に読み替えました"
+                   f"（{ex}）。")
+    return out
+
+
 def render_ai_only(r) -> str:
     """AI による判断だけをまとめた別ファイル（不確実性のある箇所の一覧）。"""
     ai = r.ai
@@ -3786,6 +3856,8 @@ def render_ai_only(r) -> str:
     acc = [d for _, d in ai.accepted]
     if ai.partial:
         L += [f"**AI の回答が途中で切れていました。** {esc(ai.partial)}", ""]
+    for line in ai_check_lines(ai):
+        L += [line, ""]
     if ai.error:
         L.append(f"AI による補完は行えませんでした: {ai.error}")
     elif not acc and not ai.rejected:

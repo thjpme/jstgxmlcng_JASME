@@ -5,7 +5,6 @@ finalize() で目印を取り除いてから出力する。
 """
 from __future__ import annotations
 
-import copy
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -854,14 +853,11 @@ class Builder:
             self.caption(f, node.caption)
             self.caption_more(f, node.caption_more)
         self.image_para_blanks(node, node.fid or "図")
-        if node.slot is not None and node.formula is None:
+        if node.slot is not None:
             self.graphic(f, node.slot)      # 図 1 つに <graphic> 1 つ（置き場所の名前。docx の画像が何枚でも、画像がなくても）
         for t in node.tables:
             # 表で組んだ図（問題文など）: 図の中に表を入れる（JATS の fig は table-wrap を含められる）
             self.table(_sub(f, "table-wrap"), t, node.caption)
-        if node.formula is not None:
-            parent.remove(f)
-            self.formula_image(parent, node)
 
     def image_para_blanks(self, node, what: str):
         """図・画像で貼った表に含めた、画像だけの段落（node.image_paras）の空白を、空白の除外として記録する。"""
@@ -908,16 +904,6 @@ class Builder:
             pe = _sub(cap, "p")
             self.autonum_mark(pe, p)
             self.em.span(pe, p, E.CAPTION)
-
-    def formula_image(self, parent, node: FigNode):
-        """AI が数式画像と判断した図: 元の画像を残したまま、AI が読み取った MathML を併記する。"""
-        df = _sub(parent, "disp-formula")
-        alt = _sub(df, "alternatives")
-        if node.slot is not None:
-            _sub(alt, "graphic").set(f"{{{XLINK}}}href", self.slot_name(node.slot))
-        holder = etree.SubElement(alt, AI)
-        holder.set("decision", getattr(node, "formula_decision", "") or "")
-        holder.append(copy.deepcopy(node.formula))
 
     def table_wrap(self, parent, node: TableNode):
         tw = _sub(parent, "table-wrap")

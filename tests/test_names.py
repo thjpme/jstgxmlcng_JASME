@@ -5,6 +5,8 @@
 引用の形の「姓だけ」の表記、なければ字数）。姓・名の中の字間の空白と、氏名の前後の空白は落とす（Emitter.drop。7 章）。いちばん長い空白で分けたもの・
 推定で分けたもの・AI が分けたもの・分けられなかったもの（空白のない氏名）は、要確認 name_split で知らせる。氏名はすべて架空。
 """
+import types
+
 import pytest
 from lxml import etree
 
@@ -386,11 +388,11 @@ def test_ai_request_tells_longest_from_estimate(journal, tmp_path):
     _, plan, linker = _mechanical(names_doc(tmp_path / "r.docx", "試\u3000験\u3000六\u3000郎", "本文。"), journal)
     lg = split_eastern("試\u3000験\u3000\u3000洋")
     ct = split_eastern("試\u3000験\u3000六\u3000郎", "試験（2024）")
-    req, _ = build_request(plan, linker, (), (), [("d11", lg), ("d12", ct)])
+    req = build_request(plan, linker, types.SimpleNamespace(exclusions=[], unsplit_names=[], name_splits=[("d11", lg), ("d12", ct)])).data
     [l1] = [x for x in req.splitlines() if x.startswith("- [d11]")]
     [l2] = [x for x in req.splitlines() if x.startswith("- [d12]")]
-    assert "いちばん長い空白で決めた氏名" in l1 and "推定した氏名" not in l1
-    assert "姓と名の境目を推定した氏名" in l2
+    assert "いちばん長い空白で姓と名に分けた" in l1 and "推定" not in l1
+    assert "境目を推定した" in l2 and "論文の中の表記「試験（2024）」" in l2
 
 
 def test_name_split_pending_has_no_ai_advice(journal, meta, tmp_path):

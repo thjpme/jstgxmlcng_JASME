@@ -24,6 +24,9 @@ FROM_JA = {"column": "アンカー段落の段", "margin": "本文の領域", "p
            "line": "アンカーのある行", "character": "アンカーの文字", "leftMargin": "左余白", "rightMargin": "右余白",
            "topMargin": "上余白", "bottomMargin": "下余白", "insideMargin": "内側の余白", "outsideMargin": "外側の余白"}
 WRAP_JA = {"wrapTopAndBottom": "上下", "wrapSquare": "四角", "wrapTight": "外周", "wrapThrough": "内部", "wrapNone": "なし（前面・背面）"}
+# 配置（wp:align）の値。横は left・center・right・inside・outside、縦は top・center・bottom・inside・outside
+ALIGN_JA = {"left": "左端", "center": "中央", "right": "右端", "inside": "内側", "outside": "外側", "top": "上端", "bottom": "下端"}
+UNKNOWN_FROM = "基準の分からない位置"     # FROM_JA にない基準（AI 依頼文に英語の値を出さない。修正計画 W8 の 4.1）
 
 
 # 文字だけのテキストボックスの判定（textbox_kind）のしきい値。文字数は空白を除いた文字の数（数式・脚注の参照は 1 字）、幅は
@@ -63,23 +66,24 @@ def why_not_at_anchor(fl: Float, layout: Optional[Layout]) -> str:
 
 
 def describe(fl: Float, layout: Optional[Layout]) -> str:
-    """AI に渡す、docx に記録された位置の説明。"""
+    """AI に渡す、docx に記録された位置の説明（AI 依頼文の「docx の配置」）。値は日本語で書く（基準・配置・折り返しの英語の値を
+    出さない。知らない値は「基準の分からない位置」「指定の位置」「不明」。修正計画 W8 の 4.1）。"""
     lay = layout or Layout()
     if lay.columns > 1 and fl.width_cm > lay.column_width_cm * 1.3:
         size = f"幅 {fl.width_cm:.1f} cm・高さ {fl.height_cm:.1f} cm（2 段にまたがる）"
     else:
         size = f"幅 {fl.width_cm:.1f} cm・高さ {fl.height_cm:.1f} cm（1 段の幅）"
     if fl.h_offset_cm is not None:
-        h = f"{FROM_JA.get(fl.h_from, fl.h_from)}の左端から {fl.h_offset_cm:.1f} cm"
+        h = f"{FROM_JA.get(fl.h_from, UNKNOWN_FROM)}の左端から {fl.h_offset_cm:.1f} cm"
         if fl.h_from == "column" and lay.columns > 1 and fl.h_offset_cm > lay.column_width_cm * 0.8:
             h += "（アンカー段落の段の右隣の段）"
     else:
-        h = f"{FROM_JA.get(fl.h_from, fl.h_from)}の{fl.h_align or '?'}"
+        h = f"{FROM_JA.get(fl.h_from, UNKNOWN_FROM)}の{ALIGN_JA.get(fl.h_align, '指定の位置')}"
     if fl.v_offset_cm is not None:
-        v = f"{FROM_JA.get(fl.v_from, fl.v_from)}の上端から {fl.v_offset_cm:.1f} cm 下（約 {fl.v_offset_cm / pitch(layout):.1f} 行）"
+        v = f"{FROM_JA.get(fl.v_from, UNKNOWN_FROM)}の上端から {fl.v_offset_cm:.1f} cm 下（約 {fl.v_offset_cm / pitch(layout):.1f} 行）"
     else:
-        v = f"{FROM_JA.get(fl.v_from, fl.v_from)}の{fl.v_align or '?'}"
-    wrap = WRAP_JA.get(fl.wrap, fl.wrap or "不明")
+        v = f"{FROM_JA.get(fl.v_from, UNKNOWN_FROM)}の{ALIGN_JA.get(fl.v_align, '指定の位置')}"
+    wrap = WRAP_JA.get(fl.wrap, "不明")
     return f"{size}。横: {h}。縦: {v}。文字列の折り返し: {wrap}"
 
 

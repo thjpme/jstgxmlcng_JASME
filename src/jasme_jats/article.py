@@ -29,8 +29,9 @@ class UnlinkedRef(NamedTuple):
 
 
 # スタイルを確かめる段落の種類（StyleSuspect.kind）: 見出しのスタイルの段落に本文が続く（C037）・見出しの階層と番号の形が合わない（C038）・
-# 本文のスタイルの引用らしい段落（C129）・文字から見出しと推定した段落（C014）。検出は修正計画の単位 D が足す（W8 は入れ物と表示だけ）
-STYLE_SUSPECT_KINDS = ("heading_body", "heading_level", "quote_like", "heading_guess")
+# 本文のスタイルの引用らしい段落（C129）・文字から見出しと推定した段落（C014）。検出は修正計画の単位 D が足す（W8 は入れ物と表示だけ）。
+# 記号だけの引用文献（ref_symbol。「.」だけの段落など。structure.Classifier.build_back が挙げる。XML の文字は変えず、Word で消してもらう）
+STYLE_SUSPECT_KINDS = ("heading_body", "heading_level", "quote_like", "heading_guess", "ref_symbol")
 
 
 class StyleSuspect(NamedTuple):
@@ -132,8 +133,6 @@ class FigNode:
     extra_images: list = field(default_factory=list)
     fid: str = ""
     number: Optional[int] = None
-    formula: object = None        # AI が数式画像と判断した場合に読み取った MathML（mml:math 要素）
-    formula_decision: str = ""
     slot: Optional[ImageSlot] = None    # 画像の置き場所（表で組んだ図は None。Classifier.assign_slots）
     # 置き場所の how・note に写すもの（Classifier.figure_units が決める。assign_slots が ImageSlot に入れる）: 画像を含めた決め方
     # （same_para・run・near の「+」つなぎ）と、備考（本体の表にできなかった近くの表の理由など）
@@ -247,8 +246,11 @@ class FloatInfo:
     # 中身の組み方: units（float_units が組んだ）/ raw（組み方を決められず、中身を docx の順にそのまま出した。修正計画 W1 の 2.3 の B5）
     built: str = ""
     where: str = ""                                # 未配置のときに仮に置いた位置: anchor（アンカー段落の後ろ）/ end（本文の最後）
-    end_why: str = ""                              # 本文の最後に置いた理由: ai（AI が本文の外の段落の後ろを指定）/ anchor（アンカー段落が本文でない）
-    end_after: str = ""                            # AI が指定した本文の外の段落の ID（end_why が ai のとき）
+    # 本文の最後に置いた理由: ai（AI が本文より後ろにあると答えた〈after が ""〉か、本文の外の段落の後ろを指定した）/
+    # anchor（アンカー段落が本文でない）
+    end_why: str = ""
+    end_after: str = ""                            # AI が指定した本文の外の段落の ID（end_why が ai のとき。after が "" の答えなら ""）
+    end_reason: str = ""                           # end_why が ai のときの AI の答えの根拠（placements の reason。要確認 float_end の行）
     # 未配置で where が anchor のとき、その後ろに仮に置いた本文の段落の ID（アンカー段落。アンカー段落が箇条書き・引用の途中なら、
     # その箇条書き・引用の最後の段落。Classifier.run_end）
     after_src: str = ""

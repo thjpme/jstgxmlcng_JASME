@@ -746,58 +746,35 @@ def test_new_paper_clears_answer_field(tmp_path):
 
 
 def test_previous_paper_answer_refused(tmp_path):
-    import zipfile as zf
-    import make_fixtures as mf
+    """前の論文の回答を貼ると、変換の中の依頼の番号の確かめ（ai_assist.check_answer の (c)）で使わず、「失敗」として知らせる
+    （画面の「前に反映した回答」の確かめを置き換えた。修正計画 W8 の 4.6・手順 18）。同じ docx の写しでは、そのまま使う。"""
+    from jasme_jats.ai_assist import OTHER_REQUEST_MSG
     a, b = make_pair(tmp_path)
     st = filled(tmp_path, docx=a)
     st.set_inputs(ai_mode="manual")
     res_a = st.convert()
-    ans_a = exclude_answer(res_a, "二つ目")
-    st.apply_answer(ans_a)
+    pid = next(p for p, q in res_a.plan.paras.items() if "二つ目" in str(getattr(q, "text", "") or q))
+    ans_a = answers.answer(style_fixes=[(pid, "exclude")], docx=a)
+    res = st.apply_answer(ans_a)
+    assert not res.ai.error and not res.ai.carried and res.ai.style_fixes
 
     def switch(path):
         st.set_inputs(docx=str(path))
         st.convert()
-    switch(b)
-    with pytest.raises(InputError, match="前に別の依頼文（A.docx のとき）に対して反映した AI の回答です") as ei:
-        st.apply_answer(ans_a)
-    check_text(str(ei.value))
-    assert "論文Bの二つ目の段落" in xml_text(st.res)
-    st.reset()
-    st.set_inputs(docx=str(b), volume="31", issue="1", fpage="1", lpage="12", peer_review="査読あり",
-                  manuscript_type=type_choices()[0], ai_mode="manual", route="docx")
-    st.convert()
-    with pytest.raises(InputError, match="前に別の依頼文"):
-        st.apply_answer(ans_a)
-    st.apply_answer(EMPTY_ANSWER)                      # 違う回答は通る
-    # A と同じ中身（別のパス）・依頼文の変わらない同名の直した版では、ans_A が通る
-    same = tmp_path / "copy" / "A.docx"
+    switch(FULL)                                       # 別の論文（図・表・文献の並びが違う）: 断らずに変換し、回答は使わない
+    res = st.apply_answer(ans_a)
+    assert res.ai.error == OTHER_REQUEST_MSG and not res.ai.style_fixes and not res.ai.accepted
+    assert app.ai_state(res) == "失敗" and st.answer_box_open      # 貼り付け直せるように手動の欄は残す
+    assert "_last_answer" not in vars(st)
+    switch(b)                                          # 並びが同じで文字の違う論文: 先頭の文字が合わないので、その指定は使わない
+    res = st.apply_answer(ans_a)
+    assert not res.ai.error and res.ai.carried and not res.ai.style_fixes and res.ai.rejected
+    same = tmp_path / "copy" / "A.docx"                # A と同じ中身（別のパス）では、そのまま使う
     same.parent.mkdir()
     same.write_bytes(a.read_bytes())
     switch(same)
-    st.apply_answer(ans_a)
-    fixed = tmp_path / "fixed" / "A.docx"
-    fixed.parent.mkdir()
-    with zf.ZipFile(a) as src, zf.ZipFile(fixed, "w", zf.ZIP_DEFLATED) as dst:
-        for item in src.infolist():
-            data = src.read(item.filename)
-            if item.filename == "docProps/core.xml":        # 更新日だけを書き換える（本文は変えない）
-                data = data.replace(b"</cp:coreProperties>", b"<dcterms:modified xmlns:dcterms='http://purl.org/dc/terms/'>2030-01-01</dcterms:modified></cp:coreProperties>")
-                assert data != src.read(item.filename)
-            dst.writestr(item, data)
-    switch(b)
-    st.apply_answer(EMPTY_ANSWER)
-    switch(fixed)
-    st.apply_answer(ans_a)
-    # 依頼文が変わる（本文の段落を足した A）なら断る
-    longer = tmp_path / "longer" / "A.docx"
-    longer.parent.mkdir()
-    S = mf.S
-    mf.make_article(longer, "論文Aの題目", lambda b_: [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "論文Aの本文。試験（2024）を引く。"),
-                                                       mf.para(S["body"], "論文Aの二つ目の段落。"), mf.para(S["body"], "足した段落。")])
-    switch(longer)
-    with pytest.raises(InputError, match="前に別の依頼文"):
-        st.apply_answer(ans_a)
+    res = st.apply_answer(ans_a)
+    assert not res.ai.error and not res.ai.carried and res.ai.style_fixes
 
 
 def test_stopped_convert_leaves_no_stale_text(tmp_path):

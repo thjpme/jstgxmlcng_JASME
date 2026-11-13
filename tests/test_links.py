@@ -171,11 +171,16 @@ def test_unlinked_superscripts_are_recorded(links):
     assert rec["架空の補足がある"] == []
     report = links.report_path.read_text(encoding="utf-8")
     prompt = links.prompt_path.read_text(encoding="utf-8")
+    # AI 依頼文には、記録の文ではなく「# 機械がリンクできなかった箇所」に、数字ごとに段落にあるとおりの表記と何回目かを書く
+    # （記録の text・occurrence と同じ。W8 の手順 15）
+    unres = prompt.split("# 機械がリンクできなかった箇所\n", 1)[1].split("\n\n", 1)[0]
     for prefix, msgs in rec.items():
         src = src_of(links, prefix)
         for m in msgs:
             assert m in report
-            assert f"- [{src}] 推定: {m}" in prompt
+            for t, k in RE_ITEM.findall(m):
+                assert f"- [{src}] 注:「{t}」（{k} 回目）… " in unres
+    assert "推定: " not in unres and "link_note" not in prompt
     # 記録だけ（図の画像を入れる手順のほかに知らせはない。手動モードの回答待ちは、位置を聞く図形がないので 2 章の 1 行だけ）
     assert [a.key for a in actions(links)] == ["images"]
 
@@ -362,7 +367,13 @@ def test_figure_refs_inside_words(links):
     # 「地図1、図2」と「地図1、2」は 1 件ずつ（「、2」は記録しない）、「図表1と表1」の図表1 は 1 件
     assert len(records(links, "図表1と表1", "figure")) == 2 and len(records(links, "図表1と表1", "table")) == 1
     prompt = links.prompt_path.read_text(encoding="utf-8")
-    assert all(f"推定: {m}" in prompt for m in figs + tabs)
+    unres = prompt.split("# 機械がリンクできなかった箇所\n", 1)[1].split("\n\n", 1)[0]
+    src = src_of(links, "地図1と図表1")
+    for word, msgs in (("図", figs), ("表", tabs)):
+        for m in msgs:
+            [(t, k)] = re.findall(r"text「(.+?)」、occurrence (\d+)", m)
+            prev = re.search("直前の「(.)」", m).group(1)
+            assert f"- [{src}] {word}:「{t}」（{k} 回目）… 直前の「{prev}」と続く語の一部" in unres
 
 
 def test_link_figure_from_record_is_accepted(links, journal, meta, tmp_path):
@@ -434,7 +445,8 @@ def test_float_refs_stop_before_superscript():
     lk = Linker(ArticlePlan())
     r = Para(src="d3", atoms=[plain_atom("図5"), sup_atom("1)"), plain_atom("を見る。")])
     lk.float_refs(r, RE_FIGREF, {1: "F1"}, "fig", "図")
-    assert lk.unresolved == [("fig", "d3", "図5", "図5 に対応する図が見つからない")]
+    assert [u[:4] for u in lk.unresolved] == [("fig", "d3", "図5", "図5 に対応する図が見つからない")]
+    assert (lk.unresolved[0].start, lk.unresolved[0].end) == (0, 2)       # 段落の中の範囲も、切った参照
     # 先頭の番号の途中で切ったときは、上付きの後ろの並びの番号（「、2」）はリンクしない（今の限界。docs/DESIGN.md の 6 章）。「と図2」
     # のように「図」の付いたものは、上付きの手前から探し直すので、次の参照としてリンクする。上付きの文字にリンク（Word のハイパー
     # リンクなど）があっても、上付きの手前で切る（「図23」にしない）

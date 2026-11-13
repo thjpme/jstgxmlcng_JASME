@@ -275,12 +275,13 @@ def extract_citations(text_nfkc, known):
             if not mm:
                 for y, s, e in years:
                     cites.append({"names": [], "etal": False, "year": y, "span": (base_inner + s, base_inner + e),
-                                  "form": "unresolved", "raw": m.group(0), "loc": loc})
+                                  "form": "unresolved", "raw": m.group(0), "raw_span": m.span(), "loc": loc})
                 continue
             names, e2, seps = split_names(mm.group(1) + ("ら" if etal else ""), known)
             for y, s, e in years:
                 cites.append({"names": names, "etal": etal or e2, "year": y, "span": (base_inner + s, base_inner + e),
-                              "form": "narrative", "raw": text_nfkc[base + mm.start():m.end()], "loc": loc})
+                              "form": "narrative", "raw": text_nfkc[base + mm.start():m.end()],
+                              "raw_span": (base + mm.start(), m.end()), "loc": loc})
             continue
         pos = 0
         for part in inner.split(";"):
@@ -297,7 +298,7 @@ def extract_citations(text_nfkc, known):
                 for t in re.finditer(Y, pm.group("years"), re.I):
                     s = base_inner + pos + ys + t.start()
                     cites.append({"names": names, "etal": etal, "year": t.group(0), "span": (s, s + len(t.group(0))),
-                                  "form": "parenthetical", "raw": m.group(0), "loc": pm.group("loc")})
+                                  "form": "parenthetical", "raw": m.group(0), "raw_span": m.span(), "loc": pm.group("loc")})
             pos += len(part) + 1
     cites.sort(key=lambda c: c["span"][0])
     return cites
@@ -352,6 +353,7 @@ def link_citations(plan, linker, paras):
     if numeric:
         link_numeric(plan, linker, paras)
         return
+    from .linker import Unresolved
     cited = defaultdict(list)
     for p, where in paras:
         if where in ("ref", "formula"):
@@ -361,7 +363,11 @@ def link_citations(plan, linker, paras):
             r, kind, detail = match_citation(c, refs)
             span = mp.orig(*c["span"])
             if r is None:
-                linker.unresolved.append(("bibr", p.src, c["raw"], detail, kind, c["year"]))
+                # 段落の中の位置は年（リンクにする文字）、context は引用の全体（どちらも段落の文字のまま。AI 依頼文に書く）
+                whole = mp.orig(*c["raw_span"]) if c.get("raw_span") else None
+                linker.unresolved.append(Unresolved("bibr", p.src, c["raw"], detail, kind, c["year"],
+                                                    *(span if span else (-1, -1)),
+                                                    context=mp.s[whole[0]:whole[1]] if whole else ""))
                 continue
             spec = LinkSpec(kind="xref", attrs={"ref-type": "bibr", "rid": r.rid})
             if span and mp.s[span[0]:span[1]] and _apply(p, span, spec):
@@ -411,6 +417,7 @@ def tag_reference(r):
 
 
 def link_numeric(plan, linker, paras):
+    from .linker import Unresolved
     nums = {r.parsed.get("number"): r.rid for r in plan.refs if r.parsed.get("number") is not None}
     for p, where in paras:
         if where in ("ref", "formula"):
@@ -421,7 +428,8 @@ def link_numeric(plan, linker, paras):
             for t in re.finditer(r"\d{1,3}", m.group(1)):
                 rid = nums.get(int(t.group(0)))
                 if rid is None:
-                    linker.unresolved.append(("bibr", p.src, m.group(0), f"番号 {t.group(0)} の文献がない", "missing", t.group(0)))
+                    linker.unresolved.append(Unresolved("bibr", p.src, m.group(0), f"番号 {t.group(0)} の文献がない", "missing",
+                                                        t.group(0), base + t.start(), base + t.end(), context=m.group(0)))
                     continue
                 if _apply(p, (base + t.start(), base + t.end()), LinkSpec(kind="xref", attrs={"ref-type": "bibr", "rid": rid})):
                     linker.count["bibr"] += 1

@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-import answers
 from jasme_jats import __version__
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -127,13 +126,12 @@ def test_step9_resets_for_next_article(monkeypatch):
     shown = fake_display(monkeypatch)
     src = cell_source("#@title 9.")
     ns = {"DONE": {1, 2, 3, 4, 5}, "docx_path": Path("first.docx"), "meta_input": {"volume": "31", "fpage": "1"},
-          "LAST_AI_RESPONSE": answers.answer(), "res": object()}
+          "res": object()}
     with pytest.raises(SystemExit, match="まだダウンロードしていません"):
         exec(src, ns)
     exec(src, ns)                                   # もう一度押すと、ダウンロードせずに進める
     assert ns["DONE"] == {1}
-    assert ns["PREVIOUS"] == {"docx": "first.docx", "meta": {"volume": "31", "fpage": "1"},
-                              "ai_response": answers.answer()}
+    assert ns["PREVIOUS"] == {"docx": "first.docx", "meta": {"volume": "31", "fpage": "1"}}
     assert "docx_path" not in ns and "res" not in ns and "_DISCARD_OK" not in ns
     # 入力欄に前の論文の値が残ることを、赤い枠で目立つように知らせる（開き直す方法も示す）
     assert "前の論文（first.docx）の値が残っています" in shown[-1] and "開き直して" in shown[-1]
@@ -390,7 +388,7 @@ def test_step6_shows_ai_error_box_before_report(monkeypatch, tmp_path):
           "convert": convert, "Options": Options, "add_images": add_images, "result_boxes": result_boxes,
           "summary_box": summary_box, "report_details": report_details, "HTML": lambda x: x, "display": shown.append}
     exec(src, ns)
-    assert ns["res"].ai.mode == "manual" and ns["res"].ai.error and ns["LAST_AI_RESPONSE"]
+    assert ns["res"].ai.mode == "manual" and ns["res"].ai.error and "LAST_AI_RESPONSE" not in ns
     box = next(i for i, x in enumerate(shown) if "AI の回答を反映できませんでした" in x)
     summary = next(i for i, x in enumerate(shown) if "結果の要約" in x)
     report = next(i for i, x in enumerate(shown) if "<details" in x and "変換レポート" in x)

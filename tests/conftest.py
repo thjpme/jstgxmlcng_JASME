@@ -26,6 +26,22 @@ LINKS_BARE = FIXTURES / "sample_links_bare.docx"   # 同じ規則の、注番号
 ALL_DOCS = [FULL, EDGE, TEMPLATE, NOTES, PDFCHECK, READER, STRUCTURE, CELLS, TABLEFIG, LINKS, LINKS_BARE]
 
 
+@pytest.fixture(autouse=True)
+def _this_request(monkeypatch):
+    """テストの回答（tests/answers.py）の request_id の目印 THIS_REQUEST を、変換のときにその変換の依頼の番号に置き換える
+    （ai_assist.check_answer の前。テストの回答を、その docx の今の依頼文への回答として扱う。修正計画 W8 の手順 17）。
+    目印でない request_id（番号のない回答・別の依頼文への回答を試すテスト）は、そのまま確かめる。"""
+    from answers import THIS_REQUEST
+    from jasme_jats import ai_assist, pipeline
+    real = ai_assist.check_answer
+
+    def check(data, request, plan, outcome):
+        if data.get("request_id") == THIS_REQUEST:
+            data["request_id"] = request.stamp
+        return real(data, request, plan, outcome)
+    monkeypatch.setattr(pipeline, "check_answer", check)
+
+
 @pytest.fixture(scope="session")
 def journal():
     return JournalConfig.load()
