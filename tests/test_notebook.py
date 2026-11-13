@@ -213,12 +213,31 @@ def test_step7_matches_names_and_skips(monkeypatch, tmp_path, capsys):
     exec(cell_source("#@title 7."), ns)
     out = capsys.readouterr().out
     assert [i.key for i in res.images if i.status == "user"] == ["fig01"] and "「x.txt」に合う図がありません" in out
-    # NO_IMAGE に図の幹を書くと、1 枚も入れずに断る（赤い枠）
+    # NO_IMAGE に図の幹を書くと、アップロードを求める前に断る（赤い枠。選んだ画像が全部入らないことにならないように）
     res2 = _template_result(tmp_path / "again")
-    ns = _step7_ns(res2, [{}, {}])
+    uploads = [{"fig01.png": _png()}, {}]
+    ns = _step7_ns(res2, uploads)
     exec(cell_source("#@title 7.").replace('NO_IMAGE = ""', 'NO_IMAGE = "fig01, img999999"'), ns)      # 欄の値を書き換える
-    assert any("画像を入れられませんでした" in x and "#dc2626" in x for x in shown)
+    assert any("NO_IMAGE を直してください" in x and "fig01、img999999" in x and "#dc2626" in x for x in shown)
+    assert len(uploads) == 2                                       # アップロードを求めていない
     assert not [i for i in res2.images if i.status in ("user", "skipped")]
+
+
+def test_step7_replace_after_all_images_are_in(monkeypatch, tmp_path, capsys):
+    """手順 7: 全部入れた後も、REPLACE にチェックを入れて名前を付けた画像をアップロードすれば、入れた画像を差し替えられる。"""
+    fake_display(monkeypatch)
+    res = _template_result(tmp_path)
+    exec(cell_source("#@title 7."), _step7_ns(res, [{"fig01.png": _png()}]))
+    first = next(i for i in res.images if i.key == "fig01").sha1
+    uploads = []
+    exec(cell_source("#@title 7."), _step7_ns(res, uploads))          # 何も求めない
+    assert uploads == [] and next(i for i in res.images if i.key == "fig01").sha1 == first
+    uploads = [{"fig01.png": _png((60, 40))}]
+    src = cell_source("#@title 7.")
+    assert 'REPLACE = False  #@param {type:"boolean"}' in src
+    exec(src.replace("REPLACE = False", "REPLACE = True"), _step7_ns(res, uploads))
+    assert uploads == [] and next(i for i in res.images if i.key == "fig01").sha1 != first
+    assert "REPLACE のチェックを外してください" in capsys.readouterr().out
 
 
 def test_step8_stops_once_when_images_are_missing(monkeypatch, tmp_path):

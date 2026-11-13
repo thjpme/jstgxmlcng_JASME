@@ -47,7 +47,7 @@ class KeptImage:
     key は置き場所の幹、kind は fig・table・nocap・optional、source_name は元のファイル名、data は中身（バイト列のまま）、
     caption は入れたときのキャプションの文字、body はその本体（structure.caption_body。番号を除いた文字）、where は入れたときの
     場所の段落の先頭 20 字（キャプションのない画像の照合に使う）、skipped は「入れない」とした置き場所か、article_id は記事識別子
-    （巻と最初のページ）。
+    （巻と最初のページ）、layout は入れたときの置き場所の並び全体（pipeline._slot_layout。幹・種類・本体・場所。どの KeptImage も同じ）。
     """
     key: str
     kind: str
@@ -58,6 +58,7 @@ class KeptImage:
     where: str
     skipped: bool
     article_id: str
+    layout: tuple = ()
 
 
 @dataclass(eq=False)
@@ -65,13 +66,17 @@ class DroppedImage:
     """持ち越せなかった前の画像（pipeline.Result.images_dropped）。別の図の画像を入れないために入れなかったもの。
 
     key は前の置き場所の幹、source_name は元のファイル名、caption は前のキャプションの文字、why は入れなかった理由の言い方、
-    suggest は、前のキャプションの本体と本体が同じ図が今ちょうど 1 つあるときのその幹（なければ ""）。
+    suggest は、前のキャプションの本体と本体が同じ図が今ちょうど 1 つあるときのその幹（なければ ""）、sha1 は前の画像の中身の SHA-1
+    （report.images_dropped が、suggest の置き場所にこの画像そのものが入ったかを見る）、other_article は、記事識別子が変わった
+    （別の論文の）ときの前の記事識別子（同じ論文なら ""。手順 images では行を並べず 1 行で知らせる）。
     """
     key: str
     source_name: str
     caption: str
     why: str
     suggest: str = ""
+    sha1: str = ""
+    other_article: str = ""
 
 
 @dataclass(eq=False)
@@ -119,7 +124,7 @@ def check_user_image(data: bytes, name: str = "") -> tuple:
     return fmt, size
 
 
-RE_ARTICLE_PREFIX = re.compile(r"^(\d+_\d+)_(.+)$")        # 記事識別子の付いた名前（29_55_fig03）
+RE_ARTICLE_PREFIX = re.compile(r"^([0-9a-z]+_[0-9a-z]+)_(.+)$")        # 記事識別子の付いた名前（29_55_fig03・31_e5_fig03。巻と最初のページは英数字）
 RE_FIG_ALIAS = re.compile(r"^(?:figure|fig|図)[\s_\-]*0*(\d+)(?:[\-‐–](\d+))?$")
 RE_TAB_ALIAS = re.compile(r"^(?:table|tab|表)[\s_\-]*0*(\d+)(?:[\-‐–](\d+))?$")
 
@@ -137,8 +142,8 @@ def match_names(names, slots, article_id: str) -> tuple:
 
     受け付ける名前（拡張子は問わない。NFKC にし、大文字・小文字を区別しない）: 幹そのもの（fig03・tab01・img3fa9c2・fig04_2）、
     記事識別子の付いた名前（29_55_fig03）、図・表の番号からの別名（fig3・図3・Figure3・fig1-2・表1・tab1・table1）。番号からの別名は、
-    その番号の置き場所が 1 つだけのとき（fig04_2 がなければ）に受け付ける。記事識別子の形（{数}_{数}_）で始まり、この記事の
-    識別子 article_id と違う名前は受け付けない（別の論文のフォルダの使い回しで、別の論文の画像が黙って入らないように）。
+    その番号の置き場所が 1 つだけのとき（fig04_2 がなければ）に受け付ける。記事識別子の形（{英数字}_{英数字}_。31_e5_ など）で始まり、
+    この記事の識別子 article_id と違う名前は受け付けない（別の論文のフォルダの使い回しで、別の論文の画像が黙って入らないように）。
     戻り値: ({幹: ファイル名}, 合わなかった名前の一覧, 重なった名前 [(幹, [ファイル名, …])])。同じ幹に 2 つ以上合ったファイルは、
     どれも {幹: ファイル名} に入れない（黙って 1 つを選ばない）。
     """
@@ -146,12 +151,13 @@ def match_names(names, slots, article_id: str) -> tuple:
     found, unmatched = {}, []
     for name in names:
         stem = _stem(name)
+        own = str(article_id).lower() + "_"
         m = RE_ARTICLE_PREFIX.match(stem)
-        if m:
-            if m.group(1) != str(article_id).lower():
-                unmatched.append(name)
-                continue
-            stem = m.group(2)
+        if stem.startswith(own) and len(stem) > len(own):
+            stem = stem[len(own):]
+        elif m:
+            unmatched.append(name)
+            continue
         key = keys.get(stem)
         if key is None:
             for regex, prefix in ((RE_FIG_ALIAS, "fig"), (RE_TAB_ALIAS, "tab")):

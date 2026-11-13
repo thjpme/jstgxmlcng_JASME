@@ -320,8 +320,8 @@ def test_caption_less_table_becomes_figure_body(journal, meta, tmp_path, capsys)
     assert not any("<graphic> なしで出力" in w for w in res.warnings)
     # 図の画像の一覧の備考に、置き場所の備考（表で組めなかった理由）を必ず出す。手順 images の行の括弧にも添える
     assert [(row.key, row.note) for row in image_rows(res)] == [
-        ("fig02", f"未。docx でこの図の画像を見つけられませんでした。{slot_notes(res)['図2']}"),
-        ("fig03", f"未。docx でこの図の画像を見つけられませんでした。{slot_notes(res)['図3']}")]
+        ("fig02", f"docx でこの図の画像を見つけられませんでした。{slot_notes(res)['図2']}"),
+        ("fig03", f"docx でこの図の画像を見つけられませんでした。{slot_notes(res)['図3']}")]
     [step] = [a for a in actions(res) if a.key == "images"]
     assert f"（docx でこの図の画像を見つけられませんでした。{slot_notes(res)['図2']}）" in step.box_detail
     assert f"（docx でこの図の画像を見つけられませんでした。{slot_notes(res)['図3']}）" in step.box_detail

@@ -231,12 +231,36 @@ def test_on_images_bulk_skip_and_notes(tmp_path):
     stray = png_file(tmp_path / "stray.png", 1)
     out = fns["on_images"]([str(pic), str(stray)], *[None] * n, *[False] * n)
     assert st.missing_images() == [] and out[5].startswith("### 図の画像（1 枚をすべて入れました）")
-    assert "名前の合う図がなかったファイル: stray.png" in out[0] and "<iframe" in out[9]
+    assert "「stray.png」に合う図がありません（この論文の画像の名前: " in out[0] and "<iframe" in out[9]
     assert out[F]["label"].endswith("— 入れた: " + pic.name) and out[8] is None
-    # 行で選んだ画像と、まとめて入れた画像が同じ図に合うときは、行の画像を使う
+    # 行で選んだ画像と、まとめて入れた画像が同じ図に合うときは、行の画像を使い、まとめての方は入れなかったと知らせる
     row_pic = png_file(tmp_path / "row.png", 2)
     out = fns["on_images"]([str(pic)], row_pic.as_posix(), *[None] * (n - 1), *[False] * n)
     assert next(i for i in st.res.images if i.key == key).source_name == "row.png"
+    assert f"「{pic.name}」は、図ごとの行で画像を選んだ図（{key}）に合ったので、入れていません" in out[0]
+
+
+def test_on_images_unchecking_skip_returns_to_missing(tmp_path):
+    """「入れない」のチェックを外して「画像を入れる」を押すと、「入れない」をやめて未に戻る（点検 9）。"""
+    from test_image_carry import make
+    d = make(tmp_path / "n.docx", [], nocaps=[("画像の前の本文である。", "red")])
+    st = filled(tmp_path, docx=d)
+    demo = app.build_app(st, app.IO())
+    fns = {f.fn.__name__: f.fn for f in demo.fns.values()}
+    fns["on_convert"](*[st.inputs[k] for k in app.INPUT_NAMES])
+    n = app.MAX_IMAGE_SLOTS
+    F = app.FIXED_VIEWS
+    (row,) = st.image_slots()
+    assert row.kind == "nocap"
+    out = fns["on_images"](None, *[None] * n, True, *[False] * (n - 1))
+    assert st.image_slots()[0].status == "skipped" and out[F + n]["value"] is True
+    out = fns["on_images"](None, *[None] * n, *[False] * n)                 # チェックを外す
+    assert st.image_slots()[0].status == "missing" and out[F + n]["value"] is False and "選ばれていません" not in out[0]
+    assert "チェックを外して" in st.images_markdown()
+    # 「入れない」にチェックが付いた画像に、まとめて入れた画像が合ったときは入れず、知らせる
+    pic = png_file(tmp_path / f"{row.key}.png")
+    out = fns["on_images"]([str(pic)], *[None] * n, True, *[False] * (n - 1))
+    assert st.image_slots()[0].status == "skipped" and "「入れない」にチェックが付いた画像" in out[0]
 
 
 def test_images_stay_through_rebuild_and_reset(tmp_path):

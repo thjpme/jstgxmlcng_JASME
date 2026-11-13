@@ -11,7 +11,7 @@ import make_fixtures as mf
 from conftest import one_color_png
 from jasme_jats.config import ArticleMeta
 from jasme_jats.pipeline import Options, add_images, convert, kept_images, reapply_images
-from jasme_jats.report import actions, image_rows, images_action
+from jasme_jats.report import actions, blocking, image_rows, images_action
 
 S = mf.S
 XLINK = "{http://www.w3.org/1999/xlink}href"
@@ -118,9 +118,9 @@ def test_swapped_figures_get_no_images(tmp_path, journal):
 
 def test_short_one_character_difference_does_not_attach_to_other_figure(tmp_path, journal):
     """「図3 児童Aの記述」「図4 児童Bの記述」の原稿に新しい図 3 を足し、新しい fig04 が「図4 児童Aの記述」になる形（点検 2 の指摘 4）。"""
-    res = conv(tmp_path, make(tmp_path / "a.docx", ["X", "X", "児童Aの記述", "児童Bの記述"]), journal)
+    res = conv(tmp_path, make(tmp_path / "a.docx", ["授業の様子", "板書の写真", "児童Aの記述", "児童Bの記述"]), journal)
     fill(res)
-    new, kept, put = again(tmp_path, make(tmp_path / "b.docx", ["X", "X", "新図", "児童Aの記述", "児童Bの記述"]), journal, res)
+    new, kept, put = again(tmp_path, make(tmp_path / "b.docx", ["授業の様子", "板書の写真", "新図", "児童Aの記述", "児童Bの記述"]), journal, res)
     assert sorted(put) == ["fig01", "fig02"]
     by = {d.key: d for d in new.images_dropped}
     assert by["fig04"].suggest == "fig05"                    # 前の fig04（B）の画像は、今の fig04（A）ではなく fig05 と思われる
@@ -137,13 +137,19 @@ def test_slightly_changed_caption_carries_with_note_and_step_stays_done(tmp_path
     rows = image_rows(new)
     assert "入れた後にキャプションが変わりました" in rows[0].note
     action = images_action(new)
-    assert action.done and action.box_title == "図の画像 1 枚をすべて入れました（キャプションが変わった図 1 つを確かめてください）"
-    assert "前「図1\u3000三角形ABCの辺の長さを調べた児童の記述」→ 今「図1\u3000三角形ABCの辺の長さを調べた児童の記述を」" in action.box_detail
-    assert action.cli == action.box_detail and "fig01" in action.checklist
-    assert not new.needs_action                                        # 手順は済み: 終了コード 0
+    assert action.done and action.box_detail == ""                    # 手順は済み（確かめは要確認 image_changed に任せる）
+    [check] = [a for a in actions(new) if a.key == "image_changed"]
+    assert check.level == "要確認" and check.box_title == "キャプションが変わった図に、前の画像を入れ直しました（要確認）"
+    assert "前「図1\u3000三角形ABCの辺の長さを調べた児童の記述」→ 今「図1\u3000三角形ABCの辺の長さを調べた児童の記述を」" in check.box_detail
+    assert "fig01" in check.cli and "fig01" in check.checklist and "図の確かめ.html" in check.box_detail
+    assert not new.needs_action                                        # 要確認なので、終了コードは 0
     from jasme_jats import colab
-    assert "児童の記述を" in colab.result_boxes(new)                    # 済んだ手順でも青い枠を出す
-    assert "キャプションが変わった図に入れ直した画像" in new.report_path.read_text(encoding="utf-8")
+    assert "児童の記述を" in colab.result_boxes(new)                    # 黄色の枠で出る
+    text = new.report_path.read_text(encoding="utf-8")
+    assert "キャプションが変わった図に入れ直した画像" in text and "要確認: キャプションが変わった図に、前の画像を入れ直しました" in text
+    # その図に画像を入れ直すと、要確認は消える
+    add_images(new, {"fig01": ("re.png", png((1, 1, 1)))})
+    assert "image_changed" not in [a.key for a in actions(new)]
 
 
 def test_other_article_gets_no_images(tmp_path, journal):
@@ -153,6 +159,78 @@ def test_other_article_gets_no_images(tmp_path, journal):
     new, kept, put = again(tmp_path, d, journal, res, fpage="13")
     assert put == [] and [x.key for x in new.images_dropped] == ["fig01"]
     assert "巻・ページが変わった" in new.images_dropped[0].why and [i.status for i in new.images] == ["missing"]
+
+
+def test_other_article_is_one_line_and_box_goes_away_when_done(tmp_path, journal):
+    """別の論文に替えて変換したとき、前の論文の画像を図ごとに「入れ直してください」と並べない。1 行だけで、画像を入れ終われば枠も出ない（点検 9）。"""
+    res = conv(tmp_path, make(tmp_path / "a.docx", ["児童Aの記述", "児童Bの記述", "児童Cの記述"]), journal)
+    fill(res)
+    new, kept, put = again(tmp_path, make(tmp_path / "b.docx", ["全く別の論文の図"]), journal, res, fpage="13")
+    assert put == [] and len(new.images_dropped) == 3
+    action = images_action(new)
+    assert not action.done
+    assert "前の論文（31_1）で入れた画像 3 枚は、記事の巻・ページが違うので入れていません。" in action.box_detail
+    assert "前の fig0" not in action.box_detail and "前に入れた画像のうち" not in action.box_detail
+    assert "入れ直しが要る前の画像" not in new.report_path.read_text(encoding="utf-8")
+    fill(new)
+    action = images_action(new)
+    assert action.done and action.box_detail == "" and action.box_title == ""      # 済んだ手順の枠は出ない
+    from jasme_jats import colab
+    assert "前の論文" not in colab.result_boxes(new)
+    # 画像の要る図がない別の論文: 手順も出ない
+    plain = conv(tmp_path, make(tmp_path / "c.docx", []), journal, fpage="21")
+    reapply_images(plain, kept)
+    assert images_action(plain) is None
+
+
+# ---------------------------------------------------------------------------- 別の図の画像を入れない守り（点検 9 の指摘）
+def test_removed_figure_does_not_carry_fuzzy_match_from_other_figure(tmp_path, journal):
+    """「児童Bの記述」「児童Cの記述」の図2 を消すと、前の図2（B）の画像を、本体が 0.83 で似た今の図2（C）に入れない。
+    今の図2 の本体は前の図3 の本体と完全に同じなので、あいまい一致を断る。手順 images は残り、前の図3 の画像の案内も消えない。"""
+    res = conv(tmp_path, make(tmp_path / "a.docx", ["授業の全体の流れ", "児童Bの記述", "児童Cの記述"]), journal)
+    sent = fill(res)
+    new, kept, put = again(tmp_path, make(tmp_path / "b.docx", ["授業の全体の流れ", "児童Cの記述"]), journal, res)
+    assert put == ["fig01"] and new.images_changed == []
+    assert {d.key: d.suggest for d in new.images_dropped} == {"fig02": "", "fig03": "fig02"}
+    assert "fig02" not in user(new)
+    action = images_action(new)
+    assert not action.done and new.needs_action and "images" in [a.key for a in blocking(actions(new))]
+    assert "今の fig02「図2\u3000児童Cの記述」の画像と思われます" in action.box_detail
+    # 今の fig02 に、前の図3 の画像そのものを入れれば、その案内は済む。別の画像を入れても済みにしない
+    add_images(new, {"fig02": ("other.png", png((7, 7, 7)))})
+    assert "前の fig03" in images_action(new).box_detail
+    add_images(new, {"fig02": sent["fig03"]})
+    assert "前の fig03" not in images_action(new).box_detail
+
+
+def test_same_captions_are_not_carried_when_undecidable(tmp_path, journal):
+    """図2・図3 が同じキャプション「児童の記述」の原稿で図2 を消す: どちらの画像か決められないので、今の図2 に入れない。"""
+    res = conv(tmp_path, make(tmp_path / "a.docx", ["授業の様子", "児童の記述", "児童の記述"]), journal)
+    fill(res)
+    new, kept, put = again(tmp_path, make(tmp_path / "b.docx", ["授業の様子", "児童の記述"]), journal, res)
+    assert put == ["fig01"] and "fig02" not in user(new)
+    by = {d.key: d for d in new.images_dropped}
+    assert set(by) == {"fig02", "fig03"} and "決められません" in by["fig02"].why
+    assert by["fig02"].suggest == "" and by["fig03"].suggest == ""      # どちらの画像か示さない
+    assert not images_action(new).done and new.needs_action
+    # 置き場所の並び全体（幹・本体・場所）が前と同じなら（AI の回答の反映や、図と関係のない所の直し）、同じキャプションでも幹で入れ直す
+    same_doc = conv(tmp_path, make(tmp_path / "c.docx", ["授業の様子", "児童の記述", "児童の記述"]), journal)
+    assert reapply_images(same_doc, kept) == ["fig01", "fig02", "fig03"] and same_doc.images_dropped == []
+    # 並びが変われば（図1 のキャプションを直した）、同じキャプションの 2 つは入れない
+    edited = conv(tmp_path, make(tmp_path / "d.docx", ["授業の様子と", "児童の記述", "児童の記述"]), journal)
+    assert reapply_images(edited, kept) == ["fig01"] and {d.key for d in edited.images_dropped} == {"fig02", "fig03"}
+
+
+def test_caption_with_number_only_is_not_carried(tmp_path, journal):
+    """キャプションが番号だけ（本体が空）の図は、同じ図か確かめられないので入れない。"""
+    res = conv(tmp_path, make(tmp_path / "a.docx", ["", "", ""]), journal)
+    fill(res)
+    new, kept, put = again(tmp_path, make(tmp_path / "b.docx", ["", ""]), journal, res)
+    assert put == [] and user(new) == {}
+    assert all("番号だけ" in d.why for d in new.images_dropped if d.key != "fig03")
+    assert not images_action(new).done and new.needs_action
+    same_doc = conv(tmp_path, make(tmp_path / "c.docx", ["", "", ""]), journal)       # 並びが同じなら幹で入れ直す
+    assert reapply_images(same_doc, kept) == ["fig01", "fig02", "fig03"]
 
 
 def test_tracks_table_kind(tmp_path, journal):
@@ -208,7 +286,7 @@ def test_skip_removes_element_and_excludes_from_total(tmp_path, journal):
     assert after.count(b"<graphic") == 2 and k1.encode() not in after and k2.encode() in after   # <fig> ごと消える
     assert res.fidelity.final_ok and res.dtd_valid and res.lost_images == [] and not [a for a in actions(res) if a.key == "lost"]
     row = next(r for r in image_rows(res) if r.key == k1)
-    assert row.status == "skipped" and "入れない" in row.note
+    assert row.status == "skipped" and "入れない" not in row.note          # 状態は「入れた画像」の列に出るので、備考には重ねない
     assert images_action(res).progress == "あと 2 枚／全部で 2 枚"          # 全部で 3 枚から 2 枚に
     fill(res)
     assert images_action(res).done and "入れないことにした" in images_action(res).checklist
@@ -258,6 +336,22 @@ def test_cli_no_image_and_exit_code(tmp_path, capsys):
     assert main([str(d), "--meta", str(META_EXAMPLE), "--out", str(out), "--no-image", key]) == 0
     assert main([str(d), "--meta", str(META_EXAMPLE), "--out", str(out), "--no-image", "fig01"]) == 2
     assert "この論文の画像を入れる場所ではありません" in capsys.readouterr().err
+
+
+def test_cli_no_image_accepts_commas(tmp_path, capsys):
+    """--no-image は、コンマ（, 、 ，）区切りでも、繰り返しでも指定できる。"""
+    from conftest import META_EXAMPLE
+    from jasme_jats.cli import main
+    d = make(tmp_path / "a.docx", [], nocaps=[("一つ目の画像の前の本文である。", "red"), ("二つ目の画像の前の本文である。", "blue"),
+                                              ("三つ目の画像の前の本文である。", "green")])
+    out = tmp_path / "cli"
+    assert main([str(d), "--meta", str(META_EXAMPLE), "--out", str(out)]) == 1
+    keys = [x.split("）")[0] for x in capsys.readouterr().err.split("入れないときは --no-image ")[1:]]
+    assert len(keys) == 3
+    for sep in (",", "、", "，"):
+        assert main([str(d), "--meta", str(META_EXAMPLE), "--out", str(out), "--no-image", sep.join(keys)]) == 0, sep
+    assert main([str(d), "--meta", str(META_EXAMPLE), "--out", str(out), "--no-image", f"{keys[0]}, {keys[1]}", "--no-image", keys[2]]) == 0
+    assert "画像を入れないことにした（手順の「全部で」から除いた）: " + ", ".join(keys) in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------- 画面とノートブック

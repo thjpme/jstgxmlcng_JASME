@@ -987,9 +987,9 @@ def _prepare_images(res: Result, supplied: dict) -> dict:
     return prepared
 
 
-def _store_images(res: Result, prepared: dict, skip=()) -> None:
+def _store_images(res: Result, prepared: dict, skip=(), unskip=()) -> None:
     """確かめた画像を Graphics/ に書き、置き場所の状態を入れる（XML・ZIP・レポートは作り直さない。rebuild_outputs が行う）。
-    skip の置き場所（キャプションのない画像）は「入れない」にする（前に入れた画像があれば消す）。"""
+    skip の置き場所（キャプションのない画像）は「入れない」にする（前に入れた画像があれば消す）。unskip の置き場所は「入れない」をやめて未に戻す。"""
     import hashlib
     gdir = graphics_path(res)
     gdir.mkdir(parents=True, exist_ok=True)
@@ -1011,6 +1011,8 @@ def _store_images(res: Result, prepared: dict, skip=()) -> None:
         im.bytes, im.sha1 = len(data), hashlib.sha1(data).hexdigest()
     for key in skip:
         by_key[key].status = "skipped"
+    for key in unskip:
+        by_key[key].status = "missing"
 
 
 def _check_skip(res: Result, skip, supplied) -> list:
@@ -1029,7 +1031,22 @@ def _check_skip(res: Result, skip, supplied) -> list:
     return keys
 
 
-def add_images(res: Result, supplied: dict, skip=None) -> list:
+def _check_unskip(res: Result, unskip, supplied, skip) -> list:
+    """「入れない」をやめる置き場所の確かめ（状態が「入れない」の置き場所だけ。画像を入れる・「入れない」にする置き場所とは重ならない）。"""
+    keys = list(dict.fromkeys(unskip or ()))
+    by_key = {i.key: i for i in res.images}
+    for key in keys:
+        im = by_key.get(key)
+        if im is None:
+            raise ValueError(f"{key} は、この論文の画像を入れる場所ではありません（この論文の画像の名前: {'、'.join(by_key) or 'なし'}）")
+        if im.status != "skipped":
+            raise ValueError(f"{key} は「入れない」にしていないので、「入れない」をやめることはできません")
+        if key in supplied or key in skip:
+            raise ValueError(f"{key} は、「入れない」をやめることと、画像を入れること・「入れない」にすることを同時に指定できません")
+    return keys
+
+
+def add_images(res: Result, supplied: dict, skip=None, unskip=None) -> list:
     """作業する人が用意した図・表の画像を Graphics/ に入れ、XML（apply_images）・アップロード用の ZIP・レポートを作り直す。
 
     supplied: 画像の置き場所の幹（fig03・tab01・img3fa9c2 など。Result.images の key）→ 画像（ファイルのパス、バイト列、または
@@ -1038,17 +1055,19 @@ def add_images(res: Result, supplied: dict, skip=None) -> list:
       前の画像は消す。
     skip: 「入れない」とするキャプションのない画像の置き場所の幹（出版版 PDF で見て、ほかの図に写っている・飾りだけ、のとき）。
       その要素は XML から取り除き、手順 images の「全部で」から除く。図・表の幹は断る。
+    unskip: 「入れない」をやめて未に戻す置き場所の幹（状態が「入れない」のものだけ）。
     受け付けるのは、この結果の置き場所の幹だけ。それ以外の幹と、PNG・JPEG・GIF でない画像があれば、1 枚も入れずに ValueError。
     入れた後の XML で、文字が変換のときの XML（xml_base）と同じこと（違えば最終出力の再チェックを不合格にする）・DTD・J-STAGE の
-    アップロード時チェック・ZIP の確かめをやり直す。戻り値: 入れた画像の幹の一覧（「入れない」にした幹は含めない）。
+    アップロード時チェック・ZIP の確かめをやり直す。戻り値: 入れた画像の幹の一覧（Result.images の順。「入れない」にした幹は含めない）。
     """
     prepared = _prepare_images(res, supplied)
     skipped = _check_skip(res, skip, supplied)
-    if not prepared and not skipped:
+    unskipped = _check_unskip(res, unskip, supplied, skipped)
+    if not prepared and not skipped and not unskipped:
         return []
-    _store_images(res, prepared, skipped)
+    _store_images(res, prepared, skipped, unskipped)
     rebuild_outputs(res)
-    return list(prepared)
+    return [i.key for i in res.images if i.key in prepared]      # Result.images の順（XML の順）
 
 
 # 持ち越しの照合（修正計画 W1 の 2.6）
@@ -1059,6 +1078,8 @@ WHY_NO_NOCAP = "同じ場所のキャプションのない画像が見つかり�
 WHY_NO_OPT = "同じ位置の、画像で補える文字（囲い文字など）が見つかりません（文字がなくなったのなら、何もしなくてかまいません）"
 WHY_WHERE = "画像のある場所の前の文章が変わっています"
 WHY_ARTICLE = "記事の巻・ページが変わった別の論文なので、前の画像は入れていません"
+WHY_NO_BODY = "キャプションが番号だけなので、同じ図か確かめられません"
+WHY_SAME_CAPTION = "同じキャプションの図が 2 つ以上あり、どの図の画像か決められません"
 
 
 def _body_key(text: str) -> str:
@@ -1082,6 +1103,16 @@ def _where_key(plan, slot) -> str:
     return _body_key_plain(text)[:CARRY_WHERE]
 
 
+def _slot_layout(res: Result) -> tuple:
+    """置き場所の並び全体（任意を除く）: (幹, 種類, キャプションの本体, 場所の段落の先頭 20 字) の並び。変換し直す前と後で同じなら、
+    置き場所は変わっていない（AI の回答の反映や、図と関係のない所の直し）ので、同じキャプションの図が並んでいても幹で入れ直せる。"""
+    from .structure import caption_body
+    if res.plan is None:
+        return ()
+    return tuple((s.key, s.kind, _body_key(caption_body(s.caption)) if s.caption is not None else "", _where_key(res.plan, s))
+                 for s in res.plan.slots if s.kind != "optional")
+
+
 def kept_images(res: Result) -> dict:
     """変換し直す前に、入れた画像と「入れない」の選択を覚える（修正計画 W1 の 2.6）。戻り値: {幹: images.KeptImage}。
 
@@ -1092,6 +1123,7 @@ def kept_images(res: Result) -> dict:
     aid = res.meta.article_id(res.journal)
     gdir = graphics_path(res) if res.zip_path is not None else None
     out = {}
+    layout = None
     for im in res.images:
         slot = slots.get(im.key)
         if slot is None or im.status not in ("user", "skipped"):
@@ -1102,10 +1134,13 @@ def kept_images(res: Result) -> dict:
             if path is None or not path.is_file():
                 continue
             data = path.read_bytes()
+        if layout is None:
+            layout = _slot_layout(res)
         out[im.key] = KeptImage(
             key=im.key, kind=slot.kind, source_name=im.source_name, data=data, caption=im.caption,
             body=caption_body(slot.caption) if slot.caption is not None else "",
-            where=_where_key(res.plan, slot) if slot.kind == "nocap" else "", skipped=im.status == "skipped", article_id=aid)
+            where=_where_key(res.plan, slot) if slot.kind == "nocap" else "", skipped=im.status == "skipped", article_id=aid,
+            layout=layout)
     return out
 
 
@@ -1113,21 +1148,33 @@ def reapply_images(res: Result, kept: dict) -> list:
     """変換し直した結果 res に、前の画像（kept_images）を、同じ図だと確かめられたものだけ入れ直す（修正計画 W1 の 2.6）。戻り値: 入れ直した幹の一覧。
 
     同じ記事（記事識別子が同じ）で、図・表は同じ幹・同じ種類の置き場所があり、キャプションの本体（番号を除いた文字）が同じとみなせる（割合 0.8 以上）
-    ときだけ入れる。前の本体が今の別の図の本体と完全に同じなら（図が足されて番号がずれた形）入れない。キャプションのない画像は、
-    同じ幹で、場所（前の文字のある段落の先頭 20 字）も同じときだけ。任意の画像は同じ幹なら入れる。入れなかった画像は res.images_dropped に、
-    本体が少し変わった図に入れたものは res.images_changed に記録する。「入れない」も同じ規則で持ち越す。
+    ときだけ入れる。次のときは入れない（別の図の画像を黙って入れないため）。
+    - 前の本体が今の別の図の本体と完全に同じ（図が足されて番号がずれた形）。
+    - 本体が空（キャプションが番号だけ）で、同じ図か確かめられない。
+    - 本体が完全に同じでなく（割合 1 未満）、今の置き場所の本体と完全に同じ本体の、別の前の画像がある（図が消えて番号がずれた形）。
+    - 本体が完全に同じでも、同じ本体の前の画像か今の図が 2 つ以上あり、どれがどれか決められない。
+    ただし、置き場所の並び全体（幹・種類・本体・場所。_slot_layout）が前と同じなら、置き場所は変わっていないので、上の 2 つ（本体が空・
+    同じ本体が 2 つ以上）でも幹で入れ直す（AI の回答の反映や、図と関係のない所の直しで、同じキャプションの図の画像を毎回入れ直さないため）。
+    キャプションのない画像は、同じ幹で、場所（前の文字のある段落の先頭 20 字）も同じときだけ。任意の画像は同じ幹なら入れる。入れなかった画像は
+    res.images_dropped に、本体が少し変わった図に入れたものは res.images_changed（要確認 image_changed で確かめてもらう）に記録する。
+    「入れない」も同じ規則で持ち越す。
     """
     import difflib
+    import hashlib
     slots = {s.key: s for s in res.plan.slots}
     by_key = {i.key: i for i in res.images}
     aid = res.meta.article_id(res.journal)
     from .structure import caption_body
     bodies = {k: _body_key(caption_body(s.caption)) for k, s in slots.items() if s.caption is not None}
+    old_bodies = {k.key: _body_key(k.body) for k in kept.values() if k.kind in ("fig", "table") and k.article_id == aid}
     prepared, skip, dropped, changed = {}, [], [], []
+    layout = _slot_layout(res) if kept else ()
 
     def drop(k, why, suggest=""):
         if not k.skipped:
-            dropped.append(DroppedImage(key=k.key, source_name=k.source_name, caption=k.caption, why=why, suggest=suggest))
+            dropped.append(DroppedImage(key=k.key, source_name=k.source_name, caption=k.caption, why=why, suggest=suggest,
+                                        sha1=hashlib.sha1(k.data).hexdigest() if k.data else "",
+                                        other_article=k.article_id if k.article_id != aid else ""))
 
     for key, k in kept.items():
         slot = slots.get(key)
@@ -1135,21 +1182,34 @@ def reapply_images(res: Result, kept: dict) -> list:
             drop(k, WHY_ARTICLE)
             continue
         if k.kind in ("fig", "table"):
-            old = _body_key(k.body)
-            same = [x for x, b in bodies.items() if x != key and slots[x].kind == k.kind and b == old]
-            suggest = same[0] if len(same) == 1 else ""
+            old = old_bodies[key]
+            same = [x for x, b in bodies.items() if x != key and slots[x].kind == k.kind and b == old] if old else []
+            twins = [x for x, b in old_bodies.items() if x != key and kept[x].kind == k.kind and b == old]
+            suggest = same[0] if len(same) == 1 and not twins else ""      # 同じ本体の前の画像が 2 つ以上なら、どれか示さない
             if slot is None or slot.kind != k.kind:
                 drop(k, WHY_NO_SLOT, suggest)
                 continue
-            if old and same and bodies[key] != old:             # 別の図の本体と完全に同じ（この図は違う）: 著者が図を足して番号がずれた形
-                drop(k, WHY_NO_SLOT, suggest)
-                continue
-            ratio = difflib.SequenceMatcher(None, old, bodies[key]).ratio() if (old or bodies[key]) else 1.0
-            if ratio < CARRY_RATIO:
-                drop(k, WHY_NO_SLOT, suggest)
-                continue
-            if ratio < 1.0:
-                changed.append(ChangedImage(key=key, source_name=k.source_name, old_caption=k.caption, new_caption=by_key[key].caption))
+            now = bodies.get(key, "")
+            if not (k.layout and k.layout == layout):            # 置き場所の並びが前とまったく同じなら、同じ幹は同じ図（確かめを飛ばす）
+                if not old or not now:                          # キャプションが番号だけ: 本体で同じ図か確かめられない
+                    drop(k, WHY_NO_BODY if not old else WHY_NO_SLOT, suggest)
+                    continue
+                if same and now != old:                             # 別の図の本体と完全に同じ（この図は違う）: 著者が図を足して番号がずれた形
+                    drop(k, WHY_NO_SLOT, suggest)
+                    continue
+                rivals = [x for x, b in old_bodies.items() if x != key and kept[x].kind == k.kind and b == now]
+                if now == old and (same or rivals):                 # 同じ本体の図・前の画像が 2 つ以上: どれがどれか決められない
+                    drop(k, WHY_SAME_CAPTION)
+                    continue
+                if rivals:                                          # 今の本体は別の前の画像のもの: 図が消えて番号がずれた形
+                    drop(k, WHY_NO_SLOT, suggest)
+                    continue
+                ratio = difflib.SequenceMatcher(None, old, now).ratio()
+                if ratio < CARRY_RATIO:
+                    drop(k, WHY_NO_SLOT, suggest)
+                    continue
+                if ratio < 1.0:
+                    changed.append(ChangedImage(key=key, source_name=k.source_name, old_caption=k.caption, new_caption=by_key[key].caption))
         elif k.kind == "nocap":
             if slot is None or slot.kind != "nocap":
                 drop(k, WHY_NO_NOCAP)

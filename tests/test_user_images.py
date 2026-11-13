@@ -102,6 +102,15 @@ def test_other_article_id_is_not_accepted():
     assert found == {"tab01": "29_55_tab01.png"} and unmatched == ["29_44_fig03.png", "fig9.png"] and clashes == []
 
 
+@pytest.mark.parametrize("aid", ["31_e5", "31_s1", "a1_2"])
+def test_article_id_with_letters(aid):
+    """英字を含む記事識別子（最初のページが e5・S1 など）でも、記事識別子つきの名前が合う。ほかの識別子の名前は合わない（点検 9）。"""
+    upper = aid.upper()
+    found, unmatched, clashes = match_names([f"{aid}_fig03.png", f"{upper}_tab01.png", "31_e6_img3fa9c2.png", "29_55_fig04.png"], SLOTS, aid)
+    assert found == {"fig03": f"{aid}_fig03.png", "tab01": f"{upper}_tab01.png"}
+    assert unmatched == ["31_e6_img3fa9c2.png", "29_55_fig04.png"] and clashes == []
+
+
 def test_two_files_for_one_slot_are_returned_as_a_clash():
     found, unmatched, clashes = match_names(["fig3.png", "図3.jpg", "表1.png"], SLOTS, "29_55")
     assert found == {"tab01": "表1.png"} and unmatched == [] and clashes == [("fig03", ["fig3.png", "図3.jpg"])]
@@ -244,7 +253,7 @@ def test_figure_with_two_images_needs_one_image(journal, meta, tmp_path):
     mf.make_figs(path, "run_frame")
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     [row] = image_rows(res)
-    assert row.key == "fig01" and row.note == "未。docx ではこの図に画像 2 枚（1 枚にまとめた画像を入れてください）"
+    assert row.key == "fig01" and row.note == "docx ではこの図に画像 2 枚（1 枚にまとめた画像を入れてください）"
     [step] = [a for a in actions(res) if a.key == "images"]
     assert step.progress == "あと 1 枚／全部で 1 枚" and "（1 枚にまとめた" not in step.box_detail
     add_images(res, {"fig01": ("fig1.png", image("PNG"))})

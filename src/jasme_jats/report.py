@@ -192,6 +192,87 @@ DECORATION_JA = {"frame": "枠", "mask": "白い四角", "line": "線や矢印",
 # 画像の置き場所の状態（images.SlotImage.status）の言い方（図の画像の一覧の「入れた画像」の列と備考）
 OPTIONAL_CAPTION = "（画像で補える文字の位置。任意）"      # 任意の置き場所（結果のないフィールドの位置）の行の、図・表とキャプションの列
 IMAGE_STATUS_JA = {"missing": "未", "user": "入れた", "skipped": "入れない", "unused": "入れていない（任意）"}
+OBJECT_MARK = "\ufffc"          # 数式などの図形の位置（Para.plain の代わりの文字）
+OBJECT_SHOWN = "［数式など］"     # 画面・コマンドライン・レポート・HTML の表示だけで、この文字の代わりに出す（XML と docx の文字ではない）
+
+
+def shown_text(text) -> str:
+    """docx の文字（キャプション・場所など）を、人が読む表示にした文字列。数式などの位置の文字（U+FFFC）は「［数式など］」にし、
+    先頭にあるものは除く（図番号の前の数式の位置は読む手がかりにならない）。表示だけで、XML と docx の文字は変えない。"""
+    t = str(text or "").strip()
+    while t.startswith(OBJECT_MARK):
+        t = t[1:].lstrip()
+    return t.replace(OBJECT_MARK, OBJECT_SHOWN)
+
+
+_BRACKETS = {"（": "）", "「": "」", "『": "』", "(": ")", "［": "］"}
+
+
+def shorten_shown(text, limit: int = 30) -> str:
+    """表示用に limit 字までに切り詰める（表示用の文字にした後。切ったら「…」を付け、開いたままの括弧は閉じる）。"""
+    t = shown_text(text)
+    if len(t) <= limit:
+        return t
+    cut, stack = t[:limit], []
+    for ch in cut:
+        if ch in _BRACKETS:
+            stack.append(ch)
+        elif stack and ch == _BRACKETS[stack[-1]]:
+            stack.pop()
+    return cut.rstrip() + "…" + "".join(_BRACKETS[b] for b in reversed(stack))
+
+
+def _key_ranges(keys) -> str:
+    """幹の並びの言い方: fig01〜fig07、tab01、img3fa9c2（figNN・tabNN が 3 つ以上つながるときは「〜」でまとめる）。"""
+    out, run = [], []
+
+    def flush():
+        if len(run) >= 3:
+            out.append(f"{run[0][1]}〜{run[-1][1]}")
+        else:
+            out.extend(k for _, k, _n in run)
+        run.clear()
+    for k in keys:
+        m = re.fullmatch(r"(fig|tab)(\d+)", k)
+        if m and run and run[-1][0] == m.group(1) and int(m.group(2)) == run[-1][2] + 1:
+            run.append((m.group(1), k, int(m.group(2))))
+            continue
+        flush()
+        if m:
+            run.append((m.group(1), k, int(m.group(2))))
+        else:
+            out.append(k)
+    flush()
+    return "、".join(out)
+
+
+def _same_number_text(rows) -> str:
+    """同じ番号の図・表が 2 つ以上ある論文の、名前の付け方の注意（なければ ""）。例: 図4 は 2 つあるので fig04・fig04_2 の名前にしてください。"""
+    groups = {}
+    for row in rows:
+        if row.kind in ("fig", "table"):
+            groups.setdefault(re.sub(r"_\d+$", "", row.key), []).append(row)
+    parts = [f"{(g[0].label or base)} は {len(g)} 個あるので {'・'.join(x.key for x in g)} の名前に" for base, g in groups.items() if len(g) > 1]
+    return ("同じ番号の図・表があります。" + "、".join(parts) + "してください。") if parts else ""
+
+
+def unmatched_image_text(res, name: str, tail: str = "") -> str:
+    """まとめて入れた画像のファイル名が、どの置き場所の名前にも合わなかったときの文（コマンドライン・1 画面版・ノートブックが共用）。
+
+    今の記事識別子を使った例と、この論文の画像の名前の一覧を添える。同じ番号の図・表がある論文では、その名前の付け方も足す。
+    tail は画面ごとの、直し方の言い方（「ファイル名を直すか、図ごとの行で選んでください。」など）。
+    """
+    rows = image_rows(res)
+    aid = res.meta.article_id(res.journal)
+    fig = next((row.key for row in rows if row.kind != "optional" and row.key), "fig03")
+    text = (f"「{name}」に合う図がありません（この論文の画像の名前: {_key_ranges([row.key for row in rows if row.key])}。"
+            f"fig03.png・図3.png・{aid}_{fig}.png のような名前にします。ほかの記事の識別子が付いた名前は入れません）。")
+    return text + _same_number_text(rows) + tail
+
+
+def clash_images_text(key: str, names) -> str:
+    """同じ置き場所に合うファイルが複数あったときの文（どれも入れない。コマンドライン・1 画面版・ノートブックが共用）。"""
+    return f"同じ図（{key}）に合うファイルが複数あるので、どれも入れていません: " + "、".join(names)
 
 
 @dataclass
@@ -290,8 +371,6 @@ def image_rows(r) -> list:
     for i in r.images:
         slot = slots.get(i.key)
         notes = []
-        if i.status in ("missing", "skipped"):
-            notes.append(IMAGE_STATUS_JA[i.status])
         slot_note = i.note
         if i.key in drawn and slot_note.startswith(NO_FIGURE_IMAGE):
             slot_note = slot_note[len(NO_FIGURE_IMAGE):].lstrip("。")
@@ -1585,52 +1664,71 @@ def _abstract_missing_action(r):
              f"対象: {samples}"))
 
 
+NOCAP_SKIP_HINT = "。出版版 PDF で見て、ほかの図に写っている・飾りだけ、のときは「入れない」を選びます"      # 手順 images の、キャプションのない行の末尾
+
+
 def _image_line(row) -> str:
     """手順 images の残りの 1 行（box_detail。修正計画 W1 の 4.1）。括弧には置き場所の備考（ImageSlot.note）をそのまま添える。"""
-    cap = row.caption.strip()
-    head = f"「{cap[:30]}{'…' if len(cap) > 30 else ''}」" if cap else ""      # キャプションは番号から（docx の文字のまま）
+    cap = shown_text(row.caption)
+    head = f"「{cap[:30]}{'…' if len(cap) > 30 else ''}」" if cap else ""      # キャプションは番号から（docx の文字のまま。数式の位置は表示用の言葉に）
     notes = [row.slot_note] if row.slot_note else []
     if row.kind == "table":
         notes.insert(0, "表が画像で挿入されていると考えられます。表の部分を画像にして入れてください")
     if row.kind == "nocap" or not cap:
         head = "キャプションのない画像"
-        notes = ([row.where] if row.where else []) + notes
-    return f"・{row.key}: {head}" + (f"（{'。'.join(notes)}）" if notes else "")
+        notes = ([shown_text(row.where)] if row.where else []) + notes
+    line = f"・{row.key}: {head}" + (f"（{'。'.join(notes)}）" if notes else "")
+    if row.kind == "nocap" or not cap:
+        line += NOCAP_SKIP_HINT
+    return line
 
 
 def _image_short(row) -> str:
     """14 章・コマンドラインの残りの 1 項目: fig04（図4 …）・img3fa9c2（キャプションなし）。"""
     if row.kind == "nocap" or not row.caption.strip():
         return f"{row.key}（キャプションなし）"
-    cap = row.caption.strip()
+    cap = shown_text(row.caption)
     return f"{row.key}（{cap[:20]}{'…' if len(cap) > 20 else ''}）"
 
 
 def _cap30(text: str) -> str:
     """キャプションの先頭 30 字（長ければ「…」を付ける）。docx の文字のまま。"""
-    t = (text or "").strip()
+    t = shown_text(text)
     return t[:30] + ("…" if len(t) > 30 else "")
 
 
 def _image_cli(row) -> str:
     """コマンドラインの残りの 1 項目。キャプションのない画像は、入れないときの指定（--no-image）も添える。"""
     if row.kind == "nocap" or not row.caption.strip():
-        return f"{row.key}（キャプションなし。{row.where}。入れないときは --no-image {row.key}）"
+        return f"{row.key}（キャプションなし。{shown_text(row.where)}。入れないときは --no-image {row.key}）"
     return _image_short(row)
 
 
 def images_dropped(r) -> list:
-    """持ち越せず、まだ入れ直していない前の画像（Result.images_dropped の DroppedImage）。入れ直した（今の置き場所に画像が入った）ものは除く。
+    """持ち越せず、まだ入れ直していない前の画像（Result.images_dropped の DroppedImage）。同じ論文のものだけ（別の論文のものは images_other_article）。
 
-    今の図が示されているもの（suggest）はその図に、ないものは同じ幹の図に画像が入っていれば、済んだとみなす。
+    今の図が示されているもの（suggest）は、その図にこの前の画像そのもの（中身の SHA-1 が同じ）が入っていれば済んだとみなす（別の画像が
+    入っていても済みにしない）。示されていないものは、同じ幹の図に画像が入っていれば済んだとみなす。
     """
     now = {i.key: i for i in r.images}
     out = []
     for d in getattr(r, "images_dropped", []):
-        im = now.get(d.suggest or d.key)
-        if im is None or im.status != "user":
+        if d.other_article:
+            continue
+        if d.suggest:
+            im = now.get(d.suggest)
+            done = im is not None and im.status == "user" and bool(d.sha1) and im.sha1 == d.sha1
+        else:
+            im = now.get(d.key)
+            done = im is not None and im.status == "user"
+        if not done:
             out.append(d)
     return out
+
+
+def images_other_article(r) -> list:
+    """記事識別子が変わった（別の論文に替えて変換した）ので入れなかった前の画像（Result.images_dropped の DroppedImage）。"""
+    return [d for d in getattr(r, "images_dropped", []) if d.other_article]
 
 
 def images_changed(r) -> list:
@@ -1658,15 +1756,20 @@ def _changed_lines(changed) -> list:
 
 
 def images_carry_text(r) -> str:
-    """変換し直しで持ち越した画像についての知らせ（修正計画 W1 の 4.1）: 入れ直さなかった画像と、キャプションが少し変わった図に入れた画像。なければ ""。"""
-    dropped, changed = images_dropped(r), images_changed(r)
+    """変換し直しで持ち越せなかった画像についての知らせ（修正計画 W1 の 4.1）。なければ ""。
+
+    同じ論文で入れ直さなかった画像は 1 枚ずつ並べる。別の論文に替えて変換したときの前の画像は並べず、画像がまだ残っているうちだけ 1 行で
+    知らせる（同じ論文で巻・ページを直したときのため）。キャプションが少し変わった図に入れた画像は、要確認 image_changed で知らせる。
+    """
+    dropped, other = images_dropped(r), images_other_article(r)
     parts = []
+    if other and images_progress(r)[0]:
+        ids = "・".join(dict.fromkeys(d.other_article for d in other))
+        parts.append(f"前の論文（{ids}）で入れた画像 {len(other)} 枚は、記事の巻・ページが違うので入れていません。"
+                     "同じ論文で巻・ページを直したのなら、入れ直してください。")
     if dropped:
         parts.append(f"前に入れた画像のうち {len(dropped)} 枚は、変換し直した原稿で図の番号かキャプション（キャプションのない画像は場所）が変わっていたので、"
                      "入れていません（別の図の画像を入れないためです）。入れ直してください。\n" + "\n".join(_dropped_lines(r, dropped)))
-    if changed:
-        parts.append("前に入れた画像を、キャプションが少し変わった図に入れ直しました。図と画像が合っているか、図の確かめの一覧で確かめてください。\n"
-                     + "\n".join(_changed_lines(changed)))
     return "\n".join(parts)
 
 
@@ -1675,7 +1778,7 @@ def images_action(r):
 
     図・表の画像は、作業する人が出版版 PDF などから用意して入れる（docx の画像は使わない）。残っていれば必須の手順が残り
     （終了コード 1・ダウンロードの歯止め）、全部入れれば済み（done）。枠の本文には、残りの置き場所ごとに 1 行（image_rows）。
-    変換し直しで持ち越せなかった画像と、キャプションが少し変わった図に入れ直した画像があれば、本文に足す（済んでいても枠を出す）。
+    変換し直しで持ち越せなかった画像があれば、本文に足す（済んでいても枠を出す。images_carry_text）。
     """
     left, total = images_progress(r)
     carry = images_carry_text(r)
@@ -1683,13 +1786,10 @@ def images_action(r):
         return None
     rows = [row for row in image_rows(r) if row.kind != "optional" and row.status in ("missing", "user")]
     rest = [row for row in rows if row.status == "missing"]
-    changed = images_changed(r)
     dropped = images_dropped(r)
     if not left:
         title = (f"図の画像 {total} 枚をすべて入れました" if total else "図の画像を入れる必要はありません")
-        if changed:
-            title += f"（キャプションが変わった図 {len(changed)} つを確かめてください）"
-        elif dropped:
+        if dropped:
             title += f"（前に入れた画像 {len(dropped)} 枚は入れていません）"
         note = ""
         if total and sum(1 for i in r.images if i.status == "skipped"):
@@ -1700,7 +1800,7 @@ def images_action(r):
                                  + ("".join("\n  " + esc(x) for x in carry.splitlines()) if carry else "")),
                       box_title=title if carry else "", box_detail=carry, cli=carry)
     progress = f"あと {left} 枚／全部で {total} 枚"
-    detail = (f"この論文で画像が要る図・表は {total} つです（Word の原稿の中の画像は使いません）。出版版 PDF を画面に大きく表示し、"
+    detail = (f"この論文で画像が要る図・表は {total} 個です（Word の原稿の中の画像は使いません）。出版版 PDF を画面に大きく表示し、"
               "図ごとに図の部分だけを切り取って（スクリーンショット）、PNG か JPEG で保存し、"
               f"{step('images')}で入れてください。キャプション（「図1 …」の行）は写さないでください（XML に文字で入っています）。"
               "ファイル名を fig04.png・図4.png のようにしておくと、まとめて入れられます。\n残り:\n"
@@ -1766,6 +1866,30 @@ def _image_same_action(r):
         box_title="同じ画像が 2 つ以上の図に入っています（要確認）",
         box_detail="".join(lines) + how,
         cli=f"要確認: 同じ画像が 2 つ以上の図に入っています（{keys}。レポートの冒頭と 9 章）。" + "".join(lines) + "取り違えていないか確かめること。")
+
+
+def _image_changed_action(r):
+    """要確認 image_changed: 変換し直しで、キャプションの本体が少し変わった図（割合 0.8 以上 1.0 未満）に前の画像を入れ直した
+    （修正計画 W1 の 2.6。pipeline.reapply_images）。手順 images は済みのまま、図と画像が合っているかを確かめてもらう。その図に画像を
+    入れ直すと消える。なければ None。"""
+    changed = images_changed(r)
+    if not changed:
+        return None
+    keys = "・".join(c.key for c in changed)
+    check = f"「{r.meta.article_id(r.journal)}_図の確かめ.html」"
+    lines = _changed_lines(changed)
+    why = "変換し直す前に入れた画像を、キャプションが少し変わった図に入れ直しました。"
+    return Action(
+        TO_CHECK, "image_changed",
+        top="\n".join([f"> **要確認: キャプションが変わった図に、前の画像を入れ直しました（9 章）。** {why}図と画像が合っているか、"
+                       f"{esc(check)}で確かめてください。違っていれば、正しい画像を入れ直してください。", ">"]
+                      + [f"> - {esc(x[1:])}" for x in lines]),
+        checklist=f"- [ ] **キャプションが変わった図に入れ直した画像**（{keys}）を、{esc(check)}で確かめる",
+        box_title="キャプションが変わった図に、前の画像を入れ直しました（要確認）",
+        box_detail=(f"{why}図と画像が合っているか、{check}で確かめてください。違っていれば、{step('images')}で正しい画像を入れ直してください。\n"
+                    + "\n".join(lines)),
+        cli=(f"要確認: キャプションが変わった図に、前の画像を入れ直しました（{keys}。レポートの冒頭と 9 章）。図と画像が合っているか確かめること。\n"
+             + "\n".join("  " + x[1:] for x in lines)))
 
 
 IMAGE_NAMES_HOW = "この XML は登載に使わず、変換レポートを添えて開発者に知らせてください。"
@@ -2695,7 +2819,7 @@ def actions(r) -> list:
                            _upload_action, _ai_error_action, _ai_pending_action,
                            _partial_action, _forced_action, _textbox_undecided_action,
                            _textbox_place_action, _textbox_figure_text_action, _unplaced_action, images_action,
-                           lost_action, _image_same_action, lost_autonum_action, _pua_left_action, _abstract_missing_action, _style_hidden_action, _resultless_field_action, _symbol_action, _abstract_ja_action, _app_after_refs_action, _note_overlap_action, _float_ref_action,
+                           lost_action, _image_same_action, _image_changed_action, lost_autonum_action, _pua_left_action, _abstract_missing_action, _style_hidden_action, _resultless_field_action, _symbol_action, _abstract_ja_action, _app_after_refs_action, _note_overlap_action, _float_ref_action,
                            _fn_guess_action, _name_split_action, _newline_action)]
     return [a for a in head if a is not None] + pdf_actions(r)
 
@@ -3045,9 +3169,9 @@ def render(r) -> str:
                  f"入れた画像との対応は「{esc(r.meta.article_id(r.journal))}_図の確かめ.html」でも確かめられます。")
         L.append("")
         L.append(table(["名前", "図・表とキャプション", "場所", "位置の決め方", "入れた画像", "元のファイル名・形式・大きさ", "備考"],
-                       [(row.key, row.caption.strip() or (OPTIONAL_CAPTION if row.kind == "optional" else "（キャプションなし）"),
-                         row.where, row.place, row.name if row.status == "user" else IMAGE_STATUS_JA.get(row.status, row.status),
-                         row.detail, row.note) for row in rows]))
+                       [(row.key, shown_text(row.caption) or (OPTIONAL_CAPTION if row.kind == "optional" else "（キャプションなし）"),
+                         shown_text(row.where), row.place, row.name if row.status == "user" else IMAGE_STATUS_JA.get(row.status, row.status),
+                         row.detail, shown_text(row.note)) for row in rows]))
     elif lost or r.hidden_images:
         L.append("XML に画像を入れる場所はありません。")
     else:
@@ -3061,7 +3185,7 @@ def render(r) -> str:
                  "入れていません（別の図の画像を入れないためです）。")
         L.append("")
         L.append(table(["前の名前", "前のキャプション", "元のファイル名", "今の図・理由"],
-                       [(d.key, d.caption.strip() or "（キャプションなし）", d.source_name,
+                       [(d.key, shown_text(d.caption) or "（キャプションなし）", d.source_name,
                          (f"今の {d.suggest} の画像と思われます" if d.suggest else d.why)) for d in dropped]))
         L.append("")
     if changed:
@@ -3070,7 +3194,7 @@ def render(r) -> str:
         L.append("前に入れた画像を、キャプションが少し変わった図に入れ直しました。図と画像が合っているか確かめてください。")
         L.append("")
         L.append(table(["名前", "前のキャプション", "今のキャプション", "元のファイル名"],
-                       [(c.key, c.old_caption.strip(), c.new_caption.strip(), c.source_name) for c in changed]))
+                       [(c.key, shown_text(c.old_caption), shown_text(c.new_caption), c.source_name) for c in changed]))
         L.append("")
     decos = getattr(r, "decorations", [])
     drawn = [d for d in decos if d.figure]
@@ -3218,8 +3342,6 @@ def render(r) -> str:
     L.append("")
     L.append(pdf_checklist_line(r))
     L.append("- [ ] 2 章（AI による補完）と 3 章（未解決）を PDF と照らして確認する")
-    if image_rows(r):
-        L.append(f"- [ ] 「{esc(r.meta.article_id(r.journal))}_図の確かめ.html」で、図番号・キャプションと入れた画像が合っているかを確認する")
     if fx is not None:
         L.append(f"- [ ] **PDF で補った docx（{esc(fx.path.name)}）を Word で開き、変更履歴を確認する**"
                  "（却下したい変更があれば、却下して保存した docx を「docx から作る」で変換し直す）")
@@ -3227,9 +3349,16 @@ def render(r) -> str:
             L.append(f"- [ ] 13 章の、直さなかった箇所（{len(fx.skipped_text)} 件）を確認する")
     # 手順（必須 → 推奨）→ 要対応 → 要確認（actions）。それぞれの中は、PDF の項目を先に、残りを actions の順に。
     # 図の画像を全部入れたときは、手順 images の済んだ行（[x]）が出る
+    check_line = ((f"- [ ] 「{esc(r.meta.article_id(r.journal))}_図の確かめ.html」で、図番号・キャプションと入れた画像が合っているかを確認する")
+                  if any(i.status == "user" for i in r.images) else "")        # 画像を 1 枚でも入れたら、手順 images の行の直後に足す
     for a in checklist_order(acts):
         if a.checklist:
             L.append(a.checklist)
+        if a.key == "images" and check_line:
+            L.append(check_line)
+            check_line = ""
+    if check_line:
+        L.append(check_line)
     L.append("- [ ] 11 章の書誌情報（巻・号・頁・日付・DOI）を確認する")
     L.append(f"- [ ] J-STAGE 編集登載システムで、巻（{esc(m.volume or '?')}）・号（{esc(m.issue or '?')}）と、その号のセクション"
              "（目次の見出し。例: 論文）を作成しておく（ないとアップロード時に EMSGM181E「巻号が学会誌別巻号の設定に存在しません」・"

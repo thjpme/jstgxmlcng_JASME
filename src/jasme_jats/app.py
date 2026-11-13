@@ -30,7 +30,8 @@ from .config import ArticleMeta, JournalConfig, keyword_language_mismatch, keywo
 from .images import match_names
 from .imagelist import check_frame
 from .pipeline import AIRequiredError, Options, StructureConflictError, add_images, convert, kept_images, reapply_images
-from .report import actions, ai_pending, blocking, image_rows, images_action
+from .report import (actions, ai_pending, blocking, clash_images_text, image_rows, images_action, shorten_shown, shown_text,
+                     unmatched_image_text)
 
 DOCS = "https://github.com/thjpme/jstgxmlcng_JASME/blob/main/docs/USAGE.md"
 MAX_IMAGE_SLOTS = 30          # 図ごとの行（ファイル選択）の数。最初から作って、置き場所の数だけ見せる。これより多い分は「まとめて入れる」で入れる
@@ -433,9 +434,9 @@ class AppState:
     @staticmethod
     def slot_label(row) -> str:
         """行のラベル: 「{キャプションの先頭 30 字}（{幹}）— {未／入れた: 元のファイル名／入れない}」。キャプションのない画像は場所を添える。"""
-        cap = row.caption.strip()
-        head = (cap[:30] + ("…" if len(cap) > 30 else "")) if cap and row.kind != "nocap" else \
-            "キャプションのない画像" + (f"（{row.where[:30]}）" if row.where else "")
+        cap = shown_text(row.caption)
+        head = shorten_shown(cap) if cap and row.kind != "nocap" else \
+            "キャプションのない画像" + (f"（{shorten_shown(row.where)}）" if row.where else "")
         state = {"missing": "未", "skipped": "入れない"}.get(row.status) or ("入れた: " + (row.image.source_name if row.image is not None else row.name))
         return f"{head}（{row.key}）— {state}"
 
@@ -457,7 +458,8 @@ class AppState:
         if self.image_rows():
             lines.append("下の「まとめて入れる」に、fig03.png・図3.png のような名前の画像（複数選べます）を選ぶと、名前で図に合わせます。"
                          "名前で合わない画像は、図ごとの行で選びます。選んだら「画像を入れる」を押してください。"
-                         "キャプションのない画像を入れないときは、その行の「入れない」にチェックを入れます。")
+                         "キャプションのない画像を入れないときは、その行の「入れない」にチェックを入れます"
+                         "（チェックを外して「画像を入れる」を押すと、「入れない」をやめて未に戻します）。")
         if len(self.image_rows()) > MAX_IMAGE_SLOTS:
             lines.append(f"図ごとの行は {MAX_IMAGE_SLOTS} 個までです。続きの図の画像は「まとめて入れる」で入れてください。")
         return "\n\n".join(lines)
@@ -474,24 +476,25 @@ class AppState:
         by_name = {}
         for p in paths:
             by_name.setdefault(Path(p).name, Path(p))
-        found, unmatched, clashes = match_names(list(by_name), self.image_rows(), self.res.meta.article_id(self.res.journal))
+        # 任意の置き場所（画像で補える文字）も、名前が合えば入れる（行と手順の数には出さない）
+        found, unmatched, clashes = match_names(list(by_name), image_rows(self.res), self.res.meta.article_id(self.res.journal))
         return {key: by_name[name] for key, name in found.items()}, unmatched, clashes
 
-    def add_images(self, mapping: dict, skip=None) -> list:
+    def add_images(self, mapping: dict, skip=None, unskip=None) -> list:
         """選んだ画像を、図ごとに入れる。mapping: 画像の置き場所の幹 → ファイルのパス。skip: 「入れない」にするキャプションのない画像の幹。
-        戻り値: 入れた画像の幹。"""
+        unskip: 「入れない」をやめて未に戻す幹。戻り値: 入れた画像の幹。"""
         if self.res is None:
             raise InputError("先に変換してください。")
         changed = self.changed_inputs()
         if changed:
             raise InputError(self.stale_text(changed))
         chosen = {name: Path(p) for name, p in (mapping or {}).items() if p}
-        skip = list(skip or [])
-        if not chosen and not skip:
+        skip, unskip = list(skip or []), list(unskip or [])
+        if not chosen and not skip and not unskip:
             raise InputError("画像が選ばれていません。")
         supplied = {name: (p.name, p.read_bytes()) for name, p in chosen.items()}
         try:
-            added = add_images(self.res, supplied, skip=skip or None)
+            added = add_images(self.res, supplied, skip=skip or None, unskip=unskip or None)
         except ValueError as e:
             raise InputError(str(e))
         return added
@@ -754,18 +757,25 @@ def build_app(state: AppState, io: "IO | None" = None):
             paths, checks = rest[:MAX_IMAGE_SLOTS], rest[MAX_IMAGE_SLOTS:]
             mapping = {row.key: p for row, p in zip(rows, paths)}
             skip = [row.key for row, c in zip(rows, checks) if c and row.kind == "nocap" and row.status != "skipped"]
+            # 「入れない」のチェックを外した行は、未に戻す（その行に画像を選んでいれば、画像を入れる）
+            unskip = [row.key for row, c, p in zip(rows, checks, paths) if not c and row.status == "skipped" and not p]
+            checked = {row.key for row, c in zip(rows, checks) if c and row.kind == "nocap"}
             notes = []
             try:
                 matched, unmatched, clashes = state.match_images(bulk or [])
                 for key, path in matched.items():
-                    if not mapping.get(key):                     # 行で選んだ画像があれば、そちらを使う
+                    if mapping.get(key):                         # 行で選んだ画像があれば、そちらを使う（まとめての方は入れない）
+                        notes.append(f"「{Path(path).name}」は、図ごとの行で画像を選んだ図（{key}）に合ったので、入れていません"
+                                     "（行で選んだ画像を入れました）")
+                    elif key in checked:                         # 「入れない」にチェックが付いている行
+                        notes.append(f"「{Path(path).name}」は、「入れない」にチェックが付いた画像（{key}）に合ったので、入れていません")
+                    else:
                         mapping[key] = path
+                        unskip = [k for k in unskip if k != key]
                 if unmatched:
-                    notes.append("名前の合う図がなかったファイル: " + "、".join(unmatched)
-                                 + "（fig03.png・図3.png・29_55_fig03.png のような名前にするか、図ごとの行で選んでください。"
-                                 "ほかの記事の識別子が付いた名前は入れません）")
-                notes += [f"同じ図（{key}）に合うファイルが複数あるので、どれも入れていません: " + "、".join(names) for key, names in clashes]
-                state.add_images(mapping, skip)
+                    notes += [unmatched_image_text(state.res, name, "ファイル名を直すか、図ごとの行で選んでください。") for name in unmatched]
+                notes += [clash_images_text(key, names) for key, names in clashes]
+                state.add_images(mapping, skip, unskip)
             except InputError as e:
                 return view(e, notice=check_box("画像を入れられなかったファイル", "\n".join(notes)) if notes else "")
             except Exception as e:

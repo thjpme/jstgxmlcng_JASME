@@ -13,11 +13,8 @@ import io
 from pathlib import Path
 
 from .package import article_dir
-from .report import (DECORATION_JA, OPTIONAL_CAPTION, IMAGE_STATUS_JA, LOST_IMAGES_HOW, LOST_IMAGES_WHY, image_rows, images_changed,
-                     images_dropped, images_progress, lost_image_label)
-
-OBJECT_MARK = "\ufffc"          # 数式などの図形の位置（Para.plain の代わりの文字）
-OBJECT_SHOWN = "［数式など］"     # HTML の表示だけで、この文字の代わりに出す（XML の文字ではない）
+from .report import (DECORATION_JA, OBJECT_MARK, OBJECT_SHOWN, OPTIONAL_CAPTION, IMAGE_STATUS_JA, LOST_IMAGES_HOW, LOST_IMAGES_WHY, image_rows,
+                     images_changed, images_dropped, images_progress, lost_image_label, shown_text)
 THUMB_PX = 240                  # embed=True の縮小の幅（px）。表示用だけで、ZIP の画像は変えない
 
 CSS = """
@@ -41,8 +38,8 @@ def _e(text) -> str:
 
 
 def _shown(text) -> str:
-    """docx の文字を HTML に出す文字列（エスケープ済み）。数式などの位置の文字は、表示だけ分かる言葉にする。"""
-    return _e(str(text or "").replace(OBJECT_MARK, OBJECT_SHOWN))
+    """docx の文字を HTML に出す文字列（エスケープ済み）。数式などの位置の文字は、表示だけ分かる言葉にする（report.shown_text。先頭のものは除く）。"""
+    return _e(shown_text(text))
 
 
 def _thumb(path: Path, fmt: str) -> str:
@@ -100,7 +97,9 @@ def check_html(res, embed: bool = False) -> str:
     if rows:
         body = []
         for row in rows:
-            cap = (f"{_shown(row.label)}　" if row.label else "") + (_shown(row.caption.strip()) or ('<span class="mute">' + (OPTIONAL_CAPTION if row.kind == "optional" else "（キャプションなし）") + '</span>' if not row.label else ""))
+            text = shown_text(row.caption)
+            numbered = bool(row.label) and text.startswith(shown_text(row.label))      # キャプションが図番号から始まるときは、番号を 2 回出さない
+            cap = ("" if numbered or not row.label else f"{_shown(row.label)}　") + (_e(text) or ('<span class="mute">' + (OPTIONAL_CAPTION if row.kind == "optional" else "（キャプションなし）") + '</span>' if not row.label else ""))
             detail = _e(row.detail)
             body.append([f"<td>{_e(row.key)}</td>", f"<td>{cap}</td>", f"<td>{_shown(row.where)}</td>", f"<td>{_e(row.place)}</td>",
                          _image_cell(res, row, embed), f"<td>{detail}</td>", f'<td class="note">{_shown(row.note)}</td>'])
@@ -111,12 +110,12 @@ def check_html(res, embed: bool = False) -> str:
     if dropped:
         P.append("<h2>入れ直しが要る前の画像</h2>")
         P.append(_table(["前の名前", "前のキャプション", "元のファイル名", "今の図・理由"],
-                        [[f"<td>{_e(d.key)}</td>", f"<td>{_shown(d.caption.strip() or '（キャプションなし）')}</td>", f"<td>{_e(d.source_name)}</td>",
+                        [[f"<td>{_e(d.key)}</td>", f"<td>{_shown(d.caption) or '（キャプションなし）'}</td>", f"<td>{_e(d.source_name)}</td>",
                           f"<td>{_e(f'今の {d.suggest} の画像と思われます' if d.suggest else d.why)}</td>"] for d in dropped]))
     if changed:
         P.append("<h2>キャプションが変わった図に入れ直した画像</h2>")
         P.append(_table(["名前", "前のキャプション", "今のキャプション", "元のファイル名"],
-                        [[f"<td>{_e(c.key)}</td>", f"<td>{_shown(c.old_caption.strip())}</td>", f"<td>{_shown(c.new_caption.strip())}</td>",
+                        [[f"<td>{_e(c.key)}</td>", f"<td>{_shown(c.old_caption)}</td>", f"<td>{_shown(c.new_caption)}</td>",
                           f"<td>{_e(c.source_name)}</td>"] for c in changed]))
     decos = getattr(res, "decorations", [])
     drawn = [d for d in decos if d.figure]

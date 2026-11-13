@@ -89,7 +89,7 @@ def test_two_images_figure_note(journal, meta, tmp_path):
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out"))
     html_text = check_html(res)
     assert "docx ではこの図に画像 2 枚（1 枚にまとめた画像を入れてください）" in html_text
-    assert body_rows(html_text)[0][6].startswith("未。")
+    assert body_rows(html_text)[0][6].startswith("docx ではこの図に")      # 状態（未）は「入れた画像」の列に出るので、備考には重ねない
 
 
 def test_drawn_figures_and_decorations_are_separated(journal, meta, tmp_path):
@@ -121,8 +121,12 @@ def test_report_points_to_the_html(where, journal, meta):
     from jasme_jats.report import actions
     name = check_name(where)
     text = where.report_path.read_text(encoding="utf-8")
-    assert name in text.split("## 9.")[1].split("## 10.")[0] and name in text.split("## 14.")[1]
+    assert name in text.split("## 9.")[1].split("## 10.")[0] and name not in text.split("## 14.")[1]      # 14 章は、1 枚でも入れてから
     same = ("a1.png", __import__("conftest").key_png(1))
     add_images(where, {i.key: same for i in where.images[:2]})
+    after = where.report_path.read_text(encoding="utf-8").split("## 14.")[1]
+    lines = [x for x in after.splitlines() if x.startswith("- [")]
+    k = next(n for n, x in enumerate(lines) if "図の画像" in x)
+    assert name in lines[k + 1]          # 手順 images の行の直後
     [a] = [a for a in actions(where) if a.key == "image_same"]
     assert f"「{name}」で確かめてください" in a.box_detail

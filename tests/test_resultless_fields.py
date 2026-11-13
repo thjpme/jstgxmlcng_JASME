@@ -295,3 +295,30 @@ def test_optional_image_is_carried_over_and_matched_by_name(journal, meta, tmp_p
     assert reapply_images(res2, kept) == [key]
     assert optional(res2)[0].status == "user" and "<inline-graphic" in res2.xml_path.read_text(encoding="utf-8")
     assert not res2.images_dropped and res2.fidelity.final_ok
+
+
+def test_optional_image_can_be_given_from_cli_and_app(journal, meta, tmp_path):
+    """要確認 resultless_field が案内するとおり、任意の置き場所の画像も、コマンドラインの --images と 1 画面版の「まとめて入れる」で
+    名前（幹・記事識別子つきの幹）から入れられる。図の画像の表と手順の数には出さない。"""
+    from conftest import META_EXAMPLE, key_png
+    from jasme_jats.cli import main, image_table
+    from test_app import filled
+    path = tmp_path / "opt8.docx"
+    article(path, lambda b: [mf.para(S["body"], "矢印", fld(r"EQ \o\ac(○,3)"), "。")])
+    key = optional(run_convert(path, journal, meta, tmp_path))[0].key
+    folder = tmp_path / "pics"
+    folder.mkdir()
+    (folder / f"{key}.png").write_bytes(key_png(3))
+    out = tmp_path / "cli"
+    assert main([str(path), "--meta", str(META_EXAMPLE), "--out", str(out), "--images", str(folder)]) == 0
+    xml = next(out.rglob("*.xml")).read_text(encoding="utf-8")
+    assert f"_{key}.png" in xml and "<inline-graphic" in xml
+    st = filled(tmp_path, docx=path)
+    res = st.convert()
+    aid = res.meta.article_id(res.journal)
+    pic = tmp_path / f"{aid}_{key}.png"
+    pic.write_bytes(key_png(4))
+    matched, unmatched, clashes = st.match_images([str(pic)])
+    assert list(matched) == [key] and not unmatched and not clashes
+    assert st.add_images(matched) == [key] and optional(st.res)[0].status == "user"
+    assert st.image_rows() == [] and image_table(st.res) == []          # 行と表には出さない

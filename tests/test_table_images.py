@@ -162,11 +162,11 @@ def test_floating_image_on_cell_caption_yields_to_image_above(journal, meta, tmp
     from jasme_jats.report import actions, image_rows
     fig2 = res.plan.slots[2]
     assert fig2.note == ("docx でこの図の画像を見つけられませんでした。同じセルにも、同じ列の上のセルにも、この図のものと決められる画像がない。"
-                         "図1 のキャプションの段落に結び付いた、キャプションのない画像がこの図の画像かもしれない。そうなら、その画像を"
-                         "この図の名前で入れ、キャプションなしの置き場所は外す")
+                         "図1 のキャプションの段落に結び付いた、キャプションのない画像がこの図の画像かもしれない。出版版 PDF で見て、"
+                         "キャプションのない画像がこの図なら、その部分をこの図として入れ、キャプションのない画像は「入れない」にする")
     # 置き場所の備考は、図の画像の一覧の備考と、手順 images の行の括弧にそのまま出す（修正計画 W1 の 4.1・4.3）
     notes = {row.key: row.note for row in image_rows(res)}
-    assert notes["fig02"] == f"未。{fig2.note}"
+    assert notes["fig02"] == fig2.note          # 状態（未）は「入れた画像」の列に出るので、備考には重ねない
     [step] = [a for a in actions(res) if a.key == "images"]
     line = next(x for x in step.box_detail.split("\n") if x.startswith("・fig02:"))
     assert line.endswith(f"（{fig2.note}）") and line.count("（") == 1            # 理由の中のかっこは 1 段だけ

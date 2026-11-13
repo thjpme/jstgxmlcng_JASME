@@ -208,7 +208,7 @@ def test_text_shapes_group_with_figure_caption_is_a_drawn_figure(journal, meta, 
     assert (deco.kind, deco.figure) == ("textgroup", "fig01") and deco.where.startswith("図形 s1（「この段落に図形が")
     [row] = image_rows(res)
     assert row.drawn == "文字の図形の集まり" and "見つけられませんでした" not in row.note
-    assert row.note == "未。Word の図形（文字の図形の集まり）で描いた図です。出版版 PDF から図の部分を切り取って入れてください"
+    assert row.note == "Word の図形（文字の図形の集まり）で描いた図です。出版版 PDF から図の部分を切り取って入れてください"
     step = acts(res)["images"]
     assert "・fig01: 「図1　図形で描いた図」（Word の図形（文字の図形の集まり）で描いた図です。" in step.box_detail
     ch9 = chapter9(res)

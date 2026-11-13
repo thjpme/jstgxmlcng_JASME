@@ -406,15 +406,16 @@ display(HTML(report_details(res.report_path.read_text(encoding="utf-8"))))
 """ + mark(5), form=False),
     code("""
 #@title 7. 図の画像を入れる
-#@markdown 画像の要る図・表があるときは、毎回この手順を行います。▶ を押すと、画像の要る図・表の一覧が出ます。出版版 PDF から図の部分だけを切り取った画像（PNG か JPEG。キャプションの行は写さない）を用意し、「まとめてアップロード」で選びます（ファイル名を fig04.png・図4.png のようにしておくと、名前で合わせます）。名前で合わなかった画像は、図ごとに選び直せます。キャプションのない画像を入れないときは、NO_IMAGE に名前（img3fa9c2 など。コンマ区切り）を書いてから ▶ を押します。
+#@markdown 画像の要る図・表があるときは、毎回この手順を行います。▶ を押すと、画像の要る図・表の一覧が出ます。出版版 PDF から図の部分だけを切り取った画像（PNG か JPEG。キャプションの行は写さない）を用意し、「まとめてアップロード」で選びます（ファイル名を fig04.png・図4.png のようにしておくと、名前で合わせます）。名前で合わなかった画像は、図ごとに選び直せます。キャプションのない画像を入れないときは、NO_IMAGE に名前（img3fa9c2 など。コンマ区切り）を書いてから ▶ を押します。全部入れた後に、入れた画像を差し替えるときは、REPLACE にチェックを入れてから ▶ を押し、差し替える画像を名前（fig04.png など）を付けてアップロードします（差し替えたら、チェックを外します）。
 NO_IMAGE = ""  #@param {type:"string"}
+REPLACE = False  #@param {type:"boolean"}
 """ + guard(1, 2, 3, 4, 5) + unmark(7) + """import re
 from IPython.display import HTML, display
 from jasme_jats.colab import error_box, missing_images_box
 from jasme_jats.images import match_names
 from jasme_jats.imagelist import check_frame
 from jasme_jats.pipeline import add_images
-from jasme_jats.report import image_rows, images_action
+from jasme_jats.report import clash_images_text, image_rows, images_action, unmatched_image_text
 
 _slots = [_row for _row in image_rows(res) if _row.kind != "optional"]
 if not _slots and images_action(res) is None:
@@ -422,17 +423,24 @@ if not _slots and images_action(res) is None:
 else:
     display(HTML(check_frame(res)))      # 画像の要る図・表の一覧（入れた画像も出る）
 _skip = [_n.strip() for _n in re.split(r"[,、，\\s]+", NO_IMAGE) if _n.strip()]
+_nocaps = [_row.key for _row in _slots if _row.kind == "nocap"]
+_bad = [_n for _n in _skip if _n not in _nocaps]      # アップロードの前に確かめる（書き違いで、選んだ画像が全部入らないことにならないように）
+if _bad:
+    display(HTML(error_box("NO_IMAGE を直してください（何も入れていません）",
+                           f"NO_IMAGE の {'、'.join(_bad)} は、この論文のキャプションのない画像の名前ではありません"
+                           f"（キャプションのない画像: {'、'.join(_nocaps) or 'なし'}）。NO_IMAGE を直してから、もう一度 ▶ を押してください。")))
 _supplied = {}
-if any(_row.status == "missing" and _row.key not in _skip for _row in _slots):
-    print("▼ 図の画像をまとめて選んでください（複数選べます。ファイル名が fig04.png・図4.png のような名前の画像を、名前で図に合わせます。"
+if not _bad and (REPLACE or any(_row.status == "missing" and _row.key not in _skip for _row in _slots)):
+    print("▼ " + ("差し替える" if REPLACE else "図の") + "画像をまとめて選んでください（複数選べます。ファイル名が fig04.png・図4.png のような名前の画像を、名前で図に合わせます。"
           "用意できていなければキャンセル）")
     _up = files.upload()
-    _found, _unmatched, _clashes = match_names(list(_up), _slots, res.meta.article_id(res.journal))
+    # 任意の置き場所（画像で補える文字。一覧と手順の数には出さない）も、名前が合えば入れる
+    _found, _unmatched, _clashes = match_names(list(_up), image_rows(res), res.meta.article_id(res.journal))
     _supplied = {_key: (_name, _up[_name]) for _key, _name in _found.items()}
     for _name in _unmatched:
-        print(f"  「{_name}」に合う図がありません（ファイル名を図の名前に合わせるか、下で図ごとに選んでください）")
+        print("  " + unmatched_image_text(res, _name, "ファイル名を直すか、下で図ごとに選んでください。"))
     for _key, _names in _clashes:
-        print(f"  同じ図（{_key}）に合うファイルが複数あるので、どれも入れません: {'、'.join(_names)}")
+        print("  " + clash_images_text(_key, _names))
     for _row in _slots:
         if _row.status != "missing" or _row.key in _supplied or _row.key in _skip:
             continue
@@ -446,7 +454,7 @@ if any(_row.status == "missing" and _row.key not in _skip for _row in _slots):
             print("  ファイルが複数選ばれたので、最初の 1 つだけを使います")
         _file, _data = next(iter(_one.items()))
         _supplied[_row.key] = (_file, _data)
-if _supplied or _skip:
+if not _bad and (_supplied or _skip):
     try:
         _added = add_images(res, _supplied, skip=_skip or None)
     except ValueError as e:
@@ -456,6 +464,8 @@ if _supplied or _skip:
             print(f"画像を {len(_added)} 枚入れ、{res.zip_path.name} とレポートを作り直しました。")
         if _skip:
             print("画像を入れないことにしました:", "、".join(_skip))
+        if REPLACE:
+            print("差し替えが済んだら、REPLACE のチェックを外してください。")
     display(HTML(check_frame(res)))      # 確かめの一覧（図番号・キャプションと画像が合っているか）
 _act = images_action(res)
 if _act is not None:
@@ -466,7 +476,7 @@ if _act is not None:
 """ + mark(7)),
     code("""
 #@title 8. 結果をダウンロード
-#@markdown 「変換結果_巻_開始ページ.zip」（J-STAGE にアップロードする jasme_巻_開始ページ.zip、XML、変換レポート。「docx から作り、出版版 PDF で補う」では（PDF の文字を読めたとき）PDF で補った docx も）をダウンロードします。要対応（赤い枠）が残っていると一度止まります（そのままダウンロードするときは、もう一度 ▶）。
+#@markdown 「変換結果_巻_開始ページ.zip」（J-STAGE にアップロードする jasme_巻_開始ページ.zip、XML、変換レポート、図の確かめ.html〈ZIP を展開すると、入れた画像も見えます〉。「docx から作り、出版版 PDF で補う」では（PDF の文字を読めたとき）PDF で補った docx も）をダウンロードします。要対応（赤い枠）が残っていると一度止まります（そのままダウンロードするときは、もう一度 ▶）。
 """ + guard(1, 2, 3, 4, 5) + unmark(8) + """import shutil
 from IPython.display import HTML, display
 from jasme_jats.colab import result_boxes

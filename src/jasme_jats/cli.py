@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -24,7 +25,7 @@ from .colab import step_text
 from .config import ArticleMeta, JournalConfig
 from .images import match_names
 from .pipeline import AIRequiredError, Options, StructureConflictError, add_images, convert
-from .report import actions, image_rows, images_action, pdf_summary, upload_issues
+from .report import actions, clash_images_text, image_rows, images_action, pdf_summary, unmatched_image_text, upload_issues
 
 
 def main(argv=None):
@@ -56,8 +57,9 @@ def main(argv=None):
                          "（PNG・JPEG・GIF）。名前の合う画像を、中身を変えずに Graphics/ に入れる")
     ap.add_argument("--no-image", action="append", default=[], metavar="名前",
                     help="画像を入れない、キャプションのない画像の置き場所の名前（img3fa9c2 など。出版版 PDF で見て、ほかの図に写っている・"
-                         "飾りだけ、のとき）。複数あるときは繰り返し指定する。図・表の画像は入れないことにできない")
+                         "飾りだけ、のとき）。複数あるときはコンマ区切りか、繰り返し指定する。図・表の画像は入れないことにできない")
     a = ap.parse_args(argv)
+    a.no_image = list(dict.fromkeys(n.strip() for v in a.no_image for n in re.split(r"[,、，]", v) if n.strip()))
     if a.ai == "api" and a.ai_provider != "claude" and not a.ai_model:
         ap.error(f"--ai-provider {a.ai_provider} では --ai-model でモデル名を指定してください"
                  "（Claude Opus と同等以上のモデルを推奨）")
@@ -147,17 +149,16 @@ def main(argv=None):
 def images_in(folder: Path, res) -> dict:
     """フォルダの画像を、ファイル名で置き場所に合わせる（images.match_names）。幹 → パス。
 
-    受け付ける名前は fig03・図3・29_55_fig03 など（拡張子は問わない）。合う置き場所のないファイル、同じ置き場所に合う複数のファイルは
+    受け付ける名前は fig03・図3・29_55_fig03 など（拡張子は問わない）。任意の置き場所（opt…。画像で補える文字）の名前も受け付ける。合う置き場所のないファイル、同じ置き場所に合う複数のファイルは
     標準エラーに出して続ける（別の記事の識別子の付いた名前も「合わない」名前）。隠しファイル（.で始まる名前）は見ない。
     """
     paths = {p.name: p for p in sorted(folder.iterdir()) if p.is_file() and not p.name.startswith(".")}
-    rows = [row for row in image_rows(res) if row.kind != "optional"]
+    rows = image_rows(res)          # 任意の置き場所（画像で補える文字）も、名前が合えば入れる（表と手順の数には出さない）
     found, unmatched, clashes = match_names(list(paths), rows, res.meta.article_id(res.journal))
     for name in unmatched:
-        print(f"画像: 「{name}」に合う図がありません（fig03.png・図3.png・{res.meta.article_id(res.journal)}_fig03.png のような名前にします。"
-              "ほかの記事の識別子が付いた名前は入れません）", file=sys.stderr)
+        print("画像: " + unmatched_image_text(res, name, "ファイル名を直してください。"), file=sys.stderr)
     for key, names in clashes:
-        print(f"画像: 同じ図（{key}）に合うファイルが複数あるので、どれも入れていません: {', '.join(names)}", file=sys.stderr)
+        print("画像: " + clash_images_text(key, names), file=sys.stderr)
     return {key: paths[name] for key, name in found.items()}
 
 
