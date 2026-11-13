@@ -286,7 +286,7 @@ if _prev:
 """ + mark(3)),
     code("""
 #@title 4. AI による補完の方法を選ぶ
-#@markdown **AI_MODE**: 「API で自動実行」は、左の 🔑（シークレット）に API キー（Claude は名前 `ANTHROPIC_API_KEY`）を登録し、「ノートブックからのアクセス」をオンにしておきます（利用料がかかります）。「手動」は依頼文をチャットに貼り付け、回答を手順 6 で貼り戻します（API キー不要）。「使わない」は推奨しません。登録のしかた・料金・手動の手順は説明書の [AI の API キーと手動モード](""" + DOCS + """/USAGE_AI.md)。
+#@markdown **AI_MODE**: 「API で自動実行」は、左の 🔑（シークレット）に API キー（Claude は名前 `ANTHROPIC_API_KEY`）を登録し、「ノートブックからのアクセス」をオンにしておきます（利用料がかかります）。「手動」は依頼文をチャットに貼り付け、回答を手順 6 で貼り戻します（API キー不要）。「使わない」では、位置を決められない図・表を、結び付いた段落の後ろに置きます。登録のしかた・料金・手動の手順は説明書の [AI の API キーと手動モード](""" + DOCS + """/USAGE_AI.md)。
 AI_MODE = "手動（チャットに貼り付け）"  #@param ["使わない", "API で自動実行（Claude・推奨）", "API で自動実行（ChatGPT）", "API で自動実行（Gemini）", "API で自動実行（Sakana AI）", "手動（チャットに貼り付け）"]
 #@markdown **MODEL**（Claude のモデル。通常は変更不要）・**OTHER_MODEL**（ChatGPT・Gemini・Sakana AI のときは必ず入力。各社の最上位クラスのモデルを推奨）・**SPLIT_LABELS**（図表番号「図1」を <label> 要素に分ける。既定は分けない）
 """ + MODEL_LINE + """OTHER_MODEL = ""  #@param {type:"string"}
@@ -310,19 +310,14 @@ if PROVIDER == "sakana":
     display(HTML(error_box("Sakana AI は、既定で送信した内容をモデルの学習に使う設定です",
                            "未公開の原稿を送るので、手順 5 の前に、Sakana AI の管理画面（Console）の設定で"
                            "学習への利用を止めて（オプトアウトして）ください。")))
-if AI == "none":
-    from IPython.display import HTML, display
-    from jasme_jats.colab import no_ai_box
-    display(HTML(no_ai_box()))
 """ + mark(4)),
     code("""
 #@title 5. 変換を実行
 """ + guard(1, 2, 3, 4) + unmark(5) + """import shutil
 from IPython.display import HTML, display
-from jasme_jats.colab import (ai_required_box, no_ai_box, prompt_box, report_details, result_boxes, structure_conflict_box,
-                              summary_box)
+from jasme_jats.colab import prompt_box, report_details, result_boxes, structure_conflict_box, summary_box
 from jasme_jats.config import ArticleMeta, JournalConfig
-from jasme_jats.pipeline import AIRequiredError, Options, StructureConflictError, convert, kept_images, reapply_images
+from jasme_jats.pipeline import Options, StructureConflictError, convert, kept_images, reapply_images
 
 api_key = None
 if AI == "api":
@@ -348,9 +343,6 @@ try:
     res = convert(docx_path, meta, journal, Options(out_dir=OUT, ai_mode=AI, ai_provider=PROVIDER, ai_model=API_MODEL,
                                                   ai_api_key=api_key, pdf_path=pdf_path, route=ROUTE_KEY,
                                                   split_labels=SPLIT_LABELS))
-except AIRequiredError as e:
-    display(HTML(ai_required_box(str(e))))
-    raise SystemExit("手順 4 で「API で自動実行」か「手動（チャットに貼り付け）」を選び、手順 4 からやり直してください。")
 except StructureConflictError as e:
     display(HTML(structure_conflict_box(str(e))))
     raise SystemExit("上の赤い枠のとおり Word で原稿を直して保存し、手順 2 から選び直してやり直してください。")
@@ -359,14 +351,12 @@ if KEPT:
     if _again:
         print(f"前に入れた画像 {len(_again)} 枚を入れ直しました。")
 manual_prompt = None
-if AI == "none":
-    display(HTML(no_ai_box()))
 if AI == "manual" and res.prompt_path:
     # 依頼文は、レポートの前に目立つ枠で出す
     manual_prompt = res.prompt_path.read_text(encoding="utf-8")
     display(HTML(prompt_box(manual_prompt)))
-# 要対応（赤）・要確認（黄）の枠（report.actions）。手動モードの「AI の回答をまだ反映していません」は、上の依頼文の枠があるので出さない
-display(HTML(result_boxes(res, skip=("ai_pending",))))
+# 要対応（赤）・要確認（黄）・手順（青）の枠（report.actions）。手動モードの AI による仕上げ（回答待ち）は、上の依頼文の枠があるので出さない
+display(HTML(result_boxes(res, skip=("ai_finish",) if AI == "manual" else ())))
 display(HTML(summary_box(res)))
 display(HTML(report_details(res.report_path.read_text(encoding="utf-8"))))
 """ + mark(5)),

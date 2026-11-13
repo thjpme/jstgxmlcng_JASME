@@ -2,13 +2,13 @@
 文字だけのテキストボックス（囲み・図に重ねた注記。修正計画の D1）。"""
 import dataclasses
 import functools
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from lxml import etree
 
+import answers
 import make_fixtures as mf
 from conftest import STRUCTURE, fill_images, image_folder, others
 from jasme_jats.docx_reader import read_docx
@@ -308,8 +308,8 @@ def test_heading_style_after_abstract_starts_appendix(journal, meta, tmp_path):
     src = next(s for s, p in res.plan.paras.items() if p.plain() == "授業の記録")
     [d] = [d for d in res.plan.decisions if d.src == src]
     assert d.message == ("英文要旨の後ろの、見出しのスタイル「章見出し」の段落「授業の記録」から資料とした（英文要旨の中に見出しは来ないため）。"
-                         "資料でなければ、Word でその段落のスタイルを英文要旨のスタイルに直して変換し直す（AI による補完では、"
-                         "set_role の abstract で英文要旨に戻せる）")
+                         "資料でなければ、Word でその段落のスタイルを英文要旨のスタイルに直して変換し直す（AI の仕上げで、"
+                         "資料の始まりを取り消せる）")
     assert d.applied and d.location == "資料1（見出し）"
 
 
@@ -333,13 +333,13 @@ def test_sentence_paragraphs_do_not_start_appendix(journal, meta, tmp_path):
     src = next(s for s, p in res.plan.paras.items() if p.plain() == "資料1\u3000架空の授業プリント")
     [d] = [d for d in res.plan.decisions if d.src == src]
     assert d.message == ("段落「資料1\u3000架空の授業プリント」を資料の見出しとした（「資料」「付録」「附録」「Appendix」で始まる見出しの"
-                         "形のため）。資料の見出しでなければ、AI による補完の set_role で英文要旨の段落（abstract）に戻せる")
+                         "形のため）。資料の見出しでなければ、AI の仕上げで資料の始まりを取り消せる（英文要旨の続きに戻る）")
     assert d.applied and d.location == "資料1（見出し）" and d.category == "style"
     assert f"- [{src}] 推定: 段落「資料1\u3000架空の授業プリント」を資料の見出しとした" in res.prompt_path.read_text(encoding="utf-8")
     report = res.report_path.read_text(encoding="utf-8")
     assert "| 資料1（見出し） | 段落「資料1\u3000架空の授業プリント」を資料の見出しとした" in report.split("## 4.")[1].split("## 5.")[0]
     # 見出しの形に合うが文とみなした段落も、判断の一覧（applied=False）と AI 依頼文の推定に載せる（見出しを文と誤ったときに
-    # 気づけるように。英文要旨の段落なら見出しのスタイルで、資料の中の段落なら AI の app_heading で資料にできる）
+    # 気づけるように。英文要旨の段落なら見出しのスタイルで、資料の中の段落なら AI の仕上げで資料にできる）
     sentences = {}
     for t in ("(Appendix 1) lists the fictional tasks used in the lesson.", "資料2（後掲）に示すように、架空の問いを並べた。"):
         src2 = next(s for s, p in res.plan.paras.items() if p.plain() == t)
@@ -351,14 +351,14 @@ def test_sentence_paragraphs_do_not_start_appendix(journal, meta, tmp_path):
     assert d.location == "英文要旨 第2段落" and d.message == (
         "段落「(Appendix 1) lists t」は「資料」「付録」「附録」「Appendix」で始まるが、番号などの後ろが英小文字の語で、「.」などで"
         "終わる英文の文の形なので、資料の見出しにしなかった（英文要旨の段落のまま）。資料の見出しなら、Word でその段落に章・節・項"
-        "見出しのスタイルを付けて変換し直すと、文字はそのままで資料になる（AI による補完では、set_role の app_heading で資料にできる）")
+        "見出しのスタイルを付けて変換し直すと、文字はそのままで資料になる（AI の仕上げで、資料の始まりを直せる）")
     d = sentences["資料2（後掲）に示すように、架空の問いを並べた。"]
     assert d.location == "資料1 第2要素" and d.message == (
         "段落「資料2（後掲）に示すように、架空の問いを」は「資料」「付録」「附録」「Appendix」で始まるが、「。」か「．」で終わる和文の"
-        "文の形なので、資料の見出しにしなかった（前の資料の段落のまま）。資料の見出しなら、AI による補完の set_role の app_heading で"
-        "資料にできる")
+        "文の形なので、資料の見出しにしなかった（前の資料の段落のまま）。資料の見出しなら、AI の仕上げで、"
+        "資料の始まりを直せる")
     assert "| 資料1 第2要素 | 段落「資料2（後掲）に示すように、架空の問いを」は" in report.split("## 4.")[1].split("## 5.")[0]
-    # 2 つ目の資料の見出しの判断は、前の資料の段落に戻す案内（p）にする
+    # 2 つ目の資料の見出しの判断は、前の資料の続きに戻る案内にする
     path = tmp_path / "second.docx"
     mf.make_article(path, "資料の見出しと文の検証用文書", lambda b: [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "本文。")],
                     appendix=[mf.para(S["abs"], "資料1\u3000架空の授業プリント"), mf.para(S["abs"], "問1\u3000架空の問い。"),
@@ -366,7 +366,7 @@ def test_sentence_paragraphs_do_not_start_appendix(journal, meta, tmp_path):
     _, plan, _ = _mechanical(path, journal)
     src = next(s for s, p in plan.paras.items() if p.plain() == "資料2：架空の回答の例")
     [d] = [d for d in plan.decisions if d.src == src]
-    assert d.message.endswith("資料の見出しでなければ、AI による補完の set_role で前の資料の段落（p）に戻せる")
+    assert d.message.endswith("資料の見出しでなければ、AI の仕上げで資料の始まりを取り消せる（前の資料の続きに戻る）")
 
 
 @pytest.mark.parametrize("appendix, expected", [
@@ -578,7 +578,7 @@ def test_label_and_undecided_textboxes_are_excluded(journal, meta, tmp_path, cap
     top, ch14 = report.split("## 2.")[0], report.split("## 14.")[1]
     ch3 = report.split("## 3.")[1].split("## 4.")[0]
     assert ("**要確認: 囲み（問題文・ヒントなど）か図の注記か決められなかったテキストボックスが 3 件あり、その文字を XML に"
-            "出力していません（3 章・6 章）。**") in top and "AI による補完を使うと" in top
+            "出力していません（3 章・6 章）。**") in top and "AI による補完を使うと" not in top
     assert "| テキストボックスの文字（3 章・4 章・6 章・10 章） | 囲み 3 件（boxed-text。うち位置を推定 1 件・要確認）、図の注記として除外 1 件、" \
            "決められずに除外 3 件（要確認） |" in top
     assert "- [ ] **囲みか図の注記か決められなかったテキストボックス 3 件**" in ch14
@@ -660,7 +660,6 @@ def test_text_only_textbox_becomes_boxed_text(journal, meta, tmp_path):
     test_PROBLEM_text_only_textbox_is_dropped_from_xml の逆。0.24.1 までは除外して 6 章に載るだけだった）。囲みとして位置を
     機械的に決めた浮動配置のテキストボックスの段落への set_role p は、機械的に決めたので変更できないとして採用しない
     （placements でも変えられないので、placements は案内しない）。"""
-    import json
     def parts(b):
         return [mf.para(S["sec1"], "１．はじめに"),
                 mf.para(S["body"], "次の問題を扱う。", mf.textbox(
@@ -676,11 +675,8 @@ def test_text_only_textbox_becomes_boxed_text(journal, meta, tmp_path):
     assert not any("二次方程式" in t for t in excluded(res))
     _, plan, _ = _mechanical(path, journal)
     src = next(s for s, p in plan.paras.items() if "二次方程式" in p.plain())
-    resp = {"operations": [{"op": "set_role", "src": src, "text": "", "occurrence": 1, "target": "", "role": "p",
-                            "image": "", "mathml": "", "surname": "", "given": "", "reason": "x", "confidence": "高"}],
-            "placements": [], "notes": []}
-    res2 = convert(path, meta, journal, Options(out_dir=tmp_path / "ai", ai_mode="manual",
-                                                ai_response=json.dumps(resp, ensure_ascii=False)))
+    resp = answers.answer(style_fixes=[(src, "p", "x")])
+    res2 = convert(path, meta, journal, Options(out_dir=tmp_path / "ai", ai_mode="manual", ai_response=resp))
     assert res2.ai.rejected and res2.ai.rejected[0][1].endswith("は囲み（boxed-text）として扱いと位置を機械的に決めたので、変更できない")
     assert text(load(res2).find(".//boxed-text")).startswith("問1　次の二次方程式を解きなさい。")
 
@@ -792,13 +788,9 @@ def test_text_in_figure_textbox_is_notified(journal, meta, tmp_path):
     # AI の set_role p は採用しない。placements の kind box・label の対象でもないので、理由で placements を案内しない
     _, plan, _ = _mechanical(path, journal)
     xid = plan.paras[src].textbox_id
-    import json
-    resp = {"placements": [{"float": xid, "after": next(s for s, p in plan.paras.items() if p.plain().startswith("図1から")),
-                            "items": [{"kind": "box", "caption": [], "body": []}], "reason": "x", "confidence": "中"}],
-            "operations": [{"op": "set_role", "src": src, "text": "", "occurrence": 1, "target": "", "role": "p", "image": "",
-                            "mathml": "", "surname": "", "given": "", "reason": "x", "confidence": "高"}], "notes": []}
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "ai", ai_mode="manual",
-                                               ai_response=json.dumps(resp, ensure_ascii=False)))
+    after = next(s for s, p in plan.paras.items() if p.plain().startswith("図1から"))
+    resp = answers.answer(boxes=[(xid, "囲み", after, "x")], style_fixes=[(src, "p", "x")])
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "ai", ai_mode="manual", ai_response=resp))
     why = {op["op"]: w for op, w in res.ai.rejected}
     assert why["set_role"] == (f"テキストボックス {xid} は囲み・図の注記の判断の対象でない（図表の入ったテキストボックス・本文の外の"
                                "テキストボックスなど）ので、段落に指定できる役割は fig_caption・table_caption・exclude だけ")
@@ -810,17 +802,15 @@ def test_text_in_unplaced_figure_textbox_is_notified_before_answer(journal, meta
     """位置を決められない図表（浮動配置）の中の出典の文は、図の画像に写るとみなして除外し、手動モードで AI の回答を貼り戻す
     前から要確認で知らせる（図形の中身の組み方は AI の指定の有無で変わらない。修正計画 W1 の 2.4）。AI が位置を答えなくても
     同じく知らせる。"""
-    import json
     path = tmp_path / "figfloat.docx"
     mf.make_article(path, "浮動配置の図の検証用文書", _figure_textbox(True))
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "pending", ai_mode="manual"))
     assert res.plan.unplaced_floats and res.fidelity.ok and res.dtd_valid
     assert excluded(res)[SOURCE_NOTE] == "テキストボックス内の文字（図の一部とみなして本文から除外）"
     assert "textbox_figure_text" in [a.key for a in actions(res)]
-    empty = json.dumps({"placements": [], "operations": [], "notes": []})
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "ans", ai_mode="manual", ai_response=empty))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "ans", ai_mode="manual", ai_response=answers.answer()))
     keys = [a.key for a in actions(res)]
-    assert "forced" in keys and "textbox_figure_text" in keys and res.fidelity.ok and res.dtd_valid
+    assert "ai_finish" in keys and "textbox_figure_text" in keys and res.fidelity.ok and res.dtd_valid
 
 
 def test_caption_shaped_paragraph_in_inline_textbox_stays_caption(journal, meta, tmp_path):
@@ -1140,10 +1130,8 @@ def test_pinned_shapes_after_g2(journal, meta, tmp_path):
     assert len(res.plan.fns) == 1 and res.plan.fn_guess_checks[0][1] == "kept"
 
 
-def _manual_roles(path, ops, meta, journal, out):
-    resp = json.dumps({"operations": [{"op": "set_role", "src": s, "text": "", "occurrence": 1, "target": "", "role": r, "image": "",
-                                       "confidence": "高", "reason": "試験"} for s, r in ops], "placements": [], "notes": []},
-                      ensure_ascii=False)
+def _manual_roles(path, resp, meta, journal, out):
+    """回答 resp（tests/answers.py で作った JSON の文字）を手動モードで貼り戻して変換する。"""
     return convert(path, meta, journal, Options(out_dir=out, ai_mode="manual", ai_response=resp))
 
 
@@ -1152,7 +1140,7 @@ def fn_guess_texts(act):
     return [act.top, act.checklist, act.box_title, act.box_detail, act.cli]
 
 
-def test_fn_guess_advice_is_executable(journal, meta, tmp_path):
+def test_fn_guess_advice_is_executable(journal, meta, tmp_path, monkeypatch):
     """G3・H2: 要確認の助言（注の節なら Word の「注見出し」スタイル、本文の続きなら Word の「注本文」スタイル）に従うと、実際に
     推定が変わる。助言に内部の操作名（set_role・fn_heading・p を指定）を出さない（利用者が指定できない書き方になるため）。
     「注」が本文スタイルのままでは、本文のスタイルに直しても同じ推定になる（助言にしない）。"""
@@ -1199,12 +1187,21 @@ def test_fn_guess_advice_is_executable(journal, meta, tmp_path):
         res4 = convert(path4, meta, journal, Options(out_dir=tmp_path / name))
         assert res4.fidelity.ok and res4.fidelity.final_ok and res4.dtd_valid and len(fn_guess_action(res4)) == want
         assert "表の下の説明である。" in text(load(res4).find("body")) and res4.plan.fns == []
-    # (5) AI の補完が役割を指定した段落も推定しない（利用者への案内にはしないが、仕組みとして働く）
-    res5 = _manual_roles(path, [(src, "p")], meta, journal, tmp_path / "out5")
+    # (5) AI の補完が役割を指定した段落も推定しない（利用者への案内にはしないが、仕組みとして働く）。推定した注の一覧（領域 fn）の
+    # 「注」への p は注の区切りの直し（注の続き）で、XML に反映する（所有者の決定 5。W8 の手順 5）
+    import jasme_jats.ai_assist as ai_assist
+    assert res.plan.region[src] == "fn"
+    res5 = _manual_roles(path, answers.answer(boundaries=[(src, "注の続き")]), meta, journal, tmp_path / "out5")
     assert res5.ai.rejected == [] and res5.fidelity.ok and res5.fidelity.final_ok and res5.dtd_valid
+    assert [(b.src, b.kind) for b in res5.ai.boundaries] == [(src, "注の続き")]
     assert res5.plan.fns == [] and res5.plan.fn_guess_checks == [] and fn_guess_action(res5) == []
     assert "注" in [text(q) for q in load(res5).find("body").iter("p")]
-    res6 = _manual_roles(path, [(src, "fn_heading")], meta, journal, tmp_path / "out6")
+    # 見出しへの fn_heading は Word のスタイルで直す提案（XML に反映しない）。組み立ての仕組みは、区切り以外の役割も反映する形に
+    # 差し替えて確かめる
+    res6 = _manual_roles(path, answers.answer(style_fixes=[(src, "fn_heading")]), meta, journal, tmp_path / "prop6")
+    assert [why for _, why in res6.ai.rejected] == [ai_assist.STYLE_ONLY_WHY] and len(fn_guess_action(res6)) == 1
+    monkeypatch.setattr(ai_assist, "boundary_kind", lambda p, plan, role: "試験の区切り")
+    res6 = _manual_roles(path, answers.answer(style_fixes=[(src, "fn_heading")]), meta, journal, tmp_path / "out6")
     assert res6.ai.rejected == [] and res6.fidelity.ok and len(res6.plan.fns) == 1 and fn_guess_action(res6) == []
 
 
@@ -1508,7 +1505,9 @@ def test_abstract_without_style_or_heading_needs_action(journal, meta, tmp_path)
     report = res.report_path.read_text(encoding="utf-8")
     ch6 = report.split("## 6.")[1].split("## 7.")[0]
     assert ch6.count(EN_OTHER_EXCLUDED + "（要対応）") == 2 and "（要確認）" not in ch6
-    assert "AI による補完を使うときは" in act.box_detail      # AI を使わないとき（目印 ai_choose の文）
+    # Word でスタイルを付ける直し方だけ（AI の set_role の abstract は提案で XML に反映しないので、勧めない。修正計画 W8 の手順 7）
+    for t in (act.top, act.box_detail, act.cli, act.checklist):
+        assert "AI" not in t and "set_role" not in t and "\x00" not in t, t
 
 
 def test_abstract_missing_reason_follows_heading(journal, meta, tmp_path):

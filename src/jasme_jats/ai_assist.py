@@ -1,8 +1,9 @@
 """生成 AI による補完（推奨は Claude。API モードでは ChatGPT・Gemini・Sakana AI も使える）。
 
 AI には XML も docx も直接編集させない。AI が返すのは「操作」の一覧（JSON）だけで、
-Python が 1 件ずつ検証してから、文字列を変えない操作（リンクを付ける・段落の役割を変える・
-姓名の区切りを指定する・数式画像に MathML を併記する）として適用する。
+Python が 1 件ずつ検証してから、文字列を変えない操作（リンクを付ける・注の区切りと資料の始まりを直す・
+姓名の区切りを指定する）として適用する。ほかの段落の役割の指定（見出し・引用・キャプション・除外など）は、Word のスタイルで
+直す提案として記録するだけで、XML は変えない（所有者の決定 5。BOUNDARY_KINDS・boundary_problem）。
 適用後は、最後に必ず文字の不変性チェックをやり直す（pipeline.py）。
 
 使い方は 2 通り:
@@ -20,6 +21,7 @@ import os
 import re
 import unicodedata
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 from lxml import etree
 
@@ -27,7 +29,7 @@ from .article import ArticlePlan, _para_text
 from .floats import column_cm, describe, estimate_top_left
 from .model import OBJ, LinkSpec, Para, note_label
 from .omml import MML_NS, OmmlConverter, math_display_text
-from .structure import AFTER_BODY_REGIONS, abstract_missing_srcs, float_caption
+from .structure import AFTER_BODY_REGIONS, abstract_missing_srcs, figure_rows, float_caption
 
 # 既定の AI モデル（Claude。動作を確かめたもの）。ここ 1 か所で決める（pipeline.Options・cli の既定、ノートブックの手順 4 と説明。
 # tools/make_notebook.py はこのファイルを読んで、DEFAULT_MODEL と DEFAULT_MODEL_INFO の値を使う）。
@@ -47,6 +49,16 @@ ROLES = {
     "exclude": "論文の本文ではない（テンプレートの装飾など）",
 }
 _HEADINGS = {"ref_heading", "notes_heading", "ack_heading", "fn_heading"}
+# AI の回答で XML を直す段落の役割の補正（所有者の決定 5。注の区切りと資料の始まりだけ）: kind の語 → 中の役割。
+# 指定できる段落は boundary_kind で決める（注の始まり・注の続きは手で書いた注の一覧〈領域 fn〉の段落、資料の見出しは英文要旨と
+# 資料の段落、英文要旨の続き・資料の本文は今、資料の見出し〈AppNode.title〉になっている段落）。ほかの指定は提案（STYLE_ONLY_WHY）
+BOUNDARY_KINDS = {"注の始まり": "fn_start", "注の続き": "p", "資料の見出し": "app_heading", "英文要旨の続き": "abstract",
+                  "資料の本文": "p"}
+# 区切りの 5 つ以外の set_role を XML に反映しない理由（レポートの 2 章の不採用の一覧。同じ内容を AIOutcome.style_fixes に提案として入れる）
+STYLE_ONLY_WHY = ("Word のスタイルで直せる指定なので、XML には反映しない（Word で直す提案として、要確認「スタイルを確かめてください」に"
+                  "載せる）")
+# 除外（exclude）の提案の、Word での直し方（ほかの役割は、その役割のスタイルにする。role_style）
+EXCLUDE_HOW = "本文に要らない段落なら、Word で消す"
 REGION_ROLES = {
     "front_ja": {"title", "subtitle", "exclude"},
     "body": {"sec1", "sec2", "sec3", "p", "fig_caption", "table_caption", "quote", "exclude"} | _HEADINGS,
@@ -71,14 +83,15 @@ OP_SCHEMA = {
     "type": "object",
     "properties": {
         "op": {"type": "string", "enum": ["link_citation", "link_figure", "link_table", "link_note", "link_formula",
-                                          "set_role", "formula_image", "split_name"]},
-        "src": {"type": "string", "description": "対象の段落 ID（例: d18）。formula_image では空文字"},
+                                          "set_role", "split_name"]},
+        "src": {"type": "string", "description": "対象の段落 ID（例: d18）"},
         "text": {"type": "string", "description": "リンクにする文字列（段落中にあるとおりに完全一致で）。リンク以外の操作では空文字"},
         "occurrence": {"type": "integer", "description": "段落内で text が何回目に現れる箇所か（1 始まり）"},
         "target": {"type": "string", "description": "リンク先 ID（B3, F1, T2, fn1, FD1 など）。リンク以外では空文字"},
         "role": {"type": "string", "description": "set_role の役割名。それ以外では空文字"},
-        "image": {"type": "string", "description": "formula_image の画像 ID（img3 など）。それ以外では空文字"},
-        "mathml": {"type": "string", "description": "formula_image の MathML（<math> 要素）。それ以外では空文字"},
+        # image・mathml は使わない項目（いつも空文字。操作 formula_image をなくした名残で、回答の形を変える修正計画 W8 の手順 10 まで残す）
+        "image": {"type": "string", "description": "使わない項目。いつも空文字"},
+        "mathml": {"type": "string", "description": "使わない項目。いつも空文字"},
         "surname": {"type": "string", "description": "split_name の姓。それ以外では空文字"},
         "given": {"type": "string", "description": "split_name の名。それ以外では空文字"},
         "reason": {"type": "string", "description": "判断の根拠（日本語。前後の文脈など、人が確認できるように具体的に）"},
@@ -96,22 +109,23 @@ PLACEMENT_SCHEMA = {
                                                    "囲み」「図に重ねた注記とみなして除外したテキストボックス」に挙げたもの"},
         "after": {"type": "string", "description": "図表・囲みを置く位置: Word で表示したときに図の左上の直上にある本文の文章を含む"
                                                    "段落の ID。テキストボックスで kind が label のときは空文字"},
-        "items": {"type": "array", "description": "図形の中身を、図・表ごとに組にしたもの（テキストボックスでは kind の組 1 つ）", "items": {
+        # items は必須のまま（ChatGPT の strict な構造化出力は、すべての項目を必須にしないと受け付けない）。図形では空の一覧 [] を書かせる
+        # （中身の組み合わせは変換ツールが決める。修正計画 W8 の手順 6）
+        "items": {"type": "array", "description": "図形（s1 など）では空の一覧 []（中身の組み合わせは変換ツールが決める）。"
+                                                  "テキストボックス（x1 など）だけ、kind の組を 1 つ書く", "items": {
             "type": "object",
             "properties": {
+                # fig・table は前の形の回答（図形の中身の組）を読むために残す（float_placements は読まない）
                 "kind": {"type": "string", "enum": ["fig", "table", "box", "label"],
-                         "description": "fig（図）・table（表）は図形（s1 など）の中身の組。box（本文の囲み）・label（図に重ねた"
-                                        "注記。本文に出さない）はテキストボックス（x1 など）に 1 つだけ書き、caption と body は"
-                                        "空の一覧 []"},
-                "caption": {"type": "array", "items": {"type": "string"},
-                            "description": "キャプションの段落 ID（出典などの続きの段落も順に）"},
-                "body": {"type": "array", "items": {"type": "string"},
-                         "description": "本体: 表 ID（t3 など）、画像 ID（img2 など）、または画像だけの段落 ID"},
+                         "description": "テキストボックス（x1 など）の種類: box（本文の囲み）か label（図に重ねた注記。本文に"
+                                        "出さない）"},
+                "caption": {"type": "array", "items": {"type": "string"}, "description": "空の一覧 []"},
+                "body": {"type": "array", "items": {"type": "string"}, "description": "空の一覧 []"},
             },
             "required": ["kind", "caption", "body"],
             "additionalProperties": False,
         }},
-        "reason": {"type": "string", "description": "位置と組み合わせの根拠（日本語で具体的に）"},
+        "reason": {"type": "string", "description": "位置の根拠（日本語で具体的に）"},
         "confidence": {"type": "string", "enum": ["高", "中", "低"]},
     },
     "required": ["float", "after", "items", "reason", "confidence"],
@@ -123,7 +137,7 @@ RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
         "placements": {"type": "array", "items": PLACEMENT_SCHEMA,
-                       "description": "位置を決められなかった図表（テキストボックス・グループ図形）の位置と組み合わせと、"
+                       "description": "位置を決められなかった図表（テキストボックス・グループ図形）の位置と、"
                                       "囲みか図の注記か決められなかったテキストボックスの種類（box・label）。回答の最初に書く"},
         "operations": {"type": "array", "items": OP_SCHEMA},
         "notes": {"type": "array", "items": {"type": "string"},
@@ -140,23 +154,28 @@ Python のプログラムがすでに機械的な変換を済ませています�
 - 論文の文字は 1 文字も変えてはいけません（誤字脱字に見えても直さない）。あなたが提案できるのは、既存の文字列に対する次の操作だけです。
 - 操作の text には、段落中にある文字列を一字一句そのまま書いてください。プログラムが完全一致で探し、見つからなければその操作は捨てられます。
 
-提案できる操作（6 の placements は operations とは別の一覧に書きます）:
+提案できる操作（5 の placements は operations とは別の一覧に書きます）:
 1. link_citation: 本文中の引用を引用文献リストの文献にリンクする。リンクにするのは「年」の部分だけです（例: 「Claude (2025)」なら text は「2025」、「中原（1995, p.3）」なら「1995」）。
    機械処理は「著者名（年）」「（著者名, 年）」の形だけを扱います。著者名と年が離れている、括弧がない、著者名の表記が文献リストと異なる、年が食い違う、などで未リンクのものを探してください。
    年が文献リストと食い違う場合（本文 1977 / 文献 1976 など）は、文脈から同じ文献と判断できるときだけ、確度「低」で提案してください。
 2. link_figure / link_table / link_note / link_formula: 「図3」「表2」「注4」「式(2)」などの参照を、対応する図・表・注・数式にリンクする（text は「図3」のように参照の表記全体）。
-3. set_role: スタイルが正しく設定されておらず、役割を機械的に決められなかった段落の役割を指定する。role には次のいずれかを書く:
+3. set_role: 段落の役割を指定する。XML に反映するのは、注の区切りと資料の始まりの直しだけです:
+   注の一覧（手で書いた注）の段落への fn_start（その段落から新しい注）と p（前の注の続き）、英文要旨と資料の段落への
+   app_heading（資料の見出し。その段落から後ろが資料になります）、今、資料の見出しになっている段落への abstract（資料の始まりを
+   取り消し、次の資料の見出しまで英文要旨に戻します）と p（見出しではなく、前の資料の続きにします。前に資料がなければ、
+   見出しのない資料の最初の段落になります）。
+   英文要旨の後ろの資料（付録）が英文要旨に入っているときは、資料の見出しの段落を app_heading にしてください。逆に、英文要旨の
+   段落が誤って資料にされているときは、その資料の見出しの段落を abstract にしてください。資料の見出しにされた段落が、見出しでは
+   なく資料の中の文のときは p にしてください。
+   ほかの役割の指定（見出しの階層、見出しと本文、ブロック引用、図・表のキャプション、引用文献、題目・副題、英文要旨のスタイルの
+   ない段落を英文要旨にする、本文に要らない段落の除外など）は、スタイルが正しく設定されていない段落について、Word のスタイルで直す
+   提案として作業する人に知らせるだけで、XML は変えません。role には次のいずれかを書く:
    {roles}
    著者表の中の段落（役割 author_ja / aff_ja / author_en / aff_en）は確認のために載せているもので、役割は変えられません。
-   Word の脚注・文末脚注の段落と、英文の題目・副題の段落の役割も変えられません。英文要旨の後ろの資料（付録）が英文要旨に
-   入っているときは、資料の見出しの段落を app_heading にしてください（その段落から後ろが資料になります）。逆に、英文要旨の
-   段落が誤って資料にされているときは、その資料の見出しの段落を abstract にしてください（次の資料の見出しまで英文要旨に戻ります）。
-   資料の見出しにされた段落が、見出しではなく資料の中の文のときは p にしてください（前の資料の続きになります。前に資料がなければ、
-   見出しのない資料の最初の段落になります）。
-4. formula_image: 画像として貼り付けられた数式を MathML（MathML 2.0、<math xmlns="http://www.w3.org/1998/Math/MathML"> を根要素とする）に書き起こす。元の画像は残したまま、読み取った数式を併記します。数式でない画像には提案しないでください。
-5. split_name: 姓と名の間に空白がない和文の著者名と、字の間に空白があり姓と名の境目をプログラムが決めた（いちばん長い空白で決めた、または推定した）和文の著者名について、姓と名の境目を指定する（surname + given が氏名の文字列と完全に一致すること。字の間に空白のある氏名は、空白を除いた文字で一致すればよい）。
+   Word の脚注・文末脚注の段落と、英文の題目・副題の段落の役割も変えられません。
+4. split_name: 姓と名の間に空白がない和文の著者名と、字の間に空白があり姓と名の境目をプログラムが決めた（いちばん長い空白で決めた、または推定した）和文の著者名について、姓と名の境目を指定する（surname + given が氏名の文字列と完全に一致すること。字の間に空白のある氏名は、空白を除いた文字で一致すればよい）。
 
-6. placements（図表の位置と組み合わせ）: 依頼文の「# 位置を決められなかった図表」に挙げた図形（s1 など）は、1 つ残らず、
+5. placements（図表の位置）: 依頼文の「# 位置を決められなかった図表」に挙げた図形（s1 など）は、1 つ残らず、
    必ず placements に 1 件ずつ指定してください（省略できません）。これらは Word のテキストボックスやグループ図形に入った図表
    （2 段組をまたぐ図など）で、docx には Word で表示したときの位置が記録されていないため、プログラムでは置き場所を決められませんでした。
    - after: 図表を置く位置です。Word で表示したときに、図の左上の直上にある本文の文章を含む段落の ID を書いてください（その段落の直後に置きます）。
@@ -164,11 +183,10 @@ Python のプログラムがすでに機械的な変換を済ませています�
      依頼文に示した配置の情報（アンカー段落、アンカー段落からの距離、行数による推定）から判断してください。行数による推定は文字数から計算した
      目安で、ページや段の区切りは考慮していません。図の番号の順序（図2 は図1 より後）とも矛盾しないようにしてください。
      after に書けるのは「# 論文の段落一覧」の本文の段落（テキストボックス・グループ図形の中の段落と、表のセルの段落を除く）だけです。
-   - items: 図形の中身を、図・表ごとに組にしたものです。kind は fig（図）か table（表）。caption はキャプションの段落 ID
-     （「図1　…」の段落と、それに続く出典などの段落を順に）。body は本体で、表 ID（t3 など）、画像 ID（img2 など）、または画像だけの段落 ID。
-     問題文などを表で組んだ図は、kind を fig、body をその表にします。1 つの図形に図が 2 つ並んでいる（表の中に画像とキャプションが並んでいる）
-     場合は、画像とキャプションのセルの段落を図ごとに組にして、items を 2 つにします。表は kind を table、body をその表 1 つにします。
-   - 「# 位置を機械的に決めた図表（変更不可）」に挙げた図形は、位置も組み合わせも確定しています。placements に書かないでください（書いても採用されません）。
+   - 答えるのは位置（after）だけです。図形の中の図・表とキャプションの組み合わせはプログラムが決めています（依頼文の「中身」に、
+     その順で並べてあります）。図形（s1 など）の items は、空の一覧 [] にしてください。1 つの図形に図・表が 2 つ以上入っていても、
+     答えは図形ごとに 1 件です（中の図・表は、その順でまとめて置かれます）。
+   - 「# 位置を機械的に決めた図表（変更不可）」に挙げた図形は、位置が確定しています。placements に書かないでください（書いても採用されません）。
    - 「# 囲みか図の注記か決められなかったテキストボックス」に挙げたもの（x1 など）は、1 つ残らず placements に 1 件ずつ指定してください。
      float にテキストボックスの ID、items に {"kind": "box" か "label", "caption": [], "body": []} を 1 つだけ書きます。
      box は本文の囲み（問題文・ヒント・まとめなど、本文として読まれる文章）で、after の段落の直後に枠で囲んだ段落として置きます。
@@ -210,11 +228,34 @@ class AIOutcome:
     raw: str = ""
     model_note: str = ""              # 指定と違うモデルを使った場合の説明
     cut: bool = False                 # API の回答が長すぎて途中で切れた（raw は切れたところまで）
-    partial: str = ""                 # 途中で切れた回答から、図表の位置の指定（placements）の一部だけを反映したときの説明（要対応）
+    boundaries: list = field(default_factory=list)   # 反映した注の区切り・資料の始まりの直し（Boundary。role_overrides が記録する）
+    style_fixes: list = field(default_factory=list)  # Word のスタイルで直す提案（StyleFix。XML には反映しない。role_overrides が記録する）
+    partial: str = ""                 # 途中で切れた回答から、図表の位置の指定（placements）の一部だけを反映したときの説明（推奨の手順 ai_finish の「一部」。report.ai_state）
+
+
+class Boundary(NamedTuple):
+    """AI の回答で反映した、注の区切り・資料の始まりの直し（AIOutcome.boundaries）。kind は BOUNDARY_KINDS の語。"""
+    src: str
+    kind: str
+    role: str
+    reason: str
+    confidence: str
+
+
+class StyleFix(NamedTuple):
+    """Word のスタイルで直す提案（AIOutcome.style_fixes。XML には反映しない）。style は Word のスタイル名（なければ ""）、how は Word での直し方。"""
+    src: str
+    role: str
+    style: str
+    how: str
+    reason: str
+    confidence: str
+    verdict: str = "直す"
 
 
 # ---------------------------------------------------------------------------- AI に渡す資料
-def para_view(p: Para) -> str:
+def para_view(p: Para, images: bool = True) -> str:
+    """AI に渡す段落の文字列。images が偽なら、docx の画像の印（⟦画像 imgN: …⟧）を書かない（図形の中身。画像は AI に渡さない）。"""
     out = []
     for a in p.atoms:
         if a.kind == "text":
@@ -222,7 +263,7 @@ def para_view(p: Para) -> str:
         elif a.kind == "math":
             mml = OmmlConverter().convert(a.math, a.display)
             out.append(f"⟦数式: {math_display_text(mml)}⟧")
-        elif a.kind == "image":
+        elif a.kind == "image" and images:
             out.append(f"⟦画像 {a.image.image_id}: {a.image.width_cm:.1f}cm×{a.image.height_cm:.1f}cm⟧")
         elif a.kind == "fnref":
             out.append("⟦Word の文末脚注参照⟧" if a.fn_kind.startswith("endnote") else "⟦Word の脚注参照⟧")
@@ -230,8 +271,8 @@ def para_view(p: Para) -> str:
     return s
 
 
-def para_view_with_links(p: Para) -> str:
-    """リンク済みの箇所を «文字→リンク先» の形で示した段落の文字列。"""
+def para_view_with_links(p: Para, images: bool = True) -> str:
+    """リンク済みの箇所を «文字→リンク先» の形で示した段落の文字列（images は para_view と同じ）。"""
     out = []
     cur = None
     buf = ""
@@ -247,7 +288,7 @@ def para_view_with_links(p: Para) -> str:
         if a.kind == "text":
             buf += a.text
         else:
-            buf += para_view(Para(src="", atoms=[a]))
+            buf += para_view(Para(src="", atoms=[a]), images)
     if cur is not None and buf:
         out.append(f"«{buf}→{_spec_label(cur)}»")
     elif buf:
@@ -345,7 +386,7 @@ def build_request(plan: ArticlePlan, linker, build_exclusions=(), unsplit_names=
     if miss:
         shown = ", ".join(miss[:8]) + (" ほか" if len(miss) > 8 else "")
         lines.append(f"- 英文要旨の段落が見つからない（英文の部分の {shown} を出力から除外した）。"
-                     "英文要旨なら、その最初の段落に set_role の abstract を提案（後ろの段落も英文要旨になる）")
+                     "英文要旨なら、その最初の段落に set_role の abstract を提案（XML には反映せず、作業する人に知らせる）")
     for src, text, lang in unsplit_names:
         note = "（英文の氏名。split_name は和文の氏名にだけ使えるので、提案しない）" if lang == "en" else ""
         # 氏名の中の改行（Word の Shift+Enter。10 章と要確認で別に知らせる）は、行が分かれないよう「⏎」で示す（レポートの表と同じ）
@@ -378,12 +419,14 @@ def float_section(plan: ArticlePlan) -> list:
     lay = plan.layout
     if unplaced:
         lines.append("\n# 位置を決められなかった図表（テキストボックス・グループ図形）")
-        lines.append("以下のすべてについて、placements に位置（after）と組み合わせ（items）を必ず指定してください。")
+        lines.append("以下のすべてについて、placements に位置（after）を必ず指定してください（中身の図・表の組み合わせは"
+                     "決まっているので、items は空の一覧 [] にします）。")
         if lay and lay.columns:
             lines.append(f"本文の体裁: {lay.columns} 段組、1 段の幅 {lay.column_width_cm:.1f} cm（1 行 約 {lay.chars_per_line:.0f} 字）、"
                          f"行送り {lay.line_pitch_cm:.2f} cm（1 段 約 {lay.text_height_cm / lay.line_pitch_cm:.0f} 行）、"
                          f"本文の幅 {lay.text_width_cm:.1f} cm")
         seq = plan.body_seq
+        rows = figure_rows(plan)
         for info in unplaced:
             fl = info.float
             anchor = plan.paras.get(fl.anchor_src)
@@ -397,18 +440,8 @@ def float_section(plan: ArticlePlan) -> list:
             else:
                 lines.append("  行数による推定: できない（縦の位置がアンカー段落を基準にしていない、または別の段にあるため）。"
                              "アンカー段落の前後と本文中の参照から判断してください")
-            lines.append("  中身:")
-            for q in info.paras:
-                if q.is_blank and not q.images:
-                    continue
-                lines.append(f"    段落 [{q.src}]（スタイル: {q.style_name}）{para_view(q)[:80]}")
-            for t in info.tables:
-                cells = [c for c in t.paragraphs() if not c.is_blank or c.images]
-                lines.append(f"    表 {t.tid}（{len(t.rows)} 行。セルの段落: "
-                             + "、".join(f"[{c.src}]{para_view(c)[:30]}" for c in cells[:12])
-                             + ("…" if len(cells) > 12 else "") + "）")
-            for img in info.images:
-                lines.append(f"    画像 {img.image_id}（グループ図形の画像。{img.width_cm:.1f}cm×{img.height_cm:.1f}cm）")
+            lines.append("  中身（この順でまとめて置く）:")
+            lines += float_contents(plan, info, rows)
             if info.reason:
                 lines.append(f"  機械的に決められなかった理由: {info.reason}")
     if fixed:
@@ -430,6 +463,39 @@ def float_section(plan: ArticlePlan) -> list:
                 how = (f"段落 [{fl.anchor_src}] の前に配置済み" if info.mode == "mechanical" else "AI の指定で配置済み")
             lines.append(f"[{fl.fid}] {what}: {how}")
     return lines + textbox_section(plan)
+
+
+def _content_line(head: str, q) -> str:
+    """図形の中身の段落 1 つの行（段落の ID・スタイル名・リンク済みの印つきの全文。画像の印は書かない）。"""
+    return f"{head}[{q.src}]（スタイル: {q.style_name}）{para_view_with_links(q, images=False)}"
+
+
+def float_contents(plan: ArticlePlan, info, rows) -> list:
+    """依頼文の「位置を決められなかった図表」の図形 1 つの「中身」の行（修正計画 W8 の手順 6）。
+
+    図形の中身から変換ツールが組んだ図・表（structure.figure_rows のうち、その図形の行。FloatInfo.nodes と表のセルの図。XML の順）を、
+    ID とキャプションの段落で書き、本文として出す段落（FloatInfo.body_paras）を続ける。docx の画像の ID は書かない（画像は AI に
+    渡さない。図・表の画像は作業する人が用意する）。図・表に組めたものがなければ、文字のある段落を docx の順に書く。"""
+    out = []
+    for row in rows:
+        if row.float_id != info.float.fid:
+            continue
+        name = {"fig": "図", "table": "表"}.get(row.kind, "キャプションのない図")
+        if row.kind == "table" and row.caption is None:
+            name = "キャプションのない表"
+        label = f"{name} {row.fid}" if row.fid else name
+        if row.caption is None:
+            out.append(f"    {label}")
+            continue
+        out.append(_content_line(f"    {label}: ", row.caption))
+        for q in getattr(row.node, "caption_more", None) or []:
+            out.append(_content_line("      続き: ", q))
+    for q in info.body_paras:
+        if not q.is_blank:
+            out.append(_content_line("    本文として出す段落: ", q))
+    if not out:
+        out = [_content_line("    段落: ", q) for q in info.paras if para_view(q, images=False).strip()]
+    return out
 
 
 def _box_size(plan: ArticlePlan, info) -> str:
@@ -838,7 +904,7 @@ def call_gemini(request_text, images, out: AIOutcome, api_key=None) -> AIOutcome
 MANUAL_EXAMPLE = """```json
 {
   "placements": [
-    {"float": "s1", "after": "d47", "items": [{"kind": "fig", "caption": ["d52", "d53"], "body": ["t3"]}],
+    {"float": "s1", "after": "d47", "items": [],
      "reason": "図の上端はアンカー段落 d48 の上端から約 1.8 行下で、推定では直上の本文は d47。図1 の初出（d46）より後", "confidence": "中"},
     {"float": "x2", "after": "d30", "items": [{"kind": "box", "caption": [], "body": []}],
      "reason": "問題文とヒントの囲みで、図の注記ではない。本文で「次の問題」と述べた段落 d30 の直後", "confidence": "中"}
@@ -861,20 +927,19 @@ kind box で書く）の各項目:
 - float: 図形の ID（s1 など）か、テキストボックスの ID（x1 など）
 - after: 図表を置く位置（Word で表示したときに図の左上の直上にある本文の文章を含む段落の ID。その段落の直後に置く）。
   テキストボックスを label にするときは ""
-- items: 図・表ごとの組。kind（fig / table）、caption（キャプションの段落 ID の一覧）、body（表 ID・画像 ID・画像だけの段落 ID の一覧）。
+- items: 図形（s1 など）では空の一覧 []（中身の図・表の組み合わせはプログラムが決める）。
   テキストボックス（x1 など）では、kind を box（本文の囲み。問題文・ヒントなど）か label（図に重ねた注記。矢印のラベルなど）に
   した組を 1 つだけ書き、caption と body は []
 - reason, confidence: 下の operations と同じ
 
 operations の各項目の意味（すべての操作に 12 項目すべてを書き、使わない項目は空文字 "" にする。occurrence は数値）:
-- op: 操作の種類（link_citation / link_figure / link_table / link_note / link_formula / set_role / formula_image / split_name）
-- src: 対象の段落 ID（d18 など。formula_image では ""）
+- op: 操作の種類（link_citation / link_figure / link_table / link_note / link_formula / set_role / split_name）
+- src: 対象の段落 ID（d18 など）
 - text: リンクにする文字列（段落中のとおりに完全一致。引用文献なら年の部分だけ）
 - occurrence: その段落で text が何回目に現れる箇所か（1 から数える）
 - target: リンク先の ID（B3, F1, T2, fn1, FD1 など）
 - role: set_role で指定する役割
-- image: formula_image の画像 ID（img3 など）
-- mathml: formula_image で読み取った数式（<math xmlns="http://www.w3.org/1998/Math/MathML"> から </math> まで）
+- image, mathml: 使わない項目（いつも ""）
 - surname, given: split_name の姓と名
 - reason: 判断の根拠（日本語で具体的に）
 - confidence: 高 / 中 / 低"""
@@ -1282,26 +1347,78 @@ def set_role_problem(p, plan: ArticlePlan, role: str) -> str:
 
 
 def set_role_hint(p, plan: ArticlePlan) -> str:
-    """依頼文の除外の一覧で、段落 p に添える set_role の案内（set_role_problem で指定できる役割だけを勧める）。
+    """依頼文の除外の一覧で、段落 p に添える set_role の案内。
 
-    囲みか図の注記か決められなかったテキストボックスの段落には、placements の kind box・label を案内し、図に重ねた注記とみなした
-    テキストボックスの段落には、本文の文章なら kind box で囲みにできることを案内する（set_role では囲みにできない）。
+    除外した段落の役割の指定は、Word のスタイルで直す提案になる（XML は変えない。決定 5）ので、案内は「確かめるだけ」の 1 通りにする。
+    ただし、set_role_problem でどの役割も指定できない段落（Word の注・著者表の中の段落など）には、必ず捨てられる set_role を
+    勧めない（N6）。囲みか図の注記か決められなかったテキストボックスの段落には、placements の kind box・label を案内し、図に
+    重ねた注記とみなしたテキストボックスの段落には、本文の文章なら kind box で囲みにできることを案内する（set_role では囲みにできない）。
     """
     box = plan.textboxes.get(p.textbox_id) if p.textbox_id else None
     if box is not None and box.kind == "undecided":
         return "（囲みなら placements の kind box、図の注記なら label で指定）"
     if box is not None and box.kind == "label":
         return "（図の注記でなく本文の文章なら、placements の kind box で囲みに指定）"
-    if not set_role_problem(p, plan, "p"):
-        return "（本文の一部なら set_role を提案）"
-    ok = [r for r in ROLES if r != "exclude" and not set_role_problem(p, plan, r)]
-    if ok:
-        return f"（set_role で指定できる役割: {', '.join(ok)}）"
+    if any(not set_role_problem(p, plan, r) for r in ROLES if r != "exclude"):
+        return "（確かめるだけ。本文に必要なら set_role で提案）"
     return "（この段落の役割は set_role では変えられない）"
 
 
-def role_overrides(ops, plan: ArticlePlan, outcome: AIOutcome) -> dict:
-    """set_role 操作を検証し、段落の役割の上書き表にする（構造の組み立てをやり直すため）。可否は set_role_problem で決める。"""
+def boundary_kind(p, plan: ArticlePlan, role: str) -> str:
+    """段落 p への役割 role の指定が、注の区切り・資料の始まりの直し（BOUNDARY_KINDS）なら、その kind の語（でなければ ''）。
+
+    set_role_problem を通った指定だけに使う（領域の確かめは set_role_problem が済ませている）。
+    """
+    region = plan.region.get(p.src, "")
+    app_title = any(a.title is p for a in plan.apps)
+    if region == "fn" and role in ("fn_start", "p"):
+        return "注の始まり" if role == "fn_start" else "注の続き"
+    if role == "app_heading":
+        return "資料の見出し"
+    if app_title and role in ("abstract", "p"):
+        return "英文要旨の続き" if role == "abstract" else "資料の本文"
+    return ""
+
+
+def boundary_problem(p, plan: ArticlePlan, role: str) -> str:
+    """段落 p に役割 role を指定して XML に反映できない理由（反映できれば ''）。
+
+    判定の 1 か所（今の形の回答の set_role の検証〈role_overrides〉と、W8 の新しい形の回答の boundaries が使う）。
+    set_role_problem を先に通し、通った指定のうち注の区切り・資料の始まりの直し（boundary_kind）でないものは STYLE_ONLY_WHY を返す
+    （Word のスタイルで直す提案にする。所有者の決定 5）。
+    """
+    why = set_role_problem(p, plan, role)
+    if why:
+        return why
+    return "" if boundary_kind(p, plan, role) else STYLE_ONLY_WHY
+
+
+def role_style(journal, role: str) -> str:
+    """役割 role の Word のスタイル名（journal.styles で、その役割の最初の日本語のスタイル名。なければ ''）。"""
+    styles = getattr(journal, "styles", None) or {}
+    return next((name for name, r in styles.items() if r == role and not name.isascii()), "")
+
+
+def style_fix(op: dict, journal) -> StyleFix:
+    """区切りの 5 つ以外の set_role を、Word のスタイルで直す提案にする（XML には反映しない）。"""
+    role = op["role"]
+    style = "" if role == "exclude" else role_style(journal, role)
+    if role == "exclude":
+        how = EXCLUDE_HOW
+    elif style:
+        how = f"Word で段落のスタイルを「{style}」にする"
+    else:
+        how = f"Word で段落を{ROLES.get(role, role)}のスタイルにする"
+    return StyleFix(op["src"], role, style, how, op.get("reason", ""), op.get("confidence", ""))
+
+
+def role_overrides(ops, plan: ArticlePlan, outcome: AIOutcome, journal=None) -> dict:
+    """set_role 操作を検証し、段落の役割の上書き表にする（構造の組み立てをやり直すため）。可否は boundary_problem で決める。
+
+    上書き表に入れるのは、注の区切り・資料の始まりの直し（BOUNDARY_KINDS）だけ。ほかの役割の指定は STYLE_ONLY_WHY で不採用にし、
+    同じ内容を Word のスタイルで直す提案（AIOutcome.style_fixes。スタイル名は journal から）に入れる（所有者の決定 5）。
+    反映した直しは AIOutcome.boundaries に記録する（構造の衝突で使わなかったものは pipeline._reject_roles が除く）。
+    """
     out = {}
     for op in ops:
         if op["op"] != "set_role":
@@ -1310,10 +1427,15 @@ def role_overrides(ops, plan: ArticlePlan, outcome: AIOutcome) -> dict:
         if src not in plan.paras:
             outcome.rejected.append((op, f"段落 {src} が存在しない"))
             continue
-        why = set_role_problem(plan.paras[src], plan, role)
+        p = plan.paras[src]
+        why = boundary_problem(p, plan, role)
         if why:
             outcome.rejected.append((op, why))
+            if why == STYLE_ONLY_WHY:
+                outcome.style_fixes.append(style_fix(op, journal))
             continue
+        outcome.boundaries.append(Boundary(src, boundary_kind(p, plan, role), role, op.get("reason", ""),
+                                           op.get("confidence", "")))
         out[src] = role
     return out
 
@@ -1576,7 +1698,7 @@ def apply_ops(ops, plan: ArticlePlan, doc, outcome: AIOutcome, split: bool = Fal
             outcome.accepted.append((op, d))
             if kind in ("link_figure", "link_table"):
                 # 機械的にはリンクしなかった図・表の参照（plan.float_unlinked）に AI がリンクを付けたら、その分は残りから除く
-                # （要確認の知らせ〈report.float_ref_ai〉は「AI もリンクを付けなかった参照」だけを挙げる）。同じ種類・同じ段落で、
+                # （要確認の知らせ〈report._float_ref_action〉は、AI もリンクを付けなかった参照だけを挙げる）。同じ種類・同じ段落で、
                 # 参照の範囲が AI のリンクの範囲と重なるものだけを除く（リンクの対象でない同じ文字〈「地図1」の「図1」〉に AI がリンクを
                 # 付けても、本当にリンクされていない参照は残る）
                 word = "図" if kind == "link_figure" else "表"

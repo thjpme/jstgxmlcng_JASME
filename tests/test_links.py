@@ -11,9 +11,9 @@ docs/fix_plan_repro_tests.py の D2・M5 の再現テスト（test_PROBLEM_super
 test_PROBLEM_figure_reference_inside_word）の期待を逆にしたものも、ここに置く（test_superscript_exponent_not_linked・
 test_float_refs_skip_words）。どのテストも、段落の文字で対象を選ぶ（fixture に段落を足しても壊れないように）。
 """
-import json
 import re
 
+import answers
 import make_fixtures as mf
 import pytest
 from conftest import FULL, LINKS, LINKS_BARE
@@ -77,9 +77,9 @@ def records(res, prefix, category="note"):
     return [d.message for d in res.plan.decisions if d.src == srcs[0] and d.category == category and not d.applied]
 
 
-def op(kind, src, text_, occurrence, target):
-    return {"op": kind, "src": src, "text": text_, "occurrence": occurrence, "target": target, "role": "", "image": "",
-            "mathml": "", "surname": "", "given": "", "reason": "記録の text と occurrence による", "confidence": "中"}
+def link(kind, src, text_, occurrence, target):
+    """回答の links の項目（tests/answers.py。kind は 文献・図・表・注・式）。"""
+    return (kind, src, text_, occurrence, target, "記録の text と occurrence による", "中")
 
 
 def src_of(res, prefix):
@@ -176,8 +176,8 @@ def test_unlinked_superscripts_are_recorded(links):
         for m in msgs:
             assert m in report
             assert f"- [{src}] 推定: {m}" in prompt
-    # 記録だけ（手動モードの回答待ちと、図の画像を入れる手順のほかに知らせはない）
-    assert [a.key for a in actions(links)] == ["ai_pending", "images"]
+    # 記録だけ（図の画像を入れる手順のほかに知らせはない。手動モードの回答待ちは、位置を聞く図形がないので 2 章の 1 行だけ）
+    assert [a.key for a in actions(links)] == ["images"]
 
 
 def test_link_note_from_record_is_accepted(links, journal, meta, tmp_path):
@@ -186,9 +186,8 @@ def test_link_note_from_record_is_accepted(links, journal, meta, tmp_path):
     for prefix in ("面積は 3 cm", "関数 f(x"):
         msg = records(links, prefix)[-1]
         [(t, k)] = RE_ITEM.findall(msg)
-        ops.append(op("link_note", src_of(links, prefix), t, int(k), "fn2"))
-    res = convert(LINKS, meta, journal, Options(out_dir=tmp_path, ai_mode="manual",
-                                                ai_response=json.dumps({"operations": ops}, ensure_ascii=False)))
+        ops.append(link("注", src_of(links, prefix), t, int(k), "fn2"))
+    res = convert(LINKS, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=answers.answer(links=ops)))
     assert len(res.ai.accepted) == 2 and res.ai.rejected == []
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     root = load(res)
@@ -370,7 +369,7 @@ def test_link_figure_from_record_is_accepted(links, journal, meta, tmp_path):
     """語の一部とみなした「図1」の記録の text・occurrence の link_figure を貼り戻すと、その「図1」にリンクが付く。"""
     msg = records(links, "地図1と図表1", "figure")[1]          # 概念図1
     t, k = re.search(r"link_figure（text「(.+?)」、occurrence (\d+)）", msg).groups()
-    response = json.dumps({"operations": [op("link_figure", src_of(links, "地図1と図表1"), t, int(k), "F1")]}, ensure_ascii=False)
+    response = answers.answer(links=[link("図", src_of(links, "地図1と図表1"), t, int(k), "F1")])
     res = convert(LINKS, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=response))
     assert len(res.ai.accepted) == 1 and res.fidelity.ok
     assert same_links(*para_links(load(res), "地図1と図表1", ("fig",)), [("概念", "図1", "F1")])
@@ -724,10 +723,9 @@ def test_branch_figure_numbers_are_not_linked(journal, meta, tmp_path):
     assert "link_figure" not in act.checklist
     for text in (act.top, act.box_detail, act.cli):
         assert "link_" not in text and "登載できる" in text and 'ref-type="fig"' in text and "xref" in text, text
-    # 利用者が取れる手段の文: 手で足す・AI による補完を使う設定で変換し直す（回答を編集するようには読めない）。図の id の場所も言う
-    assert "AI による補完を使う設定" in act.top and "変換し直すと" in act.top and "AI による補完の回答" not in act.top
-    assert step("ai_choose") + "変換し直すと" in act.box_detail and "AI による補完の回答" not in act.box_detail     # 画面ごとの語は colab が置き換える
-    assert "--ai manual か --ai api を指定して変換し直すと" in act.cli
+    # 利用者が取れる手段の文: 手で足す方法だけ（AI を勧める文は推奨の手順 ai_finish の 1 か所。修正計画 W8 の手順 7）。図の id の場所も言う
+    for text in (act.top, act.box_detail, act.cli, act.checklist):
+        assert "AI" not in text and "\x00" not in text, text
     for text in (act.top, act.box_detail):
         assert '<fig id="…">' in text and "<table-wrap id=" in text, text
         assert "> （" not in text and "`（表への" in text or ">（表への" in text, text    # タグの後ろに余分な空白がない
@@ -895,14 +893,14 @@ def _float_ref_states(tmp_path, journal, meta):
     return path, src
 
 
-def _manual(path, ops, meta, journal, out):
-    resp = json.dumps({"operations": ops, "placements": [], "notes": []}, ensure_ascii=False)
+def _manual(path, links, meta, journal, out):
+    """回答の links（tests/answers.py の項目）を手動モードで貼り戻して変換する。"""
+    resp = answers.answer(links=links)
     return convert(path, meta, journal, Options(out_dir=out, ai_mode="manual", ai_response=resp))
 
 
 def _link_op(src, target, occurrence=1, text="図1"):
-    return {"op": "link_figure", "src": src, "text": text, "occurrence": occurrence, "target": target, "role": "", "image": "",
-            "mathml": "", "surname": "", "given": "", "reason": "試験", "confidence": "高"}
+    return ("図", src, text, occurrence, target)
 
 
 def _float_ref(res):
@@ -911,42 +909,40 @@ def _float_ref(res):
 
 
 def test_h3_float_ref_advice_follows_the_ai_state(journal, meta, tmp_path):
-    """H3: 図・表の参照のリンクを付けていない箇所の案内は、AI による補完の状態（使っていない・回答待ち・AI を使った後）で文を分ける
-    （以前は、回答待ちや AI を使った後にも「AI による補完を使う設定で変換し直すと…」と勧めた）。AI がリンクを付けた参照は残りから除く。"""
+    """H3・修正計画 W8 の手順 7: 図・表の参照のリンクを付けていない箇所の案内は、AI による補完の状態（使っていない・回答待ち・
+    AI を使った後・回答を読めなかった）によらず、手で足す方法だけを書く（AI を勧める文は推奨の手順 ai_finish の 1 か所）。
+    AI がリンクを付けた参照は残りから除く。"""
     path, src = _float_ref_states(tmp_path, journal, meta)
-    # (1) AI を使っていない: AI による補完を使う設定にして変換し直すことを勧める（画面ごとの語は目印）
+
+    def texts(res):
+        act = _float_ref(res)
+        return act.top, act.box_detail, act.cli, act.checklist
+    # (1) AI を使っていない
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "none"))
     assert len(res.plan.float_unlinked) == 2
-    act = _float_ref(res)
-    assert "AI による補完を使う設定（API か手動）で変換し直すと" in act.top and step("ai_choose") + "変換し直すと" in act.box_detail
-    assert "--ai manual か --ai api を指定して変換し直すと" in act.cli
-    # (2) 手動で回答待ち: 回答を反映すると AI がリンクを付けること、反映した後に残る分をこの知らせで確かめることを言う。設定の変更は勧めない
+    base = texts(res)
+    for t in base:
+        assert "AI" not in t and "\x00" not in t, t
+    assert "手で足してください" in base[0] and "--ai" not in base[2]
+    # (2) 手動で回答待ち・(6) 回答を読み込めなかった: 文は同じ
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "pending", ai_mode="manual"))
-    act = _float_ref(res)
-    assert "AI の回答を反映すると" in act.top and "もう一度出る" in act.top and "設定（API か手動）" not in act.top
-    assert step("answer_apply") + "と" in act.box_detail and step("ai_choose") not in act.box_detail
-    assert "--ai manual --ai-response 回答のファイル を指定して変換し直すと" in act.cli and "--ai manual か --ai api を指定して" not in act.cli
-    # (3) AI を使った後、一部だけリンクが付いた: 付いた分は除き、残りは「AI もリンクを付けなかった参照」。設定の変更は勧めない
+    assert texts(res) == base
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "bad", ai_mode="manual", ai_response="これは JSON ではない"))
+    assert res.ai.error and texts(res) == base
+    # (3) AI を使った後、一部だけリンクが付いた: 付いた分は除き、残りは 1 か所
     res = _manual(path, [_link_op(src, "F1", 1)], meta, journal, tmp_path / "part")
     assert res.fidelity.ok and res.ai.rejected == [] and len(res.plan.float_unlinked) == 1
     assert float_links(load(res), "図1を見る") == [("図1", "fig", "F1")]
     act = _float_ref(res)
     assert "（1 か所）" not in act.top and "対象の参照（1 か所）" in act.box_detail
-    for t in (act.top, act.box_detail, act.cli):
-        assert "AI もリンクを付けませんでした" in t and "設定（API か手動）" not in t and "ai_choose" not in t, t
-        assert "--ai manual か --ai api" not in t
+    for t in texts(res):
+        assert "AI" not in t, t
     # (4) 全部にリンクが付いた: 知らせは出ない
     res = _manual(path, [_link_op(src, "F1", 1), _link_op(src, "F2", 2)], meta, journal, tmp_path / "all")
     assert res.plan.float_unlinked == [] and [a for a in actions(res) if a.key == "float_ref"] == []
     # (5) AI の回答が採用されなかった（リンク先がない）: 残りは全部
     res = _manual(path, [_link_op(src, "F99", 1)], meta, journal, tmp_path / "none_ok")
-    assert len(res.plan.float_unlinked) == 2 and "AI もリンクを付けませんでした" in _float_ref(res).top
-    # (6) 回答を読み込めなかった: AI は反映されていない。設定の変更ではなく回答を反映できたらと言う
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "bad", ai_mode="manual", ai_response="これは JSON ではない"))
-    assert res.ai.error
-    act = _float_ref(res)
-    assert "AI による補完が反映できていません" in act.top and "AI の回答を反映できたら" in act.top
-    assert "設定（API か手動）" not in act.top and "--ai manual か --ai api" not in act.cli
+    assert len(res.plan.float_unlinked) == 2 and texts(res) == base
 
 
 def test_manual_fields_hidden_when_result_was_not_made_in_manual_mode(journal, meta, tmp_path):
@@ -970,10 +966,14 @@ def test_manual_fields_hidden_when_result_was_not_made_in_manual_mode(journal, m
     done.ai.mode, done.prompt_path = "api", None
     st.res, st.run = done, SimpleNamespace(ai_mode="manual")
     assert not st.answer_box_open
-    # 手動モードで作った結果（AI を使った後）は、貼り直せるように見える
+    # 手動モードで作った結果は、回答待ちのあいだ見える。回答を反映し終えた（report.ai_done）ら、float_ref が残っていても閉じる
+    # （手動の欄は知らせの key ではなく状態で決める。修正計画 W8 の手順 7）
+    pend = convert(path, meta, journal, Options(out_dir=tmp_path / "manual_pend", ai_mode="manual"))
+    st.res = pend
+    assert st.answer_box_open and st.prompt_text()
     done = _manual(path, [_link_op(src, "F1", 1)], meta, journal, tmp_path / "manual_done")
     st.res = done
-    assert st.answer_box_open and st.prompt_text()
+    assert [a for a in actions(done) if a.key == "float_ref"] and not st.answer_box_open
 
 
 def test_ai_link_on_lookalike_text_keeps_the_unlinked_reference(journal, meta, tmp_path):
@@ -993,7 +993,7 @@ def test_ai_link_on_lookalike_text_keeps_the_unlinked_reference(journal, meta, t
     assert res.fidelity.ok and res.ai.rejected == []
     assert [(u.src, u.text, u.start) for u in res.plan.float_unlinked] == [(src, "図1", ref.start)]
     act = _float_ref(res)
-    assert "AI もリンクを付けませんでした" in act.top and "対象の参照（1 か所）" in act.box_detail
+    assert "対象の参照（1 か所）" in act.box_detail
     # (2) 2 回目の「図1」（本当にリンクされていない参照）にリンクを付けた: 除かれ、知らせも出ない
     res = _manual(path, [_link_op(src, "F1", 2)], meta, journal, tmp_path / "real")
     assert res.fidelity.ok and res.ai.rejected == [] and res.plan.float_unlinked == []
@@ -1001,10 +1001,9 @@ def test_ai_link_on_lookalike_text_keeps_the_unlinked_reference(journal, meta, t
 
 
 def test_float_ref_advice_names_operations_each_screen_can_take(journal, meta, tmp_path):
-    """0.29.0 の最後の点検の小さいもの (a)〜(d): 図・表の参照の知らせの案内が、画面ごとに取れる操作を言う。
-    (a) API の呼び出しが失敗したときは、回答を反映する言い方（手動の言い方）にしない。(b) 回答待ちは、1 画面版では「反映」を押すだけ
-    （押した後にさらに「変換する」を押す操作に読ませない）、ノートブックでは ▶ を押す。(c) AI を使った後の「AI に出し直してもらう」は、
-    手動なら貼り直し、API ならもう一度変換する。(d) コマンドラインは --ai manual と --ai-response を一緒に言う。"""
+    """0.29.0 の最後の点検の小さいもの・修正計画 W8 の手順 7: 図・表の参照の知らせは、どの画面でも、AI の状態（回答待ち・手動で使った後・
+    API で使った後・API の呼び出しが失敗した）によらず同じ文で、手で足す方法だけを言う（画面の操作の目印も、AI の語もない）。
+    API の呼び出しの失敗は、推奨の手順 ai_finish の「失敗」が言う。"""
     from jasme_jats import pipeline
     from jasme_jats.ai_assist import AIOutcome
     from jasme_jats.colab import step_text
@@ -1014,51 +1013,25 @@ def test_float_ref_advice_names_operations_each_screen_can_take(journal, meta, t
         act = _float_ref(res)
         return {"report": act.top, "notebook": step_text(act.box_detail, "notebook"), "app": step_text(act.box_detail, "app"),
                 "cli": act.cli}
-    # (b) 回答待ち（手動）
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "pending", ai_mode="manual"))
-    t = texts(res)
-    assert "手順 6 で AI の回答を貼り付けて ▶ を押すと" in t["notebook"]
-    assert "「反映」を押すと、AI が指定した参照にリンクが付く" in t["app"] and "「反映」を押して変換し直すと" not in t["app"]
-    assert "「変換する」" not in t["app"]                            # 回答なしで作り直す操作を勧めない
-    assert "--ai manual --ai-response 回答のファイル を指定して変換し直すと" in t["cli"]
-    # (c) AI を使った後（手動）: 貼り直す。1 画面版は手動の欄が見えたまま（AppState.answer_box_open）
+    base = texts(convert(path, meta, journal, Options(out_dir=tmp_path / "pending", ai_mode="manual")))
+    assert base["notebook"] == base["app"] and "手順" not in base["notebook"]
+    for text in base.values():
+        assert "AI" not in text and "\x00" not in text, text
     res = _manual(path, [_link_op(src, "F1", 1)], meta, journal, tmp_path / "manual_done")
-    t = texts(res)
-    assert "手順 6 で貼り付け直してください" in t["notebook"]
-    assert "「AI の回答（json のコードブロック）を貼り付ける」の欄に貼り付け直して「反映」を押してください" in t["app"]
-    assert "--ai manual --ai-response 回答のファイル を指定し直して実行してください" in t["cli"]
-    assert "貼り付け直して反映" in t["report"] and "手順" not in t["app"] and "\x00" not in "".join(t.values())
-    from types import SimpleNamespace
-
-    from jasme_jats.app import AppState
-    st = AppState(tmp_path / "work")
-    st.set_inputs(ai_mode="manual")
-    st.res, st.run = res, SimpleNamespace(ai_mode="manual")
-    assert st.answer_box_open                                   # 案内のとおり、貼り付け直す欄が見えている
-    # (c) AI を使った後（API）: もう一度変換する
+    assert "AI" not in "".join(texts(res).values())
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "api_done"))
     res.ai = AIOutcome(mode="api")
     res.ai.raw = "{}"
-    t = texts(res)
-    assert "手順 5 をもう一度実行してください" in t["notebook"] and "「変換する」をもう一度押してください" in t["app"]
-    assert "--ai api でもう一度実行してください" in t["cli"] and "もう一度変換すると" in t["report"]
-    # (a) API の呼び出しが失敗した: 回答を反映する言い方ではなく、もう一度変換して補完ができれば、と言う
+    assert texts(res) == base
     real = pipeline.call_provider
     pipeline.call_provider = lambda *a, **k: _api_failed()
     try:
         res = convert(path, meta, journal, Options(out_dir=tmp_path / "api_err", ai_mode="api", ai_api_key="x"))
     finally:
         pipeline.call_provider = real
-    assert res.ai.error and res.ai.mode == "api"
-    t = texts(res)
-    for screen, text in t.items():
-        assert "AI の回答を反映できたら" not in text and "AI による補完ができていません" in text, screen
-    assert "手順 5 をもう一度実行して AI による補完ができれば" in t["notebook"]
-    assert "「変換する」をもう一度押して AI による補完ができれば" in t["app"]
-    assert "--ai api でもう一度実行して AI による補完ができれば" in t["cli"]
-    # 回答を読めなかった手動モードは、今までどおり「AI の回答を反映できたら」
-    res = convert(path, meta, journal, Options(out_dir=tmp_path / "bad", ai_mode="manual", ai_response="これは JSON ではない"))
-    assert "AI の回答を反映できたら" in texts(res)["report"]
+    assert res.ai.error and res.ai.mode == "api" and texts(res) == base
+    fin = next(a for a in actions(res) if a.key == "ai_finish")
+    assert fin.failed and "手順 5 をもう一度実行してください" in step_text(fin.box_detail, "notebook")
 
 
 def _api_failed():
@@ -1075,7 +1048,7 @@ def test_cli_ai_response_needs_ai_manual(journal, meta, tmp_path, capsys):
 
     from jasme_jats.cli import main
     resp = tmp_path / "回答.json"
-    resp.write_text('{"operations": [], "placements": [], "notes": []}', encoding="utf-8")
+    resp.write_text(answers.answer(), encoding="utf-8")
     base = [str(FULL), "--meta", str(META_EXAMPLE), "--ai-response", str(resp)]
     for extra in ([], ["--ai", "none"], ["--ai", "api"]):
         with pytest.raises(SystemExit) as e:

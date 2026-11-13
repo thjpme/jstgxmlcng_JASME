@@ -10,12 +10,12 @@
   「図形で描いた図（図の本体）」として分ける。
 fixture は make_fixtures.make_float_figs・make_figs（内容は架空）。
 """
-import json
 import shutil
 import zipfile
 
 from lxml import etree
 
+import answers
 import make_fixtures as mf
 from conftest import fill_images, key_png
 from jasme_jats.builder import build, finalize, serialize
@@ -31,8 +31,7 @@ def run(tmp_path, meta, journal, variant, placements=None, name="out"):
     path = tmp_path / f"{variant}.docx"
     if not path.exists():
         mf.make_float_figs(path, variant)
-    resp = None if placements is None else json.dumps({"placements": placements, "operations": [], "notes": []},
-                                                      ensure_ascii=False)
+    resp = None if placements is None else answers.answer(placements=placements)
     res = convert(path, meta, journal, Options(out_dir=tmp_path / name, ai_mode="manual", ai_response=resp))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     assert res.lost_images == [] and res.image_problems == []
@@ -163,8 +162,7 @@ def test_figure_text_lines_are_the_same_with_and_without_ai(journal, meta, tmp_p
     """位置を決められない図形でも、AI の位置の指定の前後で、図形ごとの行は同じ（図形の中身の組み方は AI の指定で変わらない）。"""
     before = run(tmp_path, meta, journal, "group_down", name="before")
     anchor = next(s for s, p in before.plan.paras.items() if p.plain().startswith("この段落に図形が"))
-    after = run(tmp_path, meta, journal, "group_down", name="after", placements=[
-        {"float": "s1", "after": anchor, "items": [], "reason": "試験", "confidence": "中"}])
+    after = run(tmp_path, meta, journal, "group_down", name="after", placements=[("s1", anchor)])
     assert figure_text_lines(before) == figure_text_lines(after) == ["・図1（fig01）の図形: 9 字「点Ａと点Ｂを結ぶ。」"]
 
 
@@ -214,7 +212,7 @@ def test_text_shapes_group_with_figure_caption_is_a_drawn_figure(journal, meta, 
     ch9 = chapter9(res)
     assert "### 図形で描いた図（図の本体）" in ch9 and "- 図1（fig01）: 文字の図形の集まり（img1。" in ch9
     assert "### 画像の場所に数えなかった図形（飾り）" not in ch9
-    assert set(acts(res)) == {"ai_pending", "textbox_figure_text", "images"}
+    assert set(acts(res)) == {"textbox_figure_text", "images"}      # 手動の回答待ちは、位置を聞く図形がないので 2 章の 1 行だけ
     free = run(tmp_path, meta, journal, "drawn_free", name="free")
     [deco] = free.decorations
     assert (deco.kind, deco.figure) == ("textgroup", "") and free.images == []

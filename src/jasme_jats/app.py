@@ -24,13 +24,13 @@ from typing import Optional
 from . import __version__
 from . import report as rp
 from .ai_assist import API_KEY_NAMES, DEFAULT_MODEL
-from .colab import (ANSWER_LABEL, APPLY_LABEL, CONVERT_LABEL, ai_required_box, check_box, error_box, no_ai_box, report_details,
+from .colab import (ANSWER_LABEL, APPLY_LABEL, CONVERT_LABEL, check_box, error_box, report_details,
                     result_boxes, step_text, structure_conflict_box, summary_box)
 from .config import ArticleMeta, JournalConfig, keyword_language_mismatch, keyword_problem
 from .images import match_names
 from .imagelist import check_frame
-from .pipeline import AIRequiredError, Options, StructureConflictError, add_images, convert, kept_images, reapply_images
-from .report import (actions, ai_pending, blocking, clash_images_text, image_rows, images_action, shorten_shown, shown_text,
+from .pipeline import Options, StructureConflictError, add_images, convert, kept_images, reapply_images
+from .report import (actions, ai_done, ai_state, blocking, clash_images_text, image_rows, images_action, shorten_shown, shown_text,
                      unmatched_image_text)
 
 DOCS = "https://github.com/thjpme/jstgxmlcng_JASME/blob/main/docs/USAGE.md"
@@ -39,7 +39,7 @@ FIXED_VIEWS = 10              # 画面の更新（build_app の views）の先�
 
 # 画面の入力欄。名前は AppState.inputs の鍵で、画面の部品の並びもこの順（INPUT_NAMES）
 ROUTES = [("docx から作り、出版版 PDF で補う", "pdf"), ("docx から作る", "docx")]
-AI_MODES = [("使わない（推奨しません）", "none"), ("手動（チャットに貼り付け）", "manual"), ("API（Claude）", "api")]
+AI_MODES = [("使わない", "none"), ("手動（チャットに貼り付け）", "manual"), ("API（Claude）", "api")]
 PEER_REVIEWS = ["査読あり", "査読なし"]
 AUTO_MODEL = "自動（最新の Opus）"
 OTHER_TYPE = "その他"
@@ -314,8 +314,6 @@ class AppState:
         shutil.rmtree(self.out_dir, ignore_errors=True)
         try:
             res = convert(run.docx, run.meta, run.journal, opts)
-        except AIRequiredError as e:
-            raise InputError(step_text(str(e), "app"), ai_required_box(str(e), "app"))
         except StructureConflictError as e:
             raise InputError(step_text(str(e), "app"), structure_conflict_box(str(e), "app"))
         step(0.9, "画像を入れ直しています…")
@@ -365,29 +363,22 @@ class AppState:
     # ---- 手動モード
     @property
     def waiting_for_answer(self) -> bool:
-        """手動モードで、AI の回答をまだ反映していない。"""
-        return self.res is not None and self.run is not None and self.run.ai_mode == "manual" and ai_pending(self.res)
-
-    # 手動モードで、AI の回答を貼り付け直す案内（report.py の枠。colab.STEP_WORDS の repaste）が出る Action の key。これらが出ている
-    # ときも、手動の欄（依頼文・回答の欄・「反映」）を見せたままにする。float_ref（リンクしなかった図・表の参照。AI の回答を反映した後も
-    # AI がリンクを付けなかったとき、「AI に出し直してもらう」案内が貼り直しを勧める）・textbox_undecided（AI の回答を反映した後も
-    # 囲みか注記か決められなかったテキストボックスがあるとき、同じく貼り直しを勧める）・abstract_missing（英文要旨が見つからない
-    # とき、AI の set_role の abstract を勧めるので、回答を反映した後も貼り直せるようにする）も入れる
-    REPASTE_KEYS = ("ai_error", "partial", "forced", "float_ref", "textbox_undecided", "abstract_missing")
+        """手動モードで、AI の回答をまだ反映していない（report.ai_state が「回答待ち」）。"""
+        return (self.res is not None and self.run is not None and self.run.ai_mode == "manual"
+                and ai_state(self.res) == "回答待ち")
 
     @property
     def answer_box_open(self) -> bool:
         """手動の欄（依頼文・回答の欄〈ANSWER_LABEL〉・「反映」）を見せるか。
 
-        AI の回答をまだ反映していないとき（waiting_for_answer）に加えて、反映した後も、回答を読めない（ai_error）・途中で切れた
-        （partial）・図表の位置が決まらない（forced）・AI もリンクを付けなかった図・表の参照がある（float_ref）・囲みか注記か決められないテキストボックスが残る（textbox_undecided）・英文要旨が見つからない（abstract_missing）の枠が出ているあいだは、
-        貼り付け直せるように見せたままにする。
+        AI による仕上げが済んでいない（report.ai_done が偽。回答待ち・失敗・一部）あいだは、貼り付け直せるように見せたままにする
+        （知らせの key ではなく状態で決める。修正計画 W8 の 4.3）。
         手動モードで変換した結果のときだけ見せる（変換したときの入力の写し run.ai_mode で決める。変換の後に「AI による補完の方法」の
         欄を変えても変わらない。O3）。
         """
         if self.res is None or self.run is None or self.run.ai_mode != "manual" or self.res.ai.mode != "manual" or not self.res.prompt_path:
             return False
-        return ai_pending(self.res) or any(a.key in self.REPASTE_KEYS for a in actions(self.res))
+        return not ai_done(self.res)
 
     def prompt_text(self) -> str:
         if self.res is None or not self.res.prompt_path:
@@ -570,9 +561,9 @@ class AppState:
         if self.res is None:
             return ""
         res = self.res
-        parts = [no_ai_box("app")] if self.run is not None and self.run.ai_mode == "none" else []
+        parts = []
         # 手順 images は「図の画像」の欄（images_markdown）に出すので、ここでは重ねて出さない
-        parts.append(result_boxes(res, skip=("images",) + (("ai_pending",) if self.waiting_for_answer else ()), screen="app"))
+        parts.append(result_boxes(res, skip=("images",) + (("ai_finish",) if self.waiting_for_answer else ()), screen="app"))
         parts.append(summary_box(res))
         parts.append(report_details(res.report_path.read_text(encoding="utf-8")))
         return "".join(parts)

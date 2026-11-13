@@ -1,10 +1,10 @@
 """浮動配置の図形の中身の組み方（structure.Classifier.float_units。修正計画 W1 の 2.3 の B1〜B5・B7・B8 と 2.4）と、
 AI の位置の指定を after だけ読むこと（2.7）。fixture は make_fixtures.make_float_figs（内容は架空）。"""
-import json
 
 import pytest
 from lxml import etree
 
+import answers
 import make_fixtures as mf
 from jasme_jats.pipeline import Options, _mechanical, convert
 from jasme_jats.report import TO_CHECK, actions
@@ -21,8 +21,7 @@ def run(tmp_path, meta, journal, variant, placements=None, name="out"):
     path = tmp_path / f"{variant}.docx"
     if not path.exists():
         mf.make_float_figs(path, variant)
-    resp = None if placements is None else json.dumps({"placements": placements, "operations": [], "notes": []},
-                                                      ensure_ascii=False)
+    resp = None if placements is None else answers.answer(placements=placements)
     res = convert(path, meta, journal, Options(out_dir=tmp_path / name, ai_mode="manual", ai_response=resp))
     fid = res.fidelity
     assert fid.ok and fid.final_ok and res.dtd_valid and res.jstage_issues == [], (fid.missing, fid.conflicts)
@@ -69,8 +68,8 @@ def test_group_shape_exclusions_are_the_same_with_and_without_ai(journal, meta, 
     """位置を決められないグループ図形でも、中身の組み方と除外は AI の位置の指定の前後で同じ（AI の指定は位置だけ）。"""
     before = run(tmp_path, meta, journal, "group_down", name="before")
     assert before.plan.unplaced_floats == ["s1"]
-    after = run(tmp_path, meta, journal, "group_down", name="after", placements=[
-        {"float": "s1", "after": src_of(before.plan, "この段落に図形が"), "items": [], "reason": "試験", "confidence": "中"}])
+    after = run(tmp_path, meta, journal, "group_down", name="after",
+                placements=[("s1", src_of(before.plan, "この段落に図形が"))])
     assert after.plan.floats["s1"].mode == "ai" and after.ai.rejected == []
     assert excluded(before) == excluded(after) == [("点Ａと点Ｂを結ぶ。", TEXTBOX_TEXT_EXCLUDED)]
     assert [(s.key, len(s.covers)) for s in before.plan.slots] == [(s.key, len(s.covers)) for s in after.plan.slots] == [
@@ -106,11 +105,14 @@ def test_table_figure_with_note_text(journal, meta, tmp_path):
 
 
 def test_unplaced_table_figure_notice_lists_its_body_paragraph(journal, meta, tmp_path):
-    """位置を決められない図形の中から本文の段落として出した段落は、手作業で移す図表の知らせに、図の ID と並べて示す。"""
+    """位置を決められない図形の中から本文の段落として出した段落は、図形の中身の図表の ID（structure.float_targets）に、図の ID と
+    並べて示す。"""
+    from jasme_jats.structure import float_targets
     res = run(tmp_path, meta, journal, "table_fig_note_down", placements=[])
     assert res.plan.unplaced_floats == ["s1"]
-    assert [x.split(": ", 1)[1] for x in res.forced_floats] == [
-        "XML の段落「この段落に図形が結び付いている。本文の段」の後ろにある F1 と段落「注：架空の注である。」"]
+    assert float_targets(res.plan, res.plan.floats["s1"]) == "F1 と段落「注：架空の注である。」"
+    [row] = [u[3] for u in res.unresolved_after if u[0] == "float"]
+    assert row.startswith("結び付いた段落の後ろ（段落「この段落に図形が結び付いている。本文の段」の後ろ）に置いた")
 
 
 def test_ambiguous_table_captions_keep_the_contents(journal, meta, tmp_path):
@@ -195,7 +197,7 @@ def test_anchor_on_caption_or_image_paragraph(journal, meta, tmp_path, variant, 
     assert first.plan.unplaced_floats == ["s1"]
     pls = None
     if ai:
-        pls = [{"float": "s1", "after": first.plan.floats["s1"].float.anchor_src, "reason": "試験", "confidence": "中"}]
+        pls = [("s1", first.plan.floats["s1"].float.anchor_src)]
     res = run(tmp_path, meta, journal, variant, placements=pls)
     assert res.plan.floats["s1"].mode == ("ai" if ai else "unplaced")
     assert seq(load(res))[1:4] == want
@@ -206,24 +208,25 @@ def test_mechanical_float_placement_is_rejected(journal, meta, tmp_path):
     path = tmp_path / "group.docx"
     mf.make_float_figs(path, "group")
     _, plan, _ = _mechanical(path, journal)
-    res = run(tmp_path, meta, journal, "group", placements=[
-        {"float": "s1", "after": src_of(plan, "試験（2024）"), "items": [{"kind": "fig", "caption": [], "body": []}],
-         "reason": "試験", "confidence": "中"}])
+    res = run(tmp_path, meta, journal, "group", placements=[("s1", src_of(plan, "試験（2024）"))])
     [(op, why)] = res.ai.rejected
     assert op["src"] == "s1" and "機械的に決めた" in why and res.plan.floats["s1"].mode == "mechanical"
 
 
-def test_placement_after_paragraph_that_is_no_longer_body_is_rejected(journal, meta, tmp_path):
+def test_placement_after_paragraph_that_is_no_longer_body_is_rejected(journal, meta, tmp_path, monkeypatch):
     """同じ回答の set_role で、置く位置の段落が本文の段落でなくなった指定は、黙って捨てずに不採用として 2 章に記録する
-    （図形は位置を決められない図表のまま）。"""
+    （図形は位置を決められない図表のまま）。本文の段落への ack_heading は、今は Word のスタイルで直す提案で XML に反映しない
+    （所有者の決定 5。W8 の手順 5）ので、位置の指定を採用する。守りは、区切り以外の役割も反映する形に差し替えて確かめる。"""
+    import jasme_jats.ai_assist as ai_assist
     path = tmp_path / "group_down.docx"
     mf.make_float_figs(path, "group_down")
     _, plan, _ = _mechanical(path, journal)
     after = src_of(plan, "以上で終わる。")
-    op = {"op": "set_role", "src": after, "text": "", "occurrence": 1, "target": "", "role": "ack_heading", "image": "",
-          "mathml": "", "surname": "", "given": "", "reason": "試験", "confidence": "低"}
-    resp = json.dumps({"placements": [{"float": "s1", "after": after, "reason": "試験", "confidence": "中"}],
-                       "operations": [op], "notes": []}, ensure_ascii=False)
+    resp = answers.answer(placements=[("s1", after)], style_fixes=[(after, "ack_heading", "試験", "低")])
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "prop", ai_mode="manual", ai_response=resp))
+    assert [w for _, w in res.ai.rejected] == [ai_assist.STYLE_ONLY_WHY]
+    assert after in res.plan.body_seq and res.plan.unplaced_floats == [] and res.fidelity.ok
+    monkeypatch.setattr(ai_assist, "boundary_kind", lambda p, plan, role: "試験の区切り")
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", ai_response=resp))
     assert res.fidelity.ok and res.fidelity.final_ok
     assert after not in res.plan.body_seq and res.plan.unplaced_floats == ["s1"]
@@ -269,8 +272,7 @@ def test_placement_of_float_in_body_figure_is_rejected(journal, meta, tmp_path):
     図形なので、位置を変更できない」で不採用に記録する（図形はキャプションの位置のまま）。"""
     path = _make(tmp_path, "near_group3")
     _, plan, _ = _mechanical(path, journal)
-    res = run(tmp_path, meta, journal, "near_group3", placements=[
-        {"float": "s1", "after": src_of(plan, "試験（2024）"), "items": [], "reason": "試験", "confidence": "中"}])
+    res = run(tmp_path, meta, journal, "near_group3", placements=[("s1", src_of(plan, "試験（2024）"))])
     info = res.plan.floats["s1"]
     [(op, why)] = res.ai.rejected
     assert info.mode == "caption" and op["src"] == "s1"
@@ -281,9 +283,8 @@ def test_group_four_elements_before_caption_stays_unplaced(journal, meta, tmp_pa
     """4 要素前の段落に結び付いたグループ図形は含めない: 図 1 つ（画像の見つからない図）＋キャプションなしの図 1 つで、図形は
     位置を決められないまま。"""
     path = _make(tmp_path, "near_group4_down")
-    from jasme_jats.pipeline import AIRequiredError
-    with pytest.raises(AIRequiredError):
-        convert(path, meta, journal, Options(out_dir=tmp_path / "none"))
+    none = convert(path, meta, journal, Options(out_dir=tmp_path / "none"))      # AI なしでも中止しない（W8 の決定 4）
+    assert none.plan.unplaced_floats == ["s1"]
     res = run(tmp_path, meta, journal, "near_group4_down")
     plan = res.plan
     assert plan.floats["s1"].mode == "unplaced" and plan.unplaced_floats == ["s1"]

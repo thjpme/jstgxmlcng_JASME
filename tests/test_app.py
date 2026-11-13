@@ -1,6 +1,7 @@
 """Gradio の操作画面（app.py。1 画面版）: AppState の遷移と、build_app が画面を組めること。ブラウザは使わない。"""
 import zipfile
 
+import answers
 import pytest
 
 from conftest import FULL, TEMPLATE, fill_images
@@ -48,7 +49,8 @@ def test_convert_shows_summary_and_download(tmp_path):
     res = st.convert()
     assert res is st.res and not st.waiting_for_answer
     html = st.result_html()
-    assert "結果の要約" in html and "AI による補完を「使わない」" in html      # AI を使わないときの注意も出る
+    assert "結果の要約" in html and "AI による仕上げ: 使わない。状態: 未実行" in html      # 「使わない」でも赤い枠は出さない（W8 の手順 4）
+    assert "AI による補完を「使わない」" not in html
     # 図の画像を入れるまでは、必須の手順が残るのでダウンロードを止める（修正計画 W1）
     assert st.needs_action and st.download()[0] is None and "図の画像を入れてください" in st.download()[1]
     fill_images(st.res)
@@ -65,14 +67,15 @@ def test_manual_mode_waits_for_answer(tmp_path):
     assert st.waiting_for_answer
     fill_images(st.res)             # 図の画像の手順（必須）を済ませる
     assert not st.needs_action      # 回答待ちは推奨の手順なので、要対応に数えない
-    assert "AI の回答をまだ反映していません" not in st.result_html()    # 依頼文の欄があるので枠は出さない
+    boxes = st.result_html().split("<details")[0]       # 枠の部分（レポート全文の前。2 章には回答待ちの 1 行がある）
+    assert "AI の回答をまだ反映していません" not in boxes and "AI で図・表の位置を合わせる" not in boxes    # 依頼文の欄があるので枠は出さない
     assert st.prompt_text()
     # 回答待ちは推奨の手順なので、ダウンロードを止めない
     path, note = st.download()
     assert path and note == ""
     with pytest.raises(InputError, match="貼り付けられていません"):
         st.apply_answer("  ")
-    st.apply_answer('{"operations": []}')
+    st.apply_answer(EMPTY_ANSWER)
     assert not st.waiting_for_answer
 
 
@@ -413,7 +416,7 @@ def test_unexpected_error_in_apply_answer(tmp_path, monkeypatch):
     def boom(*args, **kwargs):
         raise OSError("書けません")
     monkeypatch.setattr(app, "convert", boom)
-    out = fns["on_apply"]('{"operations": []}')
+    out = fns["on_apply"](EMPTY_ANSWER)
     assert st.res is None and "OSError: 書けません" in out[0]
     assert "変換レポートは作られていません" in out[0] and str(report) not in out[0]     # 出力フォルダを消したので、前のレポートはない
     # 反映で落ちたときは、回答や入力を消す「変換する」の押し直しを勧めない。別に保存することと、開発者に知らせることを案内する（F15）
@@ -452,14 +455,14 @@ def test_download_crash_with_output_folder_gone(tmp_path):
 
 
 def test_manual_fields_stay_for_repaste(tmp_path):
-    """手動モードで回答を反映した後、回答を貼り直す必要がある枠（回答を読めない・途中で切れた・図表の位置が決まらない）が出ているときは、
+    """手動モードで回答を反映した後、AI による仕上げが済んでいない（回答を読めない・途中で切れた・図表の位置が決まらない）ときは、
     枠の「「AI の回答」の欄に貼り付け直して「反映」を押し」のとおりに、手動の欄（依頼文・「AI の回答」・「反映」）を見せたままにする。
     貼り直す必要がなくなったら隠す。画面の更新（on_apply の戻り）で確かめる。"""
     import json
     from conftest import FLOAT
     from test_ai import FLOAT_RESPONSE, cut_cases
     from jasme_jats.colab import result_boxes
-    from jasme_jats.report import actions
+    from jasme_jats.report import actions, ai_done
     st = AppState(tmp_path / "work")
     st.set_inputs(route="docx", docx=str(FLOAT), volume="31", issue="1", fpage="1", lpage="12", peer_review="査読あり",
                   manuscript_type=type_choices()[0], ai_mode="manual")
@@ -467,17 +470,19 @@ def test_manual_fields_stay_for_repaste(tmp_path):
     fns = {f.fn.__name__: f.fn for f in demo.fns.values()}
     out = fns["on_convert"](*[st.inputs[n] for n in app.INPUT_NAMES])
     assert out[2]["visible"] is True and out[3]                       # 回答待ち: 依頼文が出る
-    cases = {"ai_error": "これは JSON ではない", "forced": '{"placements": [], "operations": [], "notes": []}',
-             "partial": cut_cases()["c"]}
-    for key, text in cases.items():
+    # 手動の欄を見せる条件は、知らせの key ではなく AI による仕上げの状態（report.ai_done が偽: 失敗・一部。修正計画 W8 の 4.3）
+    cases = {"失敗": "これは JSON ではない", "一部・残り 3 個": EMPTY_ANSWER,
+             "一部・残り 2 個": cut_cases()["c"]}
+    for progress, text in cases.items():
         out = fns["on_apply"](text)
-        assert key in [a.key for a in actions(st.res)], key
+        fin = next(a for a in actions(st.res) if a.key == "ai_finish")
+        assert fin.progress == progress and not ai_done(st.res), progress
         assert not st.waiting_for_answer
-        assert out[2]["visible"] is True, key                         # 手動の欄を見せたまま
-        assert out[3] == st.prompt_text() and out[3], key               # 依頼文も出る
+        assert out[2]["visible"] is True, progress                    # 手動の欄を見せたまま
+        assert out[3] == st.prompt_text() and out[3], progress          # 依頼文も出る
         boxes = result_boxes(st.res, screen="app")
-        # 枠が回答の貼り直しを案内している（途中で切れた回答の枠は「新しい回答を最初から最後まで貼り付けて変換し直します」）
-        assert ("新しい回答を最初から最後まで貼り付けて" if key == "partial" else "貼り付け直して「反映」を押し") in boxes, key
+        # 枠が回答の貼り直しを案内している（途中で切れた回答の枠は「新しい回答を最初から最後まで」貼り直す）
+        assert ("新しい回答を最初から最後まで「" if text == cut_cases()["c"] else "貼り付け直して「反映」を押し") in boxes, progress
     out = fns["on_apply"](json.dumps(FLOAT_RESPONSE, ensure_ascii=False))     # 貼り直した回答で決まれば、欄を隠す
     fill_images(st.res)                                                       # 図の画像の手順（必須）を済ませる
     assert not st.needs_action and out[2]["visible"] is False and out[3] == ""
@@ -499,7 +504,7 @@ def test_apply_crash_hides_manual_fields_as_advised(tmp_path, monkeypatch):
     def boom(*args, **kwargs):
         raise OSError("書けません")
     monkeypatch.setattr(app, "convert", boom)
-    out = fns["on_apply"]('{"operations": []}')
+    out = fns["on_apply"](EMPTY_ANSWER)
     assert out[2]["visible"] is False and "隠れています" in out[0] and "「変換する」をもう一度押すと" in out[0]
     monkeypatch.setattr(app, "convert", real)
     assert fns["on_convert"](*values)[2]["visible"] is True            # 案内のとおり、欄が戻る
@@ -517,7 +522,7 @@ def test_apply_crash_before_result_dropped_keeps_manual_fields(tmp_path, monkeyp
     def boom(*args, **kwargs):
         raise OSError("写せません")
     monkeypatch.setattr(app, "Options", boom)
-    out = fns["on_apply"]('{"operations": []}')
+    out = fns["on_apply"](EMPTY_ANSWER)
     assert st.res is not None and out[2]["visible"] is True
     assert "OSError: 写せません" in out[0] and "そのまま残っています" in out[0] and "隠れています" not in out[0]
     assert "変換レポートは作られていません" not in out[0]
@@ -579,15 +584,12 @@ def xml_text(res):
 
 def exclude_answer(res, word):
     """本文の「二つ目の段落」を除外する AI の回答（src は res の段落 ID）。"""
-    import json
     cand = [pid for pid, p in res.plan.paras.items() if word in str(getattr(p, "text", "") or getattr(p, "plain", "") or p)]
     assert cand, "段落が見つからない"
-    return json.dumps({"placements": [], "operations": [{"op": "set_role", "src": cand[0], "text": "", "occurrence": 1,
-                                                         "target": "", "role": "exclude", "image": "", "confidence": "高",
-                                                         "reason": "試験"}], "notes": []}, ensure_ascii=False)
+    return answers.answer(style_fixes=[(cand[0], "exclude")])
 
 
-EMPTY_ANSWER = '{"placements": [], "operations": [], "notes": []}'
+EMPTY_ANSWER = answers.answer()
 
 
 def check_text(t):
@@ -685,7 +687,7 @@ def test_ai_mode_change_after_convert_keeps_screen(tmp_path):
     for mode in ("api", "none"):
         st.set_inputs(ai_mode=mode)
         assert st.waiting_for_answer and st.answer_box_open
-        html = st.result_html()
+        html = st.result_html().split("<details")[0]       # 枠の部分（レポート全文の 2 章には、回答待ちの 1 行がある）
         assert "AI の回答をまだ反映していません" not in html and "AI による補完を「使わない」" not in html
         assert st.changed_inputs() == [] and "次に変換するときに使われます" in st.ready_text()
         check_text(st.settings_note())
@@ -799,12 +801,12 @@ def test_previous_paper_answer_refused(tmp_path):
 
 
 def test_stopped_convert_leaves_no_stale_text(tmp_path):
-    from conftest import FLOAT
+    from test_structure import conflict_doc
     st = filled(tmp_path)
     st.convert()
-    st.set_inputs(docx=str(FLOAT))
+    st.set_inputs(docx=str(conflict_doc(tmp_path, "K1_ref_ref")))
     with pytest.raises(InputError):
-        st.convert()                                   # 図の位置を AI が決める必要がある（AI なし）
+        st.convert()                                   # 原稿の構造の衝突で中止（位置を決められない図表では中止しない。W8 の決定 4）
     assert st.res is None and st.run is not None
     st.set_inputs(fpage="77")
     assert st.changed_inputs() == [] and "今の結果は" not in st.ready_text() and not st.answer_box_open
@@ -843,33 +845,31 @@ def test_stale_texts_use_real_labels(tmp_path):
 
 
 def test_manual_fields_stay_open_for_missing_abstract(tmp_path):
-    """手動モードで回答を反映した後も、英文要旨が見つからない（abstract_missing）枠が出ているあいだは、AI の set_role の abstract を
-    貼り直せるように、手動の欄を見せたままにする。"""
-    import json
+    """手動モードで回答を反映した後の手動の欄は、知らせの key（以前の REPASTE_KEYS）ではなく状態（report.ai_done）で決める
+    （修正計画 W8 の 4.3・手順 7）。英文要旨が見つからない（abstract_missing）枠は Word でスタイルを付ける直し方だけを書き、
+    貼り直しを勧めない。図形もテキストボックスもない原稿で回答を反映し終えたら（済み）、手動の欄を閉じる。"""
     from test_structure import _no_abstract_style_docx
-    from jasme_jats.report import actions
+    from jasme_jats.report import actions, ai_state
     st = AppState(tmp_path / "work")
     st.set_inputs(route="docx", docx=str(_no_abstract_style_docx(tmp_path)), volume="31", issue="1", fpage="1", lpage="12",
                   peer_review="査読あり", manuscript_type=type_choices()[0], ai_mode="manual")
     demo = app.build_app(st, app.IO())
     fns = {f.fn.__name__: f.fn for f in demo.fns.values()}
     fns["on_convert"](*[st.inputs[n] for n in app.INPUT_NAMES])
-    assert st.waiting_for_answer
-    out = fns["on_apply"](json.dumps({"placements": [], "operations": [], "notes": []}))
+    assert st.waiting_for_answer and st.answer_box_open
+    out = fns["on_apply"](EMPTY_ANSWER)
     assert "abstract_missing" in [a.key for a in actions(st.res)] and not st.waiting_for_answer
-    assert "abstract_missing" in AppState.REPASTE_KEYS and st.answer_box_open
-    assert out[2]["visible"] is True and out[3] == st.prompt_text() and out[3]
-    # 回答を反映した後の枠は、貼り直しの案内（目印 repaste）で書く
-    from jasme_jats.report import step
+    assert not hasattr(AppState, "REPASTE_KEYS")
+    assert ai_state(st.res) == "済み" and not st.answer_box_open and out[2]["visible"] is False
     box = next(a for a in actions(st.res) if a.key == "abstract_missing").box_detail
-    assert step("repaste") in box and "出し直してもらい" in box
+    assert "\x00" not in box and "AI" not in box and "スタイルを" in box
 
 
 
 def test_structure_conflict_shows_box(tmp_path):
     """原稿の構造の衝突（K1・K2）で変換が中止されたとき: InputError で、文（args[0]）と赤い枠（html）に画面の操作が 1 画面版の語
     （「docx（論文の Word ファイル）」の欄）で出る（目印が残らない）。結果は残らず、入力の写しは残る（入力を直して変換し直せる）。
-    手動の欄は閉じたまま。AIRequiredError と同じ扱い。"""
+    手動の欄は閉じたまま（変換を中止するのは構造の衝突だけ）。"""
     from test_structure import conflict_doc
     st = filled(tmp_path, docx=conflict_doc(tmp_path, "K1_ref_ref"))
     with pytest.raises(InputError) as ei:

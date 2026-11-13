@@ -8,11 +8,11 @@
 - 本文の大きさの「（注1）」、引用文献の後ろの注の節、番号の書き方が想定外の注（tests/fixtures/sample_notes.docx）
 """
 import dataclasses
-import json
 
 import pytest
 from lxml import etree
 
+import answers
 import make_fixtures as mf
 from conftest import EDGE, NOTES, STRUCTURE
 from jasme_jats.builder import build, finalize, serialize
@@ -91,20 +91,14 @@ def test_report_explains_notes_without_numbers(journal):
         "先頭に番号（「1)」「（注1）」など）を読み取れなかった注: fn3（「（注3）2 段落からなる注の 1 段落目」。3 段落を 1 件の注にまとめた）")
 
 
-def _op(**kw):
-    return dict({"text": "", "occurrence": 1, "target": "", "role": "", "image": "", "confidence": "高", "reason": "試験"}, **kw)
-
-
 def test_ai_can_split_notes_and_link_to_the_new_note(journal, meta, tmp_path):
     _, plan, _ = _mechanical(NOTES, journal)
     start = next(s for s, p in plan.paras.items() if p.plain().startswith("※4"))
     ref = next(s for s, p in plan.paras.items() if "注※4は" in p.plain())
-    resp = {"operations": [_op(op="set_role", src=start, role="fn_start"),
-                           # 新しく分けた注は依頼文に ID がないので、その注の最初の段落の ID で指定する
-                           _op(op="link_note", src=ref, text="※4", target=start)],
-            "placements": [], "notes": []}
-    res = convert(NOTES, meta, journal, Options(out_dir=tmp_path, ai_mode="manual",
-                                                ai_response=json.dumps(resp, ensure_ascii=False)))
+    resp = answers.answer(boundaries=[(start, "注の始まり")],
+                          # 新しく分けた注は依頼文に ID がないので、その注の最初の段落の ID で指定する
+                          links=[("注", ref, "※4", 1, start)])
+    res = convert(NOTES, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=resp))
     assert res.ai.rejected == []
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     root = load(res)
@@ -114,12 +108,39 @@ def test_ai_can_split_notes_and_link_to_the_new_note(journal, meta, tmp_path):
     assert ("※4", "fn4") in {(text(x), x.get("rid")) for x in root.iter("xref") if x.get("ref-type") == "fn"}
 
 
+def test_ai_note_boundaries_are_reflected_and_recorded(journal, meta, tmp_path):
+    """注の区切りの直し（注の始まり fn_start・注の続き p）は XML に反映し、AIOutcome.boundaries に（段落、kind、理由、確度）を
+    記録する。注の一覧の段落へのほかの役割（見出し・除外）は、Word のスタイルで直す提案にして XML に反映しない（所有者の決定 5。
+    W8 の手順 5）。"""
+    from jasme_jats.ai_assist import EXCLUDE_HOW, STYLE_ONLY_WHY
+    _, plan, _ = _mechanical(NOTES, journal)
+    start = next(s for s, p in plan.paras.items() if p.plain().startswith("※4"))
+    fn3 = next(fn for fn in plan.fns if len(fn.paras) > 1)
+    cont = fn3.paras[1].src
+    assert plan.region[start] == "fn" and plan.region[cont] == "fn"
+    resp = answers.answer(boundaries=[(start, "注の始まり", "番号で始まる"), (cont, "注の始まり", "試験", "中")],
+                          style_fixes=[(start, "fn_heading"), (cont, "exclude")])
+    res = convert(NOTES, meta, journal, Options(out_dir=tmp_path / "a", ai_mode="manual", ai_response=resp))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    assert [(b.src, b.kind, b.role, b.reason, b.confidence) for b in res.ai.boundaries] == [
+        (start, "注の始まり", "fn_start", "番号で始まる", "高"), (cont, "注の始まり", "fn_start", "試験", "中")]
+    assert [(op["role"], why) for op, why in res.ai.rejected] == [("fn_heading", STYLE_ONLY_WHY), ("exclude", STYLE_ONLY_WHY)]
+    assert [(f.src, f.role, f.style, f.how) for f in res.ai.style_fixes] == [
+        (start, "fn_heading", "注見出し", "Word で段落のスタイルを「注見出し」にする"), (cont, "exclude", "", EXCLUDE_HOW)]
+    assert [len(fn.findall("p")) for fn in load(res).findall(".//fn-group/fn")] == [1, 1, 1, 1, 1]
+    # 注の続き（p）: 2 つ目の注の最初の段落を、前の注の続きにする（注が 1 つ減る）
+    second = next(fn for fn in plan.fns if not fn.word_note and fn is not plan.fns[0]).paras[0].src
+    resp = answers.answer(boundaries=[(second, "注の続き")])
+    back = convert(NOTES, meta, journal, Options(out_dir=tmp_path / "c", ai_mode="manual", ai_response=resp))
+    assert [(b.src, b.kind) for b in back.ai.boundaries] == [(second, "注の続き")] and back.ai.rejected == []
+    assert len(back.plan.fns) == len(plan.fns) - 1 and back.fidelity.ok and back.fidelity.final_ok
+
+
 def test_ai_cannot_split_word_footnotes(journal, meta, tmp_path):
     _, plan, _ = _mechanical(EDGE, journal)
     src = next(fn.paras[0].src for fn in plan.fns if fn.word_note)
-    resp = {"operations": [_op(op="set_role", src=src, role="fn_start")], "placements": [], "notes": []}
-    res = convert(EDGE, meta, journal, Options(out_dir=tmp_path, ai_mode="manual",
-                                               ai_response=json.dumps(resp, ensure_ascii=False)))
+    resp = answers.answer(boundaries=[(src, "注の始まり")])
+    res = convert(EDGE, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=resp))
     assert [why for _, why in res.ai.rejected] == [WORD_NOTE_ROLE]
 
 
@@ -558,11 +579,9 @@ def test_ai_cannot_set_role_on_word_notes(journal, meta, tmp_path):
     endnote = next(fn.paras[0].src for fn in plan.fns if fn.word_id == "endnote:5")
     footnote = next(fn.paras[0].src for fn in plan.fns if fn.word_id == "footnote:5")
     unref = next(s for s, k in plan.note_of.items() if k == "footnote:9")
-    ops = [_op(op="set_role", src=endnote, role="p"), _op(op="set_role", src=endnote, role="exclude"),
-           _op(op="set_role", src=footnote, role="fn_start"), _op(op="set_role", src=unref, role="p")]
-    res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path, ai_mode="manual",
-                                                    ai_response=json.dumps({"operations": ops, "placements": [], "notes": []},
-                                                                           ensure_ascii=False)))
+    resp = answers.answer(boundaries=[(endnote, "注の続き"), (footnote, "注の始まり"), (unref, "注の続き")],
+                          style_fixes=[(endnote, "exclude")])
+    res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=resp))
     assert [why for _, why in res.ai.rejected] == [WORD_NOTE_ROLE] * 4
     assert not any(op["op"] == "set_role" for op, _ in res.ai.accepted)
     assert res.fidelity.ok and list(fn_list(load(res))) == ["fn1", "fn2", "fn3", "fn4", "fn5"]

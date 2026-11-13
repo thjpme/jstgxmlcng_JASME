@@ -898,21 +898,24 @@ def test_fidelity_failure_is_needs_action(journal, meta, tmp_path):
 
 
 def test_manual_mode_before_answer_is_recommended_step(journal, meta, tmp_path, capsys):
-    """手動モードで AI の回答を貼り戻す前の出力は、推奨の手順（要対応ではない。終了コード 0）。冒頭は手動モードの説明のまま、
-    14 章とコマンドラインで回答を貼り戻すよう知らせる。"""
+    """手動モードで AI の回答を貼り戻す前の出力は、要対応ではない（終了コード 0）。位置を聞く図形も決められないテキストボックスも
+    ない原稿（sample_full）では、推奨の手順 ai_finish も出さず、レポートの 2 章に 1 行だけ書く（修正計画 W8 の 4.3）。"""
     from jasme_jats.cli import main
-    from jasme_jats.report import actions
+    from jasme_jats.report import ai_state
     res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "a", ai_mode="manual"))
     keys = fill_images(res)                                # 図の画像の手順（必須）を済ませる
-    assert [a.key for a in others(res)] == ["ai_pending", "name_split"] and not res.needs_action
+    assert ai_state(res) == "回答待ち"
+    assert [a.key for a in others(res)] == ["name_split"] and not res.needs_action
     report = res.report_path.read_text(encoding="utf-8")
-    assert "手動モード: 「AI依頼文.txt」をチャット" in report.split("## 2.")[0]
-    assert "AI の回答をまだ反映していない" in report.split("## 14.")[1]
+    assert "手動モード: 「AI依頼文.txt」をチャット" not in report      # 冒頭の手動モードの説明（Result.output_note）はなくした
+    ch2 = report.split("## 2.")[1].split("## 3.")[0]
+    assert "AI の回答をまだ反映していません（手動モード）。AI依頼文.txt をチャット" in ch2 and "| 状態 | 回答待ち |" in ch2
+    assert "AI の回答をまだ反映していない" not in report.split("## 14.")[1]
     from conftest import META_EXAMPLE
     assert main([str(FULL), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "b"), "--ai", "manual",
                  "--images", str(image_folder(tmp_path / "pics", keys))]) == 0
     err = capsys.readouterr().err
-    assert "手順（推奨）: 手動モードで、AI の回答をまだ反映していません" in err and "--ai manual --ai-response 回答のファイル を指定し" in err
+    assert "手順（推奨）: " not in err
 
 
 # ----------------------------------------------------------------------------- 読み取りの文字ポリシー（修正計画の G）
@@ -1185,12 +1188,11 @@ def test_structure_conflict_aborts_conversion(name, ai_mode, journal, meta, tmp_
     assert list(out.iterdir()) == []
 
 
-def test_structure_conflict_comes_before_ai_required(journal, meta, tmp_path):
-    """位置を決められない図表のある原稿（sample_float）に K1 の形（引用文献の見出しが 2 つ）があるときは、AI の判断を求める
-    AIRequiredError より先に、Word で直す StructureConflictError を出す（AI を使わない設定でも）。"""
+def test_structure_conflict_stops_float_document_without_ai(journal, meta, tmp_path):
+    """位置を決められない図表のある原稿（sample_float）は、AI を使わない設定でも中止しない（修正計画 W8 の決定 4）が、K1 の形
+    （引用文献の見出しが 2 つ）があるときは、Word で直す StructureConflictError で中止する。"""
     import re
     from conftest import FLOAT
-    from jasme_jats.pipeline import AIRequiredError
     with zipfile.ZipFile(FLOAT) as z:
         xml = z.read("word/document.xml").decode("utf-8")
         m = re.search(r"<w:p[ >](?:(?!<w:p[ >]).)*?引用および参考文献.*?</w:p>", xml, re.S)
@@ -1202,8 +1204,7 @@ def test_structure_conflict_comes_before_ai_required(journal, meta, tmp_path):
                 if item.filename == "word/document.xml":
                     data = xml.replace(m.group(0), m.group(0) + m.group(0), 1).encode("utf-8")
                 zo.writestr(item, data)
-    with pytest.raises(AIRequiredError):
-        convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "a"))      # 対照: 元の sample_float
+    assert convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "a")).plan.unplaced_floats   # 対照: 元の sample_float は中止しない
     with pytest.raises(_structure_error()):
         convert(both, meta, journal, Options(out_dir=tmp_path / "b"))
 
@@ -1220,16 +1221,17 @@ def test_structure_conflict_route2_stops_before_fixed_docx(journal, meta, tmp_pa
     assert list(out.iterdir()) == []
 
 
-def test_ai_required_route2_leaves_no_fixed_docx(journal, meta, tmp_path):
-    """O7: ルート2 で AI を使わない設定のまま、位置を決められない図表（sample_float）があって AIRequiredError で中止しても、
-    出版版 PDF で補った docx を出力フォルダに残さない（補った docx を作る前に止める）。"""
+def test_route2_without_ai_does_not_stop_for_floats(journal, meta, tmp_path):
+    """ルート2 で AI を使わない設定でも、位置を決められない図表（sample_float）で中止せず（修正計画 W8 の決定 4）、出版版 PDF で
+    補った docx が出力フォルダに残る（前は補った docx を作る前に AIRequiredError で中止していた。O7）。"""
     pytest.importorskip("pypdfium2")
     from conftest import FLOAT, PDFCHECK_PDF
-    from jasme_jats.pipeline import AIRequiredError
     out = tmp_path / "out"
-    with pytest.raises(AIRequiredError):
-        convert(FLOAT, meta, journal, Options(out_dir=out, pdf_path=PDFCHECK_PDF, route="pdf"))
-    assert not list(out.glob("*PDFで補完した原稿*"))
+    res = convert(FLOAT, meta, journal, Options(out_dir=out, pdf_path=PDFCHECK_PDF, route="pdf"))
+    assert res.plan.unplaced_floats == ["s1", "s2", "s3"] and res.xml_path.exists()
+    from jasme_jats.report import actions
+    assert "ai_finish" in [a.key for a in actions(res)]
+    assert res.docx_fix is not None and res.docx_fix.path.exists() and list(out.glob("*PDFで補完した原稿*"))
 
 
 def test_structure_conflict_leaves_previous_fixed_docx_alone(journal, meta, tmp_path):

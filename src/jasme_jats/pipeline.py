@@ -5,7 +5,8 @@
      構造（同じ種類の後付けの見出し・英文要旨の見出しが 2 つ、著者名の付かない所属。K1・K2）は plan.structure_conflicts に記録され、
      組み立ての直後（AI を呼ぶ前。ルート2 は補った docx を作る前の元の docx で）に StructureConflictError で変換を中止する
   3. 機械的にリンクを付ける（linker, refparse）
-  4. （任意）AI による補完: AI が返した操作を検証し、構造の組み直し・リンクの追加として適用する（ai_assist）。
+  4. （任意。推奨の手順）AI による補完: AI が返した操作を検証し、構造の組み直し・リンクの追加として適用する（ai_assist）。
+     AI を使わなくても中止しない（位置を決められない図表は、結び付いた段落の後ろか本文の最後に置く。修正計画 W8 の決定 4）。
      回答が途中で切れていたら、最後まで書かれた図表の位置の指定（placements）だけを読んで反映し、要対応として知らせる。
      AI の役割の指定（set_role）で組み直すと構造の衝突（K1・K2）ができるときは、衝突の範囲の set_role を、なお残ればすべての
      set_role を不採用（CONFLICT_ROLE_WHY。レポートの 2 章）にして組み直す（中止しない）
@@ -61,37 +62,20 @@ from .package import (XLINK_HREF, apply_images, article_dir, make_zip, unzipped_
                       zip_problems)
 from .pdfdocx import DocxFix, make_fixed_docx, same_file
 from .pdfmatch import PdfCheck, check_pdf
-from .report import (BOX_PENDING_NOTE, actions, blocking, decoration_where, render, render_ai_only, slot_where, step,
+from .report import (actions, blocking, decoration_where, render, render_ai_only, slot_where, step,
                      structure_conflict_text)
 from .report import pdf_fallback as report_pdf_fallback
-from .structure import FN_IMAGE_EXCLUDED, REF_IMAGE_EXCLUDED, classify, conflict_overrides, float_caption, float_targets
+from .structure import FN_IMAGE_EXCLUDED, REF_IMAGE_EXCLUDED, classify, conflict_overrides, float_caption
 from .ooxml import is_pua
 from .tracking import GEN, SPAN
 from .validate import validate
-
-
-class AIRequiredError(Exception):
-    """位置を機械的に決められない図表があるのに、AI による補完を使わない設定で変換しようとした。
-
-    文の中の画面の操作は目印（report.step）で書く。画面に出すときは colab.step_text で（ノートブックは colab.ai_required_box、
-    1 画面版は app.py、コマンドラインは cli.py が screen を指定して）語に置き換える。
-    """
-
-    def __init__(self, plan):
-        self.floats = [plan.floats[fid] for fid in plan.unplaced_floats]
-        lines = [f"- {info.float.fid}: アンカー段落「{_head(plan, info.float.anchor_src)}」付近、"
-                 f"{float_caption(info)}（{info.reason}）" for info in self.floats]
-        super().__init__(
-            f"この原稿には、位置を機械的に決められない図表（テキストボックス・グループ図形に入った図表）が {len(self.floats)} 件"
-            "あります。これらの位置と組み合わせは AI に判断させる必要があるため、AI による補完を「使わない」設定では変換できません。"
-            + step("ai_modes") + "、もう一度変換してください。\n" + "\n".join(lines))
 
 
 class StructureConflictError(Exception):
     """docx の構造に、そのまま変換すると段落の文字が XML に入らなくなる形（同じ種類の後付けの見出し・英文要旨の見出しが 2 つ、
     著者名の付かない所属。docs/REVIEW_2026-11.md の K1・K2）があるので、変換を中止した。
 
-    report.actions の知らせではなく、AIRequiredError と同じ例外の表示。文の中の画面の操作は目印（report.step）で書き、
+    report.actions の知らせではなく、例外の表示（変換を中止するのはこれだけ）。文の中の画面の操作は目印（report.step）で書き、
     画面に出すときは colab.step_text で（ノートブックは colab.structure_conflict_box、1 画面版は app.py、コマンドラインは cli.py が
     screen を指定して）語に置き換える。テストが中止のときの構造（plan.fns など）を見られるよう plan を持つ。
     """
@@ -110,31 +94,25 @@ CONFLICT_ROLE_WHY = ("この回答の役割の指定を合わせて組み直す�
 def _reject_roles(ops, outcome, pred):
     """AI の set_role のうち、pred(op) が真で、まだ不採用の一覧にないものを、構造の衝突（CONFLICT_ROLE_WHY）で不採用にする（2 章）。
 
-    同じ段落への set_role が複数あれば、すべて不採用にする。apply_ops は不採用の一覧にある操作（同じ dict）を飛ばすので、
+    同じ段落への set_role が複数あれば、すべて不採用にする（AIOutcome.boundaries からも除く）。apply_ops は不採用の一覧にある操作（同じ dict）を飛ばすので、
     採用の一覧には入らない。"""
     for op in ops:
         if op.get("op") == "set_role" and pred(op) and not any(r[0] is op for r in outcome.rejected):
             outcome.rejected.append((op, CONFLICT_ROLE_WHY))
+            # 反映した注の区切り・資料の始まりの直し（ai_assist.role_overrides）からも除く
+            outcome.boundaries = [b for b in outcome.boundaries if b.src != op["src"]]
 
 
-def _head(plan, src) -> str:
-    p = plan.paras.get(src)
-    return "".join(a.text for a in p.atoms if a.kind == "text")[:20] if p is not None else src
-
-
-# 途中で切れた回答から、図表の位置の指定の一部だけを反映したときの知らせ（要対応。レポートの冒頭・2 章・14 章、Colab、CLI）
+# 途中で切れた回答から、図表の位置の指定の一部だけを反映したときの説明（AIOutcome.partial。レポートの 2 章と、推奨の手順 ai_finish の
+# 「一部」の文。出し直しの頼み方は report._ai_finish_action が書く）
 PARTIAL_MSG = ("図表の位置の指定（placements）のうち、最後まで書かれていた {n} 件だけを読み取って反映しました（検証で"
-               "採用しなかったものは 2 章）。リンクなどの操作（operations）と気づき（notes）は反映していません。AI に出し直して"
-               "もらうと、すべてが反映されます。チャットでは「回答が途中で切れました。同じ形式で最初から出し直してください」と"
-               "頼み、新しい回答を最初から最後まで貼り付けて変換し直します（続きだけを貼り付けても読めません）。API で自動実行"
-               "するときは、もう一度変換します（また途中で切れるときは、"
-               "「手動（チャットに貼り付け）」に切り替えて変換し、依頼文をチャットに貼り付けて回答してもらいます）。")
+               "採用しなかったものは 2 章）。リンクなどの操作（operations）と気づき（notes）は反映していません。")
 
 
 def _read_cut(outcome, text):
     """途中で切れた回答から、最後まで書かれている図表の位置の指定だけを読む（ai_assist.parse_cut_response）。
 
-    読めたら、読み取りの誤りを消して、要対応の説明（outcome.partial）を書く。読めなければ None（outcome は変えない）。
+    読めたら、読み取りの誤りを消して、説明（outcome.partial）を書く。読めなければ None（outcome は変えない）。
     """
     data = parse_cut_response(text)
     if data is None:
@@ -142,12 +120,6 @@ def _read_cut(outcome, text):
     outcome.error = ""
     outcome.partial = PARTIAL_MSG.format(n=len(data["placements"]))
     return data
-
-
-def _spaced(text: str) -> str:
-    """文の中に図表の ID（英数字）を挟むときの空白: 先頭・末尾が英数字なら、その側に半角の空白を足す（例:「 F1・F2 」
-    「 F1 と段落「…」」）。"""
-    return (" " if text[:1].isascii() else "") + text + (" " if text[-1:].isascii() else "")
 
 
 def _located(plan, src) -> str:
@@ -200,8 +172,6 @@ class Result:
     tracked_changes: int = 0
     comments: int = 0
     has_pdf: bool = False
-    output_note: str = ""
-    forced_floats: list = field(default_factory=list)   # AI による補完でも位置が決まらず、仮の位置（アンカー段落の後ろ・本文の最後）に置いた図表の説明
     pdf_check: Optional[PdfCheck] = None                # 出版版 PDF との照合（PDF がなければ None）。ルート2 では補った docx との照合
     lost_images: list = field(default_factory=list)     # 画像を入れる場所（置き場所）を作れなかった docx の画像（LostImage。要対応 lost）
     image_problems: list = field(default_factory=list)  # XML の画像の名前が置き場所の一覧と合わない（image_problems の文。要対応 image_names）
@@ -677,14 +647,13 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         if not opts.pdf_path:
             raise ValueError("docx から作り、出版版 PDF で補う（ルート2）には、記事の PDF が必要です")
         fixed = fixed_path = fixed_docx_path(docx_path, out_dir, meta.article_id(journal))
-        # 構造の確かめ（K1・K2）と、位置を決められない図表の確かめは、補う前の docx で行う（補った docx を残さない。O7）。
+        # 構造の確かめ（K1・K2）は、補う前の docx で行う（補った docx を残さない。O7）。
         # 校正の直し（(B)）で見出しの重複が消える原稿でも、利用者が直すのは元の docx なので、元の docx の抜粋を見せて中止する。
-        # fixed_docx_path は入力と同じパスにならない（入力がその名前なら番号つきの別の名前）ので、入力は消えない
+        # fixed_docx_path は入力と同じパスにならない（入力がその名前なら番号つきの別の名前）ので、入力は消えない。
+        # 位置を決められない図表があっても中止しない（AI の仕上げは推奨の手順。修正計画 W8 の決定 4）
         _, plan0, _ = _mechanical(docx_path, journal)
         if plan0.structure_conflicts:
             raise StructureConflictError(plan0)
-        if plan0.unplaced_floats and opts.ai_mode == "none":
-            raise AIRequiredError(plan0)
         docx_fix = make_fixed_docx(docx_path, opts.pdf_path, fixed, journal)
         if docx_fix.check.ok:
             docx_path = fixed
@@ -692,18 +661,16 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
             docx_fix = None
 
     doc, plan, linker = _mechanical(docx_path, journal)
-    if plan.structure_conflicts or (plan.unplaced_floats and opts.ai_mode == "none"):
+    if plan.structure_conflicts:
         # AI を呼ぶ前に止める（API の費用をかけず、手動モードでも AI依頼文.txt を書かない）。AI が直せる形（2 つ目の「注」に p など）
-        # でも、元の docx で止めて Word で直してもらう。ルート2 で、この run が補った docx を書いていれば消す（(1) をすり抜けたときだけ）
+        # でも、元の docx で止めて Word で直してもらう。ルート2 で、この run が補った docx を書いていれば消す（(1) をすり抜けたときだけ）。
+        # 位置を決められない図表は、AI を使わなくても、結び付いた段落の後ろ（本文の外なら本文の最後）に置いて変換を続ける（W8 の決定 4）
         _drop_fixed(docx_fix, fixed_path)
-        if plan.structure_conflicts:
-            raise StructureConflictError(plan)
-        raise AIRequiredError(plan)
+        raise StructureConflictError(plan)
     root, info = build(plan, meta, journal, split)
     outcome = AIOutcome(mode=opts.ai_mode, model=opts.ai_model if opts.ai_mode == "api" else "",
                         provider=opts.ai_provider)
     prompt_path = None
-    output_note = ""
     data = None                 # AI の回答（読めたもの）
 
     # ---------------------------------------------------------------- AI 補完
@@ -731,19 +698,10 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
                     data = _read_cut(outcome, opts.ai_response)  # 途中で切れた回答: 最後まで書かれた位置の指定だけを読む
                     if data is None:
                         outcome.error = f"貼り付けられた回答を JSON として読めませんでした: {e}"
-            else:
-                output_note = ("> 手動モード: 「AI依頼文.txt」をチャット（claude.ai など）に貼り付け、返ってきた JSON を"
-                               "ツールに貼り戻して再実行すると、AI による補完が反映されます。この出力は AI 補完の前の状態です。")
-                if plan.unplaced_floats:
-                    output_note += ("位置を決められない図表（3 章）は、AI の回答を反映するまで、図が結び付いている段落"
-                                    "（アンカー段落）のすぐ後ろ（箇条書き・引用の途中なら、その終わり。アンカー段落が本文で"
-                                    "なければ本文の最後）に仮に置いています。")
-                if plan.undecided_boxes:
-                    output_note += BOX_PENDING_NOTE
         if data is not None:
             ops = split_ops(data, outcome)
             outcome.notes = [n for n in data.get("notes", []) if isinstance(n, str) and n.strip()]
-            overrides = role_overrides(ops, plan, outcome)
+            overrides = role_overrides(ops, plan, outcome, journal)
             placements = float_placements(data, plan, outcome)
             keys = target_keys(plan)
             # 構造を最初から組み直し（docx を読み直す）、AI の操作を適用する。リンク先は組み直した後の ID に読み替える
@@ -869,47 +827,44 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         if any(s == src and (t == year or (t and t in raw)) for s, t in ai_links):
             continue
         unresolved_after.append(u)
-    # 位置を決められなかった図表（仮の位置: アンカー段落のすぐ後ろか、本文の最後に置いている。決定事項 21）
+    # AI に位置を聞いたが、答えを採用しなかった図表（結び付いた段落のすぐ後ろか、本文の最後に置いている。決定事項 21・修正計画 W8 の 4.3）。
+    # 3 章の「理由」には置いた位置と理由だけを書く（AI を勧める文は推奨の手順 ai_finish の 1 か所。手作業で XML の中で移させない）
     pending_ai = opts.ai_mode == "manual" and data is None and not outcome.error   # 手動モードで AI の回答を待っている
-    forced_floats = []
     read = {op.get("src") for op, _ in outcome.rejected if op.get("op") == "place_float"}   # 指定を読めた（採用しなかった）図形
     for sid in plan.unplaced_floats:
         fi = plan.floats[sid]
-        # 手作業で移す XML の要素（図表の ID と、図形の中身から出した本文の段落など）
-        targets = float_targets(plan, fi)
         place = plan.float_place(sid)
-        where = f"XML の{place}にある{_spaced(targets)}" if targets else f"XML の{place}にある図表の中身"
-        if pending_ai:
-            detail = (f"テキストボックス・グループ図形 {sid} の位置を決められない（{fi.reason}）。AI の回答を反映すると配置される"
-                      f"（今は{place}に仮に置いている）")
+        if fi.end_why == "ai":
+            region = REGION_JA.get(plan.region.get(fi.end_after, ""), "本文の外")
+            detail = (f"AI が本文の外（{region}）の段落 {fi.end_after} の後ろを指定したので、本文の最後に置いた"
+                      f"（位置を機械的に決められない理由: {fi.reason}）")
         else:
-            if fi.end_why == "ai":
-                region = REGION_JA.get(plan.region.get(fi.end_after, ""), "本文の外")
-                head = (f"AI が本文の外（{region}）の段落 {fi.end_after} の後ろを指定したが、本文の外には図表を置けないため、"
-                        "本文の最後に仮に置いた。")
-            elif fi.end_why == "anchor":
-                head = "図が結び付いている段落が本文の段落でないため、本文の最後に仮に置いた。"
-            elif outcome.partial and sid not in read:
-                head = f"AI の回答が途中で切れていて、この図表の位置の指定を読み取れなかったため、{place}に仮に置いた。"
-            elif data is None and outcome.error:
-                head = f"AI の回答を反映できなかったため（2 章）、{place}に仮に置いた。"
+            if fi.end_why == "anchor":
+                head = f"結び付いた段落が本文の段落でないので、本文の最後に置いた（位置を機械的に決められない理由: {fi.reason}）"
             else:
-                head = f"AI による補完でも位置を決められなかったため、{place}に仮に置いた。"
-            detail = (head + f"手作業で、{where}を正しい位置（Word で表示したときに図の左上の直上にある本文の段落の後）に"
-                      f"移すこと。機械的に決められなかった理由: {fi.reason}")
-            forced_floats.append(f"{float_caption(fi)}: {where.rstrip()}")
+                head = f"結び付いた段落の後ろ（{place}）に置いた（位置を機械的に決められない理由: {fi.reason}）"
+            if opts.ai_mode == "none":
+                tail = ""
+            elif pending_ai:
+                tail = "。AI の回答を待っている"
+            elif data is None:
+                tail = "。AI の回答を反映できなかった（2 章）"
+            elif sid in read:
+                tail = "。AI の位置の指定は採用しなかった（2 章）"
+            elif outcome.partial:
+                tail = "。AI の回答が途中で切れていて、この図表の位置の指定を読み取れなかった"
+            else:
+                tail = "。AI の回答に、この図表の位置の指定がなかった"
+            detail = head + tail
         # 場所の欄はアンカー段落の場所（空の段落なら、その前の段落の場所）
         unresolved_after.append(("float", _located(plan, fi.float.anchor_src), float_caption(fi), detail))
     # 文字だけのテキストボックス: 囲みか図の注記か決められなかったもの（除外。要確認）と、位置を推定して置いた囲み（要確認）
     for xid in plan.undecided_boxes + plan.estimated_boxes:
         bi = plan.textboxes[xid]
         head = next((_para_text(q).strip()[:20] for q in bi.paras if not q.is_blank), "")
-        if bi.kind == "undecided" and pending_ai:
-            detail = (f"囲みか図の注記か決められない（{bi.why}）。AI の回答を反映すると判断される（今は XML に出力して"
-                      "いない）")
-        elif bi.kind == "undecided":
-            detail = (f"囲みか図の注記か決められない（{bi.why}）。XML に出力していない。AI による補完を使って変換し直すか、"
-                      "Word で確かめ、本文に必要な囲みなら文字をテキストボックスの外（本文の段落）に出して変換し直す")
+        if bi.kind == "undecided":      # AI を勧める文は推奨の手順 ai_finish の 1 か所（修正計画 W8 の 4.3）
+            detail = (f"囲みか図の注記か決められない（{bi.why}）。XML に出力していない。Word で確かめ、本文に必要な囲みなら"
+                      "文字をテキストボックスの外（本文の段落）に出して変換し直す")
         else:
             detail = (f"囲み（boxed-text）を{plan.box_place(xid)}に置いた（位置は推定: {bi.place_why}）。PDF と見比べ、"
                       "違えば XML の中で boxed-text を正しい位置に移す")
@@ -924,8 +879,8 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         jstage_issues=jstage_issues,
         link_counts=linker.count, unresolved_after=unresolved_after, images=images, warnings=warnings, ai=outcome,
         build_notes=build_notes, hidden_text=doc.hidden_text, tracked_changes=doc.tracked_changes,
-        comments=doc.comments, has_pdf=has_pdf, output_note=output_note, xml_path=flat_xml, zip_path=zip_path,
-        prompt_path=prompt_path, forced_floats=forced_floats, pdf_check=pdf_check, route=opts.route, docx_fix=docx_fix,
+        comments=doc.comments, has_pdf=has_pdf, xml_path=flat_xml, zip_path=zip_path,
+        prompt_path=prompt_path, pdf_check=pdf_check, route=opts.route, docx_fix=docx_fix,
         supplement=supplement, lost_images=lost, hidden_images=hidden_images,
         lost_autonums=lost_numbers, unshown_numbers=list(info.unshown_numbers), pua_chars=pua_left, symbols_replaced=symbols,
         table_problems=table_issues, tables_checked=tables_checked, zip_issues=zip_problems(zip_path, journal, meta, images),

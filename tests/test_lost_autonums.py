@@ -4,16 +4,17 @@ docx は make_fixtures の部品で作る（内容は架空）。番号は docx 
 文字の不変性チェックでは見つからない。ここでは、番号を出していない段落を見つけること、見つけてはいけないものを見つけないこと、
 最後の組み立ての木を調べていることを確かめる。
 """
-import json
 import types
 import zipfile
 
+import answers
 import make_fixtures as mf
 import pytest
 from conftest import ALL_DOCS, FULL, META_EXAMPLE
 from lxml import etree
 
 from jasme_jats import pipeline
+from jasme_jats.ai_assist import STYLE_ONLY_WHY
 from jasme_jats.builder import BuildInfo, Builder
 from jasme_jats.cli import main as cli_main
 from jasme_jats.model import LostImage, LostNumber
@@ -145,7 +146,8 @@ def test_actions_order_puts_autonum_lost_right_after_lost(journal, meta, tmp_pat
 # ---------------------------------------------------------------------------- 見つけてはいけないもの
 def test_guard_ignores_intentional_paths(journal, meta, tmp_path, monkeypatch):
     """番号を出すものと、番号を出さないと決めたものは、守りが報告しない: 自動番号の章見出し・本文と付記と資料の箇条・引用文献・
-    番号だけの空の段落・番号付きの画像だけの段落・AI の set_role exclude で除外した段落・題目の番号（10 章の警告）。"""
+    番号だけの空の段落・番号付きの画像だけの段落・題目の番号（10 章の警告）。AI の set_role exclude は Word で消す提案にして
+    XML に反映しない（所有者の決定 5。W8 の手順 5）ので、その段落は番号ごと出る。"""
     def parts(b):
         rid = b.add_image("a.png", mf.png_bytes("A"))
         return [li(S["sec1"], "番号付きの章見出し"), li(S["body"], "本文の箇条"), mf.para(S["body"], "本文の文である。"),
@@ -160,14 +162,12 @@ def test_guard_ignores_intentional_paths(journal, meta, tmp_path, monkeypatch):
     add_num(path, ["題目の番号の検証用文書"])
     _, plan, _ = _mechanical(path, journal)
     src = next(s for s, p in plan.paras.items() if p.plain() == "除外する箇条")
-    op = {"op": "set_role", "src": src, "text": "", "occurrence": 1, "target": "", "role": "exclude", "image": "",
-          "confidence": "高", "reason": "試験"}
-    resp = json.dumps({"operations": [op], "placements": [], "notes": []}, ensure_ascii=False)
+    resp = answers.answer(style_fixes=[(src, "exclude")])
     res, root, info = convert_tracking(monkeypatch, path, journal, meta, tmp_path / "out", ai_mode="manual", ai_response=resp)
-    assert res.ai.rejected == [] and src in {e.src for e in res.plan.exclusions}
+    assert [why for _, why in res.ai.rejected] == [STYLE_ONLY_WHY] and src not in {e.src for e in res.plan.exclusions}
     check_ok(res, root)
     assert [u[2] for u in res.unshown_numbers] == ["題目"]
-    assert not any(sp.get("src") == src for sp in root.iter(SPAN))
+    assert any(sp.get("src") == src for sp in root.iter(SPAN))
     assert "autonum_lost" not in [a.key for a in actions(res)]
 
 

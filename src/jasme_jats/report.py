@@ -113,13 +113,14 @@ def float_notes(plan):
 
 
 def float_places(plan) -> str:
-    """位置を決められなかった図表を仮に置いた位置の要約（1 章）。例: アンカー段落の後ろ / アンカー段落の後ろ 2 件・本文の最後 1 件。"""
+    """位置を機械的に決められず、AI の指定もない図表を置いた位置の要約（1 章）。例: 結び付いた段落の後ろ /
+    結び付いた段落の後ろ 2 件・本文の最後 1 件。"""
     n = {"anchor": 0, "end": 0}
     for fid in plan.unplaced_floats:
         n["end" if plan.floats[fid].where == "end" else "anchor"] += 1
     if n["anchor"] and n["end"]:
-        return f"アンカー段落の後ろ {n['anchor']} 件・本文の最後 {n['end']} 件"
-    return "本文の最後" if n["end"] else "アンカー段落の後ろ"
+        return f"結び付いた段落の後ろ {n['anchor']} 件・本文の最後 {n['end']} 件"
+    return "本文の最後" if n["end"] else "結び付いた段落の後ろ"
 
 
 def _head(p, n=20) -> str:
@@ -873,7 +874,7 @@ STEP = "手順"
 # 目印の名前を足すときは、colab.STEP_WORDS のすべての画面に語を足す（足りなければ、置き換えのときに例外になる）。
 # 目印は U+0000 で挟む。U+0000 は XML 1.0 の文字ではなく、docx の文字（w:t）・ファイル名・PDF の文字（pdfmatch が制御文字を除く）の
 # どれにも入らないので、文の中の docx 由来の文字（段落の抜粋など）が目印と読まれることがない。
-STEP_NAMES = ("docx", "pdf", "route", "meta", "ai_choose", "ai_modes", "prompt", "paste", "repaste", "answer_apply", "convert_again",
+STEP_NAMES = ("docx", "pdf", "route", "meta", "ai_choose", "prompt", "paste", "repaste", "convert_again",
               "answer_field", "apply_button", "images")
 STEP_MARK = "\x00"
 STEP_MARK_PATTERN = STEP_MARK + "step:([^\x00]*)" + STEP_MARK
@@ -887,7 +888,7 @@ def step(name: str) -> str:
 
 
 # ---------------------------------------------------------------------------- 構造の衝突で変換を中止するときの文（K1・K2）
-# report.actions の知らせではなく、pipeline.StructureConflictError の文（AIRequiredError と同じ例外の表示）。画面の操作は目印 step() で書く。
+# report.actions の知らせではなく、pipeline.StructureConflictError の文（例外の表示）。画面の操作は目印 step() で書く。
 # 抜粋・段落 ID・Word での直し方を、衝突（article.StructureConflict）ごとに 1 行で書く。直し方は Word のスタイル名（jasme.toml の名前）と
 # Word での操作（段落を消す・移す、スタイルを変える、著者表の欄に並べる）で書き、変換ツールの内部の名前は書かない。
 CONFLICT_HEADING_JA = {"ref_heading": "引用文献", "fn_heading": "注", "notes": "付記", "ack": "謝辞"}
@@ -1216,136 +1217,393 @@ def _upload_action(r):
              + "\n".join(f"  {mid}: {msg}" for mid, msg in issues)))
 
 
-# AI の回答を反映できなかったときの見出し（手動モードは貼り付けた回答、API モードは API の呼び出しか回答）
-AI_ERROR_TITLE = {"manual": "貼り付けた回答を読み込めませんでした（AI による補完は反映されていません）",
-                  "api": "AI による補完ができませんでした"}
+def float_names(plan, fids) -> str:
+    """図形 fids の中身の図・表の名前（「図２・図５・表３」。FloatInfo.nodes のキャプションの番号を XML の順に並べる。4 つ以上は
+    「図２・図５・表３ほか」。キャプションのないものは「キャプションのない図」）。推奨の手順 ai_finish の文に使う（修正計画 W8 の 4.3）。"""
+    from .structure import figure_rows
+    want = set(fids)
+    names = []
+    for row in figure_rows(plan):
+        if row.float_id in want and row.node is not None:
+            name = row.label or ("キャプションのない表" if row.kind == "table" else "キャプションのない図")
+            if name not in names:
+                names.append(name)
+    if not names:
+        return "キャプションのない図"
+    return "・".join(names[:3]) + ("ほか" if len(names) > 3 else "")
 
 
-def _ai_error_action(r):
+def _float_left(plan) -> list:
+    """AI に位置を聞いた図形のうち、AI の答えを採用していないもの（plan.asked_floats − plan.answered_floats。docx の順）。"""
+    done = set(plan.answered_floats)
+    return [fid for fid in plan.asked_floats if fid not in done]
+
+
+def _boxes_answered(plan) -> list:
+    """AI の答えで種類（囲みか図の注記か）を決めた、文字だけのテキストボックスの ID（BoxInfo.mode が ai）。"""
+    return [x for x, info in plan.textboxes.items() if info.mode == "ai"]
+
+
+AI_STATES = ("未実行", "回答待ち", "済み", "一部", "失敗")      # AI による仕上げの状態（ai_state。修正計画 W8 の 4.3）
+
+
+def ai_state(r) -> str:
+    """AI による仕上げの状態（AI_STATES のどれか。修正計画 W8 の 4.3）。
+
+    未実行: AI を使わない。回答待ち: 手動モードで、回答をまだ反映していない。失敗: API の呼び出しに失敗した・回答を読めなかった
+    （回答を 1 件も反映していない）。一部: 回答が途中で切れていて位置の一部だけを読んだか、聞いた図形（plan.asked_floats）・
+    囲みか図の注記か決められないテキストボックスに、答えがない・採用しなかったものが残る。済み: どれでもない（PDF の状態は W8 の手順 22）。
+    """
+    ai, plan = r.ai, r.plan
+    if ai.mode == "none":
+        return "未実行"
+    if ai.mode == "manual" and not ai.raw and not ai.error:
+        return "回答待ち"
+    if ai.error or not ai.raw:
+        return "失敗"
+    if ai.partial or _float_left(plan) or plan.undecided_boxes:
+        return "一部"
+    return "済み"
+
+
+def ai_done(r) -> bool:
+    """AI による仕上げが済んだか（ai_state が「済み」。1 画面版の手動の欄を閉じる条件。修正計画 W8 の 4.3・4.5）。"""
+    return ai_state(r) == "済み"
+
+
+AI_METHOD_JA = {"none": "使わない", "manual": "手動（チャットに貼り付け）"}      # API は ai_method で作る
+
+
+def ai_method(r) -> str:
+    """AI による仕上げの方法の表示（レポートの 2 章の表・結果の要約）。API は「API（Claude）」のように使った AI の名前を付ける。"""
     ai = r.ai
-    if ai.mode == "none" or not ai.error:
+    if ai.mode == "api":
+        return f"API（{PROVIDERS.get(ai.provider, ai.provider)}）"
+    return AI_METHOD_JA.get(ai.mode, ai.mode)
+
+
+def ai_summary(r) -> str:
+    """結果の要約（colab.summary_box）の「AI による仕上げ」の行: 方法・モデルと状態（ai_state）。PDF の状態は W8 の手順 22。"""
+    ai = r.ai
+    model = f"（モデル: {ai.model}）" if ai.mode == "api" and ai.model else ""
+    return f"{ai_method(r)}{model}。状態: {ai_state(r)}"
+
+
+AI_FINISH_TITLE = "AI で図・表の位置を合わせる"
+AI_BOX_TITLE = "AI にテキストボックスの種類を判断させる"      # 位置を聞く図形がなく、決められないテキストボックスだけのとき
+AI_STYLE_TITLE = "AI にスタイルの直し方を提案させる"            # 図形もテキストボックスもなく、機械が挙げたスタイルを確かめる段落だけのとき
+AI_ANSWER_TITLE = "AI の回答を反映する"                      # 図形もテキストボックスもなく、失敗か一部のとき
+AI_FAILED_TITLE = "AI の回答を反映できませんでした"
+AI_CHOOSE_HOW = "（ノートブックは手順 4〜6、1 画面版は「AI による補完の方法」の欄、コマンドラインは --ai manual か --ai api）"
+CUT_ASK = "「回答が途中で切れました。同じ形式で最初から出し直してください」"     # 途中で切れた回答の、出し直しの頼み方
+
+
+def _ai_finish_action(r):
+    """推奨の手順 ai_finish（AI による仕上げ。修正計画 W8 の 4.3）。出す条件に当たらなければ None（レポートの 2 章に 1 行だけ書く）。
+
+    出す条件: AI に位置を聞く図形がある（plan.asked_floats）／囲みか図の注記か決められないテキストボックスがあるか、AI の答えで
+    決めた／機械が挙げた、スタイルを確かめる段落がある（plan.style_suspects。英文要旨が見つからない要対応の段落は除く）／状態
+    （ai_state）が「失敗」か「一部」。状態ごとに文を変え、済みなら done、失敗なら failed（枠の見出しを赤字）。残っていても
+    失敗しても、needs_action は偽（推奨の手順）。PDF の文（W8 の手順 22）はまだ書かない。
+    """
+    plan, ai = r.plan, r.ai
+    state = ai_state(r)
+    asked, left, boxes = plan.asked_floats, _float_left(plan), plan.undecided_boxes
+    skip = set(abstract_missing_srcs(plan))
+    m = len({x.src for x in plan.style_suspects if x.src not in skip})
+    if not (asked or boxes or _boxes_answered(plan) or m or state in ("失敗", "一部")):
         return None
     manual = ai.mode == "manual"
-    title = AI_ERROR_TITLE["manual" if manual else "api"]
-    todo = ("回答のコードブロックの中身だけを貼り付け直して、変換し直す" if manual
-            else "2 章の理由を確かめて、もう一度変換する（また失敗するときは「手動（チャットに貼り付け）」に切り替える）")
-    return Action(
-        NEEDS_ACTION, "ai_error",
-        top=(f"> **要対応: {'貼り付けた回答を読み込めませんでした（AI による補完は反映されていません。2 章）' if manual else 'AI による補完ができませんでした（2 章）'}。** "
-             f"{esc(ai.error)}"),
-        checklist=f"- [ ] **{'貼り付けた AI の回答を読み込めなかった' if manual else 'AI による補完ができなかった'}**（2 章）: {todo}",
-        box_title=title, box_detail=ai.error,
-        cli=f"要対応: {title}。{ai.error}")
-
-
-def ai_pending(r) -> bool:
-    """手動モードで、AI の回答をまだ貼り戻していない（この出力は AI による補完の前の状態。決定事項 5(c)）。"""
-    return r.ai.mode == "manual" and not r.ai.raw and not r.ai.error
-
-
-def _ai_pending_action(r):
-    if not ai_pending(r):
-        return None
-    floats = ("位置を決められない図表は、AI の回答を反映するまで仮の位置に置いています（3 章）。" if r.plan.unplaced_floats
-              else "")
-    if r.plan.undecided_boxes:
-        floats += BOX_PENDING_NOTE
-    prompt = r.prompt_path.name if r.prompt_path else "AI依頼文.txt"
-    # 冒頭には、変換のときに書いた手動モードの説明（Result.output_note）が出るので、ここでは冒頭に出さない
-    return Action(
-        STEP, "ai_pending", required=False, progress="回答待ち",
-        checklist=(f"- [ ] **AI の回答をまだ反映していない**（手動モード）: {esc(prompt)} を AI に渡し、返ってきた回答を貼り戻して"
-                   "変換し直す（Colab では回答を貼り付けて反映する。ノートブックは手順 6、1 画面版は回答の欄に貼り付けて「反映」。"
-                   "コマンドラインでは --ai manual --ai-response 回答のファイル）"),
-        box_title="AI の回答をまだ反映していません（手動モード）",
-        box_detail=(f"この結果は、AI による補完の前の状態です。{step('prompt')}を AI（claude.ai などのチャット）に渡し、"
-                    f"返ってきた回答を{step('paste')}してください。" + floats),
-        cli=(f"手順（推奨）: 手動モードで、AI の回答をまだ反映していません（この出力は AI による補完の前の状態）。{prompt} を"
-             "チャット（claude.ai など）に貼り付け、返ってきた回答をファイルに保存して --ai manual --ai-response 回答のファイル を"
-             "指定し、変換し直すこと。"
-             + floats))
-
-
-PARTIAL_TITLE = "AI の回答が途中で切れていました（図表の位置の一部だけを反映しました）"
-
-
-def _partial_action(r):
-    if not r.ai.partial:
-        return None
-    return Action(
-        NEEDS_ACTION, "partial",
-        top=f"> **要対応: AI の回答が途中で切れていました（2 章）。** {esc(r.ai.partial)}",
-        checklist="- [ ] **AI の回答が途中で切れていた**（2 章）: AI に出し直してもらい、もう一度変換する",
-        box_title=PARTIAL_TITLE, box_detail=r.ai.partial,
-        cli=f"要対応: AI の回答が途中で切れていました。{r.ai.partial}")
-
-
-def unplaced_text(plan, partial="") -> tuple:
-    """AI の回答を反映した後も、位置を決められない図表が残っているときの赤い枠の (見出し, 本文)。なければ None。
-
-    図表ごとに、キャプション、XML の中の図表の ID（と、図形の中身から出した本文の段落など。structure.float_targets）、
-    仮に置いた位置（article.ArticlePlan.float_place。アンカー段落の後ろか本文の最後）を示す。partial（AIOutcome.partial。
-    AI の回答が途中で切れていた）があれば、出し直しの頼み方は、途中で切れた回答の枠（PARTIAL_MSG）と同じものを示す
-    （別の頼み方を並べない）。
-    """
-    from .structure import float_caption, float_targets
-    if not plan.unplaced_floats:
-        return None
-    why = {"ai": "（AI が注などの本文の外の段落の後ろを指定したため）",
-           "anchor": "（図が結び付いている段落が本文の段落でないため）"}
-    rows = []
-    for fid in plan.unplaced_floats:
-        info = plan.floats[fid]
-        ids = float_targets(plan, info)
-        xml = f"、XML の{' ' if ids[:1].isascii() else ''}{ids}" if ids else ""
-        rows.append(f"・{fid}（{float_caption(info)}{xml}）: {plan.float_place(fid)}"
-                    f"{why.get(info.end_why, '')}")
-    if partial:
-        intro = ("AI の回答が途中で切れていて、次の図表の位置（placements）の指定を読み取れなかったか、指定が検証で採用されません"
-                 "でした（レポートの 2 章・3 章）。")
-        again = ("AI に出し直してもらう方法は、上の「AI の回答が途中で切れていました」の枠のとおりです（最初から出し直してもらうと、"
-                 "これらの図表の位置も反映されます）。")
+    n, k = len(left), len(boxes)
+    names = float_names(plan, left) if left else ""
+    sp = " " if names[-1:].isascii() else ""        # 名前と助詞の間の空白（「図3 の」「図3ほかの」）
+    where = ("結び付いている段落のすぐ後ろ（結び付いている段落が本文の外なら、本文の最後）" if any(plan.floats[f].where == "end" for f in left)
+             else "結び付いている段落のすぐ後ろ")
+    # 見出し: 残っている図形があれば位置、なければ残っているテキストボックス、どちらもなければ（途中で切れた回答など）回答の反映
+    if left or (asked and state == "済み"):
+        base = AI_FINISH_TITLE
+    elif boxes or (_boxes_answered(plan) and state == "済み"):
+        base = AI_BOX_TITLE
+    elif m:
+        base = AI_STYLE_TITLE
     else:
-        intro = "AI の回答に、次の図表の位置（placements）の指定がないか、指定が検証で採用されませんでした（レポートの 2 章・3 章）。"
-        again = ("AI に出し直してもらう場合は、手動モードではチャットで「位置を決められなかった図表をすべて placements に書いて、"
-                 "回答の書き方に従って出し直してください」と頼んで" + step("repaste") + "、API モードでは"
-                 + step("convert_again") + "してください。")
-    return ("位置を決められなかった図表があります（仮の位置に置いています。手作業で直してください）",
-            intro + "これらは仮の位置に置いているので、登載の前に、XML の中で手作業で正しい位置（Word で表示したときに、図の左上の"
-            "直上にある本文の段落の後）に移してください。\n" + "\n".join(rows) + "\n" + again)
+        base = AI_ANSWER_TITLE
+    title = f"{base}（強く推奨。残り {n} 個）" if left else f"{base}（推奨）"
+    progress = state + (f"・残り {n} 個" if left else "")
+    prompt = r.prompt_path.name if r.prompt_path else "AI依頼文.txt"
+    # 位置を聞く図形・テキストボックスの説明（未実行・回答待ち）
+    floats = (f"{names}{sp}の {n} 個は、Word のテキストボックスなどの図形に入っていて、本文のどこに出すかを原稿から決められないため、"
+              f"{where}に置いています（出版版 PDF の位置とは数段落ずれていることがあります。置いた位置はレポートの 3 章）。"
+              "AI を使うと、図・表の位置を合わせられます。" if left else "")
+    box_text = f"囲みか図の注記か決められないテキストボックス {k} 個の文字は、XML に出していません。" if boxes else ""
+    style_text = f"スタイルを確かめる段落 {m} か所について、AI が Word での直し方を提案します。" if m else ""
+    what = "と".join(([("図・表の位置")] if left else []) + (["テキストボックスの種類"] if boxes else []))
+    does = f"AI が{what}を決めます" if what else ("AI がスタイルの直し方を提案します" if m else "AI がリンクなどを決めます")
+    short = "、".join(([f"{esc(names)}{sp}の {n} 個を、{where}に置いている（3 章）"] if left else [])
+                     + ([f"囲みか図の注記か決められないテキストボックス {k} 個の文字を XML に出していない（3 章）"] if boxes else [])
+                     + ([f"スタイルを確かめる段落が {m} か所ある（2 章）"] if m else []))
+    cli_head = "".join(([f"{names}{sp}の {n} 個は{where}に置いています（レポートの 3 章）。"] if left else [])
+                       + ([box_text] if boxes else []) + ([f"スタイルを確かめる段落が {m} か所あります（レポートの 2 章）。"] if m else []))
+    if state == "済み":
+        return Action(STEP, "ai_finish", required=False, done=True, progress=state,
+                      checklist=(f"- [x] AI の回答で図・表 {len(asked)} 個の位置を決めた（2 章・3 章）" if asked
+                                 else "- [x] AI の回答を反映した（2 章）"),
+                      box_title=title)
+    if state == "失敗":
+        reason = (ai.error or "AI の回答が空でした").rstrip("。")
+        if manual:
+            again = f"回答のコードブロックの中身だけを{step('repaste')}てください。"
+            todo = "回答のコードブロックの中身だけを貼り付け直して、変換し直す"
+            cli_again = "回答のコードブロックの中身だけをファイルに保存し、--ai manual --ai-response で指定し直して変換し直すこと。"
+        else:
+            again = f"{step('convert_again')}してください（また失敗するときは、手動に切り替えます）。"
+            todo = "2 章の理由を確かめて、もう一度変換する（また失敗するときは「手動（チャットに貼り付け）」に切り替える）"
+            cli_again = "--ai api でもう一度実行すること（また失敗するときは --ai manual に切り替える）。"
+        return Action(
+            STEP, "ai_finish", required=False, failed=True, progress=state,
+            checklist=f"- [ ] （推奨）**{AI_FAILED_TITLE}**（2 章）: {todo}",
+            box_title=AI_FAILED_TITLE, box_detail=f"{reason}。変換の結果は、AI を使わないときと同じです。{again}",
+            cli=f"手順（推奨）: {AI_FAILED_TITLE}。{reason}。変換の結果は、AI を使わないときと同じです。{cli_again}")
+    if state == "未実行":
+        detail = (floats + (box_text + "AI が種類を判断します。" if boxes else "") + style_text
+                  + f"{step('ai_choose')}変換し直してください。このまま登載することもできます。")
+        cli = (f"手順（推奨）: {base}。{cli_head}--ai manual か --ai api を指定して変換し直すと、{does}（--ai manual では、"
+               "書き出した AI依頼文.txt をチャット〈claude.ai など〉に渡し、回答を保存して --ai-response で指定します）。"
+               "このまま登載することもできます。")
+        todo = ("AI を使うと、図・表の位置を合わせられる" if left and not boxes else f"AI を使うと、{what}を決められる" if what
+                else "AI を使うと、スタイルの直し方の提案を受けられる" if m else "AI を使うと、リンクなどを補える")
+        checklist = f"- [ ] （推奨）{base}: {short}。{todo}{AI_CHOOSE_HOW}"
+    elif state == "回答待ち":
+        detail = (floats + (box_text + "AI が種類を判断します。" if boxes else "") + style_text
+                  + f"{step('prompt')}を AI（claude.ai などのチャット）に渡し、返ってきた回答を{step('paste')}してください。"
+                  "このまま登載することもできます。")
+        cli = (f"手順（推奨）: {base}。{cli_head}手動モードで、AI の回答をまだ反映していません。{prompt} をチャット（claude.ai など）に"
+               "貼り付け、返ってきた回答をファイルに保存して --ai manual --ai-response 回答のファイル を指定し、変換し直すと、"
+               f"{does}。このまま登載することもできます。")
+        checklist = (f"- [ ] （推奨）{base}（AI の回答をまだ反映していない）: {short}。{esc(prompt)} を AI に渡し、返ってきた回答を"
+                     "貼り戻して変換し直す（ノートブックは手順 6 に貼り付ける、1 画面版は回答の欄に貼り付けて「反映」、"
+                     "コマンドラインは --ai manual --ai-response 回答のファイル）")
+    else:       # 一部
+        parts = []
+        if left:
+            parts.append(f"AI の回答で位置が決まったのは {len(asked)} 個のうち {len(asked) - n} 個です。{names}{sp}は、{where}に"
+                         "置いたままです（理由はレポートの 2 章・3 章）。")
+        if boxes:
+            parts.append(f"囲みか図の注記か決められないテキストボックス {k} 個は、AI の回答でも種類が決まらず、文字を XML に出していません（3 章）。")
+        if ai.partial:
+            parts.append("AI の回答が途中で切れていました。" + ai.partial)
+        plain = "".join(parts)
+        if ai.partial and manual:
+            again = (f"チャットで{CUT_ASK}と頼み、新しい回答を最初から最後まで{step('repaste')}てください（続きだけを貼り付けても読めません）。")
+            cli_again = (f"チャットで{CUT_ASK}と頼み、新しい回答を最初から最後までファイルに保存して --ai manual --ai-response で"
+                         "指定し直し、変換し直すと、すべてを反映できます（続きだけを保存しても読めません）。")
+        elif ai.partial:
+            again = f"{step('convert_again')}してください（また途中で切れるときは、手動に切り替えます）。"
+            cli_again = "--ai api でもう一度実行すると、AI が出し直します（また途中で切れるときは --ai manual に切り替える）。"
+        elif manual:
+            ask = "・".join((["位置を決められなかった図表"] if left else []) + (["種類を決められなかったテキストボックス"] if boxes else []))
+            again = (f"AI に出し直してもらうときは、チャットで「{ask}をすべて placements に書いて、回答の書き方に従って"
+                     f"出し直してください」と頼んで{step('repaste')}てください。")
+            cli_again = "AI に出し直してもらった回答で変換し直すと、残りも合わせられます。"
+        else:
+            again = f"AI に出し直してもらうときは、{step('convert_again')}してください。"
+            cli_again = "--ai api でもう一度実行すると、AI が出し直します（毎回同じ結果になるとは限りません）。"
+        detail = plain + again + "このまま登載することもできます。"
+        cli = f"手順（推奨）: {base}" + (f"（残り {n} 個）" if left else "") + f"。{plain}{cli_again}このまま登載することもできます。"
+        todo = []
+        if left:
+            todo.append(f"AI の回答で位置が決まったのは {len(asked)} 個のうち {len(asked) - n} 個。出し直してもらった回答で、残りの位置を合わせられる")
+        if boxes:
+            todo.append(f"囲みか図の注記か決められないテキストボックス {k} 個が残る")
+        if ai.partial:
+            todo.append("AI の回答が途中で切れていた（2 章）。AI に出し直してもらい、もう一度変換する")
+        checklist = f"- [ ] （推奨）{base}: " + "。".join(todo)
+    return Action(STEP, "ai_finish", required=False, progress=progress, checklist=checklist,
+                  box_title=title, box_detail=detail, cli=cli)
 
 
-def _forced_action(r):
-    if not r.forced_floats:
+def _float_end_action(r):
+    """要確認 float_end: 結び付いた段落が本文の外なので、本文の最後に置いた図・表（修正計画 W8 の 4.3）。なければ None。
+
+    W8 の手順 1 の形: end_why が anchor の図形だけ（AI が本文の外と答えた図形は、W8 の手順 11 で足す）。引用文献などの後ろの資料の
+    要確認（app_after_refs）が出る原稿では出さない（直し方が同じなので重ねない。図の位置は 3 章に出る）。
+    """
+    from .structure import OUTSIDE_JA, figure_rows
+    plan = r.plan
+    fids = [fid for fid in plan.unplaced_floats if plan.floats[fid].end_why == "anchor"]
+    if not fids or plan.app_after_refs:
         return None
-    title, detail = unplaced_text(r.plan, r.ai.partial)
+    rows = figure_rows(plan)
+    lines = []
+    for fid in fids:
+        info = plan.floats[fid]
+        caps = [row for row in rows if row.float_id == fid and row.caption is not None]
+        if caps:
+            name = "・".join(f"「{esc(row.caption.plain().strip(), 20)}」" for row in caps)
+        else:
+            text = next((q.plain().strip() for q in info.paras if q.plain().strip()), "")
+            name = f"キャプションのない図（「{esc(text, 20)}」）" if text else f"キャプションのない図（図形 {fid}）"
+        region = OUTSIDE_JA.get(plan.region.get(info.float.anchor_src, ""), "本文の外")
+        lines.append(f"{name} — {region}の段落に結び付いています")
+    n = len(fids)
+    how = ("Word で、引用文献・注などの本文の外の段落に結び付いている図・表は、XML では本文の最後に置いています。資料の図なら、"
+           + APP_MOVE_HOW + "本文の図・表なら、Word でその図形を、図について述べている本文の段落の近くに移して、変換し直してください。")
+    title = f"本文の最後に置いた図・表が {n} 個あります"
     return Action(
-        NEEDS_ACTION, "forced",
-        top=(f"> **要対応: 位置を決められなかった図表が {len(r.forced_floats)} 件あります（AI による補完でも決まりませんでした）。** "
-             "図が結び付いている段落（アンカー段落）のすぐ後ろ（箇条書き・引用の途中なら、その終わり）か、本文の最後に仮に"
-             "置いています。登載の前に、XML の中でこれらの"
-             "図表を手作業で正しい位置（Word で表示したときに、図の左上の直上にある本文の段落の後）に移してください（3 章）: "
-             + "、".join(esc(x) for x in r.forced_floats)),
-        checklist=("- [ ] 仮の位置（アンカー段落の後ろ・本文の最後）に置いた図表（3 章の「図表の位置」）を、XML の中で手作業で"
-                   "正しい位置に移す"),
-        box_title=title, box_detail=detail,
-        # 図表ごとに、キャプションと、XML の中の位置・ID（レポートの冒頭と同じ。pipeline の forced_floats）
-        cli=(f"要対応: 位置を決められなかった図表 {len(r.forced_floats)} 件を、仮の位置（アンカー段落の後ろ、または"
-             "本文の最後）に置きました。XML の中で手作業で正しい位置（Word で表示したときに、図の左上の直上にある本文の段落の後）"
-             "に移してください（レポートの冒頭と 3 章）。\n" + "\n".join(f"  {x}" for x in r.forced_floats)))
+        TO_CHECK, "float_end",
+        top=f"> **要確認: {title}（3 章）。** {how}" + "".join(f"\n>\n> - {esc(x)}" for x in lines),
+        checklist=f"- [ ] **本文の最後に置いた図・表**（{n} 個。3 章）: 資料の図なら資料を英文要旨の後ろに、本文の図なら図形を本文の段落の近くに、Word で移して変換し直す",
+        box_title=title + "（要確認）", box_detail=how + "".join("\n・" + x for x in lines),
+        cli=f"要確認: {title}（レポートの冒頭と 3 章）。{how}" + "".join("\n  " + x for x in lines))
 
 
-# 手動モードで AI の回答を貼り戻す前の、囲みか図の注記か決められなかったテキストボックスの説明（冒頭の手動モードの説明
-# 〈pipeline.convert の output_note〉と、「AI の回答をまだ反映していません」の知らせ〈_ai_pending_action〉）
-BOX_PENDING_NOTE = "囲みか図の注記か決められなかったテキストボックス（3 章）は、AI の回答を反映するまで XML に出力していません。"
+# 機械が挙げたスタイルを確かめる段落（article.StyleSuspect）の種類ごとの、決まった見立てと一般の直し方（AI を使っていないとき、
+# AI の提案がないときに使う。要確認 style_check。修正計画 W8 の 4.3）
+STYLE_SUSPECT_JA = {
+    "heading_body": ("見出しのスタイルの段落に本文が続いています", "見出しと本文の間で Enter を押して段落を分け、後ろを本文のスタイルにする"),
+    "heading_level": ("見出しのスタイルの階層と、番号の形が合いません", "番号の形に合う階層の見出しのスタイルにする"),
+    "quote_like": ("本文のスタイルですが、引用の形をしています", "引用なら、ブロック引用のスタイルにする"),
+    "heading_guess": ("見出しのスタイルがなく、文字の形から見出しと推定しました", "見出しなら、見出しのスタイルを付ける"),
+}
+STYLE_CHECK_SHOWN = 10      # 要確認 style_check に並べる段落の数（残りは「ほか N か所（2 章）」）
+STYLE_CHECK_HOW = ("見出しや引用のスタイルが違うと、J-STAGE の全文で章立てや引用の形が変わります。違っていれば、Word でスタイルを直して"
+                   "保存し、変換し直してください（AI の提案は、XML には反映していません）。")
+STYLE_KEEP = "このまま"      # StyleFix.verdict の「このままでよい」（もう 1 つは「直す」）
+STYLE_SHOWN_CONFIDENCE = ("高", "中")     # AI だけが見つけた提案のうち、要確認 style_check に載せる確度（低は 2 章だけ）
+
+
+def _style_fix_of(ai) -> dict:
+    """AI のスタイルの提案（AIOutcome.style_fixes）を段落 ID ごとに 1 件（同じ段落の 2 件目は使わない。修正計画 W8 の 4.2）。"""
+    out = {}
+    for f in getattr(ai, "style_fixes", None) or []:
+        out.setdefault(f.src, f)
+    return out
+
+
+def _ai_style_text(f) -> str:
+    """AI のスタイルの提案 1 件の文（「AI の提案: …（確度 高。理由）」か「AI の見立て: このままでよい（理由）」）。"""
+    reason = (f.reason or "").strip().rstrip("。")
+    if f.verdict == STYLE_KEEP:
+        return "AI の見立て: このままでよい" + (f"（{reason}）" if reason else "")
+    note = "。".join(x for x in ((f"確度 {f.confidence}" if f.confidence else ""), reason) if x)
+    return f"AI の提案: {f.how}" + (f"（{note}）" if note else "")
+
+
+def style_check_rows(r) -> tuple:
+    """要確認 style_check の行（段落ごとに 1 行。段落の順）と、2 章だけに書く AI の提案（確度 低・機械が挙げていない段落の「このまま」）。
+
+    行に載せるのは、機械が挙げた段落（plan.style_suspects。AI の提案があれば同じ行に添え、「このまま」でも行は消さない）と、AI だけが
+    見つけた提案のうち確度が高・中の「直す」もの。英文要旨が見つからない要対応（abstract_missing）の対象の段落は載せない（同じことを
+    2 つの知らせで言わない）。戻り値は (行の一覧〈(段落 ID, 文)〉, 2 章だけの提案〈StyleFix〉)。修正計画 W8 の 4.3。
+    """
+    plan = r.plan
+    skip = set(abstract_missing_srcs(plan))
+    fixes = _style_fix_of(r.ai)
+    order = {src: i for i, src in enumerate(plan.paras)}
+    rows, seen = [], set()
+    for sus in plan.style_suspects:
+        if sus.src in skip or sus.src in seen:
+            continue
+        seen.add(sus.src)
+        what, how = STYLE_SUSPECT_JA.get(sus.kind, ("スタイルを確かめてください", ""))
+        f = fixes.get(sus.src)
+        tail = _ai_style_text(f) if f is not None else (f"直し方: {how}" if how else "")
+        rows.append((sus.src, f"{_para_ref(plan, sus.src)}: {sus.detail or what}。" + (tail + "。" if tail else "")))
+    only = []
+    for src, f in fixes.items():
+        if src in seen or src in skip:
+            continue
+        if f.verdict != STYLE_KEEP and f.confidence in STYLE_SHOWN_CONFIDENCE:
+            rows.append((src, f"{_para_ref(plan, src)}: {_ai_style_text(f)}。"))
+        else:
+            only.append(f)
+    rows.sort(key=lambda x: order.get(x[0], len(order)))
+    return rows, only
+
+
+def _style_check_action(r):
+    """要確認 style_check: スタイルを確かめる段落（機械の検出〈plan.style_suspects〉と AI の提案〈AIOutcome.style_fixes〉を 1 つに。
+    段落ごとに 1 行、先頭 STYLE_CHECK_SHOWN 行まで。残りは 2 章）。なければ None。XML は変えない（直すのは Word。修正計画 W8 の 4.3）。"""
+    rows, _ = style_check_rows(r)
+    if not rows:
+        return None
+    n = len(rows)
+    machine = any(s.src in {src for src, _ in rows} for s in r.plan.style_suspects)
+    title = (f"スタイルを確かめてください（{n} か所）" if machine
+             else f"AI がスタイルの誤りを見つけました（{n} か所）。確かめてください")
+    lines = [text for _, text in rows[:STYLE_CHECK_SHOWN]]
+    more = f"ほか {n - STYLE_CHECK_SHOWN} か所（2 章）" if n > STYLE_CHECK_SHOWN else ""
+    return Action(
+        TO_CHECK, "style_check",
+        top=(f"> **要確認: {title}（2 章）。** {STYLE_CHECK_HOW}" + "".join(f"\n>\n> - {esc(x)}" for x in lines)
+             + (f"\n>\n> - {more}" if more else "")),
+        checklist=f"- [ ] **スタイルを確かめる段落**（{n} か所。2 章）: 違っていれば Word でスタイルを直して変換し直す",
+        box_title=title + "（要確認）",
+        box_detail=STYLE_CHECK_HOW + "".join("\n・" + x for x in lines) + (f"\n・{more}" if more else ""),
+        cli=(f"要確認: {title}（レポートの冒頭と 2 章）。違っていれば、docx でスタイルを直して変換し直すこと（AI の提案は XML に"
+             "反映していない）。" + "".join("\n  " + x for x in lines) + (f"\n  {more}" if more else "")))
+
+
+NOTE_BOUNDARY_KINDS = ("注の始まり", "注の続き")      # ai_assist.BOUNDARY_KINDS のうち注の区切りの直し（ほかは資料の始まり）
+BOUNDARY_LINE_JA = {
+    "注の始まり": "注の一覧の{head}の段落を、新しい注の始まりにしました",
+    "注の続き": "注の一覧の{head}の段落を、前の注の続きにしました",
+    "資料の見出し": "英文の部分の{head}の段落から後ろを、資料にしました",
+    "英文要旨の続き": "英文の部分の{head}の段落からの資料を取り消し、英文要旨の続きにしました",
+    "資料の本文": "英文の部分の{head}の段落を、資料の見出しではなく、前の資料の続きにしました",
+}
+NOTE_BOUNDARY_HOW = ("注の数と、本文の注番号のリンク先を、出版版 PDF と見比べてください。違っていれば、Word で注の番号を「2)」の形に直して"
+                     "保存し、AI の回答を入れずに変換し直してください（AI の回答を入れなければ、元の区切りに戻ります）。")
+APP_BOUNDARY_HOW = ("英文要旨の終わりと資料の始まりを、出版版 PDF と見比べてください。違っていれば、Word で資料を英文要旨の後ろの"
+                    "セクションに分けて保存し、変換し直してください。")
+
+
+def boundary_text(plan, b) -> str:
+    """AI の回答で反映した注の区切り・資料の始まりの直し（ai_assist.Boundary）1 件の、何を直したかの文（根拠と確度は付けない）。"""
+    head = f"「{esc(_head(plan.paras.get(b.src), 15))}」"
+    return BOUNDARY_LINE_JA.get(b.kind, "{head}の段落の区切りを直しました").format(head=head)
+
+
+def boundary_line(plan, b) -> str:
+    """boundary_text に AI の根拠と確度を添えた文（要確認 ai_boundary の行）。"""
+    text = boundary_text(plan, b)
+    reason = (b.reason or "").strip().rstrip("。")
+    note = "。".join(x for x in ((f"AI の根拠: {reason}" if reason else ""), (f"確度 {b.confidence}" if b.confidence else "")) if x)
+    return text + (f"（{esc(note)}）" if note else "")
+
+
+def _ai_boundary_action(r):
+    """要確認 ai_boundary: AI の回答で注の区切り・資料の始まりを直した（AIOutcome.boundaries。直した段落ごとに 1 行）。なければ None。
+
+    XML は AI の回答で変わっているので、出版版 PDF と見比べてもらう。直し方は、注は Word で注の番号を直す（AI の回答を入れなければ
+    元の区切りに戻る）、資料は Word で資料を英文要旨の後ろのセクションに分ける（修正計画 W8 の 4.3）。
+    """
+    plan = r.plan
+    bs = list(getattr(r.ai, "boundaries", None) or [])
+    if not bs:
+        return None
+    n = len(bs)
+    notes = any(b.kind in NOTE_BOUNDARY_KINDS for b in bs)
+    apps = any(b.kind not in NOTE_BOUNDARY_KINDS for b in bs)
+    what = "と".join((["注の区切り"] if notes else []) + (["資料の始まり"] if apps else []))
+    title = f"AI の回答で、{what}を直しました（{n} か所）。確かめてください"
+    how = (NOTE_BOUNDARY_HOW if notes else "") + (APP_BOUNDARY_HOW if apps else "")
+    lines = [boundary_line(plan, b) for b in bs]
+    return Action(
+        TO_CHECK, "ai_boundary",
+        top=f"> **要確認: {title}（2 章）。** {how}" + "".join(f"\n>\n> - {x}" for x in lines),
+        checklist=f"- [ ] **AI の回答で直した{what}**（{n} か所。2 章）: 出版版 PDF と見比べ、違っていれば Word で直して変換し直す",
+        box_title=title + "（要確認）",
+        box_detail="".join(x + "\n" for x in ["・" + y for y in lines]) + how,
+        cli=f"要確認: {title}（レポートの冒頭と 2 章）。{how}" + "".join("\n  " + x for x in lines))
 
 
 def _textbox_undecided_action(r):
     """囲み（問題文・ヒントなど）か図の注記か決められず、文字を XML に出力しなかったテキストボックス（structure.Classifier.place_boxes）。
     なければ None。
 
-    要確認にとどめる（文字はレポートの 6 章に全文があり、図の注記を本文に混ぜるほうが害が大きい。決定事項 9(2)）。AI による補完を
-    強く勧め、使わないときは Word でテキストボックスの外に出してもらう。
+    要確認にとどめる（文字はレポートの 6 章に全文があり、図の注記を本文に混ぜるほうが害が大きい。決定事項 9(2)）。Word での直し方だけを
+    書く（AI に種類を判断させる案内は、推奨の手順 ai_finish の 1 か所。修正計画 W8 の 4.3）。
     """
     plan = r.plan
     xids = plan.undecided_boxes
@@ -1353,61 +1611,11 @@ def _textbox_undecided_action(r):
         return None
     n = len(xids)
     samples = _box_samples(plan, xids)
-    fix = "Word でそのテキストボックスを確かめ、本文に必要な囲みなら、文字をテキストボックスの外（本文の段落）に出してから変換し直してください。"
-    if r.ai.mode == "none":
-        how = ("AI による補完を使うと、AI が囲みか注記かを判断し、囲みは本文に出します（強く勧めます）。AI を使わないときは、"
-               "Word でそのテキストボックスを確かめ、本文に必要な囲みなら、文字をテキストボックスの外（本文の段落）に出してから"
-               "変換し直してください。")
-        box_how = (step("ai_choose") + "変換し直すと、AI が囲みか注記かを判断します。AI を使わないときは、Word で確かめ、本文に必要な囲みなら文字を"
-                   "テキストボックスの外に出してから変換し直してください")
-        cli_how = "--ai manual か --ai api で AI による補完を使うか、docx でその文字をテキストボックスの外に出して変換し直すこと"
-        todo = "AI による補完を使って変換し直すか、Word で確かめ、本文に必要な囲みならテキストボックスの外に出して変換し直す"
-    elif ai_pending(r):
-        how = "AI の回答を反映すると、AI が囲みか注記かを判断し、囲みは本文に出します。"
-        box_how = step("answer_apply") + "と、AI が囲みか注記かを判断します"
-        cli_how = "AI の回答をファイルに保存し、--ai manual --ai-response 回答のファイル を指定して変換し直すこと"
-        todo = "AI の回答を反映するか、Word で確かめ、本文に必要な囲みならテキストボックスの外に出して変換し直す"
-    elif r.ai.error:
-        # AI の呼び出しが失敗した・回答を読めなかった（AI による補完ができていない。要対応の知らせがある）。「AI の回答に指定が
-        # ない」とは言わない（float_ref_ai と同じ分け方）
-        todo = ("AI による補完ができていない（要対応の知らせを参照）ので、できるようにして変換し直すか、Word で確かめ、本文に必要な囲みなら"
-                "テキストボックスの外に出して変換し直す")
-        if r.ai.mode == "api":
-            undone = "AI による補完ができていません（要対応の知らせを参照）。"
-            how = f"{undone}もう一度変換して AI による補完ができれば、AI が囲みか注記かを判断し、囲みは本文に出します。AI を使わないときは、{fix}"
-            box_how = (undone + step("convert_again") + "して AI による補完ができれば、AI が囲みか注記かを判断します。AI を使わないときは、"
-                       "Word で確かめ、本文に必要な囲みなら文字をテキストボックスの外に出してから変換し直してください")
-            cli_how = (undone + "--ai api でもう一度実行して AI による補完ができれば、AI が囲みか注記かを判断します。"
-                       "AI を使わないときは、docx でその文字をテキストボックスの外に出して変換し直すこと")
-        else:
-            undone = "AI による補完が反映できていません（要対応の知らせを参照）。"
-            how = f"{undone}AI の回答を反映できたら、AI が囲みか注記かを判断し、囲みは本文に出します。AI を使わないときは、{fix}"
-            box_how = (undone + "AI の回答を反映できたら、AI が囲みか注記かを判断します。AI を使わないときは、"
-                       "Word で確かめ、本文に必要な囲みなら文字をテキストボックスの外に出してから変換し直してください")
-            cli_how = (undone + "AI の回答を直して --ai manual --ai-response 回答のファイル を指定し直して実行できたら、AI が囲みか注記かを"
-                       "判断します。AI を使わないときは、docx でその文字をテキストボックスの外に出して変換し直すこと")
-    else:
-        # AI を使った後。AI に出し直してもらう操作は、手動なら回答の貼り直し（1 画面版では app.AppState.REPASTE_KEYS の
-        # textbox_undecided で手動の欄が見えたまま）、API ならもう一度変換する（float_ref_ai と同じ）
-        ask = "囲みか注記かの種類（kind）を指定するよう頼んで"
-        todo = "AI に出し直してもらうか、Word で確かめ、本文に必要な囲みならテキストボックスの外に出して変換し直す"
-        if r.ai.mode == "manual":
-            how = (f"AI の回答に、これらの種類（kind）の指定がないか、指定が検証で採用されませんでした（2 章）。AI に出し直してもらうには、"
-                   f"チャットで AI に、{ask}出し直してもらい、回答を貼り付け直して反映してください。AI を使わないときは、{fix}")
-            box_how = (f"AI の回答に、これらの種類（kind）の指定がないか、採用されませんでした（2 章）。AI に出し直してもらうには、"
-                       f"チャットで AI に、{ask}出し直してもらい、" + step("repaste") + "てください。AI を使わないときは、Word で確かめ、"
-                       "本文に必要な囲みなら文字をテキストボックスの外に出してから変換し直してください")
-            cli_how = (f"チャットで AI に、{ask}出し直してもらい、新しい回答をファイルに保存して --ai manual --ai-response 回答のファイル を"
-                       "指定し直して実行するか、docx でその文字をテキストボックスの外に出して変換し直すこと")
-        else:
-            again = "もう一度変換すると AI が出し直します（毎回同じ結果になるとは限りません）"
-            how = (f"AI の回答に、これらの種類（kind）の指定がないか、指定が検証で採用されませんでした（2 章）。AI に出し直してもらうには、"
-                   f"{again}。AI を使わないときは、{fix}")
-            box_how = ("AI の回答に、これらの種類（kind）の指定がないか、採用されませんでした（2 章）。AI に出し直してもらうには、"
-                       + step("convert_again") + "してください（AI が出し直します。毎回同じ結果になるとは限りません）。AI を使わないときは、"
-                       "Word で確かめ、本文に必要な囲みなら文字をテキストボックスの外に出してから変換し直してください")
-            cli_how = ("--ai api でもう一度実行する（AI が出し直します。毎回同じ結果になるとは限りません）か、"
-                       "docx でその文字をテキストボックスの外に出して変換し直すこと")
+    how = "Word でそのテキストボックスを確かめ、本文に必要な囲みなら、文字をテキストボックスの外（本文の段落）に出してから変換し直してください。"
+    box_how = ("Word でそのテキストボックスを確かめ、本文に必要な囲みなら、文字をテキストボックスの外（本文の段落）に出してから"
+               "変換し直してください")
+    cli_how = "docx でそのテキストボックスを確かめ、本文に必要な囲みなら、文字をテキストボックスの外に出して変換し直すこと"
+    todo = "Word で確かめ、本文に必要な囲みならテキストボックスの外に出して変換し直す"
     return Action(
         TO_CHECK, "textbox_undecided",
         top=(f"> **要確認: 囲み（問題文・ヒントなど）か図の注記か決められなかったテキストボックスが {n} 件あり、その文字を XML に"
@@ -1611,7 +1819,9 @@ def _first_style(journal, role, default):
 def _abstract_missing_action(r):
     """英文要旨が 1 段落もなく、英文の部分の段落・表の文字を XML に出力しなかったとき（structure.abstract_missing_srcs）。なければ None。
 
-    要対応（英文要旨は XML の必須の内容。段落のスタイルがないために落ちている可能性が高い）。AI の set_role の abstract で直せる。
+    要対応（英文要旨は XML の必須の内容。段落のスタイルがないために落ちている可能性が高い）。Word でスタイルを付ける直し方を書き、
+    AI が英文要旨の段落を提案していれば（AIOutcome.style_fixes の abstract。XML には反映しない）、AI の見立てを 1 行添える
+    （対象の段落は要確認 style_check には載せない。修正計画 W8 の 4.3）。
     """
     plan = r.plan
     srcs = abstract_missing_srcs(plan)
@@ -1637,31 +1847,22 @@ def _abstract_missing_action(r):
             f"英文の題目・著者名・所属以外の段落の位置を決められませんでした（段落のスタイル: {styles}）。{app}"
             f"英文要旨なら、Word で要旨の段落に「{abs_style}」スタイルを（見出しがあれば見出しに「{head_style}」スタイルを）付けて、"
             "変換し直してください。")
-    if r.ai.mode == "none":
-        ai_line = "AI による補完を使うときは、" + step("ai_choose") + "変換し直すと、AI が英文要旨の段落を指定できます（set_role の abstract）。"
-    elif ai_pending(r):
-        ai_line = step("answer_apply") + "と、AI の指定が反映されます。"
-    elif r.ai.error:
-        ai_line = "AI の回答で直すときは、英文要旨の最初の段落に set_role の abstract を指定してもらいます。"
-    elif r.ai.mode == "manual":      # 回答を反映した後。AI に出し直してもらう操作は回答の貼り直し（app.AppState.REPASTE_KEYS の abstract_missing）
-        ai_line = ("チャットで AI に、英文要旨の最初の段落に set_role の abstract を指定して出し直してもらい、"
-                   + step("repaste") + "てください。")
-    else:                            # API モードで AI を使った後は、もう一度変換すると AI が出し直す
-        ai_line = ("AI に出し直してもらうときは、" + step("convert_again")
-                   + "してください（AI が出し直します。毎回同じ結果になるとは限りません）。英文要旨の最初の段落に set_role の abstract を"
-                   "指定してもらいます。")
+    fixes = _style_fix_of(r.ai)
+    guess = next((fixes[s] for s in srcs if s in fixes and fixes[s].role == "abstract" and fixes[s].verdict != STYLE_KEEP), None)
+    conf = f"（確度 {guess.confidence}）" if guess is not None and guess.confidence else ""
+    ai_line = (f"AI の見立て: 「{esc(_head(plan.paras.get(guess.src), 15))}」の段落から英文要旨{conf}。" if guess is not None else "")
+    body += ai_line
     return Action(
         NEEDS_ACTION, "abstract_missing",
         top=(f"> **要対応: 英文要旨が見つかりません。英文の部分の{count}を XML に出力していません（6 章）。** {body}"
-             "AI による補完では、英文要旨の最初の段落に set_role の abstract を指定すると、後ろの段落も英文要旨になります。"
              f"対象の段落: {samples}"),
         checklist=(f"- [ ] **英文要旨が見つからない**（英文の部分の{count}を出力していない。6 章）: Word で英文要旨の段落に"
                    f"「{abs_style}」スタイルを付けて変換し直す"),
         box_title="英文要旨が見つかりません（要対応）",
-        box_detail=body + ai_line + "\n対象の段落: " + samples,
+        box_detail=body + "\n対象の段落: " + samples,
         cli=(f"要対応: 英文要旨が見つかりません。英文の部分の{count}を XML に出力していません（レポートの冒頭と 6 章）。{app}"
-             f"docx で要旨の段落に「{abs_style}」スタイルを付けて変換し直すこと（AI による補完では set_role の abstract）。"
-             f"対象: {samples}"))
+             f"docx で要旨の段落に「{abs_style}」スタイルを付けて変換し直すこと。"
+             f"{ai_line}対象: {samples}"))
 
 
 NOCAP_SKIP_HINT = "。出版版 PDF で見て、ほかの図に写っている・飾りだけ、のときは「入れない」を選びます"      # 手順 images の、キャプションのない行の末尾
@@ -2306,60 +2507,16 @@ def md_tag(text: str) -> str:
 
 
 def float_ref_manual() -> str:
-    """リンクしなかった図・表の参照に、利用者が手でリンクを付ける方法の文（_float_ref_action。AI の状態によらない）。"""
+    """リンクしなかった図・表の参照に、利用者が手でリンクを付ける方法の文（_float_ref_action。AI の状態によらない。AI を勧める文は
+    推奨の手順 ai_finish の 1 か所。修正計画 W8 の 4.3）。"""
     return (f'{XREF_TAG}（表への参照は ref-type="table"、rid は表の id）を手で足してください。図の id は XML の {FIG_ID_TAG}'
             f'（表は {TABLE_ID_TAG}）にあります。')
-
-
-def float_ref_ai(r, screen: str = "report") -> str:
-    """リンクしなかった図・表の参照について、AI による補完の状態に合わせた文（_float_ref_action）。
-
-    AI を使っていない・回答待ち（手動モードで回答を貼り戻す前）・API の呼び出しが失敗した・貼り付けた回答を反映できなかった・
-    AI を使った後（手動なら回答の貼り直し、API ならもう一度変換）、で文を分ける
-    （plan.float_unlinked は、AI が link_figure・link_table でリンクを付けた参照を除いた残りなので、AI を使った後は
-    「AI もリンクを付けなかった参照」になる。ai_assist.apply_ops）。screen は "report"（レポートの冒頭。画面の操作を両方の言い方で書く）・
-    "box"（Colab の枠。目印 step() で書く）・"cli"（コマンドラインの指定で書く）。
-    """
-    ai = r.ai
-    checked = "（付いたリンクは確かめてください）。"
-    if ai.mode == "none":
-        how = {"report": "AI による補完を使う設定（API か手動）で変換し直すと、", "box": step("ai_choose") + "変換し直すと、",
-               "cli": "--ai manual か --ai api を指定して変換し直すと、"}[screen]
-        return f"手で足すほかに、{how}AI が参照の図・表を指定してリンクを付けることもあります{checked}"
-    if ai_pending(r):
-        how = {"report": "AI の回答を反映すると", "box": step("answer_apply") + "と",
-               "cli": "AI の回答をファイルに保存し、--ai manual --ai-response 回答のファイル を指定して変換し直すと"}[screen]
-        return (f"手で足すほかに、{how}、AI が指定した参照にリンクが付くことがあります{checked}回答を反映した後にも"
-                "リンクが付かずに残った参照は、この知らせにもう一度出るので、残った分を手で足してください。")
-    if ai.error and ai.mode == "api":       # API の呼び出しが失敗した（回答は貼り付けるものではなく、もう一度変換すれば呼び出し直す）
-        again = {"report": "もう一度変換して AI による補完ができれば、", "box": step("convert_again") + "して AI による補完ができれば、",
-                 "cli": "--ai api でもう一度実行して AI による補完ができれば、"}[screen]
-        return ("AI による補完ができていません（要対応の知らせを参照）。手で足すほかに、"
-                f"{again}AI が参照の図・表を指定してリンクを付けることもあります{checked}")
-    if ai.error:
-        return ("AI による補完が反映できていません（要対応の知らせを参照）。AI の回答を反映できたら、AI が参照の図・表を指定して"
-                f"リンクを付けることもあります{checked}")
-    # AI の回答は反映済みで、AI もリンクを付けなかった。AI に出し直してもらう操作は、手動モードでは回答の貼り直し（1 画面版では
-    # app.AppState.REPASTE_KEYS の float_ref で手動の欄が見えたまま）、API モードではもう一度変換する
-    done = ("AI の回答は反映済みですが、これらの参照には AI もリンクを付けませんでした（AI がリンクを指定しなかったか、指定が採用されな"
-            "かったため。2 章）。")
-    ask = "リンクしなかった参照にもリンクを付けるよう頼んで"
-    if ai.mode == "manual":
-        again = {"report": f"AI に出し直してもらってください（チャットで AI に、{ask}出し直してもらい、回答を貼り付け直して反映します）",
-                 "box": f"チャットで AI に、{ask}出し直してもらい、" + step("repaste") + "てください",
-                 "cli": f"チャットで AI に、{ask}出し直してもらい、" + "新しい回答をファイルに保存して "
-                        "--ai manual --ai-response 回答のファイル を指定し直して実行してください"}[screen]
-    else:
-        again = {"report": "AI に出し直してもらってください（もう一度変換すると AI が出し直します。毎回同じ結果になるとは限りません）",
-                 "box": step("convert_again") + "してください（AI が出し直します。毎回同じ結果になるとは限りません）",
-                 "cli": "--ai api でもう一度実行してください（AI が出し直します。毎回同じ結果になるとは限りません）"}[screen]
-    return f"{done}手で足すか、{again}。"
 
 
 def float_ref_how(r, screen: str = "report") -> str:
     """リンクしなかった図・表の参照に、利用者がリンクを付ける方法の文（_float_ref_action）。レポートの文（screen が "report"）は
     タグを Markdown のコードで囲む。"""
-    text = float_ref_manual() + float_ref_ai(r, screen)
+    text = float_ref_manual()
     return md_tag(text) if screen == "report" else text
 
 
@@ -2398,7 +2555,7 @@ def _float_ref_action(r):
         cli=(f"要確認: 図・表の番号が重なる、または枝番があるため、リンクしなかった図・表の参照が {n} か所あります"
              f"（{shown}。レポートの冒頭と 4 章）。リンクがなくても登載できる。付けるなら、PDF と照らしてどの図・表かを確かめ、"
              "XML に <xref ref-type=\"fig\" rid=\"図の id\">（表は ref-type=\"table\"）を手で足すこと"
-             "（図の id は XML の <fig id=\"…\">、表は <table-wrap id=\"…\"> にある）。" + float_ref_ai(r, "cli")))
+             "（図の id は XML の <fig id=\"…\">、表は <table-wrap id=\"…\"> にある）。"))
 
 
 FN_GUESS_SHOWN = 5      # 注の扱いの要確認に並べる件数（全件は 4 章の判断の一覧）
@@ -2585,8 +2742,6 @@ def _name_split_action(r):
     if unsplit:
         how += ("分けられなかった氏名に名もあるなら、Word で姓と名の間に空白を 1 つ入れて保存してから、変換し直してください"
                 "（名のない著者として J-STAGE に出ます）。")
-    if ai_pending(r):
-        how += "AI の回答を反映すると、AI が姓と名の境目を確かめます（AI が分けた氏名もここに挙げます）。"
     # 「字数だけの推定は誤りやすい」は、字数だけの推定（how が count）の氏名を含むときだけ書く
     guess_check = (f" 推定で分けた氏名が {len(guessed)} 人あります（誤っていることがあります"
                    + ("。字数だけの推定は誤りやすいので、必ず確かめる" if by_count else "") + "）。") if guessed else ""
@@ -2818,10 +2973,9 @@ def actions(r) -> list:
     記事フォルダにあるのに ZIP に入れなかったファイル（Result.not_zipped）は 10 章の警告のまま。
     """
     head = [f(r) for f in (_fidelity_action, _supplement_action, _dtd_action, _table_shape_action, _image_names_action,
-                           _upload_action, _ai_error_action, _ai_pending_action,
-                           _partial_action, _forced_action, _textbox_undecided_action,
+                           _upload_action, _ai_finish_action, _textbox_undecided_action,
                            _textbox_place_action, _textbox_figure_text_action, _unplaced_action, images_action,
-                           lost_action, _image_same_action, _image_changed_action, lost_autonum_action, _pua_left_action, _abstract_missing_action, _style_hidden_action, _resultless_field_action, _symbol_action, _abstract_ja_action, _app_after_refs_action, _note_overlap_action, _float_ref_action,
+                           lost_action, _image_same_action, _image_changed_action, lost_autonum_action, _pua_left_action, _abstract_missing_action, _style_hidden_action, _resultless_field_action, _symbol_action, _abstract_ja_action, _app_after_refs_action, _float_end_action, _style_check_action, _ai_boundary_action, _note_overlap_action, _float_ref_action,
                            _fn_guess_action, _name_split_action, _newline_action)]
     return [a for a in head if a is not None] + pdf_actions(r)
 
@@ -2880,7 +3034,7 @@ def render(r) -> str:
         ("出版版 PDF との照合", pdf_summary(r)),
     ]
     if plan.unplaced_floats:
-        rows.insert(7, ("位置を決められなかった図表（3 章）", f"{len(plan.unplaced_floats)} 件（{float_places(plan)}に仮に配置）"))
+        rows.insert(7, ("結び付いた段落の後ろに置いた図表（3 章）", f"{len(plan.unplaced_floats)} 件（{float_places(plan)}）"))
     if textbox_summary(plan):
         rows.insert(8 if plan.unplaced_floats else 7,
                     (f"テキストボックスの文字（{textbox_chapters(plan)}）", textbox_summary(plan)))
@@ -2910,24 +3064,36 @@ def render(r) -> str:
         if a.top:
             L.append(a.top)
             L.append("")
-    if r.output_note:
-        L.append(r.output_note)
-        L.append("")
 
     # ------------------------------------------------------------------ 2. AI
-    L.append("## 2. AI による補完（要確認）")
+    L.append("## 2. AI による仕上げ（要確認）")
+    L.append("")
+    state = ai_state(r)
+    left = _float_left(plan)
+    L.append(table(["項目", "内容"], [
+        ("方法", ai_method(r)),
+        ("モデル", ai.model if ai.mode == "api" and ai.model else "—"),
+        ("状態", state + (f"（位置を聞いた図・表 {len(plan.asked_floats)} 個のうち、残り {len(left)} 個）" if plan.asked_floats else "")),
+        ("利用量", f"入力 {ai.usage.get('input_tokens')} トークン / 出力 {ai.usage.get('output_tokens')} トークン" if ai.usage else "—"),
+    ]))
     L.append("")
     if ai.mode == "none":
         L.append("AI による補完は行っていません。")
-    elif ai.error:
-        L.append(f"AI による補完は行えませんでした: {ai.error}")
+    elif state == "回答待ち":
+        # 位置を聞く図形などがなければ、推奨の手順 ai_finish は出さず、ここに 1 行だけ書く（修正計画 W8 の 4.3）
+        L.append(f"AI の回答をまだ反映していません（手動モード）。{esc(r.prompt_path.name if r.prompt_path else 'AI依頼文.txt')} を"
+                 "チャット（claude.ai など）に渡し、返ってきた回答を貼り戻して変換し直すと、AI の判断（リンクの取りこぼしなど）が反映されます。"
+                 "この出力は AI による補完の前の状態です。")
+    elif state == "失敗":
+        L.append(f"AI による補完は行えませんでした: {ai.error or 'AI の回答が空でした'}")
     else:
         # 文字だけのテキストボックスがある論文では、その判断（placements の kind box・label）も AI が変えられる
         boxes = ("、文字だけのテキストボックスの囲み・図の注記の判断と囲みの位置"
                  if any(b.kind != "blank" for b in r.plan.textboxes.values()) else "")
         L.append("AI の判断には誤りの可能性があります。特に確度「低」「中」の項目は、PDF と照らして確認してください。"
-                 "AI が変更できるのはリンク・段落の役割・姓名の区切り・数式画像への MathML の併記と、テキストボックス・"
-                 f"グループ図形に入った図表の位置と組み合わせ{boxes}だけで、本文の文字は変更していません。")
+                 "AI の回答で変わるのはリンク・姓名の区切り・注の区切りと資料の始まりと、テキストボックス・"
+                 f"グループ図形に入った図表の位置{boxes}だけで、本文の文字は変更していません。見出し・引用など、Word のスタイルで"
+                 "直せる段落の役割は、AI の提案を下の「スタイルの提案」に載せるだけで、XML には反映していません。")
         L.append("")
         if ai.partial:
             L.append(f"**AI の回答が途中で切れていました。** {esc(ai.partial)}")
@@ -2956,8 +3122,7 @@ def render(r) -> str:
             L.append("")
         if ai.model_note:
             L.append(f"（使用したモデル: {ai.model}。{ai.model_note}）")
-        if ai.usage:
-            L.append(f"（API 使用量: 入力 {ai.usage.get('input_tokens')} トークン / 出力 {ai.usage.get('output_tokens')} トークン）")
+    L += ai_style_section(r)
     L.append("")
 
     # ------------------------------------------------------------------ 3. 未解決
@@ -3566,12 +3731,57 @@ def render_route2(L, r, pc, fx):
                         for src, old, new, why in sup.problems]))
 
 
+def ai_style_section(r) -> list:
+    """2 章の「注の区切り・資料の始まり（AI の回答で直した）」と「スタイルの提案（XML には反映していない）」の表（Markdown の行の一覧）。
+
+    スタイルの表には、機械が挙げた段落（plan.style_suspects）と AI の提案（AIOutcome.style_fixes。確度 低と「このまま」も）をすべて載せる
+    （要確認 style_check に載らなかった行の置き場所。AI を使っていなくても、機械が挙げた段落があれば出す）。修正計画 W8 の 4.3。
+    """
+    plan, ai = r.plan, r.ai
+    L = []
+    bs = list(getattr(ai, "boundaries", None) or [])
+    if bs:
+        L += ["", "### 注の区切り・資料の始まり（AI の回答で直した）", ""]
+        L.append(table(["段落", "場所", "直したこと", "AI の根拠", "確度"],
+                       [(b.src, plan.locations.get(b.src, ""), boundary_text(plan, b),
+                         esc(b.reason), b.confidence) for b in bs]))
+    fixes = _style_fix_of(ai)
+    sus = {}
+    for x in plan.style_suspects:
+        sus.setdefault(x.src, x)
+    srcs = list(dict.fromkeys(list(sus) + list(fixes)))
+    if srcs:
+        order = {src: i for i, src in enumerate(plan.paras)}
+        srcs.sort(key=lambda s: order.get(s, len(order)))
+        miss = set(abstract_missing_srcs(plan))
+        rows = []
+        for src in srcs:
+            x, f = sus.get(src), fixes.get(src)
+            machine = (x.detail or STYLE_SUSPECT_JA.get(x.kind, ("",))[0]) if x is not None else "—"
+            if f is None:
+                proposal, conf, reason = "—", "—", "—"
+            else:
+                proposal = "このままでよい" if f.verdict == STYLE_KEEP else f.how
+                conf, reason = f.confidence or "—", f.reason or "—"
+            if src in miss:
+                proposal += "（要対応「英文要旨が見つかりません」に載せた）"
+            rows.append((src, plan.locations.get(src, ""), esc(_head(plan.paras.get(src), 20)), esc(machine), esc(proposal), conf,
+                         md_tag(esc(reason))))
+        L += ["", "### スタイルの提案（XML には反映していない）", ""]
+        L.append("Word のスタイルで直せる誤りの見立てです。違っていれば Word でスタイルを直して変換し直してください（確度「高」「中」の"
+                 "AI の提案と、機械が挙げた段落は、要確認「スタイルを確かめてください」にも載せています）。")
+        L.append("")
+        L.append(table(["段落", "場所", "文字", "機械の見立て", "AI の提案", "確度", "AI の根拠"], rows))
+    return L
+
+
 def render_ai_only(r) -> str:
     """AI による判断だけをまとめた別ファイル（不確実性のある箇所の一覧）。"""
     ai = r.ai
     L = [f"# AI による補完の判断一覧: {r.docx_name}", "",
-         "AI（生成 AI）が判断した箇所の一覧です。AI は本文の文字を変更していません（リンク・段落の役割・姓名の区切り・"
-         "数式画像への MathML の併記、テキストボックス・グループ図形に入った図表の位置と組み合わせのみ）。"
+         "AI（生成 AI）が判断した箇所の一覧です。AI は本文の文字を変更していません（AI の回答で変わるのは、図・表の位置、"
+         "文字だけのテキストボックスの種類と位置、リンク、姓名の区切り、注の区切りと資料の始まりのみ。Word のスタイルで直せる"
+         "段落の役割は提案だけで、XML には反映していません）。"
          "確度の低いものから順に並べています。PDF と照らして確認してください。", ""]
     acc = [d for _, d in ai.accepted]
     if ai.partial:
@@ -3590,4 +3800,5 @@ def render_ai_only(r) -> str:
     if ai.notes:
         L += ["", "## AI からの気づき", ""]
         L += [f"- {esc(n)}" for n in ai.notes]
+    L += [x.replace("### ", "## ", 1) if x.startswith("### ") else x for x in ai_style_section(r)]
     return "\n".join(L) + "\n"

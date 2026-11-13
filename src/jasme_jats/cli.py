@@ -7,9 +7,9 @@
 書誌情報ファイル（TOML）の例は examples/meta_example.toml を参照。
 
 終了コード: 0 は要対応も残っている必須の手順もなし、1 はどちらかあり（report.blocking。report.actions の「要対応」と、残っている必須の手順。
-一覧は標準エラーに出す。--meta がない・画像が足りない、なども 1。手動モードで AI の回答をまだ指定していないのは推奨の手順なので 0）、2 は変換を中止した（書誌情報の誤り、AI による補完が
-必要な原稿を --ai none で変換したとき、原稿の構造〈同じ種類の後付けの見出しが 2 つ・著者名の付かない所属。K1・K2〉を直す必要が
-あるとき、--images の画像を読めないとき。引数の誤り〈指定したファイル・フォルダがない、
+一覧は標準エラーに出す。--meta がない・画像が足りない、なども 1。手動モードで AI の回答をまだ指定していないのは推奨の手順なので 0。
+--ai none でも変換は中止しない）、2 は変換を中止した（書誌情報の誤り、原稿の構造〈同じ種類の後付けの見出しが 2 つ・著者名の付かない
+所属。K1・K2〉を直す必要があるとき、--images の画像を読めないとき。引数の誤り〈指定したファイル・フォルダがない、
 --ai manual でないのに --ai-response を指定した、など〉も argparse が 2 で止める）。
 """
 from __future__ import annotations
@@ -24,7 +24,7 @@ from .ai_assist import API_KEY_NAMES, DEFAULT_MODEL
 from .colab import step_text
 from .config import ArticleMeta, JournalConfig
 from .images import match_names
-from .pipeline import AIRequiredError, Options, StructureConflictError, add_images, convert
+from .pipeline import Options, StructureConflictError, add_images, convert
 from .report import actions, clash_images_text, image_rows, images_action, pdf_summary, unmatched_image_text, upload_issues
 
 
@@ -96,7 +96,7 @@ def main(argv=None):
                    pdf_path=a.pdf, route=a.route)
     try:
         res = convert(a.docx, meta, journal, opts)
-    except (AIRequiredError, StructureConflictError) as e:
+    except StructureConflictError as e:
         print(step_text(str(e), "cli"), file=sys.stderr)       # 画面の操作の目印をコマンドラインの指定に置き換える
         return 2
     fid = res.fidelity

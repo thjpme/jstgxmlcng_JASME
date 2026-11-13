@@ -2,9 +2,9 @@
 （pipeline.table_problems・要対応 table_shape。修正計画 2026-11 の単位 u3-tables）。
 
 docx は make_fixtures の部品で作る（内容は架空）。"""
-import json
 from pathlib import Path
 
+import answers
 import make_fixtures as mf
 import pytest
 from conftest import META_EXAMPLE
@@ -18,7 +18,7 @@ from jasme_jats.model import Cell, Row, Table
 from jasme_jats.pipeline import Options, convert, table_problems
 from jasme_jats.report import actions
 
-EMPTY_ANSWER = json.dumps({"placements": [], "operations": [], "notes": []})
+EMPTY_ANSWER = answers.answer()
 HEAD_STOP = "見出し行の終わりで止めました"
 SPAN_WARN = "縦に結合したセルの幅"
 

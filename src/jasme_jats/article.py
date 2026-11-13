@@ -28,6 +28,22 @@ class UnlinkedRef(NamedTuple):
     end: int
 
 
+# スタイルを確かめる段落の種類（StyleSuspect.kind）: 見出しのスタイルの段落に本文が続く（C037）・見出しの階層と番号の形が合わない（C038）・
+# 本文のスタイルの引用らしい段落（C129）・文字から見出しと推定した段落（C014）。検出は修正計画の単位 D が足す（W8 は入れ物と表示だけ）
+STYLE_SUSPECT_KINDS = ("heading_body", "heading_level", "quote_like", "heading_guess")
+
+
+class StyleSuspect(NamedTuple):
+    """機械が挙げた、スタイルを確かめる段落 1 つ（ArticlePlan.style_suspects の要素。要確認 style_check の行。修正計画 W8 の 3.3・4.3）。
+
+    kind は STYLE_SUSPECT_KINDS のどれか、src は段落 ID、detail は機械の見立て（「項見出しのスタイルですが、番号の形は節です」など。
+    空なら種類ごとの決まった文）。XML は変えない（直すのは Word のスタイル）。
+    """
+    kind: str
+    src: str
+    detail: str = ""
+
+
 # ----------------------------------------------------------------------------- nodes
 @dataclass(eq=False)
 class Sec:
@@ -345,10 +361,25 @@ class ArticlePlan:
     # 画像の置き場所（ImageSlot。Classifier.assign_slots が、要素の木を XML とおおむね同じ順にたどって作る）と、画像の ID -> 置き場所
     slots: list = field(default_factory=list)
     slot_of: dict = field(default_factory=dict)
+    # 機械が挙げた、スタイルを確かめる段落（StyleSuspect。段落の順。要確認 style_check と推奨の手順 ai_finish の出す条件 3。
+    # 検出は修正計画の単位 D が足す。W8 は入れ物と表示だけ）
+    style_suspects: list = field(default_factory=list)
 
     @property
     def unplaced_floats(self) -> list:
         return [fid for fid, info in self.floats.items() if info.mode == "unplaced"]
+
+    @property
+    def asked_floats(self) -> list:
+        """AI に位置を聞く図形の ID（mode が unplaced か ai。機械的に置いたもの〈mechanical〉と、本文の図キャプションの図に含めたもの
+        〈caption〉は入らない。結び付いた段落が本文の外で本文の最後に置いたもの〈end_why anchor〉も入る: PDF で本文の段落を答えれば、
+        そこに置ける）。推奨の手順 ai_finish の残りの数は、これと answered_floats で決める（修正計画 W8 の 3.3・4.3）。"""
+        return [fid for fid, info in self.floats.items() if info.mode in ("unplaced", "ai")]
+
+    @property
+    def answered_floats(self) -> list:
+        """asked_floats のうち、AI の答えを採用したもの（mode が ai か、AI が本文の外と答えて end_why が ai のもの）。"""
+        return [fid for fid, info in self.floats.items() if info.mode == "ai" or (info.mode == "unplaced" and info.end_why == "ai")]
 
     @property
     def undecided_boxes(self) -> list:

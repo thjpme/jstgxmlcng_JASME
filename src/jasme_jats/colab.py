@@ -88,17 +88,6 @@ def prompt_box(prompt: str) -> str:
             "</div>")
 
 
-NO_AI_TITLE = "AI による補完を「使わない」設定です（推奨しません）"
-NO_AI_DETAIL = ("機械的な変換だけでは、テンプレートのスタイルが正しく設定されていない段落、決まった形でない引用（著者名と年が離れている、"
-                "括弧がないなど）、画像で貼られた数式などを取りこぼすことがあります。"
-                "API キーがなくても使える「手動（チャットに貼り付け）」を選ぶことをお勧めします。")
-
-
-def no_ai_box(screen: str = "notebook") -> str:
-    """AI による補完を使わないときに出す注意（赤い枠）。screen は目印の置き換え先（step_text）。"""
-    return error_box(step_text(NO_AI_TITLE, screen), step_text(NO_AI_DETAIL, screen))
-
-
 def _notice(title: str, detail: str, border: str, background: str, heading: str) -> str:
     return (f"{LIGHT_STYLE}<div class='jasme-light' style='border:3px solid {border};border-radius:8px;padding:12px 16px;"
             f"margin:12px 0;background:{background} !important;color:#1f2937 !important;font-size:14px;line-height:1.6'>"
@@ -128,9 +117,9 @@ _SUMMARY = ("border:2px solid #9ca3af;border-radius:8px;padding:10px 16px;margin
 
 
 def summary_box(res) -> str:
-    """変換の結果の要約（文字の不変性チェック・DTD 検証・J-STAGE のアップロード時チェック・出版版 PDF との照合）を灰色の枠で
+    """変換の結果の要約（文字の不変性チェック・DTD 検証・J-STAGE のアップロード時チェック・出版版 PDF との照合・AI による仕上げ）を灰色の枠で
     表示する HTML。手順 5・6 で、要対応・要確認の枠の後、レポート全文の前に出す。不合格・要対応の行は赤い文字にする。"""
-    from .report import pdf_summary, upload_issues
+    from .report import ai_summary, pdf_summary, upload_issues
     fid = res.fidelity
     issues = upload_issues(res)
     rows = [("文字の不変性チェック", f"{fid.summary()}（段落 {fid.units} 件中 {fid.mapped} 件を出力、{len(fid.excluded)} 件は除外）",
@@ -140,7 +129,8 @@ def summary_box(res) -> str:
             ("J-STAGE のアップロード時チェック",
              "問題なし" if not issues else f"要対応 {len(issues)} 件\n" + "\n".join(f"　{mid} {msg}" for mid, msg in issues),
              not issues),
-            ("出版版 PDF との照合", pdf_summary(res), True)]
+            ("出版版 PDF との照合", pdf_summary(res), True),
+            ("AI による仕上げ", ai_summary(res), True)]      # 推奨の手順なので、失敗でも赤くしない（修正計画 W8 の 4.8）
     sup = getattr(res, "supplement", None)
     if sup is not None:             # ルート2 で補完の確かめを行ったときだけ
         rows.insert(4, ("出版版 PDF による補完の確かめ", "合格" if sup.ok else "不合格（この XML は登載に使わないでください）", sup.ok))
@@ -230,14 +220,6 @@ def next_article_box(previous_docx: str = "") -> str:
         "手順 1 からやり直すほうが確実です。GitHub のノートブックを開き直すと、入力欄は初期の値に戻ります。")
 
 
-def ai_required_box(message: str, screen: str = "notebook") -> str:
-    """AI による補完を使わない設定で、位置を決められない図表があったときの表示（変換は中止）。
-
-    message は pipeline.AIRequiredError の文（画面の操作の目印つき）。screen は目印の置き換え先（step_text）。
-    """
-    return error_box("AI による補完が必要です（変換を中止しました）", step_text(message, screen))
-
-
 def structure_conflict_box(message: str, screen: str = "notebook") -> str:
     """原稿の構造（同じ種類の後付けの見出しが 2 つ・著者名の付かない所属。K1・K2）で変換を中止したときの表示。
 
@@ -252,11 +234,10 @@ def structure_conflict_box(message: str, screen: str = "notebook") -> str:
 # 目印は U+0000 で区切る（report.step）。U+0000 は XML 1.0 の文字ではなく、docx の文字（w:t）・ファイル名・PDF の文字
 # （pdfmatch が制御文字を除く）のどれにも入らないので、docx 由来の文字（段落の抜粋など）に {{step:x}} のような並びがあっても
 # 目印とは読まれない。語は、前後の文に合わせて「〜から」「〜で」「〜してください」に続けて読める形にする（ノートブックの語は
-# 1ffed92 までの文と同じになる形。ただし answer_apply〈以前の answer_paste。「▶ を押す」を足した〉とコマンドラインの語は、0.29.0 の最後の点検で直した。「手順 2」のように数字で終わる語の後ろの助詞の前の空白は step_text が補う）。
+# 1ffed92 までの文と同じになる形。ただしコマンドラインの語は、0.29.0 の最後の点検で直した。「手順 2」のように数字で終わる語の後ろの助詞の前の空白は step_text が補う。
+# 回答を反映すると AI が…と続けた目印 answer_apply は、AI を勧める文を推奨の手順 ai_finish に一本化して使わなくなったのでなくした。修正計画 W8 の手順 7）。
 # 1 画面版の語は app.py の部品のラベルに合わせる（ラベルは下の定数。app.py もこれを使う）。語の形は、前後の文が決める:
 #   paste・repaste・convert_again: 「…してください」に続く（語は「押」「指定し直し」などの語幹で終わる）。
-#   answer_apply: 「…と、AI が…」に続く（「押す」「変換し直す」の終止形で終わる。「反映」を押した後にさらに「変換する」を押す
-#   操作に読めないよう、1 画面版は「反映」を押すだけで変換し直されることが分かる形にする）。
 #   answer_field・apply_button: 欄・ボタンの名前（app.CRASH_ADVICE が使う）。
 ANSWER_LABEL = "AI の回答（json のコードブロック）を貼り付ける"      # 1 画面版の回答の欄のラベル（app.py の gr.Textbox）
 APPLY_LABEL = "反映"                                             # 回答を反映するボタン
@@ -265,19 +246,16 @@ STEP_WORDS = {
     "notebook": {
         "docx": "手順 2", "pdf": "手順 2", "route": "手順 2", "meta": "手順 3",
         "ai_choose": "手順 4 で AI による補完の方法を「API で自動実行」か「手動（チャットに貼り付け）」にして ▶ を押し、手順 5 から",
-        "ai_modes": "「API で自動実行」か「手動（チャットに貼り付け）」を選んで",
         "prompt": "手順 5 の依頼文", "paste": "手順 6 に貼り付けて ▶ を押", "repaste": "手順 6 で貼り付け直し",
-        "answer_apply": "手順 6 で AI の回答を貼り付けて ▶ を押す", "convert_again": "手順 5 をもう一度実行",
+        "convert_again": "手順 5 をもう一度実行",
         "answer_field": "手順 6 の貼り付けの欄", "apply_button": "手順 6 の ▶",
         "images": "手順 7「図の画像を入れる」"},
     "app": {
         "docx": "「docx（論文の Word ファイル）」の欄", "pdf": "「PDF（J-STAGE に登載する PDF）」の欄", "route": "「作り方」の欄",
         "meta": "巻・号・ページなどの入力欄",
         "ai_choose": f"「AI による補完の方法」の欄を「手動（チャットに貼り付け）」か「API（Claude）」にして「{CONVERT_LABEL}」を押し、",
-        "ai_modes": "「AI による補完の方法」の欄で「手動（チャットに貼り付け）」か「API（Claude）」を選んで",
         "prompt": "依頼文", "paste": f"「{ANSWER_LABEL}」の欄に貼り付けて「{APPLY_LABEL}」を押",
         "repaste": f"「{ANSWER_LABEL}」の欄に貼り付け直して「{APPLY_LABEL}」を押し",
-        "answer_apply": f"AI の回答を「{ANSWER_LABEL}」の欄に貼り付けて「{APPLY_LABEL}」を押す",
         "convert_again": f"「{CONVERT_LABEL}」をもう一度押",
         "answer_field": f"「{ANSWER_LABEL}」の欄", "apply_button": f"「{APPLY_LABEL}」",
         # 結果の下の「図の画像」の欄（AppState.images_markdown の見出し。まとめて入れる欄・図ごとの行・「画像を入れる」が並ぶ）
@@ -285,10 +263,8 @@ STEP_WORDS = {
     "cli": {
         "docx": "docx の指定", "pdf": "--pdf の指定", "route": "--route の指定", "meta": "--meta の指定",
         "ai_choose": "--ai manual か --ai api を指定して",
-        "ai_modes": "--ai manual か --ai api を指定して",
         "prompt": "AI依頼文.txt", "paste": "ファイルに保存して --ai manual --ai-response 回答のファイル を指定",
         "repaste": "ファイルに保存して --ai manual --ai-response 回答のファイル を指定し直し",
-        "answer_apply": "AI の回答をファイルに保存し、--ai manual --ai-response 回答のファイル を指定して変換し直す",
         "convert_again": "--ai api でもう一度実行",
         "answer_field": "--ai-response で指定する回答のファイル", "apply_button": "--ai-response の指定",
         "images": "--images の指定"},
@@ -330,7 +306,7 @@ def result_boxes(res, level=None, skip=(), screen: str = "notebook", blocking: b
     """変換の結果の、要対応（赤）・要確認（黄）・手順（青）の枠（report.actions の順。なければ空文字）。手順 5・6・8 で使う。
 
     level を "要対応" にすると要対応だけ。blocking を真にすると、止める知らせ（report.blocking。要対応と、残っている必須の手順）だけ
-    （手順 8 で一度止めるとき）。skip は出さない知らせの key（手順 5 の手動モードでは、依頼文の枠を出すので ai_pending を出さない）。
+    （手順 8 で一度止めるとき）。skip は出さない知らせの key（手順 5 の手動モードでは、依頼文の枠を出すので AI による仕上げ〈ai_finish。回答待ち〉を出さない）。
     screen は "notebook"（既定。手順の番号）か "app"（1 画面版。欄の名前）。
     """
     from . import report
@@ -363,11 +339,3 @@ def pdf_diff_box(res, screen: str = "notebook") -> str:
     """
     from .report import pdf_actions
     return "".join(_box(a, screen) for a in pdf_actions(res))
-
-
-def unplaced_box(plan, partial="", screen: str = "notebook") -> str:
-    """AI の回答を反映した後も、位置を決められない図表が残っているときの表示（report.unplaced_text）。なければ空文字。"""
-    from .report import unplaced_text
-    text = unplaced_text(plan, partial)
-    return error_box(*(step_text(t, screen) for t in text)) if text else ""
-

@@ -10,9 +10,11 @@ import zipfile
 import pytest
 from lxml import etree
 
+import answers
 import make_fixtures as mf
 from conftest import DATA, FLOAT, FLOAT_TEXT, FULL, PDFCHECK, PDFCHECK_PDF
-from jasme_jats.pipeline import AIRequiredError, Options, convert
+from jasme_jats.pipeline import Options, convert
+from jasme_jats.report import actions
 from jasme_jats.structure import FN_IMAGE_EXCLUDED, REF_IMAGE_EXCLUDED
 
 S = mf.S
@@ -92,19 +94,20 @@ def test_image_in_reference_is_reported(refs, text, journal, meta, tmp_path):
     assert "- [ ] **画像を入れる場所を作れなかった画像 1 つ**（9 章）: 資料の図なら Word で資料を英文要旨の後ろに移す" in ch14
     assert "img2（段落" in ch14 and "- [x] 図の画像" not in ch14
     # 直し方は lost の知らせだけに書く（手順 images の行・置き場所の備考には書かない。修正計画 W1 の 4.2）
-    from jasme_jats.report import actions, image_rows
+    from jasme_jats.report import image_rows
     step = next(a for a in actions(res) if a.key == "images")
     assert "英文要旨の後ろ" not in step.box_detail and all("英文要旨の後ろ" not in row.note for row in image_rows(res))
 
 
 def test_figure_on_reference_becomes_unplaced(journal, meta, tmp_path):
     """引用文献の段落に結び付いた図形（画像と図キャプション）は、引用文献の段落にせず、位置を決められない図表にする（修正計画の
-    N7。0.24.1 までは画像が XML に入らなかった）。AI を使わない設定では止める。AI が位置を答えなければ本文の最後に仮に置き、
-    手作業で移す要対応として知らせる。画像は図に入るので、画像を入れる場所を作れなかった画像にはならない。"""
+    N7。0.24.1 までは画像が XML に入らなかった）。AI を使わない設定でも中止しない（W8 の決定 4）。AI が位置を答えなければ本文の
+    最後に置き、要確認 float_end で知らせる（手作業で XML の中で移させない）。画像は図に入るので、画像を入れる場所を作れなかった
+    画像にはならない。"""
     path = make_ref_image(tmp_path / "ref.docx", textbox_on_ref)
-    with pytest.raises(AIRequiredError):
-        convert(path, meta, journal, Options(out_dir=tmp_path / "none"))
-    resp = '{"placements": [], "operations": [], "notes": []}'
+    none = convert(path, meta, journal, Options(out_dir=tmp_path / "none"))
+    assert none.plan.unplaced_floats and none.lost_images == []
+    resp = answers.answer()
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", ai_response=resp))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.lost_images == []
     assert sorted(c.image_id for i in res.images for s in res.plan.slots if s.key == i.key for c in s.covers) == ["img1", "img2"]
@@ -117,9 +120,9 @@ def test_figure_on_reference_becomes_unplaced(journal, meta, tmp_path):
     assert (slot.kind, slot.key, [i.image_id for i in slot.covers]) == ("fig", "fig05", ["img2"])
     assert last[-1].find("graphic").get("{http://www.w3.org/1999/xlink}href") == f"31_1_{slot.key}.png"
     assert slot.note == "引用文献の段落に結び付いているため、本文の最後に置いています"
-    assert res.needs_action and any("本文の最後" in x for x in res.forced_floats)
+    assert "forced" not in [a.key for a in actions(res)]
     top = chapters(res.report_path.read_text(encoding="utf-8"))[0]
-    assert "画像を入れる場所を作れなかった画像" not in top and "要対応: 位置を決められなかった図表が 1 件あります" in top
+    assert "画像を入れる場所を作れなかった画像" not in top and "要確認: 本文の最後に置いた図・表が 1 個あります（3 章）" in top
 
 
 def test_cli_exits_1_and_reports_lost_images(journal, tmp_path, capsys):
@@ -325,7 +328,10 @@ def test_cli_shows_textbox_notices(journal, tmp_path, capsys):
     assert main([str(path), "--meta", str(meta), "--out", str(tmp_path / "out")]) == 0
     err = capsys.readouterr().err
     assert "要確認: 囲みか図の注記か決められなかったテキストボックス 1 件の文字を XML に出力していません" in err
-    assert "--ai manual か --ai api で AI による補完を使うか" in err and "テキストボックスの中の文字" not in err
+    assert "docx でそのテキストボックスを確かめ" in err and "テキストボックスの中の文字" not in err
+    # AI を勧める文は推奨の手順 ai_finish の 1 か所（修正計画 W8 の手順 7）
+    line = next(x for x in err.splitlines() if "決められなかったテキストボックス 1 件" in x)
+    assert "AI" not in line and "手順（推奨）: AI にテキストボックスの種類を判断させる" in err
 
 
 def test_textless_reference_paragraph_is_not_a_ref(journal, meta, tmp_path):

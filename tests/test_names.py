@@ -5,11 +5,10 @@
 引用の形の「姓だけ」の表記、なければ字数）。姓・名の中の字間の空白と、氏名の前後の空白は落とす（Emitter.drop。7 章）。いちばん長い空白で分けたもの・
 推定で分けたもの・AI が分けたもの・分けられなかったもの（空白のない氏名）は、要確認 name_split で知らせる。氏名はすべて架空。
 """
-import json
-
 import pytest
 from lxml import etree
 
+import answers
 import make_fixtures as mf
 from jasme_jats import pdfmatch
 from jasme_jats.builder import (NAME_EDGE_REASON, NAME_GAP_REASONS, NAME_INNER_REASON, build, name_context,
@@ -256,9 +255,9 @@ def test_name_context_leaves_out_author_names(journal, tmp_path):
 
 
 # ----------------------------------------------------------------------------- AI 補完
-def _split_op(src, sur, giv):
-    return {"op": "split_name", "src": src, "text": "", "occurrence": 1, "target": "", "role": "", "image": "", "mathml": "",
-            "surname": sur, "given": giv, "reason": "英文の著者名と照らした", "confidence": "高"}
+def _split(src, sur, giv):
+    """姓と名の境目を指定する回答（tests/answers.py の names）。"""
+    return answers.answer(names=[(src, sur, giv, "英文の著者名と照らした", "高")])
 
 
 @pytest.mark.parametrize("sur, giv", [("試験", "六郎"), ("試\u3000験", "六\u3000郎"), ("試", "験六郎")])
@@ -273,7 +272,7 @@ def test_ai_split_name_accepts_spaced_name(sur, giv, journal, meta, tmp_path):
     assert len(lines) == 1 and "推定" in lines[0] and "「試\u3000験\u3000六\u3000郎」" in lines[0]
     assert "姓「試験」・名「六郎」" in lines[0] and "字数" in lines[0] and "2 か所以上" in lines[0]
     assert "name_split" in [a.key for a in actions(res)]
-    resp = json.dumps({"operations": [_split_op(src, sur, giv)]}, ensure_ascii=False)
+    resp = _split(src, sur, giv)
     res2 = convert(path, meta, journal, Options(out_dir=tmp_path / "m2", ai_mode="manual", ai_response=resp))
     fid = res2.fidelity
     assert fid.ok and fid.final_ok and res2.dtd_valid
@@ -297,7 +296,7 @@ def test_ai_split_name_on_unsplit_name_is_listed(journal, meta, tmp_path):
     path = names_doc(tmp_path / "n.docx", "試験六郎", "著者名を確かめる。")
     _, plan, _ = _mechanical(path, journal)
     src = plan.authors[0].name_ja.src
-    resp = json.dumps({"operations": [_split_op(src, "試験", "六郎")]}, ensure_ascii=False)
+    resp = _split(src, "試験", "六郎")
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "m", ai_mode="manual", ai_response=resp))
     assert eastern(res) == [("surname", "試験"), ("given-names", "六郎")]
     [act] = [a for a in actions(res) if a.key == "name_split"]
@@ -312,14 +311,12 @@ def test_ai_split_name_on_longest_gap(journal, meta, tmp_path):
     _, plan, _ = _mechanical(path, journal)
     src = plan.authors[0].name_ja.src
     same = convert(path, meta, journal, Options(out_dir=tmp_path / "a", ai_mode="manual",
-                                                ai_response=json.dumps({"operations": [_split_op(src, "試験", "洋")]},
-                                                                       ensure_ascii=False)))
+                                                ai_response=_split(src, "試験", "洋")))
     [act] = [a for a in actions(same) if a.key == "name_split"]
     assert "いちばん長い" in act.box_detail and "AI が境目を決めました" not in act.box_detail and "推定を含みます" not in act.box_title
     assert len(same.ai.accepted) == 1
     diff = convert(path, meta, journal, Options(out_dir=tmp_path / "b", ai_mode="manual",
-                                                ai_response=json.dumps({"operations": [_split_op(src, "試", "験洋")]},
-                                                                       ensure_ascii=False)))
+                                                ai_response=_split(src, "試", "験洋")))
     [act] = [a for a in actions(diff) if a.key == "name_split"]
     assert eastern(diff) == [("surname", "試"), ("given-names", "験洋")]
     assert "試／験洋 に分けました。AI が境目を決めました" in act.box_detail and "いちばん長い空白で 試験／洋 に分けていた" in act.box_detail
@@ -330,7 +327,7 @@ def test_ai_split_name_on_single_space_name_is_unchanged(journal, meta, tmp_path
     path = names_doc(tmp_path / "n.docx", "試験\u3000六郎", "著者名を確かめる。")
     _, plan, _ = _mechanical(path, journal)
     src = plan.authors[0].name_ja.src
-    resp = json.dumps({"operations": [_split_op(src, "試験", "六郎")]}, ensure_ascii=False)
+    resp = _split(src, "試験", "六郎")
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "m", ai_mode="manual", ai_response=resp))
     assert res.ai.accepted == [] and len(res.ai.rejected) == 1
     assert eastern(res) == [("surname", "試験"), ("given-names", "六郎")]
@@ -340,7 +337,7 @@ def test_ai_split_name_rejects_other_letters(journal, meta, tmp_path):
     path = names_doc(tmp_path / "n.docx", "試\u3000験\u3000六\u3000郎", "著者名を確かめる。")
     _, plan, _ = _mechanical(path, journal)
     src = plan.authors[0].name_ja.src
-    resp = json.dumps({"operations": [_split_op(src, "試験", "七郎")]}, ensure_ascii=False)
+    resp = _split(src, "試験", "七郎")
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "m", ai_mode="manual", ai_response=resp))
     assert res.ai.accepted == [] and len(res.ai.rejected) == 1
     assert eastern(res) == [("surname", "試験"), ("given-names", "六郎")]       # 機械の推定のまま
@@ -394,3 +391,17 @@ def test_ai_request_tells_longest_from_estimate(journal, tmp_path):
     [l2] = [x for x in req.splitlines() if x.startswith("- [d12]")]
     assert "いちばん長い空白で決めた氏名" in l1 and "推定した氏名" not in l1
     assert "姓と名の境目を推定した氏名" in l2
+
+
+def test_name_split_pending_has_no_ai_advice(journal, meta, tmp_path):
+    """修正計画 W8 の手順 7: 手動モードで回答待ちのときも、著者名の知らせに「AI の回答を反映すると…」を書かない（AI を勧める文は
+    推奨の手順 ai_finish の 1 か所）。文は AI を使わないときと同じ。"""
+    path = names_doc(tmp_path / "n.docx", "試　験　六　郎", "著者名を確かめる。")
+    acts = []
+    for out, mode in (("none", "none"), ("pend", "manual")):
+        res = convert(path, meta, journal, Options(out_dir=tmp_path / out, ai_mode=mode))
+        acts.append(next(a for a in actions(res) if a.key == "name_split"))
+    for a in acts:
+        for t in (a.top, a.box_detail, a.cli, a.checklist):
+            assert "AI" not in t, t
+    assert (acts[0].top, acts[0].box_detail, acts[0].cli) == (acts[1].top, acts[1].box_detail, acts[1].cli)

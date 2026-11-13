@@ -50,7 +50,7 @@ U6 で本体を変えずに移した。これまでどおり、ここからも i
      plan_figures でたどる。表のセルの図キャプションの画像は cell_figures_in。置き場所の備考 float_note、図形ごとの図・表の節 FloatInfo.nodes〈node_float_ids〉）
   9. 段落記号の削除でつないだ段落のスタイルの違いを判断の一覧に記録する: joined_styles
 - レポート・AI 依頼文・Colab・コマンドラインが使う関数: float_caption・float_ids・float_targets（浮動配置の図形の中身と、それを
-  出力した XML の要素の説明）、figure_rows（図・表・キャプションのない画像の置き場所の一覧。位置の決め方 figure_place・PLACE_JA、
+  出力した XML の要素の説明。float_targets は今はテストだけが使う）、figure_rows（図・表・キャプションのない画像の置き場所の一覧。位置の決め方 figure_place・PLACE_JA、
   表の番号 table_label）。
 - 除外の理由の文言は定数（FRONT_*・BACK_*・EN_*_EXCLUDED など）で書き、位置を決められずに除く理由は UNPLACED_EXCLUSIONS に
   まとめる（report が要確認 excluded_unsure・要対応 abstract_missing で知らせる）。
@@ -657,7 +657,8 @@ def float_ids(plan, info) -> str:
 
 
 def float_targets(plan, info) -> str:
-    """浮動配置の図形の中身を出力した XML の要素の説明（手作業で移す図表の知らせ。レポート・Colab・コマンドラインで使う）。
+    """浮動配置の図形の中身を出力した XML の要素の説明（前は手作業で移す図表の知らせに使った。W8 の手順 2 でその知らせを
+    なくしたので、今はテストが図形の中身を確かめるのに使う）。
 
     図・表の ID（float_ids）と、図形の中身から本文の段落として出した段落（画像と文字が同じ段落の文字など。図の直後に出す）。
     ID のある図表か段落があれば、キャプションのない図（ID がない）も数える（知らせどおりに移したときに、図形の中身が仮の位置に
@@ -1327,7 +1328,8 @@ class Classifier:
 
         中身は、AI の指定の有無にかかわらず float_units が組む（組み方を決められない形だけ、中身を docx の順にそのまま出す。
         修正計画 W1 の 2.3 の B）。図を置く位置の規則は「Word で表示したときに、図の左上の直上にある本文の文章を含む段落の直後」。
-        - AI の指定（placements の after）があれば、指定された段落の直後に置く（中身の組み合わせの指定 items は使わない）。
+        - AI の指定（placements の after）があれば、指定された段落の直後に置く（中身の組み合わせの指定 items は使わない。書かれて
+          いれば、判断の記録にそう書き添える）。
         - なければ、図の左上がアンカー段落の左上の位置にあれば（floats.at_anchor）、機械的にアンカー段落の前に置く。
         - どちらでもなければ「位置を決められない図表」として記録し、仮の位置に置く（利用者が手作業で移す。決定事項 21）。
           仮の位置は、アンカー段落のすぐ後ろ。AI が本文の外（注・引用文献など）の段落の後ろを指定したとき（ai_assist.float_placements
@@ -1398,11 +1400,15 @@ class Classifier:
                 target = src_index[spec["after"]] + 1
                 info.mode = "ai"
                 after = plan.paras.get(spec["after"])
+                # 中身の組み合わせ（items）を書いた回答（前の形の依頼文への回答）だけ、その指定を使わないことを書き添える
+                # （依頼文は items を空の一覧 [] にさせる。修正計画 W8 の手順 6）
+                items_note = ("（中身の組み合わせの指定は使わない。組み合わせは変換ツールが決める）"
+                              if (spec.get("op") or {}).get("text") else "")
                 plan.float_decisions[fl.fid] = plan.decide(
                     "ai", "figure", spec["after"],
                     f"テキストボックス・グループ図形 {fl.fid}（{summary}）を、段落"
-                    f"「{_para_text(after)[:20] if after else spec['after']}」の後に置いた（中身の組み合わせの指定は使わない。"
-                    f"組み合わせは変換ツールが決める）。{spec.get('reason', '')}", spec.get("confidence", ""))
+                    f"「{_para_text(after)[:20] if after else spec['after']}」の後に置いた{items_note}。"
+                    f"{spec.get('reason', '')}", spec.get("confidence", ""))
             elif at_anchor(fl, layout) and not end and not outside:
                 target = src_index[fl.anchor_src]
                 info.mode = "mechanical"
@@ -1427,7 +1433,7 @@ class Classifier:
                 self.float_place_decision[fl.fid] = plan.decide(
                     "mechanical", "figure", fl.anchor_src,
                     f"テキストボックス・グループ図形 {fl.fid}（{summary}）は、位置を機械的に"
-                    f"決められない（{info.reason}）。AI による補完で位置を指定する必要がある（{place}）",
+                    f"決められない（{info.reason}）。AI を使うと、位置を合わせられる（{place}）",
                     applied=False)
             inserts.append((target, (self.float_number(info), len(inserts)), entries))
             if info.mode == "unplaced" or info.built == "raw":
@@ -1584,8 +1590,8 @@ class Classifier:
                 for p in texts:
                     plan.exclude(p, TEXTBOX_UNDECIDED_EXCLUDED)
                 plan.decide("mechanical", "box", tb.anchor_src,
-                            f"{what}は、囲みか図の注記か決められない（{info.why}）。本文から除外した（AI による補完の placements で"
-                            " kind box・label を指定できる）", applied=False)
+                            f"{what}は、囲みか図の注記か決められない（{info.why}）。本文から除外した（本文に必要な囲みなら、Word で"
+                            "文字をテキストボックスの外に出して変換し直す）", applied=False)
                 continue
             # 囲み（boxed-text）
             node = BoxNode(xid=tb.xid, children=self.box_children(texts, roles))
@@ -1644,7 +1650,7 @@ class Classifier:
                                      "文字をテキストボックスの外に出して変換し直してください")
             else:
                 plan.warnings.append(f"{src}: 図に重ねた注記と判断したテキストボックス {what}の文字を、本文から除外しました（6 章）。"
-                                     "図の注記でなく本文の文字（問題文など）なら、AI による補完で囲みに指定するか、Word で文字を"
+                                     "図の注記でなく本文の文字（問題文など）なら、Word で文字を"
                                      "テキストボックスの外に出して変換し直してください")
         return inserts, taken
 
@@ -3123,14 +3129,14 @@ class Classifier:
                     plan.decide("mechanical", "style", b.src,
                                 f"英文要旨の後ろの、見出しのスタイル「{b.style_name}」の段落「{head}」から資料とした"
                                 "（英文要旨の中に見出しは来ないため）。資料でなければ、Word でその段落のスタイルを英文要旨の"
-                                "スタイルに直して変換し直す（AI による補完では、set_role の abstract で英文要旨に戻せる）")
+                                "スタイルに直して変換し直す（AI の仕上げで、資料の始まりを取り消せる）")
                 elif by_text:
                     # 文字の規則で始めた資料も記録する（文の形の段落を見出しと誤ったときに、レポートの 4 章と AI 依頼文の推定で
                     # 気づけるように）
-                    back = "英文要旨の段落（abstract）" if first else "前の資料の段落（p）"
+                    back = "英文要旨" if first else "前の資料"
                     plan.decide("mechanical", "style", b.src,
                                 f"段落「{head}」を資料の見出しとした（「資料」「付録」「附録」「Appendix」で始まる見出しの形のため）。"
-                                f"資料の見出しでなければ、AI による補完の set_role で{back}に戻せる")
+                                f"資料の見出しでなければ、AI の仕上げで資料の始まりを取り消せる（{back}の続きに戻る）")
                 continue
             if app is not None:
                 plan.region[b.src] = "app"
@@ -3255,8 +3261,8 @@ class Classifier:
         からの資料なら前の資料につながる）。first: 英文要旨の段落（最初の資料の見出しの位置）か。
         """
         where = "英文要旨の段落のまま" if first else "前の資料の段落のまま"
-        how = ("Word でその段落に章・節・項見出しのスタイルを付けて変換し直すと、文字はそのままで資料になる（AI による補完では、"
-               "set_role の app_heading で資料にできる）") if first else "AI による補完の set_role の app_heading で資料にできる"
+        how = ("Word でその段落に章・節・項見出しのスタイルを付けて変換し直すと、文字はそのままで資料になる（AI の仕上げで、"
+               "資料の始まりを直せる）") if first else "AI の仕上げで、資料の始まりを直せる"
         self.plan.decide("mechanical", "style", b.src,
                          f"段落「{text.strip()[:20]}」は「資料」「付録」「附録」「Appendix」で始まるが、{sentence}の形なので、"
                          f"資料の見出しにしなかった（{where}）。資料の見出しなら、{how}", applied=False)

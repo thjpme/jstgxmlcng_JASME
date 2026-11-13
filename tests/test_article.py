@@ -18,7 +18,7 @@ from jasme_jats import article, structure
 MOVED = {"Sec", "PNode", "ListNode", "QuoteNode", "FigNode", "TableNode", "FormulaNode", "BoxNode", "FnNode", "RefNode",
          "BackSec", "AppNode", "Author", "Aff", "FloatInfo", "BoxInfo", "ArticlePlan", "_para_text"}
 # 移したのではなく、article.py に新しく足した型（structure からの import は求めない。再エクスポートの対象ではない）
-ADDED = {"UnlinkedRef", "StructureConflict", "ImageSlot", "FigureRow"}
+ADDED = {"UnlinkedRef", "StructureConflict", "ImageSlot", "FigureRow", "StyleSuspect"}
 
 
 def run_python(code):

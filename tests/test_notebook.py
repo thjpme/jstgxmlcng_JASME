@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import answers
 from jasme_jats import __version__
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -126,13 +127,13 @@ def test_step9_resets_for_next_article(monkeypatch):
     shown = fake_display(monkeypatch)
     src = cell_source("#@title 9.")
     ns = {"DONE": {1, 2, 3, 4, 5}, "docx_path": Path("first.docx"), "meta_input": {"volume": "31", "fpage": "1"},
-          "LAST_AI_RESPONSE": '{"operations": []}', "res": object()}
+          "LAST_AI_RESPONSE": answers.answer(), "res": object()}
     with pytest.raises(SystemExit, match="まだダウンロードしていません"):
         exec(src, ns)
     exec(src, ns)                                   # もう一度押すと、ダウンロードせずに進める
     assert ns["DONE"] == {1}
     assert ns["PREVIOUS"] == {"docx": "first.docx", "meta": {"volume": "31", "fpage": "1"},
-                              "ai_response": '{"operations": []}'}
+                              "ai_response": answers.answer()}
     assert "docx_path" not in ns and "res" not in ns and "_DISCARD_OK" not in ns
     # 入力欄に前の論文の値が残ることを、赤い枠で目立つように知らせる（開き直す方法も示す）
     assert "前の論文（first.docx）の値が残っています" in shown[-1] and "開き直して" in shown[-1]
@@ -369,12 +370,12 @@ def test_steps5_and_6_show_result_boxes():
                     "error_box("):
             assert old not in src
     assert "result_boxes" in cell_source("#@title 5.").split("api_key = None")[0]   # 手順 5 で import する
-    # 手順 5 の手動モードでは、依頼文の枠を出すので「AI の回答をまだ反映していません」の枠は出さない
-    assert 'result_boxes(res, skip=("ai_pending",))' in cell_source("#@title 5.")
+    # 手順 5 の手動モードでは、依頼文の枠を出すので AI による仕上げ（ai_finish。回答待ち）の枠は出さない。API の失敗は出す
+    assert 'result_boxes(res, skip=("ai_finish",) if AI == "manual" else ())' in cell_source("#@title 5.")
 
 
 def test_step6_shows_ai_error_box_before_report(monkeypatch, tmp_path):
-    """手順 6 のセルを実行すると、読めない回答を貼り付けたときは「貼り付けた回答を読み込めませんでした」の赤い枠を、
+    """手順 6 のセルを実行すると、読めない回答を貼り付けたときは推奨の手順 ai_finish の「失敗」の枠（見出しが赤字）を、
     レポートの表示より前に出す（result_boxes の呼び出しと、変換の後の流れを、文字列ではなく実行して確かめる）。"""
     from conftest import FULL
 
@@ -390,10 +391,10 @@ def test_step6_shows_ai_error_box_before_report(monkeypatch, tmp_path):
           "summary_box": summary_box, "report_details": report_details, "HTML": lambda x: x, "display": shown.append}
     exec(src, ns)
     assert ns["res"].ai.mode == "manual" and ns["res"].ai.error and ns["LAST_AI_RESPONSE"]
-    box = next(i for i, x in enumerate(shown) if "貼り付けた回答を読み込めませんでした" in x)
+    box = next(i for i, x in enumerate(shown) if "AI の回答を反映できませんでした" in x)
     summary = next(i for i, x in enumerate(shown) if "結果の要約" in x)
     report = next(i for i, x in enumerate(shown) if "<details" in x and "変換レポート" in x)
-    assert box < summary < report and "#dc2626" in shown[box]
+    assert box < summary < report and "#b91c1c" in shown[box]
 
 
 def test_step8_shows_result_boxes():
@@ -489,10 +490,9 @@ def test_steps5_and_6_stop_on_structure_conflict(monkeypatch, tmp_path):
     手順 6（守り）も同じ。どちらも `DONE` から 5 を消すので、手順 7〜8 は先に進めない。セル 5・6 に error_box( は書かない。"""
     from test_structure import conflict_doc
 
-    from jasme_jats.colab import (ai_required_box, no_ai_box, prompt_box, report_details, result_boxes, structure_conflict_box,
-                                  summary_box)
+    from jasme_jats.colab import prompt_box, report_details, result_boxes, structure_conflict_box, summary_box
     from jasme_jats.config import ArticleMeta, JournalConfig
-    from jasme_jats.pipeline import AIRequiredError, Options, StructureConflictError, add_images, convert
+    from jasme_jats.pipeline import Options, StructureConflictError, add_images, convert
     for prefix in ("#@title 5.", "AI_RESPONSE = r'''"):
         src = cell_source(prefix)
         assert "except StructureConflictError as e:" in src and "display(HTML(structure_conflict_box(str(e))))" in src
@@ -505,8 +505,7 @@ def test_steps5_and_6_stop_on_structure_conflict(monkeypatch, tmp_path):
             "ROUTE_KEY": "docx", "SPLIT_LABELS": None, "journal": JournalConfig.load(),
             "meta": ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり"}),
             "convert": convert, "Options": Options, "add_images": add_images, "result_boxes": result_boxes,
-            "summary_box": summary_box, "report_details": report_details, "prompt_box": prompt_box, "no_ai_box": no_ai_box,
-            "ai_required_box": ai_required_box, "AIRequiredError": AIRequiredError,
+            "summary_box": summary_box, "report_details": report_details, "prompt_box": prompt_box,
             "StructureConflictError": StructureConflictError, "structure_conflict_box": structure_conflict_box,
             "HTML": lambda x: x, "display": shown.append}
     ns5 = dict(base, DONE={1, 2, 3, 4})

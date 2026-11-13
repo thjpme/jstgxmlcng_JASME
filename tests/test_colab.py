@@ -56,10 +56,36 @@ def test_summary_box_and_report_details(journal, meta, tmp_path, monkeypatch):
     assert "<details" in html and "<table>" not in html and "| 不変性 | 合格 |" in html
 
 
-def test_no_ai_box_is_red_warning():
-    from jasme_jats.colab import no_ai_box
-    html = no_ai_box()
-    assert "推奨しません" in html and "#dc2626" in html and "手動（チャットに貼り付け）" in html
+def test_summary_box_has_ai_finish_row(journal, meta, tmp_path):
+    """結果の要約に「AI による仕上げ」の行（方法・モデルと状態〈report.ai_state〉）がある。推奨の手順なので、失敗でも赤くしない
+    （修正計画 W8 の手順 4・4.8）。"""
+    from types import SimpleNamespace
+    from conftest import FLOAT, FULL
+    from jasme_jats.colab import summary_box
+    from jasme_jats.pipeline import Options, convert
+    res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "n"))
+    assert "AI による仕上げ: 使わない。状態: 未実行" in summary_box(res)
+    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "m", ai_mode="manual"))
+    assert "AI による仕上げ: 手動（チャットに貼り付け）。状態: 回答待ち" in summary_box(res)
+    res.ai = SimpleNamespace(mode="api", provider="claude", model="claude-x", raw="", error="接続できませんでした", partial=False)
+    html = summary_box(res)
+    assert "AI による仕上げ: API（Claude）（モデル: claude-x）。状態: 失敗" in html and "#b91c1c" not in html
+
+
+def test_no_ai_is_not_discouraged():
+    """「使わない」を推奨しないとは言わない（AI は強く推奨する仕上げで、必須にしない。修正計画 W8 の決定 4・手順 4）。
+    src・tools・notebooks に「推奨しません」と、なくした赤い枠（no_ai_box・NO_AI_TITLE・NO_AI_DETAIL）の名前がない。"""
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    files = [f for d in ("src", "tools", "notebooks") for f in (root / d).rglob("*")
+             if f.suffix in (".py", ".ipynb") and "__pycache__" not in f.parts]
+    assert files
+    for f in files:
+        text = f.read_text(encoding="utf-8")
+        for word in ("推奨しません", "no_ai_box", "NO_AI_TITLE", "NO_AI_DETAIL"):
+            assert word not in text, (f, word)
+    from jasme_jats import app
+    assert ("使わない", "none") in app.AI_MODES
 
 
 def test_detects_values_left_from_previous_article():
@@ -121,41 +147,29 @@ def test_pdf_diff_box_shows_formula_and_insert_marks():
     assert "docx の側の「［］」は、docx に文字がなく PDF にだけ文字がある位置です" in html
 
 
-def test_ai_required_and_unplaced_boxes(journal):
-    """位置を決められなかった図表の枠は、図表ごとに、キャプション・XML の中の図表の ID・仮に置いた位置（アンカー段落の後ろ・
-    本文の最後）を示す。AI の回答が途中で切れていたときは、出し直しの頼み方を途中で切れた回答の枠にそろえる。"""
-    from types import SimpleNamespace
+def test_abort_display_for_ai_is_gone():
+    """AI を使わない設定でも変換は中止しない（修正計画 W8 の決定 4）ので、中止の表示（AIRequiredError・ai_required_box）と、位置を
+    決められなかった図表の赤い枠（unplaced_box）、目印 ai_modes は、製品のコード・作業用のスクリプト・ノートブックにない（W8 の手順 2）。
+    図表を置いた位置は推奨の手順 ai_finish・要確認 float_end とレポートの 3 章で知らせる（test_steps・test_floats）。"""
+    from pathlib import Path
 
-    from conftest import FLOAT, PLACE
-
-    from jasme_jats.colab import ai_required_box, unplaced_box
-    from jasme_jats.pipeline import _mechanical
-    assert "変換を中止しました" in ai_required_box("s1: …") and "#dc2626" in ai_required_box("x")
-    assert unplaced_box(SimpleNamespace(unplaced_floats=[])) == ""
-    _, plan, _ = _mechanical(FLOAT, journal)
-    html = unplaced_box(plan)
-    assert "#dc2626" in html and "仮の位置に置いています" in html and "手作業" in html and "本文の冒頭" not in html
-    assert "・s1（「図1\u3000表で組んだ問題」、XML の F1）: 段落「この段落に図1のテキストボックスが結び付」の後ろ\n" in html
-    assert "・s2（「図3\u3000面積図」「図4\u3000樹形図」、XML の F2・F3）: 段落「この段落には図3と図4" in html
-    assert "・s3（「図2\u3000グループ図形の図」、XML の F4）: 段落「図2は教科書の見開きページであり，グルー」の後ろ\n" in html
-    assert "位置を決められなかった図表をすべて placements に書いて" in html
-    # AI が注の段落の後ろを指定した図表は、本文の最後（理由を添える）
-    _, first, _ = _mechanical(PLACE, journal)
-    note = next(src for src, p in first.paras.items() if p.plain().startswith("1) 架空の注"))
-    _, plan, _ = _mechanical(PLACE, journal, placements={"s1": {"where": "end", "after": note}})
-    html = unplaced_box(plan)
-    assert "・s1（「図1\u3000一つ目の図」、XML の F4）: 本文の最後（AI が注などの本文の外の段落の後ろを指定したため）\n" in html
-    assert "・s2（「図3\u3000三つ目の図」、XML の F2）: 段落「この段落に図3と図2のテキストボックスが」の後ろ\n" in html
-    # AI の回答が途中で切れていたとき: 別の頼み方を並べず、途中で切れた回答の枠（最初から出し直す）を示す
-    html = unplaced_box(plan, "最後まで書かれていた 1 件だけを読み取って反映しました")
-    assert "AI の回答が途中で切れていて、次の図表の位置（placements）の指定を読み取れなかったか" in html
-    assert "上の「AI の回答が途中で切れていました」の枠のとおりです" in html and "すべて placements に書いて" not in html
+    from jasme_jats import report
+    root = Path(__file__).resolve().parent.parent
+    files = [*(root / "src").rglob("*.py"), *(root / "tools").glob("*.py"), *(root / "notebooks").glob("*.ipynb")]
+    assert len(files) > 10
+    for f in files:
+        text = f.read_text(encoding="utf-8")
+        for word in ("AIRequiredError", "ai_required_box", "unplaced_box", "unplaced_text", '"ai_modes"'):
+            assert word not in text, (f.name, word)
+    assert "ai_modes" not in report.STEP_NAMES
 
 
 def test_result_boxes_follow_actions(journal, tmp_path, monkeypatch):
     """手順 5・6・8 の枠は report.actions からまとめて作る（colab.result_boxes）: J-STAGE のアップロード時チェック、
-    DTD 検証の不合格、AI のエラー（手動モードと API モードで見出しを書き分ける）。"""
+    DTD 検証の不合格、AI のエラー（推奨の手順 ai_finish の「失敗」。手動モードと API モードで直し方を書き分ける）。"""
     from conftest import FULL
+
+    from jasme_jats.report import actions, blocking
 
     from jasme_jats import pipeline
     from jasme_jats.ai_assist import AIOutcome
@@ -177,33 +191,38 @@ def test_result_boxes_follow_actions(journal, tmp_path, monkeypatch):
     good = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり"})
     res = convert(FULL, good, journal, Options(out_dir=tmp_path / "m", ai_mode="manual", ai_response="読めない回答"))
     html = result_boxes(res)
-    assert "貼り付けた回答を読み込めませんでした（AI による補完は反映されていません）" in html
+    # 読めない回答・API の失敗は、推奨の手順 ai_finish の「失敗」（見出しが赤字の青い枠。要対応ではない。修正計画 W8 の 4.3）
+    assert "手順（推奨）: AI の回答を反映できませんでした" in html and "#b91c1c" in html
+    assert "回答のコードブロックの中身だけを手順 6 で貼り付け直してください。" in html
     assert "AI の回答をまだ反映していません" not in html            # 回答を貼り付けた後は「回答待ち」ではない
     # API モード: 偽の呼び出しがエラーを返す
     monkeypatch.setattr(pipeline, "call_provider",
                         lambda *a, **k: AIOutcome(mode="api", model="claude-test", error="API の利用制限に達しました"))
     res = convert(FULL, good, journal, Options(out_dir=tmp_path / "a", ai_mode="api", ai_api_key="k"))
     html = result_boxes(res)
-    assert "AI による補完ができませんでした" in html and "API の利用制限に達しました" in html
-    assert res.needs_action and "AI による補完ができませんでした（2 章）" in res.report_path.read_text(encoding="utf-8")
+    assert "手順（推奨）: AI の回答を反映できませんでした" in html and "API の利用制限に達しました" in html
+    assert "変換の結果は、AI を使わないときと同じです。" in html
+    report = res.report_path.read_text(encoding="utf-8")
+    assert not res.needs_action or [a.key for a in blocking(actions(res))] == ["images"]
+    assert "AI による補完は行えませんでした: API の利用制限に達しました" in report.split("## 2.")[1].split("## 3.")[0]
 
 
 def test_result_boxes_before_answer_in_manual_mode(journal, meta, tmp_path):
     """手動モードで回答を貼り戻す前: 手順 5 では依頼文の枠があるので回答待ちの枠を出さず（skip）、手順 8 の止める枠
     （blocking）にも出さない（推奨の手順は止めない）。全部の枠には青い枠（手順）で出す。"""
-    from conftest import FULL
+    from conftest import FLOAT
 
     from jasme_jats.colab import result_boxes
     from jasme_jats.pipeline import Options, convert
     from conftest import fill_images
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual"))
+    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual"))
     fill_images(res)                                         # 図の画像の手順（必須）を済ませる
-    assert result_boxes(res, skip=("ai_pending", "name_split")) == ""     # name_split は d11「研究次郎」（C064）
+    assert result_boxes(res, skip=("ai_finish", "images")) == ""
     assert result_boxes(res, level="要対応") == ""
     assert result_boxes(res, blocking=True) == ""           # 手順 8 は、回答待ちでは止めない
     html = result_boxes(res)
-    assert "AI の回答をまだ反映していません（手動モード）" in html and "手順 6" in html
-    assert "手順（推奨）: AI の回答をまだ反映していません" in html and "#2563eb" in html and "#eff6ff" in html
+    assert "手順（推奨）: AI で図・表の位置を合わせる（強く推奨。残り 3 個）" in html and "手順 6" in html
+    assert "#2563eb" in html and "#eff6ff" in html
 
 
 def test_result_boxes_show_textbox_notices(journal, meta, tmp_path):
@@ -218,14 +237,13 @@ def test_result_boxes_show_textbox_notices(journal, meta, tmp_path):
     html = result_boxes(res, level="要確認")
     assert "囲みか図の注記か決められなかったテキストボックスが 3 件あります（要確認）" in html
     assert "#d97706" in html and "#dc2626" not in html             # 要確認は黄色い枠
-    assert ("手順 4 で AI による補完の方法を「API で自動実行」か「手動（チャットに貼り付け）」にして ▶ を押し、手順 5 から"
-            "変換し直すと") in html and "位置を推定して置いた囲みが 1 件あります（要確認）" in html
+    assert "テキストボックスの外（本文の段落）に出してから変換し直してください" in html and "位置を推定して置いた囲みが 1 件あります（要確認）" in html
+    assert "AI による補完" not in html          # AI を勧める文は推奨の手順 ai_finish の枠だけ（修正計画 W8 の手順 7）
     assert result_boxes(res, level="要対応") == ""
     res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "m", ai_mode="manual"))
     html = result_boxes(res)
-    assert "手順 6 で AI の回答を貼り付けて ▶ を押すと、AI が囲みか注記かを判断します" in html
-    assert "囲みか図の注記か決められなかったテキストボックス（3 章）は、AI の回答を反映するまで XML に出力していません。" in html
-    assert "囲みか図の注記か決められなかったテキストボックス（3 章）は、AI の回答を反映するまで" in res.output_note
+    # 回答待ちの推奨の手順 ai_finish にも、決められないテキストボックスを AI が判断することを書く（冒頭の手動モードの説明はなくした）
+    assert "囲みか図の注記か決められないテキストボックス 3 個の文字は、XML に出していません。AI が種類を判断します。" in html
 
 
 # ---------------------------------------------------------------------------- 画面の操作の目印（O2）
@@ -243,7 +261,7 @@ def test_step_words_cover_every_mark_in_report():
         assert set(words) == set(report.STEP_NAMES), screen
         assert all("\x00" not in w and ("手順" not in w or screen == "notebook") for w in words.values())
     used = set()
-    for module in (report, pipeline, app):    # 目印は report.py・pipeline.py（AIRequiredError の文）・app.py（CRASH_ADVICE）で使う
+    for module in (report, pipeline, app):    # 目印は report.py・pipeline.py（StructureConflictError の文）・app.py（CRASH_ADVICE）で使う
         used |= set(re.findall(r"step\((?:'|\")(\w+)(?:'|\")\)", Path(module.__file__).read_text(encoding="utf-8")))
     assert used == set(report.STEP_NAMES)                 # 使っていない目印・表にない目印がない
     assert step_text(report.step("docx") + "から", "notebook") == "手順 2 から"     # 1ffed92 までの文と同じ（助詞の前の空白）
@@ -282,8 +300,8 @@ def test_no_mark_left_in_any_screen(journal, meta, tmp_path):
     レポート（.md）と top・checklist・cli の文にも目印は出ない。make_notebook.py が使う box_detail も、置き換えれば目印は残らない。"""
     from conftest import EDGE, FLOAT, FULL, OUTSIDE, PDFCHECK, PDFCHECK_PDF, PLACE, STRUCTURE, TABLEFIG
 
-    from jasme_jats.colab import lost_images_box, missing_images_box, pdf_diff_box, result_boxes, step_text, unplaced_box
-    from jasme_jats.pipeline import AIRequiredError, Options, convert
+    from jasme_jats.colab import lost_images_box, missing_images_box, pdf_diff_box, result_boxes, step_text
+    from jasme_jats.pipeline import Options, convert
     from jasme_jats.report import actions
     cases = [(docx, Options(out_dir=tmp_path / f"c{k}{mode}", ai_mode=mode))
              for k, docx in enumerate([FULL, EDGE, FLOAT, PLACE, OUTSIDE, STRUCTURE, TABLEFIG]) for mode in ("none", "manual")]
@@ -291,10 +309,7 @@ def test_no_mark_left_in_any_screen(journal, meta, tmp_path):
                                  pdf_path=PDFCHECK_PDF, route=route)) for route in ("docx", "pdf")]
     seen = set()
     for docx, opts in cases:
-        try:
-            res = convert(docx, meta, journal, opts)
-        except AIRequiredError:
-            continue
+        res = convert(docx, meta, journal, opts)            # AI を使わない設定でも中止しない
         assert "\x00" not in res.report_path.read_text(encoding="utf-8")
         for a in actions(res):
             seen.add(a.key)
@@ -305,19 +320,19 @@ def test_no_mark_left_in_any_screen(journal, meta, tmp_path):
                 assert not re.search(r"手順 ?\d", step_text(a.box_detail, screen) + step_text(a.box_title, screen)), a.key
         for screen in ("notebook", "app"):
             html = result_boxes(res, screen=screen) + missing_images_box(res, screen) + lost_images_box(res, screen) \
-                + pdf_diff_box(res, screen) + unplaced_box(res.plan, res.ai.partial, screen)
+                + pdf_diff_box(res, screen)
             assert "\x00" not in html, screen
             assert screen == "notebook" or not re.search(r"手順 ?\d", html)      # 青い枠の見出し「手順:」は区分の名前
-    assert {"ai_pending", "textbox_undecided"} <= seen      # 目印を使う知らせを実際に通した
+    assert {"ai_finish", "textbox_undecided"} <= seen      # 目印を使う知らせを実際に通した
 
 
 def test_app_screen_words_in_boxes(journal, meta, tmp_path):
     """同じ Action の文を、ノートブックでは手順の番号で、1 画面版では欄の名前で読む。"""
-    from conftest import FULL
+    from conftest import FLOAT
 
     from jasme_jats.colab import result_boxes
     from jasme_jats.pipeline import Options, convert
-    res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual"))
+    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual"))
     note = result_boxes(res, level="手順")
     page = result_boxes(res, level="手順", screen="app")
     assert "手順 5 の依頼文を AI" in note and "手順 6 に貼り付けて ▶ を押してください" in note
@@ -349,37 +364,36 @@ def test_mark_lookalike_in_docx_text_is_shown_as_is(tmp_path, journal, meta, mon
 
 
 def test_ai_required_message_names_the_modes_of_each_screen(journal, meta, tmp_path, capsys):
-    """AI を使わない設定で図表の位置を決められないときの例外の文は、画面ごとの選択肢の名前で出る（F5）。
-    ノートブックは 1ffed92 までと同じ文、1 画面版は app.AI_MODES の名前、コマンドラインは --ai の指定。目印が残らない。"""
-    import pytest
-    from conftest import FLOAT, META_EXAMPLE
+    """AI を使わない設定で図表の位置を決められないとき、変換は中止せず（修正計画 W8 の決定 4）、推奨の手順 ai_finish の文に、画面ごとの
+    選択肢の名前が出る（F5。ノートブックは手順 4 の名前、1 画面版は app.AI_MODES の名前、コマンドラインは --ai の指定）。目印が残らない。"""
+    from conftest import FLOAT, META_EXAMPLE, image_folder
 
     from jasme_jats import app
     from jasme_jats.cli import main
-    from jasme_jats.colab import ai_required_box, no_ai_box
-    from jasme_jats.pipeline import AIRequiredError, Options, convert
-    with pytest.raises(AIRequiredError) as e:
-        convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "a"))
-    msg = str(e.value)
-    assert "AI による補完を「使わない」設定では変換できません。" in msg
-    note = ai_required_box(msg)                                   # ノートブック（既定）
-    assert "「API で自動実行」か「手動（チャットに貼り付け）」を選んで、もう一度変換してください。" in note and "\x00" not in note
-    page = ai_required_box(msg, "app")
+    from jasme_jats.colab import step_text
+    from jasme_jats.pipeline import Options, convert
+    from jasme_jats.report import actions
+    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "a"))
+    fin = next(a for a in actions(res) if a.key == "ai_finish")
+    note = step_text(fin.box_detail)                                # ノートブック（既定）
+    assert ("手順 4 で AI による補完の方法を「API で自動実行」か「手動（チャットに貼り付け）」にして ▶ を押し、手順 5 から"
+            "変換し直してください。") in note and "\x00" not in note
+    page = step_text(fin.box_detail, "app")
     labels = [label for label, _ in app.AI_MODES]
-    assert "「AI による補完の方法」の欄で「手動（チャットに貼り付け）」か「API（Claude）」を選んで、もう一度変換してください。" in page
+    assert "「AI による補完の方法」の欄を「手動（チャットに貼り付け）」か「API（Claude）」にして「" in page
     assert "手動（チャットに貼り付け）" in labels and "API（Claude）" in labels             # 画面の選択肢の名前と同じ
     assert "API で自動実行" not in page and "\x00" not in page
     st = app.AppState(tmp_path / "work")
     st.set_inputs(route="docx", docx=str(FLOAT), volume="31", issue="1", fpage="1", lpage="12", peer_review="査読あり",
                   manuscript_type=app.type_choices()[0], ai_mode="none")
-    with pytest.raises(app.InputError) as ie:
-        st.convert()
-    assert "API で自動実行" not in ie.value.args[0] and "\x00" not in ie.value.args[0] and "\x00" not in ie.value.html
-    assert "「API（Claude）」を選んで" in ie.value.args[0] and "「API（Claude）」を選んで" in ie.value.html
-    assert "AI による補完を「使わない」設定" in no_ai_box("app") and "\x00" not in no_ai_box("app")
-    assert main([str(FLOAT), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli")]) == 2
+    st.convert()                                                    # 1 画面版も中止しない
+    assert st.res is not None and "ai_finish" in [a.key for a in actions(st.res)]
+    assert "#dc2626" not in st.result_html()                        # 「使わない」を選んでも赤い枠は出ない（W8 の手順 4）
+    pics = image_folder(tmp_path / "pics", [i.key for i in res.images if i.status == "missing"])
+    capsys.readouterr()
+    assert main([str(FLOAT), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli"), "--images", str(pics)]) == 0
     err = capsys.readouterr().err
-    assert "--ai manual か --ai api を指定して、もう一度変換してください。" in err and "\x00" not in err and "API で自動実行" not in err
+    assert "--ai manual か --ai api を指定して変換し直すと" in err and "\x00" not in err and "API で自動実行" not in err
 
 
 def test_notebook_sentences_equal_those_before_marks(journal, meta, tmp_path):
@@ -396,7 +410,7 @@ def test_notebook_sentences_equal_those_before_marks(journal, meta, tmp_path):
     res = convert(OUTSIDE, meta, journal, Options(out_dir=tmp_path / "o", ai_mode="manual"))
     assert "Word で直した docx を手順 2 でアップロードし直し、そこから順にやり直してください" in result_boxes(res)
     res = convert(STRUCTURE, meta, journal, Options(out_dir=tmp_path / "s", ai_mode="manual"))
-    assert "手順 6 で AI の回答を貼り付けて ▶ を押すと、AI が囲みか注記かを判断します" in result_boxes(res)
+    assert "手順 6 に貼り付けて ▶ を押してください" in result_boxes(res)      # 回答待ちの ai_finish（目印 paste）
 
 
 def _html_text_and_tags(html):
@@ -425,7 +439,7 @@ def test_report_details_shows_angle_brackets(journal, meta, tmp_path):
     from conftest import ALL_DOCS, FLOAT, FLOAT_TEXT, OUTSIDE, PLACE
 
     from jasme_jats.colab import markdown_text_only, report_details
-    from jasme_jats.pipeline import AIRequiredError, Options, convert
+    from jasme_jats.pipeline import Options, convert
     S = mf.S
     md = ("# 変換レポート\n\n> **要確認**: 「x<y>z」「<y かつ z>」「<b>」「a&amp;b」「<http://example.org>」 と `<xref>` と "
           "`<fig id=\"…\">`\n\n- 引用: 「<i>強調」\n\n```\n<pre>の中の <b> は文字のまま\n```\n\n| 項目 | 結果 |\n|---|---|\n| x<y | <z> |\n")
@@ -453,10 +467,7 @@ def test_report_details_shows_angle_brackets(journal, meta, tmp_path):
     checked = 0
     for docx in ALL_DOCS + [FLOAT, FLOAT_TEXT, PLACE, OUTSIDE]:
         for mode in ("none", "manual"):
-            try:
-                r = convert(docx, meta, journal, Options(out_dir=tmp_path / f"r{checked}", ai_mode=mode))
-            except AIRequiredError:
-                continue
+            r = convert(docx, meta, journal, Options(out_dir=tmp_path / f"r{checked}", ai_mode=mode))
             checked += 1
             rep = r.report_path.read_text(encoding="utf-8")
             assert markdown_text_only(rep) == markdown.markdown(rep, extensions=["tables", "fenced_code"]), (docx.name, mode)
@@ -505,13 +516,13 @@ def test_structure_conflict_box_and_text(journal, tmp_path):
 def test_every_box_is_light_with_important_colors(journal, meta, tmp_path):
     """白地の枠はすべて jasme-light のクラスと <style> を持ち、色の指定は !important（ダークモードでも白地に暗い文字）。"""
     import re
-    from jasme_jats.colab import (LIGHT_STYLE, ai_required_box, check_box, next_article_box, no_ai_box, report_details,
-                                  structure_conflict_box, summary_box)
+    from jasme_jats.colab import (LIGHT_STYLE, check_box, next_article_box, report_details, structure_conflict_box,
+                                  summary_box)
     from jasme_jats.pipeline import Options, convert
     from conftest import FULL
     res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "s"))
-    boxes = [error_box("見出し", "詳細"), check_box("見出し", "詳細"), prompt_box("依頼文"), no_ai_box(),
-             ai_required_box("x"), structure_conflict_box("x"), next_article_box("a.docx"), summary_box(res),
+    boxes = [error_box("見出し", "詳細"), check_box("見出し", "詳細"), prompt_box("依頼文"),
+             structure_conflict_box("x"), next_article_box("a.docx"), summary_box(res),
              report_details("# 見出し\n\n本文")]
     for h in boxes:
         assert "class='jasme-light'" in h and LIGHT_STYLE in h
