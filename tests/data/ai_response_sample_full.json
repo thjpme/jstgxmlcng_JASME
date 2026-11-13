@@ -5,9 +5,9 @@
   "boxes": [],
   "boundaries": [],
   "links": [
-    {"kind": "文献", "src": "d18", "head": "", "text": "2001", "occurrence": 1, "target": "B2", "reason": "第1章第3段落の「その後の論考（2001）」は、文の主語「国宗は」から国宗（2001）と判断", "confidence": "高"},
+    {"kind": "文献", "src": "d18", "head": "", "text": "2001", "occurrence": 1, "target": "B2", "reason": "第1章第3段落の「その後の論考（2001）」は、文の主語「久保は」から国宗（2001）と判断", "confidence": "高"},
     {"kind": "文献", "src": "d18", "head": "", "text": "2025", "occurrence": 1, "target": "B7", "reason": "「Claudeの2025年の報告」は文献リストの Claude, A. (2025) を指すと判断", "confidence": "中"},
-    {"kind": "文献", "src": "d18", "head": "", "text": "2016", "occurrence": 1, "target": "B4", "reason": "「濱中（2016）」は第2著者 濵中裕明 を含む宮川ほか（2016）を指すと判断（異体字・第一著者でない）", "confidence": "中"},
+    {"kind": "文献", "src": "d18", "head": "", "text": "2016", "occurrence": 1, "target": "B4", "reason": "「濱田（2016）」は第2著者 濵田裕介 を含む三浦ほか（2016）を指すと判断（異体字・第一著者でない）", "confidence": "中"},
     {"kind": "文献", "src": "d18", "head": "", "text": "1977", "occurrence": 1, "target": "B10", "reason": "Lakatos の文献は 1976 年のもののみ。本文の 1977 は誤記の可能性があるが同一文献と判断", "confidence": "低"},
     {"kind": "文献", "src": "d18", "head": "", "text": "Claude", "occurrence": 1, "target": "B7", "reason": "（規則違反の例: 著者名をリンクしようとしている）", "confidence": "高"},
     {"kind": "図", "src": "d20", "head": "", "text": "図9", "occurrence": 1, "target": "F9", "reason": "（存在しない図の例）", "confidence": "高"}

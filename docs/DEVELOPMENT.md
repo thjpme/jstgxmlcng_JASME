@@ -144,6 +144,12 @@ python -m pytest
     Markdown の生の HTML・自動リンク・実体を無効にして HTML にする（`colab.markdown_text_only`。0.29.0）ので消えない。レポート自身は
     生の HTML を使わない（全 fixture のレポートで、無効にしてもしなくても同じ HTML になることを `tests/test_colab.py` が確かめる）。
     生の HTML を使う必要が出たら、`markdown_text_only` で許す要素を限ってから使う。
+11. **AI による補完は必須にしない**（AI を条件に変換を中止しない。推奨の手順 `ai_finish`）。AI の回答で変えてよいのは、図・表の位置、
+    文字だけのテキストボックスの種類と位置、リンク、姓名の境目と、注の区切り・資料の始まり（`ai_assist.BOUNDARY_KINDS`。直したら要確認
+    `ai_boundary`）だけ。Word のスタイルで直せる誤りは AI の回答では直さず、提案として要確認 `style_check` に載せる。AI は段落を除外できない。
+    AI に渡すのは依頼文と出版版 PDF だけで、docx の画像は渡さない。回答は依頼の番号（`ai_assist.request_stamp`）と段落の先頭の文字で確かめてから
+    使い（`ai_assist.check_answer`）、出版版 PDF を見て答えたかも確かめる（`ai_assist.pdf_seen`。見ていない回答では手順を済みにしない）。
+    詳しくは `docs/fix_plan_release/units/W8.md`。
 
 ## テスト
 
@@ -281,7 +287,7 @@ python -m pytest
   （推奨の手順 `ai_finish` の「失敗」。途中で切れた最上位の一覧も反映しない）、`{ }` でない操作を理由付きで不採用に記録すること（0.30.0。A9・A10）。
   同じ第一著者・同じ年の文献が 3 件以上あるときの曖昧さの判定（いちばんよく当てはまる候補が 1 つなら採る。K10）は `tests/test_refparse.py`。
 - `tests/test_floats.py`: 浮動配置の図表（`tests/fixtures/sample_float.docx` と模擬回答 `tests/data/ai_response_sample_float.json`）。
-  AI を使わない設定での中止、機械的な配置、`placements` の検証と適用（位置〈after〉だけを読み、`items` は、あってもなくても、誤っていても
+  AI を使わない設定でも中止しないこと（W8）、機械的な配置、`placements` の検証と適用（位置〈after〉だけを読み、`items` は、あってもなくても、誤っていても
   読まないこと）。`sample_float_text.docx`（ALL_DOCS には入れない）で、図形の中で画像と文字が同じ段落にあるとき、画像を図に入れ、文字を
   図の画像に写るとみなして除外すること（キャプションのない図形では本文の段落のまま）。位置を決められない図表の仮の位置
   （`sample_b3_place.docx`。ALL_DOCS には入れない）: アンカー段落のすぐ後ろ（本文の冒頭に置かない）、同じ段落に結び付いた図表は

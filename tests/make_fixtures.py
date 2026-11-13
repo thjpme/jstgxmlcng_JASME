@@ -496,17 +496,17 @@ def make_full(path):
     mext = b.add_hyperlink("https://www.mext.go.jp/")
 
     body = []
-    body += front_ja(b, "数学的探究における証明の構成過程に関する研究",
-                     "―中学校第２学年「三角形の合同」を事例として―",
-                     [("広島大学大学院人間社会科学研究科", "数学\u3000太郎"),
-                      ("東京学芸大学", "教育\u3000花子"),
-                      ("広島大学大学院人間社会科学研究科", "研究次郎")])
+    body += front_ja(b, "図形の推論における説明の構築過程に関する考察",
+                     "―中学校第２学年「平行線と角」を事例として―",
+                     [("架空大学大学院教育発達学研究科", "数学\u3000太郎"),
+                      ("架空学芸大学", "教育\u3000花子"),
+                      ("架空大学大学院教育発達学研究科", "研究次郎")])
 
     body.append(para(S["sec1"], "１．はじめに"))
     body.append(para(S["body"],
-                     "本研究では，数学的探究（中原, 1995；岩崎・山口, 2007）における証明の構成過程を検討する。",
+                     "本研究では，数学的探究（野村, 1995；桑原・川口, 2007）における説明の構築過程を検討する。",
                      "Lakatos（1976）は証明と反駁の論理を示し，Polya（1945, 1954）は発見的方法を論じた。",
-                     "また，宮川ほか（2016）は世界探究パラダイムに基づく論証活動を分析している",
+                     "また，三浦ほか（2016）は架空探究の枠組みに基づく論証活動を分析している",
                      run("1)", sup=True), "。"))
     body.append(para(S["body"],
                      "証明の機能については多くの議論がある（Hanna, 2000, p. 5; de Villiers, 1990）。",
@@ -516,11 +516,11 @@ def make_full(path):
                      f'<w:hyperlink r:id="{mext}">{run("https://www.mext.go.jp/", u=True)}</w:hyperlink>',
                      "）を参照されたい。"))
     body.append(para(S["body"],
-                     "国宗は，その後の論考（2001）において証明の意義を整理した。",
+                     "久保は，その後の論考（2001）において証明の意義を整理した。",
                      "なお，この点についてはClaudeの2025年の報告も参考になる。",
-                     "濱中（2016）も同様の指摘をしているが，Lakatos（1977）の議論とは立場が異なる。"))
+                     "濱田（2016）も同様の指摘をしているが，Lakatos（1977）の議論とは立場が異なる。"))
 
-    body.append(para(S["sec2"], "(1) 証明の構成と三角形の合同"))
+    body.append(para(S["sec2"], "(1) 説明の構築と平行線の性質"))
     body.append(para(S["body"],
                      "三平方の定理",
                      omath(msup(mr("x"), mr("2")) + mr("+") + msup(mr("y"), mr("2")) + mr("=") + msup(mr("r"), mr("2"))),
@@ -560,7 +560,7 @@ def make_full(path):
     ], header_rows=1))
     body.append(para(S["body"], ""))
     body.append(para(S["quote"], "証明とは，ある命題が真であることを，公理と既に証明された命題から導くことである。"))
-    body.append(para(S["quote"], "（中原, 1995, p. 12）"))
+    body.append(para(S["quote"], "（野村, 1995, p. 12）"))
     body.append(para(S["body"], ""))
 
     # --- スタイル違反（AI 補完の対象）
@@ -578,7 +578,7 @@ def make_full(path):
     body.append(para(S["body"], "本研究は，第50回秋期研究発表会での発表内容を加筆・修正したものである。"))
     body.append(para(S["body"], ""))
     body.append(para(S["ack_head"], "謝辞"))
-    body.append(para(S["body"], "調査にご協力いただいた先生方に感謝申し上げます。"))
+    body.append(para(S["body"], "調査にご協力いただいた皆様に感謝申し上げます。"))
     body.append(para(S["body"], ""))
     body.append(para(S["fn_head"], "注"))
     body.append(para(S["body"], "1) SRP は Study and Research Path の略である。"))
@@ -586,10 +586,10 @@ def make_full(path):
     body.append(para(S["body"], ""))
     body.append(para(S["ref_head"], "引用および参考文献"))
     refs = [
-        "岩崎秀樹・山口武志（2007）．「数学的探究の理論」．『数学教育学研究』，第13巻，pp.1-10．",
-        "国宗進（2001）．「証明の意義」．『数学教育論究』，第77巻，pp.3-20．",
-        "中原忠男（1995）．『算数・数学教育における構成的アプローチの研究』．聖文社．",
-        "宮川健・濵中裕明・大滝孝治（2016）．「世界探究パラダイムに基づくSRPにおける論証活動（1）」．"
+        "桑原秀雄・川口武史（2007）．「数学的探究の理論」．『数学教育学研究』，第13巻，pp.1-10．",
+        "久保進（2001）．「証明の意義」．『数理教育論叢』，第77巻，pp.3-20．",
+        "野村忠夫（1995）．『理科・算数教育における協働的なアプローチの研究』．架空社．",
+        "三浦健・濵田裕介・大野孝志（2016）．「架空探究の枠組みに基づくSRPにおける論証活動（1）」．"
         "全国数学教育学会誌『数学教育学研究』，第22巻，第２号，pp.25-36．",
         "文部科学省（2019a）．『中学校学習指導要領解説 数学編』．日本文教出版．",
         "文部科学省（2019b）．『高等学校学習指導要領解説 数学編』．学校図書．",
@@ -618,7 +618,7 @@ def make_full(path):
                      ["This study examines the process of constructing proofs in mathematical inquiry. "
                       "Figure 1 shows the congruent triangles discussed in the lesson.",
                       "The results suggest that students' proofs develop through refutations (Lakatos, 1976)."])
-    body += tail(b, appendix=[para(S["abs"], "資料\u3000授業で用いたワークシート"),
+    body += tail(b, appendix=[para(S["abs"], "資料\u3000授業用のワークシート"),
                               para(S["abs"], "ワークシートの設問は次の通りである。")])
     b.save(path, body)
 
@@ -783,11 +783,11 @@ def make_pdfcheck(path, published=False, split=False, hidden=False):
     body.append(para(S["body"], *h(t("本研究は架空理論 (Fictional Theory, 以下, FT) に基づく (試験, 2020; 見本, 2021)。",
                                      "本研究は架空理論（Fictional Theory, 以下，FT）に基づく（試験，2020；見本，2021）。"), "(")))
     if split and not published:
-        body.append(para_mark_deleted(S["body"], *h("詳しくは資料の学習指導案を参照されたい。", "資料")))
+        body.append(para_mark_deleted(S["body"], *h("詳しくは資料の授業計画案を参照されたい。", "資料")))
         body.append(para(S["body"], *h("授業は2回行った。", "2")))
     else:
-        body.append(para(S["body"], *h(t("詳しくは資料の学習指導案を参照されたい。授業は2回行った。",
-                                         "詳しくは付録の学習指導案を参照されたい。授業は２回行った。"), "資料")))
+        body.append(para(S["body"], *h(t("詳しくは資料の授業計画案を参照されたい。授業は2回行った。",
+                                         "詳しくは付録の授業計画案を参照されたい。授業は２回行った。"), "資料")))
     body.append(para(S["sec2"], t("(1) 方法の概要", "（1）方法の概要")))
     body.append(para(S["body"], "この段落は出版版と同じで，架空の資料を ",
                      f'<w:hyperlink r:id="{link}">{run("https://example.com/a")}</w:hyperlink>', " で公開している。"))

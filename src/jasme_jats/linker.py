@@ -128,6 +128,27 @@ def find_in_para(p: Para, text: str, occurrence: int = 1):
     return start, start + len(text)
 
 
+def _width_key(s: str) -> str:
+    """全角・半角の違いを無くした比較用の形（文字数は変えない: NFKC で 1 文字になるものだけ写し、位置を段落の文字と同じにする）。"""
+    out = []
+    for c in s:
+        k = unicodedata.normalize("NFKC", c)
+        out.append(k if len(k) == 1 else c)
+    return "".join(out)
+
+
+def find_width_insensitive(p: Para, text: str):
+    """text が段落の文字と全角・半角だけ違うとき、段落の文字の範囲（start, end）を返す（文字は変えない。C141）。
+    ちょうど 1 か所に当たるときだけ返し、0 か所・2 か所以上なら None（決められないので使わない）。"""
+    if not text:
+        return None
+    key, want = _width_key(p.plain()), _width_key(text)
+    start = key.find(want)
+    if start < 0 or key.find(want, start + 1) >= 0:
+        return None
+    return start, start + len(want)
+
+
 # ---------------------------------------------------------------------------- 本文の段落を列挙
 def body_paragraphs(plan: ArticlePlan):
     """リンク付けの対象となる段落を (para, 文脈) で列挙する。文脈: body / title（見出し）/ caption / cell / formula / abstract / back / fn / ref

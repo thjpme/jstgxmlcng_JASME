@@ -61,7 +61,7 @@ def test_no_ai_does_not_stop_when_a_float_cannot_be_placed(journal, meta, tmp_pa
     # 図形の数と、中身の図・表の名前を分けて書く（名前は番号順。図形 1 つに図が 2 つ入っていても数が食い違わない）
     assert fin.box_detail.startswith("Word のテキストボックスなどの図形 3 個（図1・図2・図3・図4）は、本文のどこに出すかを")
     assert "結び付いている段落のすぐ後ろに置いています" in fin.box_detail
-    assert "AI を使うと、図・表の位置を合わせられます。" in fin.box_detail and "このまま登載することもできます。" in fin.box_detail
+    assert "AI に出版版 PDF を見せると、PDF と同じ位置に置けます。" in fin.box_detail and "このまま登載することもできます。" in fin.box_detail
     assert fin.cli.startswith("手順（推奨）: AI で図・表の位置を合わせる。") and "--ai manual か --ai api" in fin.cli
     assert "ai_finish" not in [a.key for a in blocking(actions(res))]
     assert not (set(acts) & {"forced", "partial", "ai_error", "ai_pending"})
@@ -570,6 +570,7 @@ def _end_answer(plan, after_src, basis="PDF", reason="PDF では注の後ろに�
                      + [(fid, plan.floats[fid].float.anchor_src) for fid in ("s2", "s3")]
                      + [("s4", src_of(plan, "この段落に図3と図2"))])
     d["placements"][0]["basis"] = basis
+    d["pdf"] = {"status": "見た", "pages": 0}
     return json.dumps(d, ensure_ascii=False)
 
 

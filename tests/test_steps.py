@@ -176,11 +176,11 @@ def test_ai_finish_has_five_states(journal, meta, tmp_path):
     要対応の ai_error・partial と、手順 ai_pending はなくした（ai_finish にまとめた）。"""
     import json
     from conftest import FLOAT
-    from test_ai import FLOAT_RESPONSE, cut_cases
+    from test_ai import FLOAT_SEEN, cut_cases
     runs = {
         "未実行": Options(out_dir=tmp_path / "n"),
         "回答待ち": Options(out_dir=tmp_path / "w", ai_mode="manual"),
-        "済み": Options(out_dir=tmp_path / "d", ai_mode="manual", ai_response=json.dumps(FLOAT_RESPONSE, ensure_ascii=False)),
+        "済み": Options(out_dir=tmp_path / "d", ai_mode="manual", ai_response=json.dumps(FLOAT_SEEN, ensure_ascii=False)),
         "一部": Options(out_dir=tmp_path / "p", ai_mode="manual", ai_response=answers.answer()),
         "失敗": Options(out_dir=tmp_path / "f", ai_mode="manual", ai_response="これは JSON ではない"),
         "途中": Options(out_dir=tmp_path / "c", ai_mode="manual", ai_response=cut_cases()["c"]),
@@ -195,7 +195,7 @@ def test_ai_finish_has_five_states(journal, meta, tmp_path):
     res, fin = got["未実行"]
     assert report.ai_state(res) == "未実行" and (fin.done, fin.failed, fin.progress) == (False, False, "未実行・残り 3 個")
     assert fin.box_title == "AI で図・表の位置を合わせる（強く推奨。残り 3 個）"
-    assert "AI を使うと、図・表の位置を合わせられます。" in fin.box_detail and report.step("ai_choose") in fin.box_detail
+    assert "AI に出版版 PDF を見せると、PDF と同じ位置に置けます。" in fin.box_detail and report.step("ai_choose") in fin.box_detail
     res, fin = got["回答待ち"]
     assert report.ai_state(res) == "回答待ち" and (fin.done, fin.failed, fin.progress) == (False, False, "回答待ち・残り 3 個")
     assert report.step("prompt") in fin.box_detail and report.step("paste") in fin.box_detail
@@ -203,8 +203,8 @@ def test_ai_finish_has_five_states(journal, meta, tmp_path):
     res, fin = got["済み"]
     assert report.ai_state(res) == "済み" and report.ai_done(res)
     assert (fin.done, fin.failed, fin.progress, fin.cli) == (True, False, "済み", "")
-    assert fin.checklist.startswith("- [x] AI の回答で図・表 ") and colab._box(fin) == ""       # 済んだ手順は枠を出さない
-    assert "- [x] AI の回答で図・表 " in res.report_path.read_text(encoding="utf-8").split("## 14.")[1]
+    assert fin.checklist.startswith("- [x] AI が出版版 PDF を見て、図・表 ") and colab._box(fin) == ""       # 済んだ手順は枠を出さない
+    assert "- [x] AI が出版版 PDF を見て、図・表 " in res.report_path.read_text(encoding="utf-8").split("## 14.")[1]
     res, fin = got["一部"]
     assert report.ai_state(res) == "一部" and (fin.done, fin.failed, fin.progress) == (False, False, "一部・残り 3 個")
     assert "AI の回答で位置が決まったのは 3 個のうち 0 個です。" in fin.box_detail and report.step("repaste") in fin.box_detail

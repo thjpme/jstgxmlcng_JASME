@@ -108,7 +108,7 @@ class FigureRow:
     table（表）/ nocap（キャプションのない画像の置き場所）、label は「図3」「表1」（番号を読めなければ ""）、caption はキャプションの
     段落（なければ None）、key は画像の置き場所の幹（置き場所がない〈表で組んだ図・表〉なら ""）、float_id は図形の ID（図形の中身から
     組んだものと、本文の図キャプションの図に含めた図形〈FloatInfo.mode が caption〉のもの。図形の外なら ""）、place は位置の決め方
-    （structure.PLACE_JA の鍵: word〈Word の並び〉/ mechanical / ai / anchor〈結び付いた段落の後ろに仮に置いた〉/ end〈本文の最後〉/
+    （structure.PLACE_JA の鍵: word〈Word の並び〉/ mechanical / ai_pdf〈AI が PDF を見て指定〉/ ai_layout〈AI が PDF を見ずに指定〉/ anchor〈結び付いた段落の後ろに仮に置いた〉/ end〈本文の最後〉/
     caption〈図キャプションの位置〉）。node は FigNode・TableNode（段落の中の置き場所なら None）、slot は画像の置き場所（なければ None）。
     """
     fid: str
@@ -251,6 +251,13 @@ class FloatInfo:
     end_why: str = ""
     end_after: str = ""                            # AI が指定した本文の外の段落の ID（end_why が ai のとき。after が "" の答えなら ""）
     end_reason: str = ""                           # end_why が ai のときの AI の答えの根拠（placements の reason。要確認 float_end の行）
+    # AI の指定（mode が ai か、end_why が ai）の根拠。basis は pdf（AI が PDF を見て決めた）/ layout（Word の配置からの推定）/
+    # keep（仮の位置のまま）/ ""（指定なし・知らない語）、page と column は PDF のページと段（見ていなければ 0 と ""）、confidence は確度。
+    # 修正計画 W8 の 3.3・手順 22（3 章の位置の決め方の列〈structure.figure_place〉・ai_assist.pdf_seen が使う）
+    basis: str = ""
+    page: int = 0
+    column: str = ""
+    confidence: str = ""
     # 未配置で where が anchor のとき、その後ろに仮に置いた本文の段落の ID（アンカー段落。アンカー段落が箇条書き・引用の途中なら、
     # その箇条書き・引用の最後の段落。Classifier.run_end）
     after_src: str = ""

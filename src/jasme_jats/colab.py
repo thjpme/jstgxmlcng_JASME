@@ -69,19 +69,67 @@ _TEXTAREA = ("width:100%;box-sizing:border-box;font-family:monospace;font-size:1
              "border:1px solid #9ca3af;border-radius:4px;padding:6px;margin-top:8px")
 
 
-def prompt_box(prompt: str) -> str:
-    """手動モードの依頼文を、コピーボタン付きの目立つ枠で表示する HTML（手順 5 で、結果の枠の前に出す）。docx の画像は AI に
-    渡さない（修正計画 W1）ので、添付する画像はない。"""
-    tid = "jasme-prompt-" + uuid.uuid4().hex[:8]
-    head = "手動モード: 次の依頼文を AI（claude.ai などのチャット）に渡してください"
+COPY_STEP = {"notebook": "「依頼文をコピー」を押します。",
+             "app": "「依頼文（新しいチャットに貼り付けて送る）」の欄の右上のコピーボタンで、依頼文をコピーします。",
+             "cli": "AI依頼文.txt を開き、全文をコピーします。"}
+NO_FLOATS_TITLE = "AI の回答を入れる（任意）"
+NO_FLOATS_INTRO = ("この論文には、位置を決められない図・表はありません。AI は、リンクの取りこぼしと、スタイルの誤りを確かめます。"
+                   "このまま登載することもできます。")
+
+
+def _wants_pdf(action) -> bool:
+    """依頼文を渡すときに、出版版 PDF も同じメッセージに添付してもらう手順か（回答待ちの ai_finish の本文に目印 pdf_attach があるとき。
+    位置を聞く図形がある場合）。"""
+    from .report import STEP_MARK
+    return action is not None and STEP_MARK + "step:pdf_attach" + STEP_MARK in action.box_detail
+
+
+def _guide_inner(action, screen: str, pdf_name: str) -> str:
+    """manual_guide の枠の中身（見出し・状況の説明・手順の番号つきの案内）。"""
+    from .report import step
+    title = step_text(action.box_title, screen) if action is not None else NO_FLOATS_TITLE
+    intro = step_text(action.box_intro or action.box_detail, screen) if action is not None else NO_FLOATS_INTRO
+    if _wants_pdf(action):
+        which = f"変換に使った「{pdf_name}」と同じファイルです" if pdf_name else "この論文の出版版 PDF です"
+        send = (f"新しいチャット（claude.ai など）に貼り付け、<b>{html.escape(STEP_WORDS[screen]['pdf_attach'])}</b>送信します"
+                f"（強く推奨。出版版 PDF があると、図・表を出版版と同じ位置に置けます。PDF は、{html.escape(which)}）。")
+    else:
+        send = "新しいチャット（claude.ai など）に貼り付けて送信します。"
     steps = ("<ol style='margin:6px 0 10px 20px;padding:0'>"
-             "<li>「依頼文をコピー」を押し、<b>新しいチャット</b>に貼り付けて送信します。</li>"
+             f"<li>{COPY_STEP[screen]}</li>"
+             f"<li>{send}</li>"
              "<li>返ってきた回答（<code>json</code> と書かれたコードブロック）を、コードブロック右上のコピーボタンでコピーします。</li>"
-             "<li>この下の<b>手順 6</b> のセルに貼り付けて ▶ を押します。</li>"
+             f"<li>{html.escape(step_text(step('paste'), screen))}します。</li>"
              "</ol>")
-    return (f"{LIGHT_STYLE}{_COPY_JS}<div class='jasme-light' style=\"{_BOX}\">"
-            f"<div style='font-size:18px;font-weight:bold;margin-bottom:4px'>{html.escape(head)}</div>"
-            f"{steps}"
+    after = "<div>このまま登載することもできます。</div>" if action is not None else ""      # 任意であること（ない場合の説明には書いてある）
+    return (f"<div style='font-size:18px;font-weight:bold;margin-bottom:4px'>{html.escape(title)}</div>"
+            f"<div style='white-space:pre-wrap'>{html.escape(intro)}</div>{steps}{after}")
+
+
+def ai_finish_of(res):
+    """結果（pipeline.Result）の推奨の手順 ai_finish（report.actions の中の key が ai_finish のもの。出す条件に当たらなければ None）。
+    手動の案内（manual_guide・prompt_box）の action に渡す。"""
+    from .report import actions
+    return next((a for a in actions(res) if a.key == "ai_finish"), None)
+
+
+def manual_guide(action=None, screen: str = "notebook", pdf_name: str = "") -> str:
+    """手動モードの案内の枠（見出し・状況の説明・手順の番号つきの案内。依頼文の枠〈prompt_box〉の上の部分。1 画面版は結果の枠の並びに出す）。
+
+    action は回答待ちの推奨の手順 ai_finish（report.actions の key が ai_finish のもの）。見出しは box_title、最初の説明は box_intro を
+    そのまま使う（同じ文を 2 か所に書かない。修正計画 W8 の 4.5）。None のとき（位置を聞く図形などがなく、AI の知らせがないとき）は
+    見出しを「AI の回答を入れる（任意）」にする。pdf_name はツールに渡された出版版 PDF のファイル名（なければ「この論文の出版版 PDF」）。
+    画面の操作は目印（report.step）で書き、screen（"notebook"・"app"・"cli"）の語に置き換える。
+    """
+    return f"{LIGHT_STYLE}<div class='jasme-light' style=\"{_BOX}\">{_guide_inner(action, screen, pdf_name)}</div>"
+
+
+def prompt_box(prompt: str, action=None, screen: str = "notebook", pdf_name: str = "") -> str:
+    """手動モードの依頼文を、案内（manual_guide）とコピーボタン付きの目立つ枠で表示する HTML（ノートブックで、結果の枠の前に出す。
+    この枠を出すときは ai_finish の枠を重ねて出さない）。docx の画像は AI に渡さない（修正計画 W1）ので、添付する画像はない。
+    action・screen・pdf_name は manual_guide と同じ。"""
+    tid = "jasme-prompt-" + uuid.uuid4().hex[:8]
+    return (f"{LIGHT_STYLE}{_COPY_JS}<div class='jasme-light' style=\"{_BOX}\">{_guide_inner(action, screen, pdf_name)}"
             f"<button style=\"{_BUTTON}\" onclick=\"jasmeCopy('{tid}')\">依頼文をコピー</button>"
             f"<span id='{tid}-msg' style='margin-left:12px;font-weight:bold;color:#1f2937 !important'></span>"
             f"<textarea id='{tid}' readonly style=\"{_TEXTAREA};height:220px\">{html.escape(prompt)}</textarea>"
@@ -249,7 +297,7 @@ STEP_WORDS = {
         "prompt": "手順 5 の依頼文", "paste": "手順 6 に貼り付けて ▶ を押", "repaste": "手順 6 で貼り付け直し",
         "convert_again": "手順 5 をもう一度実行",
         "answer_field": "手順 6 の貼り付けの欄", "apply_button": "手順 6 の ▶",
-        "images": "手順 7「図の画像を入れる」"},
+        "images": "手順 7「図の画像を入れる」", "pdf_attach": "出版版 PDF を同じメッセージに添付して"},
     "app": {
         "docx": "「docx（論文の Word ファイル）」の欄", "pdf": "「PDF（J-STAGE に登載する PDF）」の欄", "route": "「作り方」の欄",
         "meta": "巻・号・ページなどの入力欄",
@@ -259,7 +307,7 @@ STEP_WORDS = {
         "convert_again": f"「{CONVERT_LABEL}」をもう一度押",
         "answer_field": f"「{ANSWER_LABEL}」の欄", "apply_button": f"「{APPLY_LABEL}」",
         # 結果の下の「図の画像」の欄（AppState.images_markdown の見出し。まとめて入れる欄・図ごとの行・「画像を入れる」が並ぶ）
-        "images": "「図の画像」の欄"},
+        "images": "「図の画像」の欄", "pdf_attach": "出版版 PDF を同じメッセージに添付して"},
     "cli": {
         "docx": "docx の指定", "pdf": "--pdf の指定", "route": "--route の指定", "meta": "--meta の指定",
         "ai_choose": "--ai manual か --ai api を指定して",
@@ -267,7 +315,7 @@ STEP_WORDS = {
         "repaste": "ファイルに保存して --ai manual --ai-response 回答のファイル を指定し直し",
         "convert_again": "--ai api でもう一度実行",
         "answer_field": "--ai-response で指定する回答のファイル", "apply_button": "--ai-response の指定",
-        "images": "--images の指定"},
+        "images": "--images の指定", "pdf_attach": "出版版 PDF を一緒に渡して"},
 }
 _HIRAGANA = re.compile("[\u3041-\u309f]")
 

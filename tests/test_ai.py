@@ -19,6 +19,8 @@ from jasme_jats.report import actions
 
 RESPONSE = (DATA / "ai_response_sample_full.json").read_text(encoding="utf-8")
 FLOAT_RESPONSE = json.loads((DATA / "ai_response_sample_float.json").read_text(encoding="utf-8"))
+# 出版版 PDF を見たと答える回答（pdf.status が「見た」。ツールに PDF がなければ「見た（確かめられない）」で、手順 ai_finish が済む）
+FLOAT_SEEN = {**FLOAT_RESPONSE, "pdf": {"status": "見た", "pages": 0}}
 # 前の形の回答（operations を持つ。W8 の手順 10 で断るようになった形）
 FLOAT_OLD = json.dumps({"placements": [{"float": "s1", "after": "d17", "items": [], "reason": "x", "confidence": "中"}],
                         "operations": [], "notes": []})
@@ -60,7 +62,7 @@ def test_manual_mode_applies_valid_ops_and_rejects_invalid(journal, meta, tmp_pa
     assert [x.text for x in names[2]] == ["研究", "次郎"]
     assert res.unresolved_after == []
     report = res.report_path.read_text(encoding="utf-8")
-    assert "## 2. AI による仕上げ（要確認）" in report and "| 状態 | 済み |" in report and "国宗は" in report
+    assert "## 2. AI による仕上げ（要確認）" in report and "| 状態 | 済み |" in report and "久保は" in report
 
 
 def test_manual_mode_without_response_writes_prompt(journal, meta, tmp_path):
@@ -295,17 +297,17 @@ def test_openai_errors_are_reported(journal, meta, tmp_path, monkeypatch):
     req = httpx2.Request("POST", "https://api.openai.com/v1/responses")
     err = openai.AuthenticationError("bad key", response=httpx2.Response(401, request=req), body=None)
     _fake_openai(monkeypatch, [], error=err)
-    out = ai_assist.call_provider("openai", "指示", "x", [], model="gpt-test", api_key="t")
+    out = ai_assist.call_provider("openai", "指示", "x", None, model="gpt-test", api_key="t")
     assert "OPENAI_API_KEY" in out.error
     _fake_openai(monkeypatch, [], content_type="refusal")
-    assert "断りました" in ai_assist.call_provider("openai", "指示", "x", [], model="gpt-test", api_key="t").error
+    assert "断りました" in ai_assist.call_provider("openai", "指示", "x", None, model="gpt-test", api_key="t").error
     _fake_openai(monkeypatch, [], status="incomplete")
-    assert "途中で切れました" in ai_assist.call_provider("openai", "指示", "x", [], model="gpt-test", api_key="t").error
+    assert "途中で切れました" in ai_assist.call_provider("openai", "指示", "x", None, model="gpt-test", api_key="t").error
     # API キーが見つからない（クライアントを作れない）ときも、止まらずにエラーとして記録する
     def no_key(*a, **k):
         raise openai.OpenAIError("The api_key client option must be set")
     monkeypatch.setattr(openai, "OpenAI", no_key)
-    assert "OPENAI_API_KEY を確認" in ai_assist.call_provider("openai", "指示", "x", [], model="gpt-test").error
+    assert "OPENAI_API_KEY を確認" in ai_assist.call_provider("openai", "指示", "x", None, model="gpt-test").error
 
 
 def _fake_gemini(monkeypatch, calls, error=None, finish="STOP", text=RESPONSE):
@@ -350,27 +352,27 @@ def test_gemini_errors_are_reported(monkeypatch):
     bad_key = errors.ClientError(400, {"error": {"code": 400, "message": "API key not valid. Please pass a valid API key.",
                                                  "status": "INVALID_ARGUMENT"}})
     _fake_gemini(monkeypatch, [], error=bad_key)
-    out = ai_assist.call_provider("gemini", "指示", "x", [], model="gemini-test", api_key="t")
+    out = ai_assist.call_provider("gemini", "指示", "x", None, model="gemini-test", api_key="t")
     assert "GEMINI_API_KEY" in out.error
     not_found = errors.ClientError(404, {"error": {"code": 404, "message": "not found", "status": "NOT_FOUND"}})
     _fake_gemini(monkeypatch, [], error=not_found)
-    assert "gemini-test が見つかりません" in ai_assist.call_provider("gemini", "指示", "x", [], model="gemini-test").error
+    assert "gemini-test が見つかりません" in ai_assist.call_provider("gemini", "指示", "x", None, model="gemini-test").error
     _fake_gemini(monkeypatch, [], finish="MAX_TOKENS")
-    assert "途中で切れました" in ai_assist.call_provider("gemini", "指示", "x", [], model="gemini-test").error
+    assert "途中で切れました" in ai_assist.call_provider("gemini", "指示", "x", None, model="gemini-test").error
     _fake_gemini(monkeypatch, [], finish="SAFETY")
-    assert "SAFETY" in ai_assist.call_provider("gemini", "指示", "x", [], model="gemini-test").error
+    assert "SAFETY" in ai_assist.call_provider("gemini", "指示", "x", None, model="gemini-test").error
     from google import genai
 
     def no_key(*a, **k):
         raise ValueError("Missing key inputs argument!")
     monkeypatch.setattr(genai, "Client", no_key)
-    assert "GEMINI_API_KEY または GOOGLE_API_KEY を確認" in ai_assist.call_provider("gemini", "指示", "x", [], model="g").error
+    assert "GEMINI_API_KEY または GOOGLE_API_KEY を確認" in ai_assist.call_provider("gemini", "指示", "x", None, model="g").error
 
 
 def test_other_providers_require_a_model_name(journal, meta, tmp_path):
     # ChatGPT・Gemini ではモデル名を利用者が指定する（Claude のモデル名・「自動」・空欄は受け付けない）
     for model in ("", "auto", DEFAULT_MODEL):
-        out = ai_assist.call_provider("openai", "指示", "x", [], model=model)
+        out = ai_assist.call_provider("openai", "指示", "x", None, model=model)
         assert "モデルの名前を指定" in out.error and "Opus と同等以上" in out.error
     res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="api", ai_provider="gemini", ai_model=""))
     assert "Gemini の API を使うときは" in res.ai.error and res.fidelity.ok
@@ -433,17 +435,17 @@ def test_sakana_retries_without_schema_and_never_sends_openai_key(monkeypatch):
     # JSON スキーマの指定を断られたら、指定なしで 1 回だけやり直す（依頼文に回答の形式があるので JSON で返る）
     calls = []
     _fake_sakana(monkeypatch, calls, reject_schema=True)
-    out = ai_assist.call_provider("sakana", "指示", "x", [], model="fugu", api_key="sk-sakana")
+    out = ai_assist.call_provider("sakana", "指示", "x", None, model="fugu", api_key="sk-sakana")
     creates = [c for c in calls if "messages" in c]
     assert len(creates) == 2 and "response_format" not in creates[1]
     assert not out.error and parse_response(out.raw)["links"] and "指定なしでやり直した" in out.model_note
     _fake_sakana(monkeypatch, [], finish="length")
-    assert "途中で切れました" in ai_assist.call_provider("sakana", "指示", "x", [], model="fugu", api_key="k").error
+    assert "途中で切れました" in ai_assist.call_provider("sakana", "指示", "x", None, model="fugu", api_key="k").error
     # Sakana のキーがないときに、環境変数の OpenAI のキーを Sakana に送らない
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-should-not-be-sent")
     calls = []
     _fake_sakana(monkeypatch, calls)
-    out = ai_assist.call_provider("sakana", "指示", "x", [], model="fugu")
+    out = ai_assist.call_provider("sakana", "指示", "x", None, model="fugu")
     assert "SAKANA_API_KEY" in out.error and calls == []
 
 
@@ -578,20 +580,20 @@ def test_api_cut_answers_are_kept(monkeypatch):
     text = _cut_text()
     calls = []
     _fake_anthropic(monkeypatch, calls, text=text, stop="max_tokens")
-    out = ai_assist.call_provider("claude", "指示", "x", [], api_key="t")
+    out = ai_assist.call_provider("claude", "指示", "x", None, api_key="t")
     assert (out.raw, out.cut) == (text, True) and "途中で切れました" in out.error and out.usage["output_tokens"] == 50
     _fake_openai(monkeypatch, [], status="incomplete", text=text)
-    out = ai_assist.call_provider("openai", "指示", "x", [], model="gpt-test", api_key="t")
+    out = ai_assist.call_provider("openai", "指示", "x", None, model="gpt-test", api_key="t")
     assert (out.raw, out.cut) == (text, True) and "途中で切れました" in out.error
     _fake_gemini(monkeypatch, [], finish="MAX_TOKENS", text=text)
-    out = ai_assist.call_provider("gemini", "指示", "x", [], model="gemini-test")
+    out = ai_assist.call_provider("gemini", "指示", "x", None, model="gemini-test")
     assert (out.raw, out.cut) == (text, True) and "途中で切れました" in out.error
     _fake_sakana(monkeypatch, [], finish="length", text=text)
-    out = ai_assist.call_provider("sakana", "指示", "x", [], model="fugu", api_key="k")
+    out = ai_assist.call_provider("sakana", "指示", "x", None, model="fugu", api_key="k")
     assert (out.raw, out.cut) == (text, True) and "途中で切れました" in out.error
     # 切れていない回答は cut にならない
     _fake_anthropic(monkeypatch, [], text=RESPONSE)
-    out = ai_assist.call_provider("claude", "指示", "x", [], api_key="t")
+    out = ai_assist.call_provider("claude", "指示", "x", None, api_key="t")
     assert not out.cut and out.raw == RESPONSE and not out.error
 
 
@@ -640,7 +642,7 @@ def test_call_api_reports_missing_key(monkeypatch):
             self.beta = types.SimpleNamespace(messages=types.SimpleNamespace(stream=no_key))
             self.messages = self.beta.messages
     monkeypatch.setattr(anthropic, "Anthropic", FakeClient)
-    out = ai_assist.call_api("指示", "x", [], model="claude-test")
+    out = ai_assist.call_api("指示", "x", None, model="claude-test")
     assert "API キーが見つかりません" in out.error and "ANTHROPIC_API_KEY" in out.error and not out.raw
 
 
@@ -656,10 +658,10 @@ def test_call_api_other_type_error_is_not_api_key(monkeypatch):
             self.beta = types.SimpleNamespace(messages=types.SimpleNamespace(stream=old_sdk))
             self.messages = self.beta.messages
     monkeypatch.setattr(anthropic, "Anthropic", FakeClient)
-    out = ai_assist.call_api("指示", "x", [], model="claude-test", api_key="sk-test")
+    out = ai_assist.call_api("指示", "x", None, model="claude-test", api_key="sk-test")
     assert out.error == "AI の呼び出しに失敗しました: stream() got an unexpected keyword argument 'fallbacks'"
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    out = ai_assist.call_api("指示", "x", [], model="claude-test")       # API キーがどこにもなければ、API キーの知らせ
+    out = ai_assist.call_api("指示", "x", None, model="claude-test")       # API キーがどこにもなければ、API キーの知らせ
     assert "API キーが見つかりません" in out.error
 
 
@@ -1597,6 +1599,30 @@ def test_a6_links_in_nolink_paragraphs_rejected(journal):
     ai_assist.apply_ops(ops, plan, None, out)
     assert out.accepted == [] and len(out.rejected) == 2
     assert "題目" in out.rejected[0][1] and "引用文献" in out.rejected[1][1]
+
+
+def test_c141_link_text_width_variant_links_single_place(journal):
+    """C141（W8 の手順 26）: リンクの text が段落の文字と全角・半角だけ違い、1 か所に決まるときは、段落の文字の範囲でリンクする（文字は変えない）。
+    2 か所に当たるとき・全角・半角以外も違うときは不採用。"""
+    from jasme_jats.model import Atom, Para
+    from jasme_jats.linker import find_width_insensitive
+    p = Para(src="dx", atoms=[Atom(kind="text", text="Aは（2019）と（2020）を見る")])
+    assert find_width_insensitive(p, "(2019)") == (2, 8)
+    assert find_width_insensitive(p, "(2019") == (2, 7)
+    assert find_width_insensitive(p, "(2021)") is None
+    q = Para(src="dy", atoms=[Atom(kind="text", text="（2019）と(2019)")])
+    assert find_width_insensitive(q, "(2019)") is None          # 2 か所に当たる
+    assert find_width_insensitive(q, "") is None
+    _, plan, _ = _mechanical(FULL, journal, {}, {})
+    target = next(pp for pp in plan.paras.values() if pp.plain().strip() and pp.src not in {x.src for x in plan.title})
+    before = target.plain()
+    plan_text = "（2019）"
+    target.atoms = [Atom(kind="text", text=before + plan_text)]
+    fid = plan.figures[0].fid
+    out = ai_assist.AIOutcome()
+    ai_assist.apply_ops([_op(op="link_figure", src=target.src, text="(2019)", target=fid)], plan, None, out)
+    assert len(out.accepted) == 1, out.rejected
+    assert target.plain() == before + plan_text                     # 文字は変わらない
 
 
 def test_f6_final_check_rejects_entity_declaration_without_reading(tmp_path):

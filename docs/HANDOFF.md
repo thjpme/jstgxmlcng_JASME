@@ -13,6 +13,9 @@
 - **正本は GitHub の `main` ブランチです。** 利用者のノートブックは、実行のたびに `main` からツールを入れます。
   つまり **`main` に入れた変更は、その時点で利用者に届きます。** テストを通してから反映してください。
 - 読む順番: README.md → USAGE.md（利用者向けの使い方。USAGE_AI.md は API キーと手動モード）→ ARCHITECTURE.md（コードの地図）→ DESIGN.md → DEVELOPMENT.md → REVIEW_2026-11.md（点検で見つかった問題）→（必要に応じて）JSTAGE_NOTES.md・STYLE_MAPPING.md・GUI_PLAN.md（操作画面の整理計画）。
+- AI による補完（W8。`docs/fix_plan_release/units/W8.md`）は必須にしない推奨の手順です。AI に渡すのは依頼文と出版版 PDF だけで、
+  実際の API での確かめ（設計書の手順 24）は Claude だけ・所有者がノートブックで行います（それまでは偽のクライアントのテストだけ。
+  ChatGPT・Gemini・Sakana AI への PDF の渡し方は実機で未確認、費用の目安 `DEFAULT_MODEL_INFO["per_run_usd"]` は仮の値です）。
   Claude Code に頼めば、要点をまとめて説明してくれます（下の 4.）。
 
 ## 1. 必要なもの

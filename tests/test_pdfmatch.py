@@ -24,13 +24,13 @@ from jasme_jats.pipeline import Options, _mechanical, convert
 
 ORIGINAL = {    # docx の文字（ルート1 の XML はこのまま）
     "d12": "本研究は架空理論 (Fictional Theory, 以下, FT) に基づく (試験, 2020; 見本, 2021)。",
-    "d13": "詳しくは資料の学習指導案を参照されたい。授業は2回行った。",
+    "d13": "詳しくは資料の授業計画案を参照されたい。授業は2回行った。",
     "d14": "(1) 方法の概要",
     "d17": "試験四郎 (2020). 「架空の研究」. 『架空誌』, 第1巻, pp.1-10.",
 }
 PUBLISHED = {   # 出版社が直した想定の文字（ルート2 の XML はこうなる）
     "d12": "本研究は架空理論（Fictional Theory, 以下，FT）に基づく（試験，2020；見本，2021）。",
-    "d13": "詳しくは付録の学習指導案を参照されたい。授業は２回行った。",
+    "d13": "詳しくは付録の授業計画案を参照されたい。授業は２回行った。",
     "d14": "（1）方法の概要",
     "d17": "試験四郎（2020）．「架空の研究」．『架空誌』，第1巻，pp.1-10．",
 }
@@ -128,7 +128,7 @@ def test_route2_fixes_docx_with_tracked_changes(journal, meta, tmp_path):
     assert "作り方: docx から作り、出版版 PDF で補う" in head
     assert "PDF で補った校正の直し 1 箇所・組版の違い 43 箇所（変更履歴: 挿入 26・削除 40）" in head
     assert f"照合の相手は、出版版 PDF で補った docx（{fx.path.name}）" in head
-    assert "「詳しくは資料の学習指」→「詳しくは付録の学習指」" in report
+    assert "「詳しくは資料の授業計」→「詳しくは付録の授業計」" in report
     assert "表のセル・別行の数式・図の中の文字・資料の見出しと、4 文字未満の段落は照合せず、docx のままです。" in report
     assert "### 13.3 直さなかった箇所（要確認）\n\nありません。" in report
     assert res.supplement.ok and "### 13.8 補完の確かめ\n\n合格" in report
@@ -1512,7 +1512,7 @@ def test_running_heads_are_listed_in_report(route, journal, meta, tmp_path, monk
         fx = res.docx_fix
         assert fx.check.ignored_lines == ignored
         assert [(f.src, f.old, f.new, f.reason) for f in fx.skipped] == [("d13", "2回", "試験四郎", HEAD_WHY)]
-        assert PUBLISHED["d12"] in out and "詳しくは付録の学習指導案を参照されたい。授業は2回行った。" in out
+        assert PUBLISHED["d12"] in out and "詳しくは付録の授業計画案を参照されたい。授業は2回行った。" in out
         assert f"| 2回 | 試験四郎 | {HEAD_WHY} |" in ch13.split("### 13.3")[1].split("### 13.4")[0]
         section = ch13.split(f"### 13.7 {IGNORED_TITLE}")[1]
         # ルート2 では、ほかの段落にある文字でも、13.1 で元の段落から消していないかを確かめてもらう
@@ -1520,7 +1520,7 @@ def test_running_heads_are_listed_in_report(route, journal, meta, tmp_path, monk
     assert "照合に使わなかった PDF の文字 2 件（2 段落。誌名の行・投稿受付日・表や図の中の文字などとみなしたもの。" in head
     assert "13 章で確認" not in head            # 要約の行の 13 章の案内は、行の最後の「（13 章）」だけ
     assert "13 章の最後の「照合に使わなかった PDF の文字」（2 件）に、docx にない本文" in ch14
-    assert not any("試験四郎" in t for t in out if "架空理論" in t or "学習指導案" in t)
+    assert not any("試験四郎" in t for t in out if "架空理論" in t or "授業計画案" in t)
     assert IGNORED_NOTE in section
     assert f"| d12 | {loc['d12']} | 1 | 試験四郎 |" in section and f"| d13 | {loc['d13']} | 1 | 試験四郎 |" in section
     # 照合に使わなかった文字は要確認（実際の出版版 PDF ではほぼ毎回出るので、終了コード 1 にも、Colab の手順 8 で止めることにも
@@ -1789,7 +1789,7 @@ def test_edited_short_tail_before_date_or_head_line_is_fixed(split, after, cut, 
     assert changed_paragraphs(plan, pc, {src[LESSON]: pub}) == {}
 
 
-FLOW_FIG = {"recall": ["導入", "↓", "前時の表を振り返る"], "task": ["課題の提示", "↓", "個人で考える時間"]}
+FLOW_FIG = {"recall": ["導入", "↓", "前時の表を振り返る"], "task": ["課題の提示", "↓", "各自で考える時間"]}
 
 
 @pytest.mark.parametrize("cut, tail", [(7, "時間を設けた。"), (8, "う時間をとった。"), (9, "合う場を設けた。")],
@@ -2685,7 +2685,7 @@ def test_paragraph_starting_with_line_on_many_pages_is_found(journal, tmp_path):
 
 # ---------------------------------------------------------------------------- 分断された部分の照合（表・図・ほかの段落）
 INTRO = ("本研究の目的は，架空の中学校で行った比例の授業において，生徒が二つの量の関係をどのように捉えたかを，"
-         "ノートの記述と授業中の発話から明らかにすることである。")
+         "メモの記述と授業中の発話から明らかにすることである。")
 WATER_HEAD = ("第三時の授業では，教師はまず前時に作った表を黒板に掲げ，水を入れる時間と水の深さの関係を振り返らせた。"
               "続いて，表の隣り合う値の間に矢印をかき，深さがどれだけ増えたかを矢印の上に書き込む活動を示した。"
               "生徒は自分のノートの表にも矢印をかき，増え方がいつも同じであることを確かめた。")
@@ -3481,7 +3481,7 @@ def test_split_paragraph_is_matched_as_one(journal, meta, tmp_path):
     # 直した docx: w:p の数と、前の w:p の段落記号の削除はそのまま。直しは文字のある w:p に入り、2 つをつなぐと PDF の文字
     ps = paragraphs(fx.path)
     assert len(ps) == len(paragraphs(path))
-    k = ps.index("詳しくは付録の学習指導案を参照されたい。")
+    k = ps.index("詳しくは付録の授業計画案を参照されたい。")
     assert ps[k + 1] == "授業は２回行った。"
     root = parse_xml(zipfile.ZipFile(fx.path).read("word/document.xml"))
     first = next(p for p in root.iter(w("p")) if "".join(t.text or "" for t in p.iter(w("delText"))) == "資料")
@@ -3576,7 +3576,7 @@ def test_route2_fixes_paragraphs_with_style_hidden_text(split, journal, meta, tm
     ps = paragraphs(fx.path)
     assert sum(p.count("〔隠した注記〕") for p in ps) == (3 if split else 2)
     shown = [p.replace("〔隠した注記〕", "") for p in ps]
-    want = ["詳しくは付録の学習指導案を参照されたい。", "授業は２回行った。"] if split else [PUBLISHED["d13"]]
+    want = ["詳しくは付録の授業計画案を参照されたい。", "授業は２回行った。"] if split else [PUBLISHED["d13"]]
     k = shown.index(want[0])
     assert PUBLISHED["d12"] in shown and shown[k:k + len(want)] == want
     assert paragraphs(fx.path, reject=True) == paragraphs(path)

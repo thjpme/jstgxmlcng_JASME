@@ -1,8 +1,14 @@
 """コマンドラインの入口。
 
-  python -m jasme_jats 論文.docx --meta 書誌情報.toml --out 出力フォルダ [--ai api|manual|none]
+  python -m jasme_jats 論文.docx --meta 書誌情報.toml --out 出力フォルダ [--ai manual|api|none]
                        [--ai-provider claude|openai|gemini|sakana] [--ai-model モデル名] [--pdf 記事.pdf [--route docx|pdf]]
-                       [--ai manual --ai-response 回答のファイル] [--ai api --ai-refresh]
+                       [--ai manual --ai-response 回答のファイル] [--ai api --ai-refresh] [--ai api --ai-no-pdf]
+
+--ai の既定は manual（AI依頼文.txt を書き出すだけ。AI の回答がなくても、XML・ZIP までできて終了コードは変わらない。
+依頼文を出版版 PDF と一緒にチャット〈claude.ai など〉に渡し、返ってきた回答を保存して --ai-response で指定すると、図・表の位置などを反映する。
+AI を使わないときは --ai none。修正計画 W8 の 4.8）。
+
+--ai api では --pdf の出版版 PDF を、Claude には依頼のデータの前に付けて送る（--ai-no-pdf で送らない。修正計画 W8 の 4.7）。
 
 --ai api では、出力フォルダに前の変換の AI回答.json（反映した AI の回答の写し）があり、依頼の番号・AI・モデル・PDF の渡し方が
 今回と同じなら、API を呼ばずにその回答を使う（--ai-refresh で読まずに呼び直す。修正計画 W8 の 4.6）。
@@ -28,7 +34,8 @@ from .colab import step_text
 from .config import ArticleMeta, JournalConfig
 from .images import match_names
 from .pipeline import Options, StructureConflictError, add_images, convert
-from .report import actions, clash_images_text, image_rows, images_action, pdf_summary, unmatched_image_text, upload_issues
+from .report import (actions, clash_images_text, image_rows, images_action, pdf_summary, step, unmatched_image_text,
+                     upload_issues)
 
 
 def main(argv=None):
@@ -38,7 +45,9 @@ def main(argv=None):
     ap.add_argument("--out", type=Path, default=Path("output"), help="出力フォルダ（既定: output）")
     ap.add_argument("--config", type=Path, help="雑誌の設定ファイル（既定: 同梱の jasme.toml）")
     ap.add_argument("--split-labels", choices=["yes", "no"], help="図表番号を <label> に分けるか（既定: 設定ファイルに従う）")
-    ap.add_argument("--ai", choices=["none", "api", "manual"], default="none", help="AI による補完の方法")
+    ap.add_argument("--ai", choices=["none", "api", "manual"], default="manual",
+                    help="AI による補完の方法（既定: manual。依頼文 AI依頼文.txt を書き出すだけで、回答は --ai-response で後から指定する。"
+                         "api は API で自動実行、none は使わない）")
     ap.add_argument("--ai-provider", choices=["claude", "openai", "gemini", "sakana"], default="claude",
                     help="API モードで使う AI（既定・推奨: claude。openai は ChatGPT、gemini は Gemini、sakana は Sakana AI）。"
                          "API キーは環境変数 ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY（または GOOGLE_API_KEY）/ "
@@ -51,6 +60,9 @@ def main(argv=None):
     ap.add_argument("--ai-refresh", action="store_true",
                     help=f"API モード（--ai api と一緒に指定する）: 出力フォルダの {ANSWER_FILE}（前の変換の AI の回答）を使わず、"
                          "AI を呼び直す（既定では、依頼の番号・AI・モデルが同じなら、API を呼ばずにその回答を使う）")
+    ap.add_argument("--ai-no-pdf", action="store_true",
+                    help="API モード（--ai api と一緒に指定する）: --pdf の出版版 PDF を AI に渡さない（既定では、Claude には依頼のデータの"
+                         "前に PDF を付けて送る。送ると図・表の位置の答えが正確になる）")
     ap.add_argument("--pdf", type=Path, help="記事の PDF（J-STAGE への登載に必須。指定すると ZIP に入れる。"
                                           "指定しなければ、記事フォルダに前の変換の PDF が残っていても ZIP に入れない）")
     ap.add_argument("--route", choices=["docx", "pdf"],
@@ -70,11 +82,13 @@ def main(argv=None):
         ap.error(f"--ai-provider {a.ai_provider} では --ai-model でモデル名を指定してください"
                  "（Claude Opus と同等以上のモデルを推奨）")
     if a.ai_response is not None and a.ai != "manual":
-        # 回答のファイルは --ai manual のときだけ読む（--ai の既定は none）。黙って無視すると、AI の回答を反映していない結果になる
+        # 回答のファイルは --ai manual のときだけ読む（--ai none・--ai api と一緒には指定できない）。黙って無視すると、AI の回答を反映していない結果になる
         ap.error("--ai-response（AI の回答のファイル）は --ai manual のときだけ読みます"
                  f"（今は --ai {a.ai}）。AI の回答を反映するときは --ai manual を一緒に指定してください")
     if a.ai_refresh and a.ai != "api":
         ap.error(f"--ai-refresh は --ai api のときだけ使います（今は --ai {a.ai}）")
+    if a.ai_no_pdf and a.ai != "api":
+        ap.error(f"--ai-no-pdf は --ai api のときだけ使います（今は --ai {a.ai}）")
     for opt, path in (("変換する docx", a.docx), ("--meta", a.meta), ("--pdf", a.pdf), ("--ai-response", a.ai_response)):
         # 通常のファイルでなくても読めるもの（/dev/stdin・プロセス置換の /dev/fd/NN など）は通す。フォルダは誤り
         if path is not None and (not path.exists() or path.is_dir()):
@@ -101,7 +115,7 @@ def main(argv=None):
     opts = Options(out_dir=a.out, split_labels=None if a.split_labels is None else a.split_labels == "yes",
                    ai_mode=a.ai, ai_provider=a.ai_provider, ai_model=a.ai_model or DEFAULT_MODEL, ai_api_key=api_key,
                    ai_response=a.ai_response.read_text(encoding="utf-8") if a.ai_response else None,
-                   pdf_path=a.pdf, route=a.route, ai_cache=None if a.ai != "api" or a.ai_refresh else _read_cache(a.out))
+                   pdf_path=a.pdf, route=a.route, ai_send_pdf=not a.ai_no_pdf, ai_cache=None if a.ai != "api" or a.ai_refresh else _read_cache(a.out))
     try:
         res = convert(a.docx, meta, journal, opts)
     except StructureConflictError as e:
@@ -127,7 +141,10 @@ def main(argv=None):
     if res.ai_report_path:
         print(f"AI 判断一覧: {res.ai_report_path}")
     if res.prompt_path:
-        print(f"AI 依頼文: {res.prompt_path}")
+        # 依頼文の渡し方の案内 1 行（位置を聞く図形があるときは、出版版 PDF を一緒に渡す。回答の指定は --ai-response）
+        pdf = step_text(step("pdf_attach"), "cli") if res.plan.asked_floats else ""
+        again = "" if a.ai_response else f"（チャット〈claude.ai など〉に{pdf}送信し、返ってきた回答を保存して --ai manual --ai-response で指定する）"
+        print(f"AI 依頼文: {res.prompt_path}{again}")
     if res.ai_answer_path:
         print(f"AI の回答の写し: {res.ai_answer_path}" + ("（前の変換の回答を使い、AI は呼んでいません）" if res.ai.reused else ""))
     if a.images or a.no_image:

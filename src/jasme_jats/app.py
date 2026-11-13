@@ -23,8 +23,8 @@ from typing import Optional
 
 from . import __version__
 from . import report as rp
-from .ai_assist import API_KEY_NAMES, DEFAULT_MODEL
-from .colab import (ANSWER_LABEL, APPLY_LABEL, CONVERT_LABEL, check_box, error_box, report_details,
+from .ai_assist import API_KEY_NAMES, DEFAULT_MODEL, cost_note
+from .colab import (ANSWER_LABEL, APPLY_LABEL, CONVERT_LABEL, ai_finish_of, check_box, error_box, manual_guide, report_details,
                     result_boxes, step_text, structure_conflict_box, summary_box)
 from .config import ArticleMeta, JournalConfig, keyword_language_mismatch, keyword_problem
 from .images import match_names
@@ -361,10 +361,16 @@ class AppState:
         self.run = RunInputs(compared=compared, docx=local_docx, pdf=local_pdf, route=str(f["route"]),
                              split_labels=bool(f["split_labels"]), ai_mode=f["ai_mode"], model=_model_value(f["model"]),
                              meta=meta, journal=journal, docx_name=Path(f["docx"]).name, api_key=api_key)
-        step(0.2, "変換中…（数分かかることがあります）")
+        step(0.2, self.convert_note())
         res = self._run(self.run.ai_mode, None, progress)
         step(1.0, "完了")
         return res
+
+    def convert_note(self) -> str:
+        """変換中の進み具合の文。API モードは、AI に依頼を送っている（出版版 PDF も送る）ことを言う。"""
+        api = self.inputs["ai_mode"] == "api"
+        return ("変換中…AI に依頼文" + ("と出版版 PDF " if self.inputs["pdf"] else "") + "を送って回答を待っています（数分かかることがあります）"
+                if api else "変換中…（数分かかることがあります）")
 
     # ---- 手動モード
     @property
@@ -564,6 +570,10 @@ class AppState:
         parts = []
         # 手順 images は「図の画像」の欄（images_markdown）に出すので、ここでは重ねて出さない
         parts.append(result_boxes(res, skip=("images",) + (("ai_finish",) if self.waiting_for_answer else ()), screen="app"))
+        if self.waiting_for_answer:
+            # 手動の回答待ち: ai_finish の枠の代わりに、手順の番号つきの案内（なぜ・任意か・PDF を添付すること）を出す
+            # （下の依頼文・回答の欄の案内。同じ文を重ねて出さない。修正計画 W8 の 4.5）
+            parts.append(manual_guide(ai_finish_of(res), "app", res.pdf_name))
         parts.append(summary_box(res))
         parts.append(report_details(res.report_path.read_text(encoding="utf-8")))
         return "".join(parts)
@@ -655,7 +665,8 @@ def build_app(state: AppState, io: "IO | None" = None):
             corresp = gr.Textbox(label="責任著者", info="何番目の著者か。例: 1（複数なら 1,2）")
             doi = gr.Textbox(label="DOI", info="空欄なら 10.24529/jasme.巻.号_開始ページ")
         ai_mode = gr.Radio(AI_MODES, value=DEFAULTS["ai_mode"], label="AI による補完の方法",
-                           info="API は、Colab のシークレットに ANTHROPIC_API_KEY を登録しておく")
+                           info=("API は、Colab のシークレットに ANTHROPIC_API_KEY を登録しておく（利用料がかかります。" + cost_note()
+                                 + "）。手動は、依頼文をチャットに貼り付け、回答を貼り戻す（API キー不要）"))
         with gr.Accordion("詳細設定", open=False):
             model = gr.Dropdown([DEFAULT_MODEL, AUTO_MODEL], value=DEFAULTS["model"], allow_custom_value=True,
                                 label="MODEL（Claude のモデル。通常は変更不要）")

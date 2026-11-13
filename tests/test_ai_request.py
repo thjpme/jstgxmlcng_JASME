@@ -204,19 +204,19 @@ def test_four_providers_get_instructions_as_system(journal, meta, tmp_path, monk
     system, data = req.system_text(), req.data
     calls = []
     _anthropic(monkeypatch, calls)
-    assert not ai_assist.call_provider("claude", system, data, [], api_key="t").error
+    assert not ai_assist.call_provider("claude", system, data, None, api_key="t").error
     assert calls[0]["system"] == system and calls[0]["messages"][0]["content"][-1]["text"] == data
     calls = []
     _fake_openai(monkeypatch, calls)
-    ai_assist.call_provider("openai", system, data, [], model="gpt-test", api_key="t")
+    ai_assist.call_provider("openai", system, data, None, model="gpt-test", api_key="t")
     assert calls[0]["instructions"] == system and calls[0]["input"][0]["content"][-1]["text"] == data
     calls = []
     _fake_gemini(monkeypatch, calls)
-    ai_assist.call_provider("gemini", system, data, [], model="gemini-test", api_key="t")
+    ai_assist.call_provider("gemini", system, data, None, model="gemini-test", api_key="t")
     assert calls[0]["config"].system_instruction == system and calls[0]["contents"][0].parts[-1].text == data
     calls = []
     _fake_sakana(monkeypatch, calls)
-    ai_assist.call_provider("sakana", system, data, [], model="fugu", api_key="k")
+    ai_assist.call_provider("sakana", system, data, None, model="fugu", api_key="k")
     msgs = next(c for c in calls if "messages" in c)["messages"]
     assert msgs[0] == {"role": "system", "content": system} and msgs[1]["content"][-1]["text"] == data
     # 変換でも同じ（pipeline が AIRequest の 2 つを渡す。【作業する方へ】は API には渡さない）

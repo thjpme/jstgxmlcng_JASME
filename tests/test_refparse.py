@@ -14,12 +14,12 @@ def make_refs(texts):
 
 
 REFS = make_refs([
-    "中原忠男（1995）．『算数・数学教育における構成的アプローチの研究』．聖文社．",
-    "岩崎秀樹・山口武志（2007）．「数学的探究の理論」．『数学教育学研究』，第13巻，pp.1-10．",
+    "野村忠夫（1995）．『理科・算数教育における協働的なアプローチの研究』．架空社．",
+    "桑原秀雄・川口武史（2007）．「数学的探究の理論」．『数学教育学研究』，第13巻，pp.1-10．",
     "Claude, A. (2025). An unusual reference format example. Journal of Testing, 1, 1-2.",
     "Polya, G. (1945). How to solve it. Princeton University Press.",
     "Polya, G. (1954). Mathematics and plausible reasoning. Princeton University Press.",
-    "宮川健・濵中裕明・大滝孝治（2016）．「論証活動」．『数学教育学研究』，第22巻，pp.25-36．",
+    "三浦健・濵田裕介・大野孝志（2016）．「論証活動」．『数学教育学研究』，第22巻，pp.25-36．",
 ])
 KNOWN = {n for r in REFS for n in r.parsed["names"]}
 
@@ -40,17 +40,17 @@ def test_narrative_fullwidth_paren_links_only_year():
 
 
 def test_parenthetical_multiple():
-    got = links("数学的探究（中原, 1995；岩崎・山口, 2007）における")
+    got = links("数学的探究（野村, 1995；桑原・川口, 2007）における")
     assert got == [("1995", "B1", "exact"), ("2007", "B2", "exact")]
 
 
 def test_multiple_years_and_page():
     assert links("Polya（1945, 1954）は") == [("1945", "B4", "exact"), ("1954", "B5", "exact")]
-    assert links("（中原, 1995, p. 12）") == [("1995", "B1", "exact")]
+    assert links("（野村, 1995, p. 12）") == [("1995", "B1", "exact")]
 
 
 def test_fullwidth_digits_map_back_to_original():
-    text = "中原（１９９５）によれば"
+    text = "野村（１９９５）によれば"
     got = links(text)
     assert got == [("１９９５", "B1", "exact")]
 

@@ -1054,15 +1054,16 @@ def _api_failed():
 
 
 def test_cli_ai_response_needs_ai_manual(journal, meta, tmp_path, capsys):
-    """0.29.0 の最後の点検の (d): --ai の既定は none なので、--ai-response だけでは回答が読まれない。黙って無視せず、引数の誤り
-    （標準エラー・終了コード 2。変換の前に止める）にする。--ai api でも同じ。--ai manual と一緒なら読む。"""
+    """0.29.0 の最後の点検の (d): --ai none・--ai api では、--ai-response の回答は読まれない。黙って無視せず、引数の誤り
+    （標準エラー・終了コード 2。変換の前に止める）にする。--ai manual と一緒なら読む（--ai の既定は manual なので、
+    --ai-response だけでも読む。修正計画 W8 の手順 23）。"""
     from conftest import META_EXAMPLE
 
     from jasme_jats.cli import main
     resp = tmp_path / "回答.json"
     resp.write_text(answers.answer(), encoding="utf-8")
     base = [str(FULL), "--meta", str(META_EXAMPLE), "--ai-response", str(resp)]
-    for extra in ([], ["--ai", "none"], ["--ai", "api"]):
+    for extra in (["--ai", "none"], ["--ai", "api"]):
         with pytest.raises(SystemExit) as e:
             main(base + extra + ["--out", str(tmp_path / "out")])
         err = capsys.readouterr().err
@@ -1070,3 +1071,5 @@ def test_cli_ai_response_needs_ai_manual(journal, meta, tmp_path, capsys):
     assert not (tmp_path / "out").exists()
     assert main(base + ["--ai", "manual", "--out", str(tmp_path / "ok")]) in (0, 1)
     assert (tmp_path / "ok").exists()
+    assert main(base + ["--out", str(tmp_path / "dflt")]) in (0, 1)         # --ai の指定なし（既定は manual）でも、回答のファイルを指定してエラーにならない
+    assert (tmp_path / "dflt" / "AI依頼文.txt").exists()

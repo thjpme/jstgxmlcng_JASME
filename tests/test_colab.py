@@ -67,7 +67,7 @@ def test_summary_box_has_ai_finish_row(journal, meta, tmp_path):
     assert "AI による仕上げ: 使わない。状態: 未実行" in summary_box(res)
     res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "m", ai_mode="manual"))
     assert "AI による仕上げ: 手動（チャットに貼り付け）。状態: 回答待ち" in summary_box(res)
-    res.ai = SimpleNamespace(mode="api", provider="claude", model="claude-x", raw="", error="接続できませんでした", partial=False)
+    res.ai = SimpleNamespace(mode="api", provider="claude", model="claude-x", raw="", error="接続できませんでした", partial=False, pdf_seen="")
     html = summary_box(res)
     assert "AI による仕上げ: API（Claude）（モデル: claude-x）。状態: 失敗" in html and "#b91c1c" not in html
 
@@ -391,7 +391,7 @@ def test_ai_required_message_names_the_modes_of_each_screen(journal, meta, tmp_p
     assert "#dc2626" not in st.result_html()                        # 「使わない」を選んでも赤い枠は出ない（W8 の手順 4）
     pics = image_folder(tmp_path / "pics", [i.key for i in res.images if i.status == "missing"])
     capsys.readouterr()
-    assert main([str(FLOAT), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli"), "--images", str(pics)]) == 0
+    assert main([str(FLOAT), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli"), "--ai", "none", "--images", str(pics)]) == 0
     err = capsys.readouterr().err
     assert "--ai manual か --ai api を指定して変換し直すと" in err and "\x00" not in err and "API で自動実行" not in err
 

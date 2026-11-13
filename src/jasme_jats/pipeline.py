@@ -51,7 +51,7 @@ from typing import Optional
 
 from . import __version__
 from .ai_assist import (ANSWER_FILE, DEFAULT_MODEL, REUSED_MSG, AIOutcome, apply_ops, boundary_overrides, box_kinds,
-                        build_request, cache_meta, cache_text, cached_answer, call_provider, check_answer, float_placements, link_ops, missing_answers, name_ops,
+                        build_request, cache_meta, cache_text, cached_answer, call_provider, check_answer, float_placements, link_ops, missing_answers, name_ops, pdf_attachment, pdf_seen, pdf_will_be_sent,
                         parse_cut_response, parse_response, read_answer_meta, record_boundaries, retarget_ops, style_fixes,
                         target_keys, NO_PLACEMENT_WHY)
 from .article import _para_text
@@ -174,6 +174,8 @@ class Options:
     # 前の変換の AI回答.json（ai_assist.ANSWER_FILE）の中身。API モードで meta（依頼の番号・提供元・モデル・PDF の渡し方）が今回と
     # すべて同じなら、API を呼ばずにその回答を使う（ai_assist.cached_answer。修正計画 W8 の 4.6）。手動モードでは使わない
     ai_cache: Optional[str] = None
+    # API モードで出版版 PDF（pdf_path）を AI に渡すか（ai_assist.pdf_attachment。既定は渡す。--ai-no-pdf で渡さない。修正計画 W8 の 4.7）
+    ai_send_pdf: bool = True
 
 
 @dataclass
@@ -235,6 +237,7 @@ class Result:
     report_path: Optional[Path] = None
     check_path: Optional[Path] = None       # 図の確かめの一覧（imagelist.write_check。出力フォルダの {記事識別子}_図の確かめ.html。ZIP には入らない）
     prompt_path: Optional[Path] = None
+    pdf_name: str = ""                      # 変換に渡された出版版 PDF のファイル名（なければ ""。手動の画面の案内に出す。修正計画 W8 の 4.5）
     ai_report_path: Optional[Path] = None
     ai_answer_path: Optional[Path] = None   # 反映した AI の回答の写し（出力フォルダの AI回答.json。記事フォルダの外なので ZIP には入らない）
 
@@ -700,25 +703,28 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
                         provider=opts.ai_provider)
     prompt_path = None
     data = None                 # AI の回答（読めたもの）
+    attachment = None           # API に渡す出版版 PDF（ai_assist.PdfAttachment。API モードだけ）
     answer_copy = None          # AI回答.json に書く回答（依頼の番号の確かめで書き換える前の写し。使えた回答だけ）
 
     # ---------------------------------------------------------------- AI 補完
     if opts.ai_mode in ("api", "manual"):
         # 依頼文（修正計画 W8 の 4.1）: 手動では【作業する方へ】・指示・データをつないで AI依頼文.txt に書き、API では system に指示、
-        # 利用者の内容にデータを渡す。docx の画像は AI に渡さない（図・表の画像は作業する人が用意する。修正計画 W1。call_provider の
-        # 画像の引数は W8 の手順 20 で PDF に置き換える）
+        # 利用者の内容にデータを渡す。docx の画像は AI に渡さない（図・表の画像は作業する人が用意する。修正計画 W1）。API では出版版 PDF
+        # （pdf_path）を依頼のデータの前に付ける（pdf_attachment が事前に確かめる。修正計画 W8 の 4.7）
         request = build_request(plan, linker, info, pdf_name=Path(opts.pdf_path).name if opts.pdf_path else "",
                                 manual=opts.ai_mode == "manual", journal=journal)
         if opts.ai_mode == "api":
-            cached = cached_answer(opts.ai_cache, _answer_meta(opts, request.stamp))
+            attachment = pdf_attachment(opts.pdf_path, send=opts.ai_send_pdf)
+            expect = _answer_meta(opts, request.stamp, attachment)
+            cached = cached_answer(opts.ai_cache, expect)
             if cached is not None:
                 # 前の変換と同じ依頼・同じ AI への回答（AI回答.json）があるので、API を呼ばない（修正計画 W8 の 4.6）
                 outcome = AIOutcome(mode="api", model=opts.ai_model, provider=opts.ai_provider, reused=REUSED_MSG,
-                                    raw=json.dumps(cached, ensure_ascii=False))
+                                    raw=json.dumps(cached, ensure_ascii=False), pdf_sent=expect["pdf_send"])
             else:
                 try:
-                    outcome = call_provider(opts.ai_provider, request.system_text(), request.data, [], model=opts.ai_model,
-                                            api_key=opts.ai_api_key)
+                    outcome = call_provider(opts.ai_provider, request.system_text(), request.data, attachment,
+                                            model=opts.ai_model, api_key=opts.ai_api_key)
                 except Exception as e:  # noqa: BLE001
                     # 各 API の主な誤りの型は call_* が受けて outcome.error にする。それ以外の想定外の例外でも変換は止めない（AI の失敗）
                     outcome.error = f"AI の呼び出しで想定外の誤りが起きました（{type(e).__name__}: {e}）"
@@ -822,6 +828,10 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
             cited = cited_refs(plan)
             plan.uncited_refs = [r.rid for r in plan.refs if r.rid not in cited]
             root, info = build(plan, meta, journal, split)
+
+    if data is not None and outcome.pdf_status:
+        # AI が出版版 PDF を見て答えたかを、ツールが別に確かめる（回答の位置は、合わなくてもそのまま使う。修正計画 W8 の 4.4）
+        outcome.pdf_seen, outcome.pdf_seen_note = pdf_seen(outcome, plan, opts.pdf_path)
 
     # ---------------------------------------------------------------- 出版版 PDF との照合
     pdf_check = None
@@ -941,7 +951,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         link_counts=linker.count, unresolved_after=unresolved_after, images=images, warnings=warnings, ai=outcome,
         build_notes=build_notes, hidden_text=doc.hidden_text, tracked_changes=doc.tracked_changes,
         comments=doc.comments, has_pdf=has_pdf, xml_path=flat_xml, zip_path=zip_path,
-        prompt_path=prompt_path, pdf_check=pdf_check, route=opts.route, docx_fix=docx_fix,
+        prompt_path=prompt_path, pdf_name=Path(opts.pdf_path).name if opts.pdf_path else "", pdf_check=pdf_check, route=opts.route, docx_fix=docx_fix,
         supplement=supplement, lost_images=lost, hidden_images=hidden_images,
         lost_autonums=lost_numbers, unshown_numbers=list(info.unshown_numbers), pua_chars=pua_left, symbols_replaced=symbols,
         table_problems=table_issues, tables_checked=tables_checked, zip_issues=zip_problems(zip_path, journal, meta, images),
@@ -956,7 +966,8 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     write_check(res)
     if answer_copy is not None:
         res.ai_answer_path = out_dir / ANSWER_FILE
-        res.ai_answer_path.write_text(cache_text(_answer_meta(opts, outcome.request_id), answer_copy), encoding="utf-8")
+        res.ai_answer_path.write_text(cache_text(_answer_meta(opts, outcome.request_id, attachment, outcome), answer_copy),
+                                      encoding="utf-8")
     report_path = out_dir / f"{aid}_変換レポート.md"
     report_path.write_text(render(res), encoding="utf-8")
     res.report_path = report_path
@@ -966,9 +977,13 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     return res
 
 
-def _answer_meta(opts: Options, request_id: str) -> dict:
-    """AI回答.json の meta（ai_assist.cache_meta）。PDF の渡し方と中身の sha256 は、PDF を API に渡す W8 の手順 20 まで ""。"""
-    return cache_meta(opts.ai_mode, request_id, opts.ai_provider, opts.ai_model)
+def _answer_meta(opts: Options, request_id: str, attachment=None, outcome=None) -> dict:
+    """AI回答.json の meta（ai_assist.cache_meta）。PDF の渡し方（pdf_send）と中身の sha256 は、outcome があれば実際に渡した方法
+    （PDF を付けた呼び出しが断られて外してやり直したら ""）、なければ渡す予定の方法（pdf_will_be_sent）。PDF なしで得た回答を、
+    PDF を付けた変換で使い回さないため。"""
+    sent = outcome.pdf_sent if outcome is not None else (pdf_will_be_sent(opts.ai_provider, attachment, opts.ai_model) if opts.ai_mode == "api" else "")
+    sha = attachment.sha256 if sent and attachment is not None else ""
+    return cache_meta(opts.ai_mode, request_id, opts.ai_provider, opts.ai_model, sent, sha)
 
 
 def slot_images(info) -> list:

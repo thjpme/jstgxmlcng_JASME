@@ -74,6 +74,11 @@ def test_default_model_comes_from_ai_assist():
             f"出力 100 万トークンあたり {DEFAULT_MODEL_INFO['output_usd']} ドル") in usage_ai
     y, m, d = (int(x) for x in DEFAULT_MODEL_INFO["not_before"].split("-"))
     assert f"提供終了は {y} 年 {m} 月 {d} 日より前にはならない" in usage_ai
+    low, high = DEFAULT_MODEL_INFO["per_run_usd"]
+    assert f"1 回あたりおおむね {low:g}〜{high:g} ドル" in usage_ai
+    from jasme_jats.ai_assist import cost_note
+    assert mk.COST_NOTE == cost_note()                   # 1 画面版の費用の文と同じ
+    assert mk.COST_NOTE in cell_source("#@title 4.") and f"{low:g}〜{high:g} ドル" in mk.COST_NOTE
 
 
 def test_module_constants_reports_missing_line(tmp_path):

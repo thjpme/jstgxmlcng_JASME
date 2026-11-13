@@ -876,7 +876,7 @@ STEP = "手順"
 # 目印は U+0000 で挟む。U+0000 は XML 1.0 の文字ではなく、docx の文字（w:t）・ファイル名・PDF の文字（pdfmatch が制御文字を除く）の
 # どれにも入らないので、文の中の docx 由来の文字（段落の抜粋など）が目印と読まれることがない。
 STEP_NAMES = ("docx", "pdf", "route", "meta", "ai_choose", "prompt", "paste", "repaste", "convert_again",
-              "answer_field", "apply_button", "images")
+              "answer_field", "apply_button", "images", "pdf_attach")
 STEP_MARK = "\x00"
 STEP_MARK_PATTERN = STEP_MARK + "step:([^\x00]*)" + STEP_MARK
 
@@ -1010,6 +1010,8 @@ class Action:
     required・done・failed・progress は手順（level が STEP）だけが使う。required: 必須（残っていれば終了コード 1 で止める）か、
     推奨（止めない）か。done: 済んだ（枠は出さない）。failed: やってみて失敗した（枠の見出しを赤字で出す。終了コードは変えない）。
     progress: 進み具合の短い文（「あと 4 枚／全部で 7 枚」「回答待ち」など）。
+    box_intro: box_detail の前半（今の状況の説明。手動モードの回答待ちの ai_finish だけが持つ。依頼文の枠〈colab.prompt_box〉が、
+    手順の番号つきの案内の前にこれを出す）。
     """
     level: str
     key: str
@@ -1017,6 +1019,7 @@ class Action:
     checklist: str = ""
     box_title: str = ""
     box_detail: str = ""
+    box_intro: str = ""
     cli: str = ""
     required: bool = True
     done: bool = False
@@ -1267,7 +1270,7 @@ def ai_state(r) -> str:
 
     未実行: AI を使わない。回答待ち: 手動モードで、回答をまだ反映していない。失敗: API の呼び出しに失敗した・回答を読めなかった
     （回答を 1 件も反映していない）。一部: 回答が途中で切れていて位置の一部だけを読んだか、聞いた図形（plan.asked_floats）・
-    囲みか図の注記か決められないテキストボックスに、答えがない・採用しなかったものが残る。済み: どれでもない（PDF の状態は W8 の手順 22）。
+    囲みか図の注記か決められないテキストボックスに、答えがない・採用しなかったものが残る。済み: どれでもない（AI が PDF を見たかは ai_done・pdf_unseen）。
     """
     ai, plan = r.ai, r.plan
     if ai.mode == "none":
@@ -1281,9 +1284,27 @@ def ai_state(r) -> str:
     return "済み"
 
 
+def pdf_unseen(r) -> bool:
+    """AI に位置を聞いた図形（plan.asked_floats）があるのに、AI が出版版 PDF を見て答えた回答ではないか（AIOutcome.pdf_seen が
+    「見た」「見た（確かめられない）」でない。回答に pdf がなければ「添付なし」と同じ扱い）。位置を聞く図形がなければ偽
+    （PDF を見ていなくても、リンクなどは決められる。修正計画 W8 の 4.3・4.4）。"""
+    from .ai_assist import PDF_SEEN_OK
+    return bool(r.plan.asked_floats) and r.ai.pdf_seen not in PDF_SEEN_OK
+
+
 def ai_done(r) -> bool:
-    """AI による仕上げが済んだか（ai_state が「済み」。1 画面版の手動の欄を閉じる条件。修正計画 W8 の 4.3・4.5）。"""
-    return ai_state(r) == "済み"
+    """AI による仕上げが済んだか（ai_state が「済み」で、位置を聞いた図形があれば AI が出版版 PDF を見て答えたこと〈pdf_unseen が偽〉。
+    1 画面版の手動の欄を閉じる条件。修正計画 W8 の 4.3・4.4・4.5）。"""
+    return ai_state(r) == "済み" and not pdf_unseen(r)
+
+
+def ai_pdf(r) -> str:
+    """AI が出版版 PDF を見て答えたかの表示（2 章の概要の表・結果の要約）。回答に pdf がなければ ""。
+    AIOutcome.pdf_seen の語に、合わないときは理由（pdf_seen_note）を添える。"""
+    ai = r.ai
+    if not ai.pdf_seen:
+        return ""
+    return ai.pdf_seen + (f"。{esc(ai.pdf_seen_note)}" if ai.pdf_seen_note else "")
 
 
 AI_METHOD_JA = {"none": "使わない", "manual": "手動（チャットに貼り付け）"}      # API は ai_method で作る
@@ -1298,10 +1319,11 @@ def ai_method(r) -> str:
 
 
 def ai_summary(r) -> str:
-    """結果の要約（colab.summary_box）の「AI による仕上げ」の行: 方法・モデルと状態（ai_state）。PDF の状態は W8 の手順 22。"""
+    """結果の要約（colab.summary_box）の「AI による仕上げ」の行: 方法・モデルと状態（ai_state）、AI が出版版 PDF を見たか（pdf_seen）。"""
     ai = r.ai
     model = f"（モデル: {ai.model}）" if ai.mode == "api" and ai.model else ""
-    return f"{ai_method(r)}{model}。状態: {ai_state(r)}"
+    seen = f"。PDF: {ai.pdf_seen}" if ai.pdf_seen else ""
+    return f"{ai_method(r)}{model}。状態: {ai_state(r)}{seen}"
 
 
 AI_FINISH_TITLE = "AI で図・表の位置を合わせる"
@@ -1309,6 +1331,7 @@ AI_BOX_TITLE = "AI にテキストボックスの種類を判断させる"      
 AI_STYLE_TITLE = "AI にスタイルの直し方を提案させる"            # 図形もテキストボックスもなく、機械が挙げたスタイルを確かめる段落だけのとき
 AI_ANSWER_TITLE = "AI の回答を反映する"                      # 図形もテキストボックスもなく、失敗か一部のとき
 AI_FAILED_TITLE = "AI の回答を反映できませんでした"
+AI_PDF_TITLE = "AI に出版版 PDF を見せて、図・表の位置を合わせ直す"     # 回答で位置は決まったが、AI が出版版 PDF を見ていないとき
 AI_CHOOSE_HOW = "（ノートブックは手順 4〜6、1 画面版は「AI による補完の方法」の欄、コマンドラインは --ai manual か --ai api）"
 CUT_ASK = "「回答が途中で切れました。同じ形式で最初から出し直してください」"     # 途中で切れた回答の、出し直しの頼み方
 
@@ -1319,7 +1342,8 @@ def _ai_finish_action(r):
     出す条件: AI に位置を聞く図形がある（plan.asked_floats）／囲みか図の注記か決められないテキストボックスがあるか、AI の答えで
     決めた／機械が挙げた、スタイルを確かめる段落がある（plan.style_suspects。英文要旨が見つからない要対応の段落は除く）／状態
     （ai_state）が「失敗」か「一部」。状態ごとに文を変え、済みなら done、失敗なら failed（枠の見出しを赤字）。残っていても
-    失敗しても、needs_action は偽（推奨の手順）。PDF の文（W8 の手順 22）はまだ書かない。
+    失敗しても、needs_action は偽（推奨の手順）。位置は決まったが AI が出版版 PDF を見ていないとき（pdf_unseen）は、済みにせず
+    PDF を添付して依頼し直す文（_ai_pdf_unseen_action）。
     """
     plan, ai = r.plan, r.ai
     state = ai_state(r)
@@ -1354,7 +1378,7 @@ def _ai_finish_action(r):
     # 位置を聞く図形・テキストボックスの説明（未実行・回答待ち）
     floats = (f"Word のテキストボックスなどの{names}は、本文のどこに出すかを原稿から決められないため、"
               f"{where}に置いています（出版版 PDF の位置とは数段落ずれていることがあります。置いた位置はレポートの 3 章）。"
-              "AI を使うと、図・表の位置を合わせられます。" if left else "")
+              "AI に出版版 PDF を見せると、PDF と同じ位置に置けます。" if left else "")
     box_text = f"囲みか図の注記か決められないテキストボックス {k} 個の文字は、XML に出していません。" if boxes else ""
     style_text = f"スタイルを確かめる段落 {m} か所について、AI が Word での直し方を提案します。" if m else ""
     what = "と".join(([("図・表の位置")] if left else []) + (["テキストボックスの種類"] if boxes else []))
@@ -1364,9 +1388,11 @@ def _ai_finish_action(r):
                      + ([f"スタイルを確かめる段落が {m} か所ある（2 章）"] if m else []))
     cli_head = "".join(([f"{names}は{where}に置いています（レポートの 3 章）。"] if left else [])
                        + ([box_text] if boxes else []) + ([f"スタイルを確かめる段落が {m} か所あります（レポートの 2 章）。"] if m else []))
+    if state == "済み" and pdf_unseen(r):
+        return _ai_pdf_unseen_action(r)
     if state == "済み":
         return Action(STEP, "ai_finish", required=False, done=True, progress=state,
-                      checklist=(f"- [x] AI の回答で図・表 {len(asked)} 個の位置を決めた（2 章・3 章）" if asked
+                      checklist=(f"- [x] AI が出版版 PDF を見て、図・表 {len(asked)} 個の位置を決めた（2 章・3 章）" if asked
                                  else "- [x] AI の回答を反映した（2 章）"),
                       box_title=title)
     if state == "失敗":
@@ -1390,15 +1416,17 @@ def _ai_finish_action(r):
         cli = (f"手順（推奨）: {base}。{cli_head}--ai manual か --ai api を指定して変換し直すと、{does}（--ai manual では、"
                "書き出した AI依頼文.txt をチャット〈claude.ai など〉に渡し、回答を保存して --ai-response で指定します）。"
                "このまま登載することもできます。")
-        todo = ("AI を使うと、図・表の位置を合わせられる" if left and not boxes else f"AI を使うと、{what}を決められる" if what
+        todo = ("AI に出版版 PDF を見せると、PDF と同じ位置に置ける" if left and not boxes else f"AI を使うと、{what}を決められる" if what
                 else "AI を使うと、スタイルの直し方の提案を受けられる" if m else "AI を使うと、リンクなどを補える")
         checklist = f"- [ ] （推奨）{base}: {short}。{todo}{AI_CHOOSE_HOW}"
     elif state == "回答待ち":
-        detail = (floats + (box_text + "AI が種類を判断します。" if boxes else "") + style_text
-                  + f"{step('prompt')}を AI（claude.ai などのチャット）に渡し、返ってきた回答を{step('paste')}してください。"
+        intro = floats + (box_text + "AI が種類を判断します。" if boxes else "") + style_text
+        send = step("pdf_attach") if left else ""      # 位置を聞く図形があるときは、出版版 PDF を同じメッセージに添付して送る
+        detail = (intro + f"{step('prompt')}を AI（claude.ai などのチャット）に{send}送信し、返ってきた回答を{step('paste')}してください。"
                   "このまま登載することもできます。")
-        cli = (f"手順（推奨）: {base}。{cli_head}手動モードで、AI の回答をまだ反映していません。{prompt} をチャット（claude.ai など）に"
-               "貼り付け、返ってきた回答をファイルに保存して --ai manual --ai-response 回答のファイル を指定し、変換し直すと、"
+        cli_pdf = "出版版 PDF と一緒に" if left else ""
+        cli = (f"手順（推奨）: {base}。{cli_head}手動モードで、AI の回答をまだ反映していません。{prompt} を、{cli_pdf}チャット（claude.ai など）に"
+               "送信し、返ってきた回答をファイルに保存して --ai manual --ai-response 回答のファイル を指定し、変換し直すと、"
                f"{does}。このまま登載することもできます。")
         checklist = (f"- [ ] （推奨）{base}（AI の回答をまだ反映していない）: {short}。{esc(prompt)} を AI に渡し、返ってきた回答を"
                      "貼り戻して変換し直す（ノートブックは手順 6 に貼り付ける、1 画面版は回答の欄に貼り付けて「反映」、"
@@ -1440,7 +1468,36 @@ def _ai_finish_action(r):
             todo.append("AI の回答が途中で切れていた（2 章）。AI に出し直してもらい、もう一度変換する")
         checklist = f"- [ ] （推奨）{base}: " + "。".join(todo)
     return Action(STEP, "ai_finish", required=False, progress=progress, checklist=checklist,
-                  box_title=title, box_detail=detail, cli=cli)
+                  box_title=title, box_detail=detail, box_intro=intro if state == "回答待ち" else "", cli=cli)
+
+
+def _ai_pdf_unseen_action(r):
+    """推奨の手順 ai_finish の、AI の回答で位置は決まったが、AI が出版版 PDF を見ていない（添付なし・別の論文・ツールの確かめが合わない。
+    AIOutcome.pdf_seen）とき（修正計画 W8 の 4.3・4.4）。位置は AI の答えのまま使い、PDF を添付して依頼し直す手順を残す。"""
+    ai, asked = r.ai, r.plan.asked_floats
+    n, seen = len(asked), ai.pdf_seen
+    manual = ai.mode == "manual"
+    if seen.startswith("合わない"):
+        why = (f"AI は出版版 PDF を見たと答えましたが、{ai.pdf_seen_note}。別の論文の PDF を添付していないか確かめ、この論文の PDF を"
+               "添付して依頼し直してください。")
+    elif seen == "別の論文":
+        why = "AI は、添付された出版版 PDF が別の論文だと答えました。この論文の PDF を添付して依頼し直してください。"
+    else:
+        why = "出版版 PDF を見ていない回答でした（位置は Word の配置からの推定です）。PDF を添付して依頼し直すと、PDF と同じ位置に置けます。"
+    plain = f"AI の回答で図・表 {n} 個の位置を決めましたが、{why}"
+    if manual:
+        again = f"チャットで、PDF を添付して依頼文を送り直し、返ってきた回答を{step('repaste')}てください。"
+        cli_again = "チャットで、出版版 PDF を添付して AI依頼文.txt を送り直し、返ってきた回答を保存して --ai manual --ai-response で指定し、変換し直すこと。"
+    else:
+        cant = f"PDF を AI に渡せませんでした（{ai.pdf_note or '理由は 2 章'}）。" if not ai.pdf_sent else ""
+        again = cant + f"{step('convert_again')}してください。"
+        cli_again = cant + "--ai api でもう一度実行すること。"
+    return Action(
+        STEP, "ai_finish", required=False, progress=f"済み・PDF {seen or '添付なし'}",
+        checklist=(f"- [ ] （推奨）{AI_PDF_TITLE}: AI の回答で図・表 {n} 個の位置を決めたが、AI が出版版 PDF を見ていない"
+                   f"（{seen or '添付なし'}。2 章）。PDF を添付して AI に依頼し直す"),
+        box_title=AI_PDF_TITLE + "（推奨）", box_detail=plain + again + "このまま登載することもできます。",
+        cli=f"手順（推奨）: {AI_PDF_TITLE}。{plain}{cli_again}このまま登載することもできます。")
 
 
 def _float_end_action(r):
@@ -3133,7 +3190,8 @@ def render(r) -> str:
         ("モデル", ai.model if ai.mode == "api" and ai.model else "—"),
         ("状態", state + (f"（位置を聞いた図・表 {len(plan.asked_floats)} 個のうち、残り {len(left)} 個）" if plan.asked_floats else "")),
         ("利用量", f"入力 {ai.usage.get('input_tokens')} トークン / 出力 {ai.usage.get('output_tokens')} トークン" if ai.usage else "—"),
-    ]))
+    ] + ([("出版版 PDF", ai_pdf_sent(ai))] if ai.mode == "api" else [])
+      + ([("PDF を見たか（ツールの確かめ）", ai_pdf(r))] if ai.pdf_seen else [])))
     L.append("")
     if ai.mode == "none":
         L.append("AI による補完は行っていません。")
@@ -3827,6 +3885,17 @@ def ai_style_section(r) -> list:
 
 
 REREAD_SHOWN = 5        # 段落の ID を読み替えた指定を、2 章に例として挙げる数
+
+
+def ai_pdf_sent(ai) -> str:
+    """2 章の概要の「出版版 PDF」（API モード）: AI に渡したか。渡していなければ理由（AIOutcome.pdf_note）。"""
+    if ai.reused:
+        return "前の変換の回答を使ったため、呼び出していない" + ("（その回答は PDF を付けて得たもの）" if ai.pdf_sent else "")
+    if ai.pdf_sent == "pages":
+        return "ページの画像にして渡した（依頼のデータの前に付けて送信）" + (f"。{esc(ai.pdf_note)}" if ai.pdf_note else "")
+    if ai.pdf_sent:
+        return "渡した（依頼のデータの前に付けて送信）" + (f"。{esc(ai.pdf_note)}" if ai.pdf_note else "")
+    return "渡していない" + (f"（{esc(ai.pdf_note)}）" if ai.pdf_note else "")
 
 
 def ai_check_lines(ai) -> list:

@@ -263,7 +263,7 @@ def test_supplement_with_formula_and_joined_paragraphs(journal, meta, tmp_path, 
     # 段落記号の削除をまたぐ直し（「。授」→「，本」。前の w:p の最後の文字と後ろの w:p の最初の文字にかかる）
     split = tmp_path / "split.docx"
     mf.make_pdfcheck(split, split=True)
-    d13 = "詳しくは付録の学習指導案を参照されたい，本業は２回行った。"
+    d13 = "詳しくは付録の授業計画案を参照されたい，本業は２回行った。"
     pages = ["\n".join(["（1）", *FRONT, PUB12, d13, *REST[1:]])]
     (tmp_path / "s").mkdir()
     res = convert_with_pages(tmp_path / "s", monkeypatch, journal, meta, pages, "pdf", docx=split)

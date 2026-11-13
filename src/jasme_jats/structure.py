@@ -302,8 +302,9 @@ def slot_keys(slots, order, images) -> list:
 
 
 # 図・表の位置の決め方（article.FigureRow.place。レポートの図の画像の一覧の列「位置の決め方」）
-PLACE_JA = {"word": "Word の並び", "mechanical": "機械的", "ai": "AI の指定", "anchor": "結び付いた段落の後ろ",
-            "end": "本文の最後", "caption": "図キャプションの位置"}
+# AI の指定は、AI が出版版 PDF を見て決めたもの（ai_pdf。FloatInfo.basis が pdf）と、PDF を見ずに決めたもの（ai_layout）に分ける
+PLACE_JA = {"word": "Word の並び", "mechanical": "機械的", "ai_pdf": "AI の指定（PDF を見て）", "ai_layout": "AI の指定（PDF なし）",
+            "anchor": "結び付いた段落の後ろ", "end": "本文の最後", "caption": "図キャプションの位置"}
 
 
 def plan_figures(plan):
@@ -476,6 +477,8 @@ def figure_place(plan, fid: str) -> str:
         return "word"
     if info.mode == "unplaced":
         return "end" if info.where == "end" else "anchor"
+    if info.mode == "ai":
+        return "ai_pdf" if info.basis == "pdf" else "ai_layout"
     return info.mode if info.mode in PLACE_JA else "word"
 
 
@@ -1421,6 +1424,9 @@ class Classifier:
                 placed.update(id(b) for b in blocks)
             self.float_entries[fl.fid] = entries
             summary = self.float_summary(info)
+            if spec:
+                info.basis, info.page = spec.get("basis", ""), spec.get("page", 0)
+                info.column, info.confidence = spec.get("column", ""), spec.get("confidence", "")
             if spec and not end:
                 target = src_index[spec["after"]] + 1
                 info.mode = "ai"

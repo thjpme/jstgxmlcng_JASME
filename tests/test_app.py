@@ -68,7 +68,7 @@ def test_manual_mode_waits_for_answer(tmp_path):
     fill_images(st.res)             # 図の画像の手順（必須）を済ませる
     assert not st.needs_action      # 回答待ちは推奨の手順なので、要対応に数えない
     boxes = st.result_html().split("<details")[0]       # 枠の部分（レポート全文の前。2 章には回答待ちの 1 行がある）
-    assert "AI の回答をまだ反映していません" not in boxes and "AI で図・表の位置を合わせる" not in boxes    # 依頼文の欄があるので枠は出さない
+    assert "AI の回答をまだ反映していません" not in boxes and "AI で図・表の位置を合わせる" not in boxes    # ai_finish の枠は出さず、案内（colab.manual_guide。見出しは「AI の回答を入れる（任意）」）を出す
     assert st.prompt_text()
     # 回答待ちは推奨の手順なので、ダウンロードを止めない
     path, note = st.download()
@@ -460,7 +460,7 @@ def test_manual_fields_stay_for_repaste(tmp_path):
     貼り直す必要がなくなったら隠す。画面の更新（on_apply の戻り）で確かめる。"""
     import json
     from conftest import FLOAT
-    from test_ai import FLOAT_RESPONSE, cut_cases
+    from test_ai import FLOAT_RESPONSE, FLOAT_SEEN, cut_cases
     from jasme_jats.colab import result_boxes
     from jasme_jats.report import actions, ai_done
     st = AppState(tmp_path / "work")
@@ -483,7 +483,7 @@ def test_manual_fields_stay_for_repaste(tmp_path):
         boxes = result_boxes(st.res, screen="app")
         # 枠が回答の貼り直しを案内している（途中で切れた回答の枠は「新しい回答を最初から最後まで」貼り直す）
         assert ("新しい回答を最初から最後まで「" if text == cut_cases()["c"] else "貼り付け直して「反映」を押し") in boxes, progress
-    out = fns["on_apply"](json.dumps(FLOAT_RESPONSE, ensure_ascii=False))     # 貼り直した回答で決まれば、欄を隠す
+    out = fns["on_apply"](json.dumps(FLOAT_SEEN, ensure_ascii=False))     # 貼り直した回答で決まれば、欄を隠す
     fill_images(st.res)                                                       # 図の画像の手順（必須）を済ませる
     assert not st.needs_action and out[2]["visible"] is False and out[3] == ""
     # 変換の後に「AI による補完の方法」の欄を変えても判定は変わらない（O3）。この時点では貼り直す枠がないので欄は出ない
