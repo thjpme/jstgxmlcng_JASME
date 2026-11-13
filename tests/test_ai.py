@@ -1153,11 +1153,12 @@ def test_ai_textbox_placement_twice_and_estimated_box(journal, meta, tmp_path):
     bt = next(bt for bt in load(res).iter("boxed-text") if _text(bt).startswith("問3"))
     assert _text(bt.getprevious()) == "空の囲みを置いた。"
     assert "textbox_place" not in [a.key for a in actions(res)]
-    # 浮動配置の図形（位置を決められなかった図表）に kind box を書いたものは採用しない
+    # 浮動配置の図形（位置を決められなかった図表）に kind box を書いたものは、位置（after）だけを使う（items は読まない。
+    # 修正計画 W1 の 2.7）。テキストボックスの kind にはしない
     _, fplan, _ = _mechanical(FLOAT, journal)
     out = AIOutcome()
-    assert float_placements({"placements": [_box_pl("s1", "d13")]}, fplan, out) == {}
-    assert "items の kind は fig か table" in out.rejected[0][1]
+    got = float_placements({"placements": [_box_pl("s1", "d13")]}, fplan, out)
+    assert list(got) == ["s1"] and got["s1"]["after"] == "d13" and "kind" not in got["s1"] and out.rejected == []
 
 
 def test_set_role_on_textbox_paragraphs(journal, meta, tmp_path):
@@ -1440,7 +1441,8 @@ def test_a1_op_field_types(journal, meta, tmp_path):
 
 
 def test_a1_placements_types(journal, meta, tmp_path):
-    """A1: placements の各欄の型が違っても変換は止まらず、理由付きで不採用（float・after・items の caption・body の数値など）。"""
+    """A1: placements の各欄の型が違っても変換は止まらず、理由付きで不採用（float・after の型）。浮動配置の図形の items は
+    読まないので（修正計画 W1 の 2.7）、items の型の違いは理由にならず、図形の ID で不採用になる（この原稿に図形 s1 はない）。"""
     it = {"kind": "fig", "caption": ["d16"], "body": ["t2"]}
     pls = [{"float": ["s1"], "after": "d18", "items": [], "reason": "x", "confidence": "高"},
            {"float": 1.5, "after": "d18", "items": [it], "reason": "x", "confidence": "高"},
@@ -1456,8 +1458,8 @@ def test_a1_placements_types(journal, meta, tmp_path):
     res = _manual_raw([], meta, journal, tmp_path, placements=pls)
     assert res.fidelity.ok and len(res.ai.rejected) == len(pls)
     whys = [why for _, why in res.ai.rejected]
-    assert sum("は一覧（[ ]）で書く" in w for w in whys) == 5          # caption=5・body=5・2.5・文字列・辞書
-    assert sum("文字列" in w for w in whys) >= 4
+    assert sum("float と after は文字列で書く" in w for w in whys) == 4
+    assert sum("s1 は「位置を決められなかった図表」" in w for w in whys) == 6 and not any("一覧（[ ]）" in w for w in whys)
 
 
 def test_a1_a2_parse_paths_do_not_raise():
@@ -1587,7 +1589,9 @@ def test_f7_link_on_label_range_rejected_when_split(journal, meta, tmp_path):
 
 
 def test_a8_formula_image_on_real_docx_with_table_and_moved_image(journal, meta, tmp_path):
-    """A8: 表を含む図・他の段落から移した画像のある図を formula_image にしようとしても、不採用で表が残り、不変性チェックも通る。"""
+    """A8: 図形の中の画像と表を formula_image にしようとしても、表が残り、不変性チェックも通る。W1 からは、キャプションのない
+    図形（画像を直接持たないテキストボックス）の画像と表は別々の要素として出る（float_units の B4。AI の items は読まない）ので、
+    画像はキャプションなしの図、表は表のまま。"""
     cm = 360000
 
     def parts(b):
@@ -1611,8 +1615,10 @@ def test_a8_formula_image_on_real_docx_with_table_and_moved_image(journal, meta,
     resp = json.dumps({"operations": [_op(op="formula_image", image=img, mathml=mml)], "placements": [pl], "notes": []})
     res = convert(p, meta, journal, Options(out_dir=tmp_path / "o", convert_metafiles=False, ai_mode="manual", ai_response=resp))
     assert res.fidelity.ok and res.fidelity.final_ok
-    assert any("数式画像" in w for _, w in res.ai.rejected)
+    assert not any(op["op"] == "place_float" for op, _ in res.ai.rejected)
+    root = load(res)
     assert "表の文字甲" in res.xml_path.read_text(encoding="utf-8")
+    assert not any(f.find("table-wrap") is not None for f in root.iter("fig"))      # 表は図の中に入らない
 
 
 # ---------------------------------------------------------------------------- 回答の形（A9・A10・{ } でない操作）

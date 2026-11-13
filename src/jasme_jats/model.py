@@ -110,6 +110,12 @@ class ImageRef:
     hidden_style: bool = False  # hidden のうち、スタイル・既定の書式の設定で隠したもの（ランの直接の指定でない。要確認で知らせる）
     crop: tuple | None = None   # Word のトリミング（左・上・右・下）。元の画像の幅・高さに対する割合（0 以上）。4 つとも 0 なら None
     edits: tuple = ()           # 書き出しで反映しない Word の加工の名前（IMAGE_EDITS の順・重複なし）。9 章と要確認 image_edits
+    # --- 画像の置き場所を決める手がかり（W1。docx の画像は、置き場所を決めるためにだけ読む）
+    draw_id: str = ""           # 同じ w:drawing・w:pict・w:object の画像（グループ図形の中の複数の画像）は同じ値（g1, g2, …。部品をまたいで通し番号）
+    digest: str = ""            # 画像の中身の SHA-1。画像ファイルがあればファイルの中身、なければ図形の XML（文字・位置・ID・名前を除く）
+    decoration: str = ""        # 画像を持たない図形のうち、画像の位置に数えない飾り。"" / frame（枠）/ mask（白い四角）/ line（線・矢印）/
+                                # textgroup（文字の図形だけのグループ）
+    para_src: str = ""          # この画像のあるアトムの段落の ID（Para.src）
 
     @property
     def height_cm(self) -> float:
@@ -147,11 +153,14 @@ class Para:
 
     @property
     def is_blank(self) -> bool:
-        return not any(a.kind != "text" or a.text.strip() for a in self.atoms)
+        """空白だけの段落か。飾りの図形（ImageRef.decoration）は数えない（飾りだけの段落は、空白だけの段落と同じ扱い）。"""
+        return not any((a.kind != "text" and not (a.kind == "image" and a.image.decoration)) or a.text.strip()
+                       for a in self.atoms)
 
     @property
     def images(self) -> list:
-        return [a.image for a in self.atoms if a.kind == "image"]
+        """段落の中の画像（飾りの図形〈ImageRef.decoration〉を除く。飾りのアトムは段落のアトムのまま残り、plain() の位置は変わらない）。"""
+        return [a.image for a in self.atoms if a.kind == "image" and not a.image.decoration]
 
     @property
     def has_display_math(self) -> bool:

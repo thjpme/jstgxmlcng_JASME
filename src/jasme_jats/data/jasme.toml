@@ -17,8 +17,9 @@ publisher_en = "Japan Academic Society of Mathematics Education"
 doi_pattern = "10.24529/jasme.{volume}.{issue}_{fpage}"
 # 記事識別子（J-STAGE のフォルダ名・ファイル名。{巻}_{開始ページ}）
 article_id_pattern = "{volume}_{fpage}"
-# 画像ファイル名（Graphics/ に入れる。記事識別子. で始まる名前は J-STAGE で使えない）
-image_name_pattern = "{article_id}_{n:02d}"
+# 画像ファイル名（Graphics/ に入れる。拡張子の前まで。{key} は画像の置き場所の幹〈fig03・img3fa9c2 など。structure.slot_keys〉。
+# 記事識別子. で始まる名前は J-STAGE で使えない）
+image_name_pattern = "{article_id}_{key}"
 # テンプレートの冒頭の誌名行（題目の前の段落。冒頭部の装飾として、知らせずに除く。structure.front_decoration）
 front_lines = ["全国数学教育学会誌　数学教育学研究"]
 

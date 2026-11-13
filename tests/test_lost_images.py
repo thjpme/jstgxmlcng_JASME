@@ -87,7 +87,7 @@ def test_image_in_reference_is_reported(refs, text, journal, meta, tmp_path):
     assert "**要対応: XML に入らなかった画像が 1 件あります（9 章）。**" in top
     assert f"> - img2（段落 {li.src}" in top and "Word でその画像" in top and "本文の段落に" in top
     assert "| 画像 | XML に出力 1 件（うち要対応 0 件）。ほかに XML に入らなかった画像が 1 件あり、要対応（9 章） |" in top
-    assert "### XML に入らなかった画像（要対応）" in ch9 and "| img2 | word/media/" in ch9 and "| img1 | 31_1_01.png |" in ch9
+    assert "### XML に入らなかった画像（要対応）" in ch9 and "| img2 | word/media/" in ch9 and "| img1 | 31_1_fig01.png |" in ch9
     assert "- [ ] **XML に入らなかった画像 1 件**（9 章）" in ch14 and "img2（段落" in ch14
     assert "すべて Graphics/ に入っている" not in ch14
 
@@ -108,6 +108,11 @@ def test_figure_on_reference_becomes_unplaced(journal, meta, tmp_path):
     last = root.find("body")[-1]
     assert last[-1].tag == "fig" and "".join(last[-1].find("caption").itertext()) == "図5\u3000最後のページの図"
     assert "図5" not in "".join("".join(m.itertext()) for m in root.iter("mixed-citation"))
+    # 本文の最後の図に画像の置き場所があり、備考に本文の最後に置いた理由（直し方は書かない。修正計画 W1 の 2.3 の B7）
+    [slot] = [s for s in res.plan.slots if s.float_id]
+    assert (slot.kind, slot.key, [i.image_id for i in slot.covers]) == ("fig", "fig05", ["img2"])
+    assert last[-1].find("graphic").get("{http://www.w3.org/1999/xlink}href") == f"31_1_{slot.key}.png"
+    assert slot.note == "引用文献の段落に結び付いているため、本文の最後に置いています"
     assert res.needs_action and any("本文の最後" in x for x in res.forced_floats)
     top = chapters(res.report_path.read_text(encoding="utf-8"))[0]
     assert "XML に入らなかった画像" not in top and "要対応: 位置を決められなかった図表が 1 件あります" in top

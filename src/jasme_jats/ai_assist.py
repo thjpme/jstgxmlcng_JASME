@@ -434,7 +434,11 @@ def float_section(plan: ArticlePlan, images: list) -> list:
                 what = float_caption(info)      # 表のセルの画像とキャプションで組んだ図（structure.Classifier.cell_figures）
             else:
                 what = "（キャプションなし）"
-            how = (f"段落 [{fl.anchor_src}] の前に配置済み" if info.mode == "mechanical" else "AI の指定で配置済み")
+            if info.mode == "caption":
+                # 本文の図キャプションの図に含めた図形（structure.Classifier.take_float。修正計画 W1 の 2.3 の B6）
+                how = f"本文の図キャプション [{info.caption_src}] の図に含めて配置済み"
+            else:
+                how = (f"段落 [{fl.anchor_src}] の前に配置済み" if info.mode == "mechanical" else "AI の指定で配置済み")
             lines.append(f"[{fl.fid}] {what}: {how}")
     return lines + textbox_section(plan)
 
@@ -1376,9 +1380,10 @@ def placement_op(pl) -> dict:
 
 
 def float_placements(data, plan: ArticlePlan, outcome: AIOutcome) -> dict:
-    """placements（図表の位置と組み合わせ）を検証し、図形の ID → 指定 の表にする（構造の組み立てをやり直すため）。
+    """placements（図表の位置）を検証し、図形の ID → 指定 の表にする（構造の組み立てをやり直すため）。
 
-    採用するのは、位置を決められなかった図形について、中身をすべて正しく指定したものだけ。機械的に配置した図形は変更させない。
+    採用するのは、位置を決められなかった図形について、本文の段落の後ろを指定したもの。中身の組み合わせ（items）は読まない
+    （組み合わせは変換ツールが決める。修正計画 W1 の 2.7）。機械的に配置した図形は変更させない。
     本文の外（注・引用文献など。structure.AFTER_BODY_REGIONS）の段落の後ろを指定したものは、本文の外には図表を置けないので
     今までどおり採用しないが、その図形には「本文の最後に仮に置く」印（{"where": "end"}）を付ける（決定事項 21。
     structure.Classifier.place_floats）。印を付けた後に、同じ図形の正しい指定があれば、そちらを採用する。
@@ -1397,7 +1402,9 @@ def float_placements(data, plan: ArticlePlan, outcome: AIOutcome) -> dict:
                 ends[fid] = ({"where": "end", "after": after, "op": op}, len(outcome.rejected))
             outcome.rejected.append((op, why))
             continue
-        spec = {"after": pl.get("after"), "items": pl["items"], "reason": op["reason"],     # label は after を使わない（書かなくてよい）
+        # 浮動配置の図形の items（中身の組み合わせ）は使わない（組み合わせは変換ツールが決める）。採用の記録（2 章）の操作の欄には
+        # 書かれたまま載せる（placement_op。黙って捨てない）。label は after を使わない（書かなくてよい）
+        spec = {"after": pl.get("after"), "reason": op["reason"],
                 "confidence": op["confidence"] if op["confidence"] in ("高", "中", "低") else "低", "op": op}
         if pl["float"] in plan.textboxes:
             spec["kind"] = pl["items"][0]["kind"]       # 文字だけのテキストボックス: box（囲み）か label（図の注記）
@@ -1412,84 +1419,44 @@ def float_placements(data, plan: ArticlePlan, outcome: AIOutcome) -> dict:
 
 
 def _placement_problem(pl, plan: ArticlePlan, body: set, done: dict) -> str:
+    """配置の指定 pl を採用しない理由（採用できれば ''）。
+
+    浮動配置の図形では、図形の ID と置く位置（after。本文の段落か）だけを検証する。中身の組み合わせ（items）は、あっても
+    なくてもよく、読まない（組み合わせは変換ツールが決める。structure.Classifier.float_units。修正計画 W1 の 2.7）。
+    文字だけのテキストボックスは、今までどおり items[0].kind（box か label）を読む（_box_placement_problem）。
+    """
     if not isinstance(pl, dict):
         return "指定の形式が正しくない"
     fid, after, items = pl.get("float"), pl.get("after"), pl.get("items")
     if not isinstance(fid, str) or not (after is None or isinstance(after, str)):
         return "float と after は文字列で書く"
-    for it in items if isinstance(items, list) else []:
-        if not isinstance(it, dict):
-            continue                    # 形式の不備は、以降の検証が理由を示す
-        for key in ("caption", "body"):
-            v = it.get(key)
-            if not v:
-                continue                # None・""・0・false は、以前どおり空の一覧として扱う（下の it.get(key) or []）
-            if not isinstance(v, list):
-                return f"items の {key} は一覧（[ ]）で書く"
-            if not all(isinstance(x, str) for x in v):
-                return f"items の {key} の要素は文字列（段落・表・画像の ID）で書く"
-    box = plan.textboxes.get(fid) if isinstance(fid, str) else None
+    box = plan.textboxes.get(fid)
     if box is not None:
+        for it in items if isinstance(items, list) else []:
+            if not isinstance(it, dict):
+                continue                # 形式の不備は、以降の検証が理由を示す
+            for key in ("caption", "body"):
+                v = it.get(key)
+                if not v:
+                    continue            # None・""・0・false は、以前どおり空の一覧として扱う
+                if not isinstance(v, list):
+                    return f"items の {key} は一覧（[ ]）で書く"
+                if not all(isinstance(x, str) for x in v):
+                    return f"items の {key} の要素は文字列（段落・表・画像の ID）で書く"
         return _box_placement_problem(fid, box, after, items, body, done)
-    info = plan.floats.get(fid) if isinstance(fid, str) else None
+    info = plan.floats.get(fid)
     if info is None:
         return (f"{fid} は「位置を決められなかった図表」「囲みか図の注記か決められなかったテキストボックス」"
                 "「位置を推定した囲み」「図に重ねた注記とみなして除外したテキストボックス」にない")
+    if info.mode == "caption":
+        # 本文の図キャプションの図に含めた図形（structure.Classifier.take_float。修正計画 W1 の 2.3 の B6）
+        return f"図形 {fid} は本文の図キャプション [{info.caption_src}] の図に含めて配置した図形なので、位置を変更できない"
     if info.mode != "unplaced":
-        return f"図形 {fid} は位置を機械的に決めた図表なので、位置も組み合わせも変更できない"
+        return f"図形 {fid} は位置を機械的に決めた図表なので、位置を変更できない"
     if fid in done:
         return f"図形 {fid} の指定が 2 回ある（最初の指定を採用）"
     if after not in body:
         return f"置く位置の段落 {after} は本文の段落ではない（図形の中の段落・表のセル・本文以外は指定できない）"
-    if not isinstance(items, list) or not items:
-        return "items（図表の組）がない"
-    paras = {q.src: q for q in info.paras}
-    cells = {q.src: q for t in info.tables for q in t.paragraphs()}
-    tables = {t.tid for t in info.tables}
-    group_imgs = {i.image_id for i in info.images}
-    img_paras = {i.image_id: q for q in list(paras.values()) + list(cells.values()) for i in q.images}
-    used, whole, split = set(), set(), set()
-    cell_table = {q.src: t.tid for t in info.tables for q in t.paragraphs()}
-    for it in items:
-        if not isinstance(it, dict) or it.get("kind") not in ("fig", "table"):
-            return "items の kind は fig か table"
-        caps, bodies = it.get("caption") or [], it.get("body") or []
-        if not isinstance(caps, list) or not isinstance(bodies, list):
-            return "caption と body は一覧（[ ]）で書く"
-        for c in caps:
-            q = paras.get(c) or cells.get(c)
-            if q is None:
-                return f"キャプションの段落 {c} は図形 {fid} の中にない"
-            if not _para_text(q).strip():
-                return f"キャプションの段落 {c} に文字がない"
-            if c in cell_table:
-                split.add(cell_table[c])
-        if it["kind"] == "table" and (len(bodies) != 1 or bodies[0] not in tables):
-            return "表（table）の body は、図形の中の表 1 つ"
-        if it["kind"] == "fig" and not bodies:
-            return "図（fig）の body（画像か表）がない"
-        for x in bodies:
-            if x in tables:
-                whole.add(x)
-                continue
-            if x in group_imgs:
-                continue
-            q = paras.get(x) or cells.get(x) or img_paras.get(x)
-            if q is None:
-                return f"本体 {x} は図形 {fid} の中の表・画像・画像の段落ではない"
-            if not q.images:
-                return (f"本体 {x} の段落 {q.src} には画像がない（画像以外の文字だけの段落は、キャプションか、"
-                        "指定しない段落として残す）")
-            # 画像と文字が同じ段落（画像だけの段落でないもの）も本体にできる。画像は図に入り、段落は文字ごと図の直後に
-            # 本文の段落として出る（structure.Classifier.float_from_spec）
-            if q.src in cell_table:
-                split.add(cell_table[q.src])
-        for x in list(caps) + [img_paras[b].src if b in img_paras and b not in group_imgs else b for b in bodies]:
-            if x in used:
-                return f"{x} が 2 回使われている"
-            used.add(x)
-    if whole & split:
-        return f"表 {', '.join(sorted(whole & split))} を、表全体と、セルの段落の両方で使っている"
     return ""
 
 

@@ -422,7 +422,7 @@ if globals().get("USER_IMAGES"):
     _again = add_images(res, USER_IMAGES, skip_unneeded=True)
     if _again:
         print("手順 7 でアップロードした画像を入れ直しました:", "、".join(_again))
-display(HTML(result_boxes(res)))      # 要対応（赤）・要確認（黄）の枠（report.actions）
+display(HTML(result_boxes(res)))      # 要対応（赤）・要確認（黄）・手順（青）の枠（report.actions）
 display(HTML(summary_box(res)))
 display(HTML(report_details(res.report_path.read_text(encoding="utf-8"))))
 """ + mark(5), form=False),
@@ -469,30 +469,28 @@ if _missing:
 #@markdown 「変換結果_巻_開始ページ.zip」（J-STAGE にアップロードする jasme_巻_開始ページ.zip、XML、変換レポート。「docx から作り、出版版 PDF で補う」では（PDF の文字を読めたとき）PDF で補った docx も）をダウンロードします。要対応（赤い枠）が残っていると一度止まります（そのままダウンロードするときは、もう一度 ▶）。
 """ + guard(1, 2, 3, 4, 5) + unmark(8) + """from IPython.display import HTML, display
 from jasme_jats.colab import result_boxes
-from jasme_jats.report import NEEDS_ACTION, actions, images_to_prepare
+from jasme_jats.report import actions, blocking, images_to_prepare
 
 _missing = images_to_prepare(res)
-_todo = [a for a in actions(res) if a.level == NEEDS_ACTION]
-# 止めたかどうかの記録。要対応の中身（枠の見出しと本文）が変われば、変換し直した同じ docx でももう一度止める
+_todo = blocking(actions(res))      # 止める知らせ（要対応と、残っている必須の手順。推奨の手順は止めない）
+# 止めたかどうかの記録。止める知らせの中身（枠の見出しと本文）が変われば、変換し直した同じ docx でももう一度止める
 _key = str(docx_path) + "|" + repr([(a.key, a.box_title, a.box_detail) for a in _todo]) + "|" + ",".join(n for n, _, _ in _missing)
 if _todo and globals().get("_NEEDS_ACTION_OK") != _key:
     _NEEDS_ACTION_OK = _key
-    display(HTML(result_boxes(res, level=NEEDS_ACTION)))
+    display(HTML(result_boxes(res, blocking=True)))
     if [a.key for a in _todo] == ["images"]:
         raise SystemExit(f"画像を用意できなかった図が {len(_missing)} 件あります。手順 7 で画像をアップロードしてから、もう一度この ▶ を押して"
                          "ください。画像を入れずにダウンロードするときは、そのままもう一度この ▶ を押します（後で ZIP の Graphics/ に"
                          "入れることもできます）。")
-    raise SystemExit(f"要対応が {len(_todo)} 件あります（上の赤い枠: " + "／".join(a.box_title for a in _todo) + "）。"
+    raise SystemExit(f"要対応が {len(_todo)} 件あります（上の枠: " + "／".join(a.box_title for a in _todo) + "）。"
                      + ("画像を用意できなかった図は、手順 7 で画像をアップロードしてから、もう一度この ▶ を押してください。" if _missing else "")
-                     + ("手動モードで AI の回答をまだ貼り付けていなければ、手順 6 で貼り付けてください。"
-                        if "ai_pending" in [a.key for a in _todo] else "")
                      + "枠の説明に従って直してから変換し直すか、このままダウンロードするときは（結果を確かめるときなど）、"
                        "もう一度この ▶ を押します。")
 archive = shutil.make_archive(str(WORK / f"変換結果_{res.xml_path.stem}"), "zip", OUT)
 files.download(archive)
 CONVERTED = {**globals().get("CONVERTED", {}), Path(archive).name: docx_path.name}
 print("ダウンロードしました:", Path(archive).name, "（" + docx_path.name + "）")
-display(HTML(result_boxes(res)))      # ダウンロードした結果に残っている要対応・要確認
+display(HTML(result_boxes(res)))      # ダウンロードした結果に残っている要対応・要確認・手順
 print("続けて他の論文を変換するときは、下の手順 9 の ▶ を押してください。")
 """ + mark(8)),
     code("""

@@ -1,4 +1,6 @@
 """Colab ノートブックの表示部品（colab.py）。"""
+import re
+
 from jasme_jats.colab import error_box, prompt_box
 
 
@@ -90,7 +92,7 @@ def test_missing_images_box(journal, meta, tmp_path):
     res = convert(TEMPLATE, meta, journal, Options(out_dir=tmp_path / "t", convert_metafiles=False))
     html = missing_images_box(res)
     assert "#dc2626" in html and "画像ファイルを用意できなかった図が 1 件あります" in html
-    assert "31_1_01.png: 図1\u3000三角形ABC" in html and "jasme_31_1.zip の中の jasme/31/1/31_1/Graphics/" in html
+    assert "31_1_fig01.png: 図1\u3000三角形ABC" in html and "jasme_31_1.zip の中の jasme/31/1/31_1/Graphics/" in html
     assert missing_images_box(convert(FULL, meta, journal, Options(out_dir=tmp_path / "f", convert_metafiles=False))) == ""
 
 
@@ -146,20 +148,6 @@ def test_ai_required_and_unplaced_boxes(journal):
     assert "上の「AI の回答が途中で切れていました」の枠のとおりです" in html and "すべて placements に書いて" not in html
 
 
-def test_figure_body_box(journal, meta, tmp_path):
-    """図の本体（画像・表）が見つからない図（近くの表を図の本体にできなかったもの）の赤い枠。"""
-    from conftest import FULL, TABLEFIG
-
-    from jasme_jats.colab import figure_body_box
-    from jasme_jats.pipeline import Options, convert
-    html = figure_body_box(convert(TABLEFIG, meta, journal, Options(out_dir=tmp_path / "t", convert_metafiles=False)))
-    assert "#dc2626" in html and "図の本体（画像・表）が見つからない図が 2 件あります（要対応）" in html
-    assert "・「図2\u3000間に段落がある問題」（図キャプションの前にキャプションのない表があるが、間にほかの段落がある）" in html
-    assert "・「図3\u3000表の直後の図キャプション」（直前の表に表キャプション「表1\u3000表キャプションの付いた表」が付いている）" in html
-    assert "表を図キャプションのすぐ上" in html and "変換し直してください" in html
-    assert figure_body_box(convert(FULL, meta, journal, Options(out_dir=tmp_path / "f", convert_metafiles=False))) == ""
-
-
 def test_result_boxes_follow_actions(journal, tmp_path, monkeypatch):
     """手順 5・6・8 の枠は report.actions からまとめて作る（colab.result_boxes）: J-STAGE のアップロード時チェック、
     DTD 検証の不合格、AI のエラー（手動モードと API モードで見出しを書き分ける）。"""
@@ -199,15 +187,19 @@ def test_result_boxes_follow_actions(journal, tmp_path, monkeypatch):
 
 
 def test_result_boxes_before_answer_in_manual_mode(journal, meta, tmp_path):
-    """手動モードで回答を貼り戻す前: 手順 5 では依頼文の枠があるので回答待ちの枠を出さず（skip）、手順 8 では出す。"""
+    """手動モードで回答を貼り戻す前: 手順 5 では依頼文の枠があるので回答待ちの枠を出さず（skip）、手順 8 の止める枠
+    （blocking）にも出さない（推奨の手順は止めない）。全部の枠には青い枠（手順）で出す。"""
     from conftest import FULL
 
     from jasme_jats.colab import result_boxes
     from jasme_jats.pipeline import Options, convert
     res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", convert_metafiles=False))
     assert result_boxes(res, skip=("ai_pending", "name_split")) == ""     # name_split は d11「研究次郎」（C064）
-    html = result_boxes(res, level="要対応")
+    assert result_boxes(res, level="要対応") == ""
+    assert result_boxes(res, blocking=True) == ""           # 手順 8 は、回答待ちでは止めない
+    html = result_boxes(res)
     assert "AI の回答をまだ反映していません（手動モード）" in html and "手順 6" in html
+    assert "手順（推奨）: AI の回答をまだ反映していません" in html and "#2563eb" in html and "#eff6ff" in html
 
 
 def test_result_boxes_show_textbox_notices(journal, meta, tmp_path):
@@ -286,8 +278,7 @@ def test_no_mark_left_in_any_screen(journal, meta, tmp_path):
     レポート（.md）と top・checklist・cli の文にも目印は出ない。make_notebook.py が使う box_detail も、置き換えれば目印は残らない。"""
     from conftest import EDGE, FLOAT, FULL, OUTSIDE, PDFCHECK, PDFCHECK_PDF, PLACE, STRUCTURE, TABLEFIG
 
-    from jasme_jats.colab import (figure_body_box, lost_images_box, missing_images_box, pdf_diff_box, result_boxes,
-                                  step_text, unplaced_box)
+    from jasme_jats.colab import lost_images_box, missing_images_box, pdf_diff_box, result_boxes, step_text, unplaced_box
     from jasme_jats.pipeline import AIRequiredError, Options, convert
     from jasme_jats.report import actions
     cases = [(docx, Options(out_dir=tmp_path / f"c{k}{mode}", ai_mode=mode, convert_metafiles=False))
@@ -307,12 +298,12 @@ def test_no_mark_left_in_any_screen(journal, meta, tmp_path):
             for screen in ("notebook", "app", "cli"):
                 assert "\x00" not in step_text(a.box_title, screen) + step_text(a.box_detail, screen), a.key
             for screen in ("app", "cli"):
-                assert "手順" not in step_text(a.box_detail, screen) + step_text(a.box_title, screen), a.key
+                assert not re.search(r"手順 ?\d", step_text(a.box_detail, screen) + step_text(a.box_title, screen)), a.key
         for screen in ("notebook", "app"):
             html = result_boxes(res, screen=screen) + missing_images_box(res, screen) + lost_images_box(res, screen) \
-                + pdf_diff_box(res, screen) + figure_body_box(res, screen) + unplaced_box(res.plan, res.ai.partial, screen)
+                + pdf_diff_box(res, screen) + unplaced_box(res.plan, res.ai.partial, screen)
             assert "\x00" not in html, screen
-            assert screen == "notebook" or "手順" not in html
+            assert screen == "notebook" or not re.search(r"手順 ?\d", html)      # 青い枠の見出し「手順:」は区分の名前
     assert {"ai_pending", "textbox_undecided"} <= seen      # 目印を使う知らせを実際に通した
 
 
@@ -323,10 +314,11 @@ def test_app_screen_words_in_boxes(journal, meta, tmp_path):
     from jasme_jats.colab import result_boxes
     from jasme_jats.pipeline import Options, convert
     res = convert(FULL, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", convert_metafiles=False))
-    note = result_boxes(res, level="要対応")
-    page = result_boxes(res, level="要対応", screen="app")
+    note = result_boxes(res, level="手順")
+    page = result_boxes(res, level="手順", screen="app")
     assert "手順 5 の依頼文を AI" in note and "手順 6 に貼り付けて ▶ を押してください" in note
-    assert "依頼文を AI" in page and "「AI の回答（json のコードブロック）を貼り付ける」の欄に貼り付けて「反映」を押してください" in page and "手順" not in page
+    assert "依頼文を AI" in page and "「AI の回答（json のコードブロック）を貼り付ける」の欄に貼り付けて「反映」を押してください" in page \
+        and not re.search(r"手順 ?\d", page)
 
 
 def test_mark_lookalike_in_docx_text_is_shown_as_is(tmp_path, journal, meta, monkeypatch):

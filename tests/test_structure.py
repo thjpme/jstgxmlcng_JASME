@@ -802,16 +802,17 @@ def test_text_in_figure_textbox_is_notified(journal, meta, tmp_path):
     assert "textbox_figure_text" in [a.key for a in actions(res)] and excluded(res)[SOURCE_NOTE] == TEXTBOX_TEXT_EXCLUDED
 
 
-def test_text_in_unplaced_figure_textbox_is_notified_after_answer(journal, meta, tmp_path):
-    """位置を決められない図表（浮動配置）の中の出典の文は、手動モードで AI の回答を貼り戻す前は知らせない（AI が図を組めば、
-    図の後ろに本文の段落として出る）。AI が位置を答えず、図の一部として除外したままなら、要確認で知らせる。"""
+def test_text_in_unplaced_figure_textbox_is_notified_before_answer(journal, meta, tmp_path):
+    """位置を決められない図表（浮動配置）の中の出典の文は、図の画像に写るとみなして除外し、手動モードで AI の回答を貼り戻す
+    前から要確認で知らせる（図形の中身の組み方は AI の指定の有無で変わらない。修正計画 W1 の 2.4）。AI が位置を答えなくても
+    同じく知らせる。"""
     import json
     path = tmp_path / "figfloat.docx"
     mf.make_article(path, "浮動配置の図の検証用文書", _figure_textbox(True))
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "pending", ai_mode="manual", convert_metafiles=False))
     assert res.plan.unplaced_floats and res.fidelity.ok and res.dtd_valid
     assert excluded(res)[SOURCE_NOTE] == "テキストボックス内の文字（図の一部とみなして本文から除外）"
-    assert "textbox_figure_text" not in [a.key for a in actions(res)]
+    assert "textbox_figure_text" in [a.key for a in actions(res)]
     empty = json.dumps({"placements": [], "operations": [], "notes": []})
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "ans", ai_mode="manual", ai_response=empty,
                                                convert_metafiles=False))

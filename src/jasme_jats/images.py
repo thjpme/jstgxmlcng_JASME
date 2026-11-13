@@ -28,6 +28,7 @@ class ImageResult:
     message: str = ""
     crop: tuple | None = None   # Word のトリミングに合わせて切り取って出力したときの割合（ImageRef.crop）。切り取らなければ None
     edits: tuple = ()           # 書き出しで反映しなかった Word の加工（ImageRef.edits の写し）
+    key: str = ""               # 画像の置き場所の幹（article.ImageSlot.key。W1 の途中の姿。pipeline.export_slot_images が入れる）
 
 
 class CropError(Exception):
@@ -225,7 +226,8 @@ def _bbox(img):
 
 
 def export_images(doc, images, out_dir: Path, convert_metafiles=True, *, keep_dir: Path):
-    """BuildInfo.images（出力した画像）を out_dir に書き出す。
+    """出力した画像（ImageRef の一覧。名前は export_name。pipeline.export_slot_images が、置き場所ごとの最初の画像に置き場所の
+    名前を付けて渡す）を out_dir に書き出す。
 
     変換できなかった EMF/WMF の元の画像は keep_dir に置く（省略できない。記事フォルダの中に置くと、記事フォルダを
     そのまま ZIP にしたときに入ってしまうため）。pipeline は出力フォルダの直下の 要変換/ を渡す（記事フォルダの外。

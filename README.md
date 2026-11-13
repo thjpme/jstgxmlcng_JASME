@@ -56,18 +56,17 @@ ANTHROPIC_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml 
 OPENAI_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai api --ai-provider openai --ai-model モデル名
 GEMINI_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai api --ai-provider gemini --ai-model モデル名
 SAKANA_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai api --ai-provider sakana --ai-model モデル名
-python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --images 画像フォルダ   # 用意できなかった図の画像（25_77_01.png など）を入れる
+python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --images 画像フォルダ   # 用意できなかった図の画像（25_77_fig01.png など）を入れる
 python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --pdf 記事.pdf               # docx から作り、出版版 PDF で補う
 python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --pdf 記事.pdf --route docx  # docx から作る（PDF とは照合だけ）
 ```
 
 書誌情報ファイルの例: [examples/meta_example.toml](examples/meta_example.toml)
 
-コマンドラインの終了コードは、**0 が要対応なし、1 が要対応あり、2 が変換の中止**です（要対応・要確認の一覧は標準エラーに出します。
-要確認だけなら 0）。次の場合も 1 になります: `--meta` を指定しない（開始ページがないので、J-STAGE のアップロード時チェックの EMSGM230E
-で要対応になる）、画像を用意できなかった図がある（`--images` で入れると 0）、`--ai manual` で `--ai-response` を指定しない
-（依頼文を作る最初の実行。AI の回答をまだ反映していない）、AI の回答が途中で切れていた（位置を決められない図表が残らなくても）、図の本体が見つからない図がある。手動モードの最初の実行の 1 は、回答を待っている
-という知らせで、失敗ではありません（スクリプトから呼ぶときは、依頼文ができていれば次に進んでください。0.23.0 までは 0 でした）。
+コマンドラインの終了コードは、**0 が要対応なし、1 が要対応あり、2 が変換の中止**です（要対応・要確認・手順の一覧は標準エラーに出します。
+要確認や推奨の手順だけなら 0）。次の場合も 1 になります: `--meta` を指定しない（開始ページがないので、J-STAGE のアップロード時チェックの EMSGM230E
+で要対応になる）、画像を用意できなかった図がある（docx に画像の見つからない図も。`--images` で入れると 0）、AI の回答が途中で切れていた（位置を決められない図表が残らなくても）。手動モードの最初の実行（依頼文を作る実行。AI の回答をまだ反映していない）は、標準エラーに「手順（推奨）: …」と出して、終了コードは 0 です
+（スクリプトから呼ぶときは、依頼文ができていれば次に進んでください。以前は 1 でした）。
 書誌情報の誤り（巻・号・ページの英数字以外の文字、読めない日付など）、AI による補完が必要な原稿を `--ai none` で変換したとき、
 `--ai api` で API キー（環境変数）がないとき、`--ai manual` でないのに `--ai-response` を指定したとき（`--ai` の既定は none で、回答のファイルは読まれない）、指定したファイル・フォルダ（docx・`--meta`・`--pdf`・`--ai-response`・`--images`）が
 ないとき（ファイルの代わりにフォルダを指定したときも）、`--images` の画像を読めないとき（画像は 1 枚も入れません）、同じ種類の見出し（引用文献・注・付記・謝辞・英文要旨）が

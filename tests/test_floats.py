@@ -1,4 +1,4 @@
-"""浮動配置の図表（テキストボックス・グループ図形）: 機械的な配置、AI による位置と組み合わせの指定、AI が必要なときの中止、
+"""浮動配置の図表（テキストボックス・グループ図形）: 機械的な配置、AI による位置の指定（組み合わせの items は読まない）、AI が必要なときの中止、
 位置を決められない図表の仮の位置（アンカー段落の後ろ・本文の最後）、途中で切れた AI の回答の位置の指定の反映。
 文字だけのテキストボックスの判定（floats.textbox_kind のしきい値）と、本文の外の段落に結び付いた図形（修正計画の N7）。"""
 import json
@@ -212,12 +212,9 @@ def test_manual_mode_before_response_places_floats_after_anchor(journal, meta, t
 
 @pytest.mark.parametrize("bad, why", [
     ({"float": "s1", "after": "d16", "items": [{"kind": "fig", "caption": ["d16"], "body": ["t2"]}]}, "本文の段落ではない"),
-    ({"float": "s1", "after": "d13", "items": [{"kind": "table", "caption": ["d16"], "body": ["d14"]}]}, "表 1 つ"),
-    ({"float": "s1", "after": "d13", "items": [{"kind": "fig", "caption": ["d16"], "body": ["d14"]}]}, "画像以外の文字"),
-    ({"float": "s1", "after": "d13", "items": [{"kind": "fig", "caption": ["d24"], "body": ["t2"]}]}, "図形 s1 の中にない"),
-    ({"float": "s2", "after": "d18", "items": [{"kind": "fig", "caption": ["d21"], "body": ["img1", "d19"]}]}, "2 回"),
-    ({"float": "s2", "after": "d18", "items": [{"kind": "fig", "caption": ["d21"], "body": ["t3"]}]}, "両方"),
     ({"float": "s9", "after": "d13", "items": [{"kind": "fig", "caption": [], "body": ["t2"]}]}, "ない"),
+    ({"float": "s4", "after": "d13", "items": [{"kind": "fig", "caption": ["d29"], "body": ["img4"]}]}, "機械的に決めた"),
+    ({"float": "s1", "after": 3, "items": []}, "文字列で書く"),
 ])
 def test_invalid_placements_are_rejected(journal, bad, why):
     doc, plan, linker = _mechanical(FLOAT, journal)
@@ -226,27 +223,59 @@ def test_invalid_placements_are_rejected(journal, bad, why):
     assert why in out.rejected[0][1]
 
 
+@pytest.mark.parametrize("items", [
+    "OMIT", [],
+    [{"kind": "table", "caption": ["d16"], "body": ["d14"]}],              # 以前は「表 1 つ」で不採用
+    [{"kind": "fig", "caption": ["d24"], "body": ["t2"]}],                 # 以前は「図形 s1 の中にない」で不採用
+    [{"kind": "fig", "caption": "d16", "body": 5}],                        # 以前は「一覧（[ ]）で書く」で不採用
+])
+def test_placement_items_are_not_read(journal, meta, tmp_path, items):
+    """浮動配置の図形の指定は、図形の ID と after だけを検証し、items（中身の組み合わせ）は、あってもなくても、誤っていても
+    読まない（修正計画 W1 の 2.7）。中身は変換ツールが組み（float_units）、after の段落の後ろに置く。採用の記録（2 章）には
+    「組み合わせの指定は使わない」と書き、操作の欄に items を書かれたまま載せる（黙って捨てない）。"""
+    data = json.loads(RESPONSE)
+    pl = next(p for p in data["placements"] if p["float"] == "s1")
+    if items == "OMIT":
+        pl.pop("items")
+    else:
+        pl["items"] = items
+    res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=json.dumps(data),
+                                                convert_metafiles=False))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    assert res.plan.floats["s1"].mode == "ai" and "s1" not in res.plan.unplaced_floats
+    assert not any(op["src"] == "s1" for op, _ in res.ai.rejected)
+    [(op, d)] = [(op, d) for op, d in res.ai.accepted if op["src"] == "s1"]
+    assert "中身の組み合わせの指定は使わない。組み合わせは変換ツールが決める" in d.message
+    if isinstance(items, list) and items and isinstance(items[0]["caption"], list):
+        assert op["text"].startswith(items[0]["kind"] + ": キャプション " + ",".join(items[0]["caption"]))
+    root = load(res)
+    assert after(body_sequence(root), "図3と図4は") == ["F1"]                 # 指定どおりの位置。中身は表で組んだ図
+    assert root.find(".//fig[@id='F1']/table-wrap/table") is not None
+
+
 def test_image_and_text_in_one_paragraph_of_a_float(journal, meta, tmp_path):
-    """図形の中で画像と文字が同じ段落にある図: 画像は図の <graphic> に入れ、段落の文字は図の直後の <p> に出す。
-    AI を使わない設定でも止まらない。キャプションのない図形は、これまでどおり画像も文字も 1 つの <p> に出す。"""
+    """図形の中で画像と文字が同じ段落にある図: 画像は図の <graphic> に入れ、段落の文字は図の画像に写るとみなして除外する
+    （修正計画 W1 の 2.4。要確認 textbox_figure_text）。AI を使わない設定でも止まらない。キャプションのない図形（画像を直接
+    持たないテキストボックス）は、これまでどおり画像も文字も 1 つの <p> に出す（本文の段落。除外しない）。"""
+    from jasme_jats.structure import TEXTBOX_TEXT_EXCLUDED
     res = convert(FLOAT_TEXT, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
     fid = res.fidelity
     assert fid.ok and fid.final_ok and res.dtd_valid and res.jstage_issues == [], (fid.missing, fid.conflicts)
-    assert res.plan.unplaced_floats == [] and not any("説明文" in t for _, _, t in fid.excluded)
-    root = load(res)
     mixed = next(p for p in res.plan.paras.values() if p.text_only().startswith("説明文：図1"))
+    assert res.plan.unplaced_floats == [] and (mixed.src, TEXTBOX_TEXT_EXCLUDED, mixed.text_only()) in fid.excluded
+    root = load(res)
     fig = root.find(".//fig[@id='F1']")
-    assert [g.get(f"{{{XLINK}}}href") for g in fig.findall("graphic")] == [mixed.images[0].export_name]
-    assert "説明文" not in "".join(fig.itertext())
-    nxt = fig.getnext()
-    assert nxt.tag == "p" and "".join(nxt.itertext()) == "説明文：図1の画像と同じ段落にある文字。"
-    assert nxt.find("inline-graphic") is None                            # 画像は図に移した（段落の中に二重に出さない）
-    assert after(body_sequence(root), "試験（2024）", 3) == ["F1", "説明文：図1の画像と", "この段落に図1のテキ"]
-    assert any("画像と文字が同じ段落にある" in d.message and d.src == mixed.src for d in res.plan.decisions)
-    # キャプションのない図形: これまでどおり（画像も文字も 1 つの <p>。図にはしない）
+    [slot] = [s for s in res.plan.slots if s.kind == "fig"]
+    assert [g.get(f"{{{XLINK}}}href") for g in fig.findall("graphic")] == [f"31_1_{slot.key}.png"]
+    assert mixed.images[0] in slot.covers and slot.how == "float"
+    assert "説明文：図1" not in "".join(root.itertext())
+    assert after(body_sequence(root), "試験（2024）", 2) == ["F1", "この段落に図1のテキ"]
+    assert [a.key for a in actions(res) if a.level == TO_CHECK] == ["textbox_figure_text"]
+    # キャプションのない図形: これまでどおり（画像も文字も 1 つの <p>。図にはしない。本文の段落として記録する）
     p = next(p for p in root.iter("p") if "キャプションのない図形の文字" in "".join(p.itertext()))
     assert p.find("inline-graphic") is not None and len(list(root.iter("fig"))) == 1
-    assert len(res.images) == 2
+    [other] = [i for i in res.plan.floats.values() if i.body_paras]
+    assert [q.text_only() for q in other.body_paras] == ["説明文：キャプションのない図形の文字。"]
 
 
 def test_text_in_figure_image_paragraph_is_not_excluded(journal, meta):
@@ -256,11 +285,11 @@ def test_text_in_figure_image_paragraph_is_not_excluded(journal, meta):
     from jasme_jats.fidelity import verify
     from jasme_jats.structure import PNode
     _, plan, _ = _mechanical(FLOAT_TEXT, journal)
-    mixed = next(p for p in plan.paras.values() if p.text_only().startswith("説明文：図1"))
-    # 0.18.1 の組み方を模す: 画像と文字が同じ段落を図 F1 の画像の段落にし、図の直後の段落からは外す
+    mixed = next(p for p in plan.paras.values() if p.text_only().startswith("説明文：キャプションのない"))
+    # 組み立ての誤りを模す: 本文の段落として出す、画像と文字が同じ段落を、図 F1 の画像の段落にし、本文の段落からは外す
     [fig] = [f for f in plan.figures if f.fid == "F1"]
     fig.image_paras.append(mixed)
-    sec = next(s for s in plan.body if fig in s.children)
+    sec = next(s for s in plan.body if any(isinstance(n, PNode) and n.para is mixed for n in s.children))
     sec.children = [n for n in sec.children if not (isinstance(n, PNode) and n.para is mixed)]
     root, info = build(plan, meta, journal)
     assert not any(e.src == mixed.src for e in info.exclusions)
@@ -271,8 +300,8 @@ def test_text_in_figure_image_paragraph_is_not_excluded(journal, meta):
 
 @pytest.mark.parametrize("by", ["image", "paragraph"])
 def test_ai_placement_of_image_and_text_in_one_paragraph(journal, meta, tmp_path, by):
-    """位置を決められない図形で、画像と文字が同じ段落の画像（またはその段落）を AI が図の本体に指定した場合も、
-    画像は図に入れ、段落の文字は図の直後の <p> に出す。"""
+    """位置を決められない図形で、画像と文字が同じ段落の画像（またはその段落）を AI が図の本体に指定した場合も、組み方は
+    AI の指定のないときと同じ（画像は図に入れ、段落の文字は除外。AI の位置の指定の前後で除外が同じ）。"""
     path = tmp_path / "float_text_down.docx"
     mf.make_float_text(path, down_cm=2)          # 図1 のテキストボックスをアンカー段落から 2 cm 下にずらす
     with pytest.raises(AIRequiredError):
@@ -282,6 +311,7 @@ def test_ai_placement_of_image_and_text_in_one_paragraph(journal, meta, tmp_path
     mixed = next(p for p in paras if p.text_only().startswith("説明文：図1"))
     cap = next(p for p in paras if p.text_only().startswith("図1\u3000"))
     anchor = next(p for p in paras if p.text_only().startswith("この段落に図1"))
+    before = [(e.src, e.reason) for e in plan.exclusions]
     body = [mixed.images[0].image_id] if by == "image" else [mixed.src]
     resp = {"operations": [], "notes": [], "placements": [{"float": mixed.float_id, "after": anchor.src, "items": [
         {"kind": "fig", "caption": [cap.src], "body": body}], "reason": "試験", "confidence": "中"}]}
@@ -289,11 +319,11 @@ def test_ai_placement_of_image_and_text_in_one_paragraph(journal, meta, tmp_path
                                                ai_response=json.dumps(resp, ensure_ascii=False), convert_metafiles=False))
     assert res.ai.rejected == [] and res.plan.unplaced_floats == []
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
+    assert [(e.src, e.reason) for e in res.plan.exclusions] == before
     root = load(res)
-    assert after(body_sequence(root), "この段落に図1", 2) == ["F1", "説明文：図1の画像と"]
+    assert after(body_sequence(root), "この段落に図1", 2) == ["F1", "以上が図1である。"]
     fig = root.find(".//fig[@id='F1']")
-    assert len(fig.findall("graphic")) == 1 and fig.getnext().find("inline-graphic") is None
-    assert any(f"画像と文字が同じ段落 {mixed.src}" in d.message for _, d in res.ai.accepted)
+    assert len(fig.findall("graphic")) == 1 and "説明文：図1" not in "".join(root.itertext())
 
 
 def test_estimate_top_left_counts_lines():
@@ -574,6 +604,13 @@ def test_shapes_outside_body(journal, meta, tmp_path):
     assert "資料の囲み：架空のワークシートの問いである。" in app and root.find(".//app//boxed-text") is None
     # XML に入らなかった画像は、引用文献の段落そのものにある行内の画像だけ（図3 の画像は図に入る）
     assert [(li.location, li.text[:4]) for li in res.lost_images] == [("引用文献 3件目", "試験八郎")]
+    # 本文の最後の図3 に画像の置き場所があり、備考に理由を書く。図・表の一覧では、どちらの図形の図表も「本文の最後」
+    [slot] = [s for s in plan.slots if s.float_id == "s1"]
+    assert (slot.key, slot.note) == ("fig03", "引用文献の段落に結び付いているため、本文の最後に置いています")
+    assert last[-3].find("graphic").get("{http://www.w3.org/1999/xlink}href") == "31_1_fig03.png"
+    from jasme_jats.structure import figure_rows
+    assert [(r.fid, r.kind, r.label, r.float_id, r.place) for r in figure_rows(plan) if r.float_id] == [
+        ("T1", "table", "表1", "s3", "end"), ("F1", "fig", "図3", "s1", "end")]
 
 
 def _refs_group(path, inner):
@@ -618,8 +655,9 @@ def test_group_shape_on_reference_keeps_its_image(journal, meta, tmp_path):
     assert res.plan.floats["s1"].mode == "ai" and res.plan.textboxes == {}
     root = load(res)
     texts = ["".join(el.itertext()) for el in root.find("body").iter("p")]
-    assert texts.count("点Ｐ") == 1 and root.find(".//fig/graphic") is not None
-    assert "点Ｐ" not in {t for _, _, t in fid.excluded}
+    # 画像を直接持つグループ図形の中の文字は、図の画像に写るとみなして除外する（AI の指定の有無で同じ。修正計画 W1 の 2.4）
+    assert texts.count("点Ｐ") == 0 and root.find(".//fig/graphic") is not None
+    assert "点Ｐ" in {t for _, _, t in fid.excluded}
 
 
 def test_classify_twice_for_shapes_outside_body(journal, monkeypatch):
@@ -772,8 +810,8 @@ def test_unreadable_cut_response_is_reported(journal, meta, tmp_path):
 @pytest.mark.parametrize("val", ["OMIT", None, "", 0, False])
 @pytest.mark.parametrize("key", ["caption", "body"])
 def test_h1_falsy_caption_body_of_float_items_do_not_stop(key, val, journal, meta, tmp_path):
-    """H1: placements の items の caption・body が 0・false・null・空文字・キーなしのとき、検証（_placement_problem）は空の一覧として
-    通すので、組み立て（structure.float_from_spec）も同じ扱いにする（以前は TypeError・KeyError で変換が止まった）。"""
+    """H1: placements の items の caption・body が 0・false・null・空文字・キーなしでも止まらない（以前は TypeError・KeyError で
+    変換が止まった）。W1 からは浮動配置の図形の items を読まないので、どれも after の位置で採用する。"""
     data = json.loads(RESPONSE)
     item = data["placements"][0]["items"][0]
     if val == "OMIT":
@@ -783,11 +821,8 @@ def test_h1_falsy_caption_body_of_float_items_do_not_stop(key, val, journal, met
     res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path, ai_mode="manual", ai_response=json.dumps(data),
                                                 convert_metafiles=False))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
-    if key == "body":
-        assert any("body" in why for _, why in res.ai.rejected)      # 本体のない図は不採用（止まらない）
-    else:
-        assert not any("caption" in why for _, why in res.ai.rejected)
-        assert "s1" not in res.plan.unplaced_floats                 # キャプションのない図として採用された
+    assert not any(op["src"] == "s1" for op, _ in res.ai.rejected)
+    assert "s1" not in res.plan.unplaced_floats and res.plan.floats["s1"].mode == "ai"
 
 
 def test_h1_label_placement_without_after_key(journal, meta, tmp_path):

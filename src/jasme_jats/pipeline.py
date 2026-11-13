@@ -13,15 +13,16 @@
   6. 文字の不変性チェック（fidelity）… AI 補完を行った場合も、必ずこの最終段階で行う
   7. 目印を取り除いた最終出力を作り、もう一度文字列を照合する（fidelity.final_check）
   8. J-STAGE 指定 DTD で検証する（validate）
-  9. docx の画像のうち XML に出力しなかったもの（画像を置けない場所・出力しなかった段落の中の画像）を調べる（lost_images）。
+  9. docx の画像のうち XML に出力しなかったもの（画像の置き場所〈ImageSlot〉に含まれず、画像を置けない場所・出力しなかった段落の中に
+     ある画像）を調べる（lost_images）。
      あわせて、出力した表の形（行ごとの列の数・セルの重なり・縦の結合の範囲・セルのない行）を調べる（table_problems）。
      Word の自動番号のある段落で、文字を出したのに番号を出していないものも調べる（lost_autonums）。
      最終の XML に私用領域の文字（読めない文字）が残っていないかも調べ（pua_chars）、記号フォントの符号を普通の文字に置き換えた
      記号を集める（symbols_replaced）
  10. J-STAGE のアップロード時のチェックのうち XML だけで判定できるものを再現する（jstage_rules。画像の名前を使うので、
      11 の画像の書き出しの後、ZIP を作る前に、出力した画像の名前で行う）
- 11. 画像の書き出し、J-STAGE のフォルダ構成と ZIP（今回の XML・PDF・出力できた画像だけを入れ、読み直して確かめる）、
-     レポート（images, package, report）
+ 11. 画像の書き出し（置き場所ごとに最初の画像を置き場所の名前で。export_slot_images）、J-STAGE のフォルダ構成と ZIP
+     （今回の XML・PDF・出力できた画像だけを入れ、読み直して確かめる）、レポート（images, package, report）
 
 作り方は 2 通り（Options.route）:
   ルート1（docx）: docx から作る。docx の文字は 1 文字も変えない。記事の PDF があれば照合して、違いをレポートに載せるだけ（pdfmatch）
@@ -36,7 +37,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Optional
 
@@ -56,7 +57,7 @@ from .model import Decision, LostImage, LostNumber, PuaChar, TableProblem
 from .package import article_dir, make_zip, unzipped_files, write_package, zip_image_names, zip_problems
 from .pdfdocx import DocxFix, make_fixed_docx, same_file
 from .pdfmatch import PdfCheck, check_pdf
-from .report import (BOX_PENDING_NOTE, NEEDS_ACTION, actions, figure_body_detail, images_to_prepare, render,
+from .report import (BOX_PENDING_NOTE, actions, blocking, images_to_prepare, render,
                      render_ai_only, step, structure_conflict_text)
 from .report import pdf_fallback as report_pdf_fallback
 from .structure import FN_IMAGE_EXCLUDED, REF_IMAGE_EXCLUDED, classify, conflict_overrides, float_caption, float_targets
@@ -238,9 +239,10 @@ class Result:
 
     @property
     def needs_action(self) -> bool:
-        """要対応の知らせ（report.actions の level が「要対応」）があるか。コマンドラインの終了コード 1、Colab の手順 8 で
-        一度止める。ok でなければ必ず真（不変性チェック・DTD 検証の不合格は要対応）。"""
-        return any(a.level == NEEDS_ACTION for a in actions(self))
+        """要対応の知らせ（report.actions の level が「要対応」）か、残っている必須の手順があるか（report.blocking）。
+        コマンドラインの終了コード 1、Colab の手順 8 で一度止める。ok でなければ必ず真（不変性チェック・DTD 検証の不合格は要対応）。
+        推奨の手順（AI の回答待ちなど）は数えない。"""
+        return bool(blocking(actions(self)))
 
     @property
     def pdf_fallback(self) -> bool:
@@ -293,11 +295,12 @@ def lost_images(doc, plan, root, info, exclusions) -> tuple:
 
     不変性チェック（fidelity）は文字しか見ないので、画像を置けない文脈（題目・著者名・所属・引用文献・番号。emit の
     images=False）の段落や、出力しなかった段落（除外）の中の画像は、ここで調べないと XML からも Graphics/ からも黙って消える。
-    root は組み立てた XML（jx:span の目印が残っているもの）、info はその組み立ての BuildInfo（出力した画像は info.images）。
+    root は組み立てた XML（jx:span の目印が残っているもの）、info はその組み立ての BuildInfo（出力した画像の置き場所は info.slots。
+    置き場所の covers の画像を、出力したものとする〈図 1 つに <graphic> 1 つで、図に含めた画像はすべてその 1 枚に写るとみなす〉）。
     理由は、画像のある段落の文字を XML のどこに出力したか（jx:span の祖先の要素）と、除外の記録から推定する。
     隠し文字のランの中の画像（ImageRef.hidden）は、Word で表示されないので出力しない（隠し文字と同じ扱い）。別に返す。
     """
-    out = {img.image_id for img in info.images}
+    out = {img.image_id for slot in info.slots for img in slot.covers}
     holder = {}                                  # 画像の ID -> その画像のアトムがある段落
     for p in plan.paras.values():
         for img in p.images:
@@ -316,6 +319,8 @@ def lost_images(doc, plan, root, info, exclusions) -> tuple:
             continue
         if img.hidden:
             hidden.append(img.image_id)
+            continue
+        if img.decoration:      # 飾りの図形（枠・白い四角・線など）は画像の位置に数えない（XML に出さない）
             continue
         p = holder.get(img.image_id)
         if p is None:
@@ -700,6 +705,15 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
                     why = (f"テキストボックス {sid} は、AI の役割の指定（set_role）を反映して組み直した後に文字だけのテキストボックスで"
                            "なくなったか、置く位置の段落が本文の段落でなくなったので、kind の指定は使わなかった")
                     outcome.rejected.append((spec["op"], why))
+                elif spec.get("where") != "end":
+                    # 浮動配置の図形の位置の指定で、組み直した後に使えなくなったもの（同じ回答の set_role で、置く位置の段落が本文の
+                    # 段落でなくなった。structure.Classifier.place_floats）。黙って捨てずに、不採用として 2 章に示す（本文の外の段落の
+                    # 後ろの指定〈where end〉は、検証のときに不採用に記録してある）
+                    why = (f"図形 {sid} の置く位置の段落 {spec['after']} は、AI の役割の指定（set_role）を反映して組み直した後に本文の"
+                           "段落でなくなったので、位置の指定は使わなかった" if sid in plan.floats else
+                           f"図形 {sid} は、AI の役割の指定（set_role）を反映して組み直した後に図表の入った図形でなくなったので、"
+                           "位置の指定は使わなかった")
+                    outcome.rejected.append((spec["op"], why))
             apply_ops(ops, plan, doc, outcome, split)
             cited = cited_refs(plan)
             plan.uncited_refs = [r.rid for r in plan.refs if r.rid not in cited]
@@ -759,10 +773,9 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
 
     # ---------------------------------------------------------------- 出力
     adir = article_dir(out_dir, journal, meta)
-    images = export_images(doc, info.images, adir / "Graphics", convert_metafiles=opts.convert_metafiles,
-                           keep_dir=out_dir / "要変換")
+    images = export_slot_images(doc, info, adir / "Graphics", opts.convert_metafiles, out_dir / "要変換")
     aid = meta.article_id(journal)
-    jstage_issues = jstage_check(final_root, aid, [i.name for i in images if i.name])
+    jstage_issues = jstage_check(final_root, aid, [i.name for i in images if i.name])     # 置き場所の名前（画像がないものも）
     # ZIP に入れるのは、今回の XML・今回指定した PDF・出力できた画像だけ（記事フォルダに残っている前回の変換の残りなどは入れない）
     zip_path, adir, has_pdf = write_package(out_dir, journal, meta, xml_bytes, opts.pdf_path, zip_image_names(images))
     flat_xml = out_dir / f"{aid}.xml"
@@ -825,9 +838,6 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
                       "違えば XML の中で boxed-text を正しい位置に移す")
         # 場所の欄はアンカー段落の場所（空の段落なら、その前の段落の場所。本文の外なら「引用文献 3件目」など）
         unresolved_after.append(("box", _located(plan, bi.box.anchor_src), f"テキストボックス {xid}「{head}」", detail))
-    # 画像のない図キャプションで、近くの表を図の本体にできなかったもの（structure.Classifier.table_for_figure）
-    for src, why in plan.figure_issues:
-        unresolved_after.append(("figbody", src, _head(plan, src), figure_body_detail(why)))
     warnings = list(dict.fromkeys(doc.warnings + plan.warnings + info.warnings))
     build_notes = [Decision(did=f"M-B{i}", stage="mechanical", category=c, src=s, message=m,
                             location=plan.locations.get(s, "")) for i, (c, s, m) in enumerate(info.notes, 1)]
@@ -854,6 +864,28 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     return res
 
 
+# 置き場所に docx の画像がない図（キャプションだけの図）の、画像の一覧の備考（images_to_prepare の理由にも使う）
+NO_DOCX_IMAGE = "docx の中にこの図の画像が見つからない（キャプションだけの図）。出版版 PDF などから図の画像を作って入れること"
+
+
+def export_slot_images(doc, info, gdir: Path, convert_metafiles, keep_dir: Path) -> list:
+    """W1 の途中の姿: 出力した画像の置き場所（info.slots。XML の順）ごとに、最初の画像（covers[0]）を置き場所の名前で
+    Graphics/ に書き出す（images.export_images。W1 の手順 9 で書き出しをやめる）。戻り値は置き場所ごとの images.ImageResult
+    （置き場所と同じ順。key は置き場所の幹）。docx に画像のない置き場所は、状態 missing・理由 NO_DOCX_IMAGE。"""
+    # 名前は置き場所ごと（同じ docx の画像が 2 つの置き場所の最初の画像のときも、それぞれの名前で書く。C007 の形）
+    firsts = [replace(slot.covers[0], export_name=info.slot_names[slot.key]) for slot in info.slots if slot.covers]
+    done = iter(export_images(doc, firsts, gdir, convert_metafiles=convert_metafiles, keep_dir=keep_dir))
+    out = []
+    for slot in info.slots:
+        if slot.covers:
+            r = next(done)
+            r.key = slot.key
+        else:
+            r = ImageResult("", info.slot_names[slot.key], "", "missing", NO_DOCX_IMAGE, key=slot.key)
+        out.append(r)
+    return out
+
+
 def graphics_path(res: Result) -> Path:
     """出力フォルダの中の Graphics フォルダ（画像の置き場所）。"""
     return article_dir(res.zip_path.parent, res.journal, res.meta) / "Graphics"
@@ -863,7 +895,7 @@ def add_images(res: Result, supplied: dict, skip_unneeded: bool = False) -> list
     """利用者が用意した画像（Word の図形で描かれた図など、変換で画像ファイルを作れなかった図の画像）を Graphics/ に入れ、
     アップロード用の ZIP とレポートを作り直す。
 
-    supplied: 出力ファイル名（25_77_01.png など）→ 画像（ファイルのパス、バイト列、または (元のファイル名, バイト列)）。
+    supplied: 出力ファイル名（25_77_fig01.png など）→ 画像（ファイルのパス、バイト列、または (元のファイル名, バイト列)）。
       元のファイル名は何でもよい。PNG・JPEG・GIF など、または 1 ページの PDF を、出力ファイル名の形式にして入れる。
     受け付けるのは、用意が必要な画像（report.images_to_prepare）の名前だけ。それ以外の名前と読めない画像は ValueError
     （skip_unneeded なら、用意が不要な名前は黙って飛ばす。変換をやり直した後に、前に受け取った画像を入れ直すとき）。
@@ -890,7 +922,8 @@ def add_images(res: Result, supplied: dict, skip_unneeded: bool = False) -> list
         k = next(k for k, i in enumerate(res.images) if i.name == name)
         old = res.images[k]
         res.images[k] = ImageResult(old.image_id, name, old.source, "user",
-                                    f"利用者が用意した画像{f'（{label}）' if label else ''}を入れた。変換のときの状態: {need[name]}")
+                                    f"利用者が用意した画像{f'（{label}）' if label else ''}を入れた。変換のときの状態: {need[name]}",
+                                    key=old.key)
         res.warnings = [w for w in res.warnings if not w.startswith(f"{old.image_id}:")]
     if prepared:
         out_dir = res.zip_path.parent

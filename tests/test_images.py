@@ -158,12 +158,12 @@ def test_crop_image_unreadable_is_crop_error():
 # ----------------------------------------------------------------------------- 変換
 def test_convert_crops_word_trimmed_png(journal, meta, tmp_path):
     res = run(tmp_path, one_image("a.png", mf.two_tone(), src_rect='l="50000"'), journal, meta)
-    im = Image.open(io.BytesIO(zip_member(res, "Graphics/31_1_01.png")))
+    im = Image.open(io.BytesIO(zip_member(res, "Graphics/31_1_fig01.png")))
     assert im.size == (100, 100) and im.convert("RGB").getpixel((0, 0)) == (0, 0, 255)
     r = res.images[0]
     assert r.status == "converted" and r.crop == (0.5, 0, 0, 0)
     xml = res.xml_path.read_text(encoding="utf-8")
-    assert 'xlink:href="31_1_01.png"' in xml
+    assert 'xlink:href="31_1_fig01.png"' in xml
     assert "image_crop" in keys(res) and not res.needs_action
     report = res.report_path.read_text(encoding="utf-8")
     assert "切り取った" in report.split("## 9.")[1].split("## 10.")[0]
@@ -171,8 +171,8 @@ def test_convert_crops_word_trimmed_png(journal, meta, tmp_path):
 
 def test_convert_crops_jpeg_keeps_jpg_name(journal, meta, tmp_path):
     res = run(tmp_path, one_image("a.jpeg", mf.two_tone("JPEG"), src_rect='l="50000"'), journal, meta)
-    assert res.images[0].name == "31_1_01.jpg"
-    im = Image.open(io.BytesIO(zip_member(res, "Graphics/31_1_01.jpg")))
+    assert res.images[0].name == "31_1_fig01.jpg"
+    im = Image.open(io.BytesIO(zip_member(res, "Graphics/31_1_fig01.jpg")))
     assert im.format == "JPEG" and im.size == (100, 100)
 
 
@@ -184,18 +184,18 @@ def test_exif_orientation_zero_is_cropped(journal, meta, tmp_path):
 def test_convert_uncroppable_goes_to_prepare(journal, meta, tmp_path):
     res = run(tmp_path, one_image("a.jpg", exif_jpeg(6), src_rect='l="50000"'), journal, meta)
     r = res.images[0]
-    assert r.status == "failed" and r.name == "31_1_01.jpg"
+    assert r.status == "failed" and r.name == "31_1_fig01.jpg"
     assert r.name not in zip_image_names(res.images)
-    assert zip_member(res, "Graphics/31_1_01.jpg") is None
-    assert not list((tmp_path / "out").glob("jasme/**/Graphics/31_1_01.jpg"))
-    keep = tmp_path / "out" / "要変換" / "31_1_01.jpg"
+    assert zip_member(res, "Graphics/31_1_fig01.jpg") is None
+    assert not list((tmp_path / "out").glob("jasme/**/Graphics/31_1_fig01.jpg"))
+    keep = tmp_path / "out" / "要変換" / "31_1_fig01.jpg"
     assert keep.exists() and Image.open(keep).size == (200, 100)
     need = images_to_prepare(res)
-    assert [n for n, _, _ in need] == ["31_1_01.jpg"] and "切り取れなかった" in need[0][2]
+    assert [n for n, _, _ in need] == ["31_1_fig01.jpg"] and "切り取れなかった" in need[0][2]
     assert "images" in keys(res) and res.needs_action
     buf = io.BytesIO()
     Image.new("RGB", (50, 50), "green").save(buf, "PNG")
-    add_images(res, {"31_1_01.jpg": buf.getvalue()})
+    add_images(res, {"31_1_fig01.jpg": buf.getvalue()})
     assert res.images[0].status == "user"
     assert "image_crop" not in keys(res)
 
@@ -211,14 +211,14 @@ def test_crop_save_error_becomes_failed(journal, meta, tmp_path, monkeypatch):
     monkeypatch.setattr(Image.Image, "save", boom)
     res = run(tmp_path, one_image("a.png", mf.two_tone(), src_rect='l="50000"'), journal, meta)
     assert res.images[0].status == "failed"
-    assert (tmp_path / "out" / "要変換" / "31_1_01.png").exists()
+    assert (tmp_path / "out" / "要変換" / "31_1_fig01.png").exists()
 
 
 def test_subpixel_crop_is_noop(journal, meta, tmp_path):
     data = mf.two_tone(size=(100, 100))
     res = run(tmp_path, one_image("a.png", data, src_rect='l="100"'), journal, meta)
     r = res.images[0]
-    assert r.status == "ok" and r.crop is None and zip_member(res, "Graphics/31_1_01.png") == data
+    assert r.status == "ok" and r.crop is None and zip_member(res, "Graphics/31_1_fig01.png") == data
     assert "image_crop" not in keys(res)
 
 
@@ -226,7 +226,7 @@ def test_convert_metafile_with_crop_is_not_cropped(journal, meta, tmp_path):
     res = run(tmp_path, one_image("a.emf", b"\x01\x00\x00\x00dummy-emf", src_rect='l="50000"'), journal, meta)
     r = res.images[0]
     assert r.status == "failed" and "切り取った図" in r.message
-    assert zip_member(res, "Graphics/31_1_01.png") is None
+    assert zip_member(res, "Graphics/31_1_fig01.png") is None
 
 
 @pytest.mark.skipif(images.soffice_path() is None, reason="LibreOffice がない")
@@ -238,15 +238,15 @@ def test_convert_converted_metafile_with_crop_goes_to_prepare(journal, meta, tmp
     res = convert(make(tmp_path, one_image("a.emf", emf, src_rect='l="50000"')), meta, journal, Options(out_dir=out))
     r = res.images[0]
     assert r.status == "failed" and "当てはめられない" in r.message
-    assert zip_member(res, "Graphics/31_1_01.png") is None
-    assert (out / "要変換" / "31_1_01.png").exists()
+    assert zip_member(res, "Graphics/31_1_fig01.png") is None
+    assert (out / "要変換" / "31_1_fig01.png").exists()
 
 
 def test_convert_rotated_image_is_reported(journal, meta, tmp_path):
     data = mf.two_tone()
     res = run(tmp_path, one_image("a.png", data, xfrm=' rot="5400000"'), journal, meta)
     r = res.images[0]
-    assert r.status == "ok" and r.edits == ("回転",) and zip_member(res, "Graphics/31_1_01.png") == data
+    assert r.status == "ok" and r.edits == ("回転",) and zip_member(res, "Graphics/31_1_fig01.png") == data
     acts = {a.key: a for a in actions(res)}
     assert "image_edits" in acts
     import re

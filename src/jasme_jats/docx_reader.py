@@ -9,8 +9,12 @@ ooxml.canonical_texts() で独立に取り出した文字列と一致するこ�
 """
 from __future__ import annotations
 
+import copy
+import hashlib
 import re
 from dataclasses import dataclass, field
+
+from lxml import etree
 
 from .model import (IMAGE_EDITS, Atom, Cell, DeletedRow, Document, Float, ImageRef, JoinInfo, Layout, Para, ResultlessField, Row, SymbolReplaced,
                     Table, TextBox, note_key)
@@ -143,6 +147,7 @@ class Reader:
         # 削除の変更履歴の中の脚注・文末脚注の参照の注の鍵（参照として数えない。structure.Classifier.attach_word_notes が除外の理由に使う）
         self.deleted_note_refs = set()
         self._img_count = 0
+        self._draw_count = 0    # w:drawing・w:pict・w:object の通し番号（ImageRef.draw_id）
         self.floats = []
         self._float = None      # 読み取り中の浮動配置の図形（Float）
         self.textboxes = []
@@ -577,7 +582,8 @@ class Reader:
                     self.warnings.append(f"{para.src}: ルビ「{_plain(rt)}」は JATS 1.1 で表現できないため、親文字のみ出力")
 
     # ------------------------------------------------------------ images / text boxes
-    def _new_image(self, rid, source, **kw) -> ImageRef:
+    def _new_image(self, rid, source, el=None, **kw) -> ImageRef:
+        """画像 1 つの ImageRef。el は画像の XML（pic:pic・v:imagedata・図形全体）で、画像ファイルがないときの digest に使う。"""
         self._img_count += 1
         target = ""
         if rid and rid in self.rels:
@@ -593,8 +599,34 @@ class Reader:
                        float_id=self._float.fid if self._float else "", **kw)
         if not target and not kw.get("shape_only"):
             img.shape_only = True
+        if target in self.media:
+            img.digest = hashlib.sha1(self.media[target]).hexdigest()
+        elif el is not None:
+            img.digest = self._xml_digest(el)
         self.images.append(img)
         return img
+
+    def _xml_digest(self, el) -> str:
+        """図形の XML の SHA-1。文字（w:txbxContent）・位置（wp:positionH・positionV・simplePos・a:off）・ID と名前の属性は除く
+        （文字を直したり、図形を動かしたりしても変わらない）。リレーションシップの ID（r:id など）は、参照先の部品の中身にする
+        （部品の番号が振り直されても変わらない）。"""
+        c = copy.deepcopy(el)
+        drop = {w("txbxContent"), f"{{{WP_NS}}}positionH", f"{{{WP_NS}}}positionV", f"{{{WP_NS}}}simplePos", f"{{{A_NS}}}off"}
+        for x in [x for x in c.iter() if x is not c and x.tag in drop]:
+            if x.getparent() is not None:
+                x.getparent().remove(x)
+        for x in c.iter():
+            if not isinstance(x.tag, str):
+                continue
+            for k in list(x.attrib):
+                local = k.rsplit("}", 1)[-1]
+                if k.startswith(f"{{{R_NS}}}"):
+                    ref = self.rels.get(x.get(k))
+                    data = self.pkg.read(ref[1]) if ref and ref[2] != "External" else None
+                    x.set(k, hashlib.sha1(data).hexdigest() if data is not None else (ref[1] if ref else x.get(k)))
+                elif local in DIGEST_DROP_ATTRS:
+                    del x.attrib[k]
+        return hashlib.sha1(etree.tostring(c, method="c14n", exclusive=True)).hexdigest()
 
     def _textboxes(self, container, para, holder=None, inline=False, group=False, vml=False):
         """container（w:drawing / w:pict / w:object）の中のテキストボックスの段落・表を読み、段落 para の後ろに並べる。
@@ -679,7 +711,9 @@ class Reader:
         """画像・図形。隠し文字のランの中の画像も doc.images に入れる（ImageRef.hidden。スタイル・既定の書式で隠したものは
         hidden_style も）が、段落のアトムにはしない。テキストボックスの中の段落は、隠し文字のランの中でも隠さずに読む
         （画像と違う。0.25.0 と同じ。docs/DESIGN.md の 4.1）。"""
-        hid = {"hidden": bool(hidden), "hidden_style": hidden == "style"}
+        self._draw_count += 1
+        hid = {"hidden": bool(hidden), "hidden_style": hidden == "style",
+               "draw_id": f"g{self._draw_count}", "para_src": para.src}
         if el.tag == w("drawing"):
             holder = el.find(f"{{{WP_NS}}}inline")
             inline = holder is not None
@@ -718,14 +752,14 @@ class Reader:
                         sy = _ratio(wext.get("cy"), ch.get("cy"))
                     pcx, pcy = round(int(ext.get("cx", "0")) * sx), round(int(ext.get("cy", "0")) * sy)
                 crop, edits = _pic_edits(pic, el)
-                img = self._new_image(rid, "drawing", cx_emu=pcx, cy_emu=pcy, inline=inline, descr=descr,
+                img = self._new_image(rid, "drawing", el=pic, cx_emu=pcx, cy_emu=pcy, inline=inline, descr=descr,
                                       crop=crop, edits=edits, **hid)
                 if not hidden:
                     para.atoms.append(Atom(kind="image", image=img))
             if not pics:
                 if not has_tx or "wordprocessingGroup" in uri or "wordprocessingCanvas" in uri or "chart" in uri:
-                    img = self._new_image(None, "drawing", cx_emu=cx, cy_emu=cy, inline=inline, descr=descr,
-                                          shape_only=True, **hid)
+                    img = self._new_image(None, "drawing", el=el, cx_emu=cx, cy_emu=cy, inline=inline, descr=descr,
+                                          shape_only=True, decoration=shape_decoration(el), **hid)
                     if not hidden:
                         para.atoms.append(Atom(kind="image", image=img))
             if has_tx:
@@ -750,13 +784,13 @@ class Reader:
         for d in imgdata:
             rid = d.get(f"{{{R_NS}}}id")
             crop, edits = _vml_edits(d)
-            img = self._new_image(rid, "ole" if el.tag == w("object") else "vml",
+            img = self._new_image(rid, "ole" if el.tag == w("object") else "vml", el=d,
                                   cx_emu=cx, cy_emu=cy, ole_progid=progid, crop=crop, edits=edits, **hid)
             if not hidden:
                 para.atoms.append(Atom(kind="image", image=img))
         has_tx = any(True for _ in el.iter(w("txbxContent")))
         if not imgdata and not has_tx:
-            img = self._new_image(None, "vml", cx_emu=cx, cy_emu=cy, shape_only=True, ole_progid=progid, **hid)
+            img = self._new_image(None, "vml", el=el, cx_emu=cx, cy_emu=cy, shape_only=True, ole_progid=progid, **hid)
             if not hidden:
                 para.atoms.append(Atom(kind="image", image=img))
         if has_tx:
@@ -780,6 +814,85 @@ class Reader:
         fl.wrap = next((etree_local(c) for c in holder if etree_local(c).startswith("wrap")), "")
         self.floats.append(fl)
         return fl
+
+
+# 図形の XML の digest（_xml_digest）から除く属性（名前空間によらず、ローカル名で）
+DIGEST_DROP_ATTRS = frozenset({"id", "name", "anchorId", "editId", "paraId", "textId"})
+_BOX_PRST = ("rect", "roundRect")
+_WHITE_SCHEME = ("bg1", "lt1")
+
+
+def _fill_kind(wsp) -> str:
+    """図形 wps:wsp の塗り。none（塗りなし）/ white（白）/ other（それ以外。グラデーション・画像・色つき・テーマの塗り）。"""
+    sp = wsp.find(f"{{{WPS_NS}}}spPr")
+    if sp is not None:
+        for ch in sp:
+            tag = etree_local(ch)
+            if tag == "noFill":
+                return "none"
+            if tag == "solidFill":
+                col = next(iter(ch), None)
+                if col is None:
+                    return "other"
+                # 色の加工（明るさ・色合いなど）があれば純白ではない。透明度（alpha）は塗りの色を変えない
+                if any(etree_local(x) != "alpha" for x in col):
+                    return "other"
+                name, val = etree_local(col), (col.get("val") or "").lower()
+                if (name == "srgbClr" and val == "ffffff") or (name == "schemeClr" and val in _WHITE_SCHEME) \
+                        or (name == "sysClr" and val == "window"):
+                    return "white"
+                return "other"
+            if tag in ("gradFill", "blipFill", "pattFill", "grpFill"):
+                return "other"
+    # spPr に塗りの指定がなければ、図形のスタイル（wps:style の fillRef）に従う。idx 0 は塗りなし
+    st = wsp.find(f"{{{WPS_NS}}}style/{{{A_NS}}}fillRef")
+    if st is not None and (st.get("idx") or "0") != "0":
+        return "other"
+    return "none"
+
+
+def _shape_kind(wsp) -> str:
+    """図形 wps:wsp の種類。text（文字のある長方形・角丸）/ frame（文字のない長方形・角丸で塗りなし）/ mask（同じく白い塗り）/
+    line（文字のない線・コネクタ・矢印）/ ""（それ以外。楕円・三角形・フリーフォーム・色つきなど）。"""
+    sp = wsp.find(f"{{{WPS_NS}}}spPr")
+    geom = sp.find(f"{{{A_NS}}}prstGeom") if sp is not None else None
+    prst = geom.get("prst", "") if geom is not None else ""
+    box = wsp.find(f"{{{WPS_NS}}}txbx")
+    has_text = box is not None and any((t.text or "").strip() for t in box.iter(w("t")))
+    if prst in _BOX_PRST:
+        if has_text:
+            return "text"
+        fill = _fill_kind(wsp)
+        return "frame" if fill == "none" else "mask" if fill == "white" else ""
+    low = prst.lower()
+    if prst and not has_text and not low.startswith("flowchart") and ("line" in low or "connector" in low or "arrow" in low):
+        return "line"
+    return ""
+
+
+def shape_decoration(el) -> str:
+    """画像を持たない図形 el（w:drawing）が、画像の位置に数えない飾りなら、その種類。そうでなければ ""。
+
+    飾り（修正計画 W1 の 2.3 の D）: 単独の図形の、文字のない枠（frame。長方形・角丸で塗りなし）・白い四角（mask）・線やコネクタや矢印（line）。
+    グループ（描画キャンバスも）で、中の図形がすべて枠か白い四角（frame。白い四角だけなら mask）、またはすべて文字のある長方形・角丸
+    （textgroup）のもの。グラフ・VML・それ以外の形（楕円・三角形・フリーフォームなど）・線だけを集めたグループ・枠と文字の図形が混ざった
+    グループは、画像の位置に数える（迷うものは数える側に倒す）。"""
+    gd = el.find(f".//{{{A_NS}}}graphicData")
+    uri = gd.get("uri", "") if gd is not None else ""
+    shapes = [x for x in el.iter(f"{{{WPS_NS}}}wsp") if not _in_textbox(x, el)]
+    if "wordprocessingShape" in uri:
+        kind = _shape_kind(shapes[0]) if len(shapes) == 1 else ""
+        return kind if kind in ("frame", "mask", "line") else ""
+    if "wordprocessingGroup" in uri or "wordprocessingCanvas" in uri:
+        # グループの中に画像・表・グラフがあれば、図形だけの集まりではない
+        if not shapes or any(True for x in el.iter(f"{{{PIC_NS}}}pic", f"{{{WPG_NS}}}graphicFrame") if not _in_textbox(x, el)):
+            return ""
+        kinds = {_shape_kind(x) for x in shapes}
+        if kinds <= {"frame", "mask"}:
+            return "mask" if kinds == {"mask"} else "frame"
+        if kinds == {"text"}:
+            return "textgroup"
+    return ""
 
 
 def etree_local(el) -> str:

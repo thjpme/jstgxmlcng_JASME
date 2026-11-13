@@ -28,7 +28,7 @@ from .colab import (ANSWER_LABEL, APPLY_LABEL, CONVERT_LABEL, ai_required_box, e
                     step_text, structure_conflict_box, summary_box)
 from .config import ArticleMeta, JournalConfig, keyword_language_mismatch, keyword_problem
 from .pipeline import AIRequiredError, Options, StructureConflictError, add_images, convert
-from .report import NEEDS_ACTION, actions, ai_pending, images_to_prepare
+from .report import actions, ai_pending, blocking, images_to_prepare
 
 DOCS = "https://github.com/thjpme/jstgxmlcng_JASME/blob/main/docs/USAGE.md"
 MAX_IMAGE_SLOTS = 30          # 足りない画像の欄の数（最初から作って、足りない図の数だけ見せる）。これより多い分は「画像を入れる」の後に出る
@@ -532,7 +532,8 @@ class AppState:
         return self.res is not None and self.res.needs_action
 
     def todo_titles(self) -> list:
-        return [a.box_title for a in actions(self.res) if a.level == NEEDS_ACTION] if self.res is not None else []
+        """ダウンロードの前に止める知らせ（report.blocking。要対応と、残っている必須の手順）の見出し。"""
+        return [a.box_title for a in blocking(actions(self.res))] if self.res is not None else []
 
     def result_html(self) -> str:
         """結果の HTML: 要対応・要確認の枠 → 結果の要約 → レポート全文（畳む）。"""
@@ -546,14 +547,14 @@ class AppState:
         return "".join(parts)
 
     def download(self, accept_todo: bool = False) -> "tuple[str | None, str]":
-        """ダウンロード用の ZIP を作る。戻り値: (ZIP のパス, 知らせ)。要対応が残っていて accept_todo でなければ (None, 知らせ)。"""
+        """ダウンロード用の ZIP を作る。戻り値: (ZIP のパス, 知らせ)。止める知らせ（要対応か、残っている必須の手順）があって accept_todo でなければ (None, 知らせ)。"""
         if self.res is None:
             return None, "先に変換してください。"
         changed = self.changed_inputs()
         if changed:
             return None, self.stale_text(changed)       # 「このままダウンロード」でも断る
         if self.needs_action and not accept_todo:
-            return None, ("要対応が残っています: " + "／".join(self.todo_titles())
+            return None, ("残っていることがあります: " + "／".join(self.todo_titles())
                           + "。このままダウンロードするときは、「このままダウンロード」にチェックを入れてもう一度押してください。")
         archive = shutil.make_archive(str(self.work / f"変換結果_{self.res.xml_path.stem}"), "zip", self.out_dir)
         return archive, ""
@@ -655,7 +656,7 @@ def build_app(state: AppState, io: "IO | None" = None):
                            for k in range(1, MAX_IMAGE_SLOTS + 1)]        # 図ごとの欄。view() が見せる数とラベルを決める
             images_btn = gr.Button("画像を入れる")
         with gr.Row():
-            accept = gr.Checkbox(label="このままダウンロード（要対応が残っています）", visible=False)
+            accept = gr.Checkbox(label="このままダウンロード（要対応か、残っている手順があります）", visible=False)
             download_btn = gr.Button("結果をダウンロード")
             next_btn = gr.Button("次の論文")
         download_html = gr.HTML()                      # 「ZIP を保存」のボタン（download_button_html）

@@ -54,25 +54,89 @@ class QuoteNode:
 
 
 @dataclass(eq=False)
+class ImageSlot:
+    """XML の画像の置き場所 1 つ（<graphic>・<inline-graphic> 1 つ。画像は 1 枚）。Classifier.assign_slots が作る。
+
+    docx の画像は、置き場所を決める手がかりとしてだけ使う（covers）。名前は幹 key から決める（builder.Builder.slot_name。
+    「{記事識別子}_{幹}.{拡張子}」）。幹は図・表なら番号から（fig03・fig01-2・fig04_2・figx01）、キャプションなしなら covers の
+    最初の画像の中身の要約値（ImageRef.digest）の先頭 6 桁（img3fa9c2。同じ中身が 2 か所なら docx の順に _2）。
+    kind: fig（図キャプションの図）/ table（画像で貼った表）/ nocap（キャプションなし）/ optional（任意）。
+    place: fig（<fig> の中の <graphic>）/ table（<table-wrap> の中の <graphic>）/ inline（段落・表のセルの中の <inline-graphic>）。
+    label は「図3」「図1-2」（番号を読めなければ ""）、caption はキャプションの段落（なければ None）、src は場所を示す段落の ID、
+    covers はこの 1 枚に写るとみなした ImageRef の一覧（docx の順）、float_id は図形の ID（図形の中身なら）、how は含めた決め方の
+    記録、note は備考。
+    """
+    key: str
+    kind: str
+    label: str = ""
+    caption: Optional[Para] = None
+    src: str = ""
+    covers: list = field(default_factory=list)
+    float_id: str = ""
+    place: str = "fig"
+    how: str = ""
+    note: str = ""
+
+
+@dataclass(eq=False)
+class FigureRow:
+    """図・表・キャプションのない画像の置き場所の一覧の 1 行（structure.figure_rows。XML の順）。レポートの図の画像の一覧と、
+    AI の依頼文の「図・表の一覧」（修正計画 W8）が同じものを使う。
+
+    fid は節の ID（F1・T2。キャプションのない図・表のセルの中の置き場所などは ""）、kind は fig（図キャプションの図。表で組んだ図も）/
+    table（表）/ nocap（キャプションのない画像の置き場所）、label は「図3」「表1」（番号を読めなければ ""）、caption はキャプションの
+    段落（なければ None）、key は画像の置き場所の幹（置き場所がない〈表で組んだ図・表〉なら ""）、float_id は図形の ID（図形の中身から
+    組んだものと、本文の図キャプションの図に含めた図形〈FloatInfo.mode が caption〉のもの。図形の外なら ""）、place は位置の決め方
+    （structure.PLACE_JA の鍵: word〈Word の並び〉/ mechanical / ai / anchor〈結び付いた段落の後ろに仮に置いた〉/ end〈本文の最後〉/
+    caption〈図キャプションの位置〉）。node は FigNode・TableNode（段落の中の置き場所なら None）、slot は画像の置き場所（なければ None）。
+    """
+    fid: str
+    kind: str
+    label: str = ""
+    caption: Optional[Para] = None
+    key: str = ""
+    float_id: str = ""
+    place: str = "word"
+    node: object = None
+    slot: Optional[ImageSlot] = None
+
+
+@dataclass(eq=False)
 class FigNode:
     image_paras: list
     caption: Optional[Para] = None
     caption_more: list = field(default_factory=list)   # 2 段落目以降のキャプション
     tables: list = field(default_factory=list)         # 表で組んだ図の本体（テキストボックスの中の表など）
-    extra_images: list = field(default_factory=list)   # 他の段落の中から移した画像（グループ図形の画像）
+    # ほかの段落から含めた画像（グループ図形の画像、図キャプションの段落の中の画像、近くの段落の画像、文字のある段落に結び付いた
+    # 浮動の画像。structure.Classifier.figure_units）
+    extra_images: list = field(default_factory=list)
     fid: str = ""
     number: Optional[int] = None
     formula: object = None        # AI が数式画像と判断した場合に読み取った MathML（mml:math 要素）
     formula_decision: str = ""
+    slot: Optional[ImageSlot] = None    # 画像の置き場所（表で組んだ図は None。Classifier.assign_slots）
+    # 置き場所の how・note に写すもの（Classifier.figure_units が決める。assign_slots が ImageSlot に入れる）: 画像を含めた決め方
+    # （same_para・run・near の「+」つなぎ）と、備考（本体の表にできなかった近くの表の理由など）
+    how: str = ""
+    note: str = ""
 
 
 @dataclass(eq=False)
 class TableNode:
+    """表（<table-wrap>）。table が None で image_paras・extra_images があれば、画像で貼った表（修正計画 W1 の 2.3 の C。
+    Classifier.assemble_floats と float_units が組む）で、画像の置き場所 slot を持つ。"""
     table: Optional[Table]
     caption: Optional[Para] = None
     caption_more: list = field(default_factory=list)
     tid: str = ""
     number: Optional[int] = None
+    slot: Optional[ImageSlot] = None    # 画像で貼った表の置き場所（Classifier.assign_slots。本体の表がある表は None）
+    # 画像で貼った表に含めた、画像だけの段落（図の FigNode.image_paras と同じ。空白の除外の記録に使う）と、ほかの段落から含めた画像
+    # （グループ図形の画像など）、含めた決め方（next・run・float）と備考
+    image_paras: list = field(default_factory=list)
+    extra_images: list = field(default_factory=list)
+    how: str = ""
+    note: str = ""
 
 
 @dataclass(eq=False)
@@ -150,15 +214,27 @@ class FloatInfo:
     float: Float
     paras: list = field(default_factory=list)      # テキストボックスの段落（出現順）
     tables: list = field(default_factory=list)     # テキストボックスの表
-    images: list = field(default_factory=list)     # グループ図形の画像（アンカー段落の中にある ImageRef）
-    mode: str = ""                                 # mechanical（機械的に配置）/ ai（AI の指定で配置）/ unplaced（未配置）
+    images: list = field(default_factory=list)     # グループ図形の画像（アンカー段落の中にある ImageRef。飾りの図形を除く）
+    # mechanical（機械的に配置）/ ai（AI の指定で配置）/ unplaced（未配置）/ caption（本文の図キャプションの図に含め、その位置に
+    # 置いた。キャプションのないグループ図形が、本体のない図キャプションの近くの段落に結び付いているとき。修正計画 W1 の 2.3 の B6。
+    # 位置を決められない図形に数えない）
+    mode: str = ""
     reason: str = ""                               # 未配置の理由
+    caption_src: str = ""                          # mode が caption のとき、含めた図の図キャプションの段落 ID
+    # 図形の中身のうち、本文の段落として出した段落（docx の順。Classifier.float_units が決める。図の画像に写らない図形〈表で組んだ
+    # 図・Word の表だけの図形・画像を直接持たない図形〉の、キャプションでない文字の段落。plan.body_seq には入れない）
+    body_paras: list = field(default_factory=list)
+    # 中身の組み方: units（float_units が組んだ）/ raw（組み方を決められず、中身を docx の順にそのまま出した。修正計画 W1 の 2.3 の B5）
+    built: str = ""
     where: str = ""                                # 未配置のときに仮に置いた位置: anchor（アンカー段落の後ろ）/ end（本文の最後）
     end_why: str = ""                              # 本文の最後に置いた理由: ai（AI が本文の外の段落の後ろを指定）/ anchor（アンカー段落が本文でない）
     end_after: str = ""                            # AI が指定した本文の外の段落の ID（end_why が ai のとき）
     # 未配置で where が anchor のとき、その後ろに仮に置いた本文の段落の ID（アンカー段落。アンカー段落が箇条書き・引用の途中なら、
     # その箇条書き・引用の最後の段落。Classifier.run_end）
     after_src: str = ""
+    # その図形の中身から組んだ図・表の節（FigNode・TableNode。XML の順。表で組んだ図・表のセルの図・中身をそのまま出した図形から
+    # 図形の外と同じ規則で組んだもの・mode が caption の図形を含めた本文の図も。Classifier.assign_slots が入れる）
+    nodes: list = field(default_factory=list)
 
 
 @dataclass(eq=False)
@@ -230,7 +306,6 @@ class ArticlePlan:
     body_seq: list = field(default_factory=list)     # 本文の段落 ID（出現順。浮動配置の図形の中の段落を除く）
     moved_images: set = field(default_factory=set)   # 図に移したため、元の段落では出力しない画像の ID
     float_decisions: dict = field(default_factory=dict)  # AI の指定で配置した図形の ID -> Decision
-    figure_issues: list = field(default_factory=list)    # 画像のない図キャプションの近くの表を図の本体にできなかったもの: (段落 ID, 理由)
     # docx の表のセルの段落のうち、表の外に出したもの（表のセルの画像とキャプションで組んだ図のキャプション・本体。cell_figures）。
     # 出版版 PDF との照合では、今までどおり表のセルとして扱う（照合しない・直さない。linker.body_paragraphs の文脈 "cell"）
     cell_paras: set = field(default_factory=set)
@@ -263,6 +338,9 @@ class ArticlePlan:
     # そのまま組み立てると段落の文字が出力にも除外にも入らなくなる構造（StructureConflict。同じ種類の後付けの見出し・英文要旨の見出しが
     # 2 つ、著者名の付かない所属。K1・K2）。あれば pipeline.convert が StructureConflictError で変換を中止する
     structure_conflicts: list = field(default_factory=list)
+    # 画像の置き場所（ImageSlot。Classifier.assign_slots が、要素の木を XML とおおむね同じ順にたどって作る）と、画像の ID -> 置き場所
+    slots: list = field(default_factory=list)
+    slot_of: dict = field(default_factory=dict)
 
     @property
     def unplaced_floats(self) -> list:

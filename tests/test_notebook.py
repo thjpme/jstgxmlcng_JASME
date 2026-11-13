@@ -138,7 +138,7 @@ def test_step9_resets_for_next_article(monkeypatch):
     assert "前の論文（first.docx）の値が残っています" in shown[-1] and "開き直して" in shown[-1]
     # ダウンロード済み（手順 8 を実行済み）なら、1 回で進む
     ns.update(DONE={1, 2, 3, 4, 5, 8}, docx_path=Path("second.docx"), meta_input={"volume": "31", "fpage": "13"},
-              USER_IMAGES={"31_1_01.png": ("a.png", b"")})
+              USER_IMAGES={"31_1_fig01.png": ("a.png", b"")})
     exec(src, ns)
     assert ns["DONE"] == {1} and ns["PREVIOUS"]["docx"] == "second.docx"
     assert "USER_IMAGES" not in ns                  # 前の論文の画像は持ち越さない
@@ -174,9 +174,9 @@ def test_step7_uploads_missing_images_one_by_one(monkeypatch, tmp_path):
     exec(src, ns)                                   # キャンセル: 何も入れずに、まだ足りないことを赤い枠で示す
     assert ns["USER_IMAGES"] == {} and "画像ファイルを用意できなかった図が 1 件" in shown[-1]
     exec(src, ns)
-    assert list(ns["USER_IMAGES"]) == ["31_1_01.png"] and ns["DONE"] == {1, 2, 3, 4, 5, 7}
-    assert shown[-1]["filename"].endswith("Graphics/31_1_01.png")      # 入れた画像を表示して確かめられる
-    assert "jasme/31/1/31_1/Graphics/31_1_01.png" in zipfile.ZipFile(res.zip_path).namelist()
+    assert list(ns["USER_IMAGES"]) == ["31_1_fig01.png"] and ns["DONE"] == {1, 2, 3, 4, 5, 7}
+    assert shown[-1]["filename"].endswith("Graphics/31_1_fig01.png")      # 入れた画像を表示して確かめられる
+    assert "jasme/31/1/31_1/Graphics/31_1_fig01.png" in zipfile.ZipFile(res.zip_path).namelist()
     assert "要対応: 画像ファイル" not in res.report_path.read_text(encoding="utf-8")
     exec(src, ns)                                   # 足りない画像がなければ何もしない
     assert uploads == []

@@ -22,28 +22,36 @@ U6 で本体を変えずに移した。これまでどおり、ここからも i
      装飾・誌名行〈JournalConfig.front_lines〉なら FRONT_DECORATION_EXCLUDED〈知らせない〉、そうでなければ位置を決められない
      除外 FRONT_OTHER_EXCLUDED〈UNPLACED_EXCLUSIONS。要確認 excluded_unsure〉）。
   4. 本文: build_body
-     - 浮動配置の図表の置き場所: place_floats（float_captions・float_number・float_summary。機械的に組む float_mechanical
-       〈表のセルの画像とキャプション cell_figures・cell_pairs・cell_caption〉、AI の指定で組む float_from_spec、位置を
-       決められない図表の仮の位置 provisional_target・run_end〈list_or_quote〉。図形の中身を取る _take・_take_table・
-       _caption_decision・_drop_blank）
+     - 浮動配置の図表の置き場所: place_floats（group_images・float_captions・float_number・float_summary。中身は AI の指定の
+       有無にかかわらず float_units が組む〈表のセルの画像とキャプション cell_figures・cell_pairs・cell_caption。修正計画 W1 の
+       2.3 の B〉。AI の指定は位置〈after〉だけを使う。位置を決められない図表の仮の位置 provisional_target・run_end〈list_or_quote〉。
+       図形の中身を取る _take・_take_table・_caption_decision・_drop_blank。組み立て済みの図表〈役割 node〉は、図表を組み立てる
+       ときに前後の要素に数えない〈NODE_PLACE。B8〉）
      - 文字だけのテキストボックス（囲み・図の注記）: place_boxes（text_only・near_image・box_children・run_end・_xid_list）
      - 段落の役割の推定（textbox_caption・guess_heading〈all_bold〉）と、本文スタイルの図表キャプションの推定（same_place・
        is_image_para）
-     - 図表・箇条書き・引用・別行数式に組む: assemble_floats（same_place・table_for_figure・formula_node・
-       doc_numbering_is_bullet）
+     - 図表・箇条書き・引用・別行数式に組む: assemble_floats（same_place・formula_node・doc_numbering_is_bullet。図形の外の
+       図キャプションの図は figure_units〈同じ段落・続く画像だけの段落・表で組んだ図 table_for_figure・近くの段落 near_images。
+       近くの段落に結び付いたキャプションのないグループ図形は caption_floats・take_float で図形ごと含める（B6）。画像をすべて
+       図に含めた画像だけの段落は free_image_para で見分ける〉、
+       キャプションの続きの段落の中の画像は caption_images、文字のある段落に結び付いた浮動の画像は anchored_figures〈段落の
+       後ろのキャプションなしの図〉。本体の表のない表キャプションの後ろの画像だけの段落は、画像で貼った表〈table_image_paras。
+       浮動配置の図形の中は float_units。TableNode.image_paras〉。修正計画 W1 の 2.3 の A・C・E）
      - 章・節・項の入れ子: nest。段落の位置の説明: compute_locations（node_paras）
   5. 後付け（付記・謝辞・注・引用文献）: build_back（outside_key・back_heading_by_text・note_mark・appendix_heading・formula_node。
      同じ種類の見出しが 2 つになるときは replace_back が plan.structure_conflicts に記録する〈K1〉。注の節の中の表は FnNode.tables
      に入れる〈表の枝の pending・caption_only・note_table・settle。注に入れられない表は flush が BACK_TABLE_EXCLUDED で除外〉）
-  6. 英文の部分と資料: build_front_en（outside_key・appendix_heading・appendix_sentence・note_appendix_sentence・
+  6. 英文の部分と資料: build_front_en（資料の図キャプションを隣の画像と組む pair_app_figures。outside_key・appendix_heading・appendix_sentence・note_appendix_sentence・
      check_abstract_ja・add_author_en・add_aff_en。英文要旨の見出しが 2 つになるときも replace_back が記録する。題目・著者・
      要旨・資料以外の段落と表は EN_OTHER_EXCLUDED・EN_TABLE_EXCLUDED〈EN_PART_EXCLUSIONS。英文要旨が 1 段落もなければ
      abstract_missing_srcs が要対応 abstract_missing の対象にする〉）
   7. Word の脚注・文末脚注を注にする: attach_word_notes（unreferenced_note_reason・no_link_rule）
-  8. ID を付ける: assign_ids（図・表・数式・注・文献・所属）
+  8. ID を付ける: assign_ids（図・表・数式・注・文献・所属）。最後に画像の置き場所と名前の幹を決める（assign_slots。要素の木を
+     plan_figures でたどる。表のセルの図キャプションの画像は cell_figures_in。置き場所の備考 float_note、図形ごとの図・表の節 FloatInfo.nodes〈node_float_ids〉）
   9. 段落記号の削除でつないだ段落のスタイルの違いを判断の一覧に記録する: joined_styles
 - レポート・AI 依頼文・Colab・コマンドラインが使う関数: float_caption・float_ids・float_targets（浮動配置の図形の中身と、それを
-  出力した XML の要素の説明）。
+  出力した XML の要素の説明）、figure_rows（図・表・キャプションのない画像の置き場所の一覧。位置の決め方 figure_place・PLACE_JA、
+  表の番号 table_label）。
 - 除外の理由の文言は定数（FRONT_*・BACK_*・EN_*_EXCLUDED など）で書き、位置を決められずに除く理由は UNPLACED_EXCLUSIONS に
   まとめる（report が要確認 excluded_unsure・要対応 abstract_missing で知らせる）。
 - pipeline.convert が使う関数: conflict_overrides（AI の set_role で構造の衝突ができたときに、まず使わない指定〈衝突の範囲の中の
@@ -51,8 +59,10 @@ U6 で本体を変えずに移した。これまでどおり、ここからも i
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import unicodedata
+from types import SimpleNamespace
 from typing import Optional
 
 # 構造の型は article.py にある（ここでも使う）。structure から import しているコード（tests など）のために、これまでどおりの
@@ -66,9 +76,11 @@ from .article import (
     BoxInfo,
     BoxNode,
     FigNode,
+    FigureRow,
     FloatInfo,
     FnNode,
     FormulaNode,
+    ImageSlot,
     ListNode,
     PNode,
     QuoteNode,
@@ -121,6 +133,9 @@ BODY_END = float("inf")
 # 囲み（文字だけのテキストボックス。BoxNode）の置き場所（same_place・Classifier.provisional の値）。図表の組み立てでは、囲みを
 # 図形の外の要素の隣として数えない（build_body）
 BOX_PLACE = "@box"
+# 浮動配置の図形の中身から組み立て済みの図表（place_floats が差し込んだ役割 node の節）の置き場所（same_place・
+# Classifier.provisional の値）。図表の組み立てでは、図形の外の要素の前後に数えない（修正計画 W1 の 2.3 の B8）
+NODE_PLACE = "@node"
 # 本文より後ろにある領域（ArticlePlan.region の値）。AI がこれらの段落の後ろを指定した図表は、本文の最後に仮に置く
 # （ai_assist.float_placements。本誌のテンプレートでは、英文の部分・資料も本文より後ろ）
 AFTER_BODY_REGIONS = {"notes", "ack", "fn", "refs", "back", "front_en", "app"}
@@ -154,6 +169,9 @@ def caption_label(para: Para, regex) -> tuple:
     return int(m.group(1)), RE_CAP_BRANCH.match(t, m.end(1)) is not None
 # テキストボックス内のキャプションの形（NFKC 後）。番号の直後がひらがな・読点・範囲の記号なら「図1は…」のような本文の文
 RE_TEXTBOX_CAP = re.compile(r"^(?:(?P<fig>図|Figure|Fig\.?)|(?P<tab>表|Table))\s*[0-9]+(?![0-9ぁ-ゟ,、・~〜\-–—])")
+# キャプションのない図形の図の中の、キャプションの形の段落（NFKC 後。Classifier.float_caption_like）: 図・表・資料・写真・出典などの
+# 語の後ろに、番号・「:」・「(」か空白が続くもの（「資料：…」「写真1 …」「出典 …」。「図形」「表現」「資料から」は当たらない）
+RE_FLOAT_CAP_LIKE = re.compile(r"^(?:図|表|資料|写真|出典|出所|Figure|Fig\.?|Table|Photo|Source)(?:\s*[0-9:(]|\s+\S)")
 RE_FORMULA_LABEL = re.compile(r"^[\s\u3000]*([(（][\s\u3000]*[0-9０-９]+(?:[.．\-－][0-9０-９]+)?[\s\u3000]*[)）])[\s\u3000]*$")
 # 注の一覧の各注の先頭の番号: 「1)」「(1)」「注1)」/「（注1）」「［注1］」/「注1　…」（「註」も）
 _WS = r"[\s\u3000]*"
@@ -194,10 +212,230 @@ RE_EN_SENTENCE_END = re.compile(r"[.?!][\s\u3000]*$")
 # かな・漢字（英文要旨の中の和文の段落の判定。config.RE_JA_CHARS は全角英数字も含むので使わない）
 RE_KANA_KANJI = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff々]")
 ABSTRACT_JA_RATIO = 0.3        # 英文要旨の段落のうち、かな・漢字がこの割合以上なら和文の段落とみなして知らせる
+# 図キャプションの近く（Classifier.near_images。修正計画 W1 の 2.3 の A4）: 本体の付かなかった図キャプションの前（上に置く原稿では
+# 後ろ）この数の要素以内にある、画像のある段落の画像を、その図に含める
+NEAR_FIGURE = 3
 # 引用文献などの後ろの資料の見出しと思われる段落を知らせるときの、後付けの節の名前（build_back。決定事項 8(b) は暫定で警告だけ）
 APP_PLACE = {"refs": "引用文献", "fn": "注", "notes": "付記", "ack": "謝辞"}
 # 注の番号をリンクにしない段落の種類（ArticlePlan.no_link_paras。判断の一覧と、レポートの 8 章の表で知らせる）
 NO_LINK_KINDS = "題目・副題・著者名・所属・引用文献"
+
+
+def slot_number(para: Para, regex=None) -> tuple:
+    """図キャプションの段落の番号と枝番: (番号, 枝番)。枝番がなければ (番号, None)、番号を読めなければ (None, None)。
+    番号は caption_label（assign_ids の FigNode.number）と同じ規則で読む。regex に RE_TABCAP を渡すと表キャプションの番号。"""
+    t = nfkc(_para_text(para)).strip()
+    m = (regex or RE_FIGCAP).match(t)
+    if not m:
+        return None, None
+    b = re.match(rf"[{CAP_BRANCH_SEP}]({CAP_BRANCH_NUM})", t[m.end(1):])
+    return int(m.group(1)), (int(b.group(1)) if b else None)
+
+
+def slot_label(para: Para) -> str:
+    """図キャプションの段落の「図3」「図1-2」（番号を読めなければ ""）。画像の置き場所の label。"""
+    n, branch = slot_number(para)
+    if n is None:
+        return ""
+    return f"図{n}" + (f"-{branch}" if branch is not None else "")
+
+
+def table_label(para: Para) -> str:
+    """表キャプションの段落の「表1」「表1-2」（番号を読めなければ ""）。図・表の一覧（figure_rows）の label。"""
+    n, branch = slot_number(para, RE_TABCAP)
+    if n is None:
+        return ""
+    return f"表{n}" + (f"-{branch}" if branch is not None else "")
+
+
+def slot_keys(slots, order, images) -> list:
+    """画像の置き場所（ImageSlot）の幹（名前の「{記事識別子}_」の後ろ）の一覧（slots と同じ順）。
+
+    図: fig ＋ 番号 2 桁（枝番は - で続ける。fig03・fig01-2）。番号を読めない図キャプション: figx ＋ その中での順 2 桁（figx01）。
+    画像で貼った表: tab ＋ 番号 2 桁（tab01）。番号を読めない表キャプション: tabx ＋ その中での順 2 桁。
+    キャプションなし: img ＋ covers の最初の画像の中身の要約値（ImageRef.digest）の先頭 6 桁（img3fa9c2）。同じ幹が 2 つ目以降なら、
+    docx の順に _2・_3 を足す（fig04_2）。docx の順は、図はキャプションの段落の順（order: 段落 ID -> 順）、キャプションなしは
+    covers の最初の画像の順（images: 画像の ID -> doc.images の順）。図番号と画像の中身だけで決まるので、docx の文字を直しても、
+    AI の回答で図の位置や XML の順が変わっても、ほかの画像を足しても消しても、同じ図・画像の幹は変わらない。
+    """
+    def where(slot):
+        if slot.caption is not None:
+            return (0, order.get(slot.caption.src, len(order)), 0)
+        first = slot.covers[0] if slot.covers else None
+        return (1, images.get(first.image_id, len(images)) if first is not None else len(images), 0)
+
+    base = {}
+    unread = []
+    for slot in slots:
+        if slot.kind in ("fig", "table") and slot.caption is not None:
+            stem = "fig" if slot.kind == "fig" else "tab"
+            n, branch = slot_number(slot.caption, RE_FIGCAP if slot.kind == "fig" else RE_TABCAP)
+            if n is None:
+                unread.append(slot)
+                continue
+            base[id(slot)] = f"{stem}{n:02d}" + (f"-{branch}" if branch is not None else "")
+        else:
+            first = slot.covers[0] if slot.covers else None
+            digest = (first.digest if first is not None else "") or hashlib.sha1(
+                (first.image_id if first is not None else slot.src).encode("utf-8")).hexdigest()
+            base[id(slot)] = "img" + digest[:6]
+    count = {}
+    for slot in sorted(unread, key=where):
+        stem = "figx" if slot.kind == "fig" else "tabx"
+        count[stem] = count.get(stem, 0) + 1
+        base[id(slot)] = f"{stem}{count[stem]:02d}"
+    seen = {}
+    final = {}
+    for slot in sorted(slots, key=where):
+        b = base[id(slot)]
+        seen[b] = seen.get(b, 0) + 1
+        final[id(slot)] = b if seen[b] == 1 else f"{b}_{seen[b]}"
+    return [final[id(slot)] for slot in slots]
+
+
+# 図・表の位置の決め方（article.FigureRow.place。レポートの図の画像の一覧の列「位置の決め方」）
+PLACE_JA = {"word": "Word の並び", "mechanical": "機械的", "ai": "AI の指定", "anchor": "結び付いた段落の後ろ",
+            "end": "本文の最後", "caption": "図キャプションの位置"}
+
+
+def plan_figures(plan):
+    """構造（ArticlePlan）の要素の木を、builder が書き出すのとおおむね同じ順（冒頭の英文要旨、本文、付記・謝辞・注・資料）に
+    たどり、("para", 段落)・("fig", FigNode)・("table", TableNode)・("grid", Table) を返す（grid は表の本体。そのセルの段落の前に返す。
+    画像の置き場所 assign_slots と、図・表の一覧
+    figure_rows が同じ順で使う）。段落は、画像を書ける文脈のもの（見出し・本文・箇条書き・引用・キャプション・表のセル・注など。
+    題目・著者名・所属・引用文献は返さない）。図はキャプションの段落の後ろ、その本体の表のセルの前に返し、表は表の節を
+    キャプションとセルの段落の前に返す。"""
+    def para(p):
+        if p is not None:
+            yield "para", p
+
+    def table(t):
+        if t is not None:
+            yield "grid", t
+            for q in t.paragraphs():
+                yield "para", q
+
+    def walk(nodes):
+        for node in nodes:
+            if isinstance(node, Sec):
+                yield from para(node.heading)
+                yield from walk(node.children)
+            elif isinstance(node, (PNode, FormulaNode)):
+                yield from para(node.para)
+            elif isinstance(node, ListNode):
+                for q in node.items:
+                    yield from para(q)
+            elif isinstance(node, QuoteNode):
+                for q in node.paras:
+                    yield from para(q)
+            elif isinstance(node, FigNode):
+                yield from para(node.caption)
+                for q in node.caption_more:
+                    yield from para(q)
+                yield "fig", node
+                for t in node.tables:
+                    yield from table(t)
+            elif isinstance(node, TableNode):
+                yield "table", node
+                yield from para(node.caption)
+                for q in node.caption_more:
+                    yield from para(q)
+                yield from table(node.table)
+            elif isinstance(node, BoxNode):
+                yield from walk(node.children)
+            elif isinstance(node, BackSec):
+                yield from para(node.heading)
+                yield from walk(node.children)
+            elif isinstance(node, AppNode):
+                yield from para(node.title)
+                yield from walk(node.children)
+
+    yield from para(plan.abstract_heading)
+    for q in plan.abstract:
+        yield from para(q)
+    yield from walk(plan.body)
+    for extra in (plan.ack, plan.notes):
+        if extra:
+            yield from walk([extra])
+    yield from para(plan.ref_heading)
+    for app in plan.apps:
+        yield from walk([app])
+    yield from para(plan.fn_heading)
+    for fn in plan.fns:
+        for q in fn.paras:
+            yield from para(q)
+        for _, t in fn.tables:
+            yield from walk([t])
+
+
+def node_float_ids(node) -> list:
+    """図・表の節（FigNode・TableNode）の中身の図形の ID（docx の順。重ねない）: キャプション・キャプションの続き・画像だけの段落・
+    含めた画像・本体の表の float_id。図形の外の要素だけなら []。本文の図キャプションの図に含めた図形（B6）は、含めた画像の図形。"""
+    if isinstance(node, FigNode):
+        paras = ([node.caption] if node.caption is not None else []) + list(node.caption_more) + list(node.image_paras)
+        ids = [q.float_id for q in paras] + [i.float_id for q in node.image_paras for i in q.images]
+        ids += [i.float_id for i in node.extra_images] + [t.float_id for t in node.tables]
+    elif isinstance(node, TableNode):
+        paras = ([node.caption] if node.caption is not None else []) + list(node.caption_more) + list(node.image_paras)
+        ids = [q.float_id for q in paras] + ([node.table.float_id] if node.table is not None else [])
+        ids += [i.float_id for q in node.image_paras for i in q.images] + [i.float_id for i in node.extra_images]
+    else:
+        return []
+    out = []
+    for x in ids:
+        if x and x not in out:
+            out.append(x)
+    return out
+
+
+def figure_place(plan, fid: str) -> str:
+    """図形 fid の中身から組んだ図・表の位置の決め方（PLACE_JA の鍵）。図形の外（fid が空か、図表の入った図形でない）なら word。"""
+    info = plan.floats.get(fid) if fid else None
+    if info is None:
+        return "word"
+    if info.mode == "unplaced":
+        return "end" if info.where == "end" else "anchor"
+    return info.mode if info.mode in PLACE_JA else "word"
+
+
+def figure_rows(plan) -> list:
+    """図・表・キャプションのない画像の置き場所の一覧（article.FigureRow。XML の順〈plan_figures〉）。
+
+    図（FigNode。表で組んだ図・キャプションのない図も）と表（TableNode）は節ごとに 1 行、段落・表のセルの中の置き場所
+    （ImageSlot の place inline。キャプションのない画像と、表のセルの図キャプションの図）は置き場所ごとに 1 行
+    （表のセルの図は、キャプションの段落の場所）。図形の中身から組んだ図・表（中身をそのまま出した図形から
+    図形の外と同じ規則で組んだものも）は、その図形の ID と位置の決め方（figure_place）を持ち、同じ図形の行は docx の順に並ぶ。
+    レポートの図の画像の一覧と、AI の依頼文の「図・表の一覧」「位置を決める図・表」（修正計画 W8）が使う。
+    """
+    inline = {}
+    for slot in plan.slots:
+        if slot.place == "inline":
+            inline.setdefault(slot.src, []).append(slot)
+    rows, seen = [], set()
+    for kind, x in plan_figures(plan):
+        if kind == "grid":
+            continue
+        if kind == "para":
+            for slot in inline.get(x.src, []):
+                if id(slot) not in seen:
+                    seen.add(id(slot))
+                    # 表のセルの図（キャプションの段落が場所を示す。kind が fig）は図の行、それ以外はキャプションのない置き場所の行
+                    rows.append(FigureRow(fid="", kind=slot.kind, label=slot.label, caption=slot.caption, key=slot.key,
+                                          float_id=slot.float_id, place=figure_place(plan, slot.float_id), slot=slot))
+            continue
+        fids = node_float_ids(x)
+        fl = fids[0] if fids else ""
+        slot = x.slot
+        if kind == "fig":
+            rows.append(FigureRow(fid=x.fid, kind="fig" if x.caption is not None else "nocap",
+                                  label=slot_label(x.caption) if x.caption is not None else "", caption=x.caption,
+                                  key=slot.key if slot is not None else "", float_id=fl, place=figure_place(plan, fl),
+                                  node=x, slot=slot))
+        else:
+            rows.append(FigureRow(fid=x.tid, kind="table", label=table_label(x.caption) if x.caption is not None else "",
+                                  caption=x.caption, key=slot.key if slot is not None else "", float_id=fl,
+                                  place=figure_place(plan, fl), node=x, slot=slot))
+    return rows
 
 
 def nfkc(s: str) -> str:
@@ -371,15 +609,22 @@ def float_targets(plan, info) -> str:
     return out
 
 
+def group_images(p: Para) -> list:
+    """段落 p に結び付いた図形（Float）が直接持つ画像（グループ図形の画像。p のアトム）。飾りの図形（ImageRef.decoration。
+    枠・白い四角・線・文字の図形の集まり）は、画像の位置に数えないので含めない（Para.images と同じ。修正計画 W1 の 2.3 の D）。"""
+    return [a.image for a in p.atoms if a.kind == "image" and a.image.float_id and not a.image.decoration]
+
+
 def same_place(flat, provisional) -> tuple:
     """本文の要素の列 flat の要素ごとに、同じ置き場所の、すぐ前・すぐ後ろの要素の位置（なければ None）。戻り値: (前, 後ろ)。
 
-    置き場所は、位置を決められない図表（仮の位置に置いた図形）の中身なら仮に置いた位置（provisional: 要素の id -> 置き場所。
-    同じ位置に仮に置いた図形の中身は同じ値）、囲み（BoxNode）なら BOX_PLACE、それ以外（図形の外の要素と、位置の決まった
-    図形の中身）は ""。仮に置いた図形の中身は本当はそこにないので、図表の組み立てで前後を見るときは、同じ置き場所の要素だけを
+    置き場所は、位置を決められない図表（仮の位置に置いた図形）の中身と、中身をそのまま出した図形の中身なら差し込んだ位置
+    （provisional: 要素の id -> 置き場所。同じ位置に差し込んだ図形の中身は同じ値）、囲み（BoxNode）なら BOX_PLACE、図形の中身から
+    組み立て済みの図表（役割 node）なら NODE_PLACE、それ以外（図形の外の要素と、位置の決まった図形の中身の段落）は ""。仮に置いた図形の中身は本当はそこにないので、図表の組み立てで前後を見るときは、同じ置き場所の要素だけを
     見る（Classifier.assemble_floats・build_body）。同じ位置に仮に置いた図形の中身どうし（同じ段落に結び付いた、画像だけの
     図形とキャプションだけの図形など）は隣り合う要素として見る。囲みは、図形の外の要素の前後に数えない（間に囲みがあっても、
-    画像と図キャプションは隣り合う要素として見る。0.24.1 までは囲みの文字を除外していて、要素の列になかった）。
+    画像と図キャプションは隣り合う要素として見る。0.24.1 までは囲みの文字を除外していて、要素の列になかった）。組み立て済みの
+    図表も同じく前後に数えない（修正計画 W1 の 2.3 の B8）。
     """
     n = len(flat)
     here = [provisional.get(id(b), "") for _, b in flat]
@@ -414,6 +659,12 @@ class Classifier:
         self._top, self._top_index = [], {}     # 図形の外の最上位の段落・表の列と、段落 ID -> その位置（near_image）
         self._heading_by_text = {}      # 後付けの見出しの段落 ID -> 文字から推定した見出しか（back_heading_by_text。replace_back が使う）
         self._loose_affs, self._loose_used = [], True   # 和文の所属の段落で、まだ著者名に付いていないもの（build_front_ja）と、付いたか
+        # 浮動配置の図形の ID -> float_units が組んだ中身 [(役割, 要素)] と、place_floats が記録した位置の判断（機械的に置いた・
+        # 位置を決められない図形）。本文の図キャプションの図に含めた図形（B6。figure_units）の中身を取り除き、判断を書き直すのに使う
+        self.float_entries, self.float_place_decision = {}, {}
+        # 図キャプションを図の下に置く原稿か（assemble_floats が本文の画像とキャプションの並びから決める。資料の図キャプションと
+        # 表のセルの図キャプションも同じ向きで見る）
+        self.captions_below = True
         self.plan = ArticlePlan(lang=journal.lang)
 
     def style_role(self, para: Para) -> Optional[str]:
@@ -495,6 +746,7 @@ class Classifier:
         self.build_body(regions["body"])
         self.build_back(regions["back"])
         self.build_front_en(regions["front_en"])
+        self.pair_app_figures()
         self.attach_word_notes()
         self.assign_ids()
         self.joined_styles()
@@ -948,8 +1200,16 @@ class Classifier:
         flat = merged
         # 位置を決められない図表（仮の位置に置いた図形）の中身。本当はそこにないので、図表を組み立てるときに、その外の要素と
         # 組にしない（assemble_floats・table_for_figure）。置き場所は仮に置いた位置で、同じ位置に仮に置いた図形の中身どうし
-        # （同じ段落に結び付いた、画像だけの図形とキャプションだけの図形など）は組にする
+        # （同じ段落に結び付いた、画像だけの図形とキャプションだけの図形など）は組にする。中身をそのまま出した図形（float_units が
+        # 組めなかったもの）の中身も、位置にかかわらず同じく扱う（その中身どうしで組む。修正計画 W1 の 2.3 の B5）
         self.provisional = {id(obj): f"@{target}" for target, entries in prov for _, obj in entries}
+        # 浮動配置の図形の中身から組み立て済みの図表（役割 node）も、図表を組み立てるときに前後の要素として数えない（修正計画 W1 の
+        # 2.3 の B8。囲みと同じ扱い）。アンカー段落や AI の指定した段落が表キャプション・図キャプション・画像だけの段落でも、
+        # キャプションと本体は組まれ、差し込んだ図表はその後ろ（キャプションの位置で組んだ図表の後ろ）に出る
+        for _, _, entries in inserts:
+            for role, obj in entries:
+                if role == "node":
+                    self.provisional[id(obj)] = NODE_PLACE
         # 囲み（文字だけのテキストボックス）も、図表を組み立てるときに隣の要素として数えない（0.24.1 までは文字を除外していて、
         # 要素の列になかった。画像と図キャプション、表キャプションと表などの間に囲みを置いても、0.24.1 と同じく組にする。
         # 図はキャプションの位置に組み立てるので、画像とキャプションの間にあった囲みは、キャプションが画像の後ろなら図の前、
@@ -985,23 +1245,27 @@ class Classifier:
     def place_floats(self, items):
         """浮動配置の図形（テキストボックス・グループ図形）に入った図表を、本文のどこに置くかを決める。
 
-        図を置く位置の規則は「Word で表示したときに、図の左上の直上にある本文の文章を含む段落の直後」。
-        - AI の指定（placements）があれば、その組み合わせで、指定された段落の直後に置く。
-        - なければ、図の左上がアンカー段落の左上の位置にあり（floats.at_anchor）、中身が単純（キャプション 1 つと本体 1 つ、
-          表のセルに画像とキャプションが並ぶ図など。float_mechanical）な場合だけ、機械的にアンカー段落の前に置く。
+        中身は、AI の指定の有無にかかわらず float_units が組む（組み方を決められない形だけ、中身を docx の順にそのまま出す。
+        修正計画 W1 の 2.3 の B）。図を置く位置の規則は「Word で表示したときに、図の左上の直上にある本文の文章を含む段落の直後」。
+        - AI の指定（placements の after）があれば、指定された段落の直後に置く（中身の組み合わせの指定 items は使わない）。
+        - なければ、図の左上がアンカー段落の左上の位置にあれば（floats.at_anchor）、機械的にアンカー段落の前に置く。
         - どちらでもなければ「位置を決められない図表」として記録し、仮の位置に置く（利用者が手作業で移す。決定事項 21）。
           仮の位置は、アンカー段落のすぐ後ろ。AI が本文の外（注・引用文献など）の段落の後ろを指定したとき（ai_assist.float_placements
           の印 where="end"）と、アンカー段落が本文の段落でないとき（本文の外の段落に結び付いた図形。self.outside）は、本文の最後
-          （provisional_target）。中身が単純なら図の本体とキャプションを組にし、そうでなければ中身をそのまま（これまでの扱いで。
-          役割は build_body で決める）出す。
+          （provisional_target）。
         - 本文の外（引用文献・注・付記・謝辞・英文の部分）の段落に結び付いた図形（修正計画の N7。2 回目の組み立てで、中身は
           split_regions が本文の最後に回している）は、図の左上の位置にかかわらず「位置を決められない図表」にする（決定事項 10）。
           グループ図形の画像は、アンカー段落（本文の外の段落）から集める。
-        - 文字だけのテキストボックス（図表ではない図形）は、ここでは扱わない（place_boxes）。
+        - 文字だけのテキストボックス（図表ではない図形）は、ここでは扱わない（place_boxes）。飾りの図形（ImageRef.decoration）は
+          画像に数えないので、飾りと文字だけの図形も文字だけのテキストボックスになる。
+        - 機械的に置いた図形・位置を決められない図形のうち、キャプションのないグループ図形は、後で assemble_floats（figure_units の
+          A4）が、近くの本文の図キャプションの図に図形ごと含めることがある（mode を caption にし、ここで記録した位置の判断を書き直す。
+          B6。そのために、組んだ中身を self.float_entries、位置の判断を self.float_place_decision に残す）。
         戻り値: (並べ直した items, [(items での位置, 同じ位置での順番, [(役割, 要素)])], 中身をそのまま出す図形の要素の id →
-        その図形の差し込みの一覧, [(仮の位置に置いた図形の items での位置, その差し込みの一覧)])。items での位置は「その位置の要素の前」で、
-        アンカー段落の後ろは アンカー段落の位置 + 1、本文の最後は BODY_END。同じ位置に置くものはキャプションの番号順（番号が
-        なければ後ろ）、同じ番号なら docx の順
+        その図形の差し込みの一覧, [(図形の中身を、その外の要素と組にしない差し込みの items での位置, その差し込みの一覧)])。
+        最後の一覧は、位置を決められない図表（仮の位置）と、中身をそのまま出した図形（どの位置でも）。items での位置は
+        「その位置の要素の前」で、アンカー段落の後ろは アンカー段落の位置 + 1、本文の最後は BODY_END。同じ位置に置くものは
+        キャプションの番号順（番号がなければ後ろ）、同じ番号なら docx の順
         """
         plan = self.plan
         src_index = {b.src: k for k, (b, _) in enumerate(items) if isinstance(b, Para)}
@@ -1015,9 +1279,8 @@ class Classifier:
                 members.setdefault(b.float_id, []).append(b)
                 roles[id(b)] = role
             elif isinstance(b, Para):
-                for img in b.images:
-                    if img.float_id:
-                        group_imgs.setdefault(img.float_id, []).append(img)
+                for img in group_images(b):
+                    group_imgs.setdefault(img.float_id, []).append(img)
         placed, inserts, raw, prov = set(), [], {}, []
         layout = plan.layout
         for fl in getattr(self.doc, "floats", []):
@@ -1029,7 +1292,7 @@ class Classifier:
             if outside and not imgs:
                 # グループ図形の画像は、アンカー段落（本文の外の段落。items にない）の中にある
                 anchor = plan.paras.get(fl.anchor_src)
-                imgs = [i for i in (anchor.images if anchor is not None else []) if i.float_id == fl.fid]
+                imgs = [i for i in (group_images(anchor) if anchor is not None else []) if i.float_id == fl.fid]
             info = FloatInfo(float=fl, paras=[b for b in blocks if isinstance(b, Para)],
                              tables=[b for b in blocks if isinstance(b, Table)], images=imgs)
             groups, others = self.float_captions(info.paras, roles)
@@ -1039,53 +1302,56 @@ class Classifier:
             spec = self.placements.get(fl.fid)
             end = bool(spec) and spec.get("where") == "end"     # AI が本文の外の段落の後ろを指定した（本文の最後に仮に置く）
             if spec and not end and spec["after"] not in src_index:
-                spec = None     # AI の役割の指定で、指定された段落が本文でなくなった
+                spec = None     # AI の役割の指定で、指定された段落が本文でなくなった（pipeline.convert が不採用に記録する）
+            # 中身を組む（位置の決め方にかかわらず同じ。組めなければ None で、中身をそのまま出す）
+            entries = self.float_units(info, groups, others, blocks)
+            info.built = "raw" if entries is None else "units"
+            if entries is None:
+                entries = []
+                for b in blocks:
+                    raw[id(b)] = entries
+            else:
+                placed.update(id(b) for b in blocks)
+            self.float_entries[fl.fid] = entries
+            summary = self.float_summary(info)
             if spec and not end:
-                entries = self.float_from_spec(info, spec)
                 target = src_index[spec["after"]] + 1
                 info.mode = "ai"
-            else:
-                mech = at_anchor(fl, layout) and not end and not outside
-                entries = self.float_mechanical(info, groups, others) if mech else None
-                if entries is None:
-                    info.mode = "unplaced"
-                    if outside:
-                        info.reason = f"図形が本文の外（{OUTSIDE_JA.get(outside, outside)}）の段落に結び付いている"
-                    elif not at_anchor(fl, layout):
-                        info.reason = why_not_at_anchor(fl, layout)
-                    else:
-                        info.reason = "中身の組み合わせ（図表の本体とキャプション）を機械的に決められない"
-                    info.where, info.end_why, info.end_after, target = self.provisional_target(
-                        fl, spec if end else None, src_index, body)
-                    if info.where == "anchor":
-                        # アンカー段落が箇条書き・引用の途中なら、その最後の段落の後ろにずらす（箇条書き・引用を 2 つに分けない）
-                        last = self.run_end(items, target - 1)
-                        info.after_src, target = items[last][0].src, last + 1
-                    place = ("AI が本文の外の段落の後ろを指定したので、本文の最後に仮に置く" if info.end_why == "ai"
-                             else f"指定がなければ{plan.float_place(fl.fid)}に仮に置く")
-                    plan.decide("mechanical", "figure", fl.anchor_src,
-                                f"テキストボックス・グループ図形 {fl.fid}（{self.float_summary(info)}）は、位置を機械的に"
-                                f"決められない（{info.reason}）。AI による補完で位置を指定する必要がある（{place}）",
-                                applied=False)
-                    # 組み合わせは、中身が単純なら機械的に組む。単純でなければ中身をそのまま出す（build_body で役割を決めてから、
-                    # この図形の差し込みに入れる）
-                    entries = self.float_mechanical(info, groups, others)
-                    if entries is None:
-                        entries = []
-                        for b in blocks:
-                            raw[id(b)] = entries
-                    else:
-                        placed.update(id(b) for b in blocks)
-                    inserts.append((target, (self.float_number(info), len(inserts)), entries))
-                    prov.append((target, entries))
-                    continue
+                after = plan.paras.get(spec["after"])
+                plan.float_decisions[fl.fid] = plan.decide(
+                    "ai", "figure", spec["after"],
+                    f"テキストボックス・グループ図形 {fl.fid}（{summary}）を、段落"
+                    f"「{_para_text(after)[:20] if after else spec['after']}」の後に置いた（中身の組み合わせの指定は使わない。"
+                    f"組み合わせは変換ツールが決める）。{spec.get('reason', '')}", spec.get("confidence", ""))
+            elif at_anchor(fl, layout) and not end and not outside:
                 target = src_index[fl.anchor_src]
                 info.mode = "mechanical"
-                plan.decide("mechanical", "figure", fl.anchor_src,
-                            f"テキストボックス・グループ図形 {fl.fid}（{self.float_summary(info)}）を、アンカー段落"
-                            f"「{_para_text(plan.paras[fl.anchor_src])[:20]}」の前に置いた（図の左上がアンカー段落の左上の位置にあるため）")
-            placed.update(id(b) for b in blocks)
+                self.float_place_decision[fl.fid] = plan.decide(
+                    "mechanical", "figure", fl.anchor_src,
+                    f"テキストボックス・グループ図形 {fl.fid}（{summary}）を、アンカー段落"
+                    f"「{_para_text(plan.paras[fl.anchor_src])[:20]}」の前に置いた（図の左上がアンカー段落の左上の位置にあるため）")
+            else:
+                info.mode = "unplaced"
+                if outside:
+                    info.reason = f"図形が本文の外（{OUTSIDE_JA.get(outside, outside)}）の段落に結び付いている"
+                else:
+                    info.reason = why_not_at_anchor(fl, layout) if not at_anchor(fl, layout) else "AI が本文の外の段落の後ろを指定した"
+                info.where, info.end_why, info.end_after, target = self.provisional_target(
+                    fl, spec if end else None, src_index, body)
+                if info.where == "anchor":
+                    # アンカー段落が箇条書き・引用の途中なら、その最後の段落の後ろにずらす（箇条書き・引用を 2 つに分けない）
+                    last = self.run_end(items, target - 1)
+                    info.after_src, target = items[last][0].src, last + 1
+                place = ("AI が本文の外の段落の後ろを指定したので、本文の最後に仮に置く" if info.end_why == "ai"
+                         else f"指定がなければ{plan.float_place(fl.fid)}に仮に置く")
+                self.float_place_decision[fl.fid] = plan.decide(
+                    "mechanical", "figure", fl.anchor_src,
+                    f"テキストボックス・グループ図形 {fl.fid}（{summary}）は、位置を機械的に"
+                    f"決められない（{info.reason}）。AI による補完で位置を指定する必要がある（{place}）",
+                    applied=False)
             inserts.append((target, (self.float_number(info), len(inserts)), entries))
+            if info.mode == "unplaced" or info.built == "raw":
+                prov.append((target, entries))
         rest = [(b, r) for b, r in items if id(b) not in placed]
         return rest, inserts, raw, prov
 
@@ -1434,55 +1700,248 @@ class Classifier:
         self.plan.region[p.src] = "body"
         self.plan.exclude_blank(p)
 
-    def float_mechanical(self, info, groups, others):
-        """位置が機械的に決まる浮動配置の図形の中身を組む。中身が単純でなければ None（AI に任せる）。
+    def float_units(self, info, groups, others, blocks):
+        """浮動配置の図形の中身を、AI の指定の有無にかかわらず組む（修正計画 W1 の 2.3 の B1〜B5）。
 
-        単純な中身: キャプション 1 つと本体 1 つ（画像・表）、または表 1 つだけで、そのセルに画像とキャプションが並ぶ図
-        （cell_figures）。画像と文字が同じ段落は、図に組むときは画像を図に移し、段落は文字ごと図の直後に本文の段落として出す。
-        キャプションのない図形は図にしないので、これまでどおり画像も文字も段落のまま出す。表 1 つだけの図形で、セルの画像と
-        キャプションの組み方が一つに決まらないものも、これまでどおり（0.21.0 と同じ）キャプションのない表として出す。
+        groups・others は float_captions の結果、blocks は図形の中身（段落・表。docx の順）。
+        - B1 表 1 つだけの図形で、そのセルに画像と図キャプションが並ぶ図: cell_figures（今のまま）。
+        - B2 表キャプションの組ごとに、その後ろで次のキャプションの組より前にある最初の未使用の表を本体にする。なければ、
+          その前で前のキャプションの組より後ろにある最後の未使用の表（表の下にキャプション）。後ろの表をすべての表キャプションに
+          当ててから、残ったものに前の表を当てる（キャプション・表・キャプション・表の並びで、表を取り違えないため）。どちらも
+          なければ本体のない表（図キャプションがなく、画像があれば、画像で貼った表。下の C）。
+        - B3 図キャプション: 図形に画像（グループが直接持つ画像・画像のある段落・本体にしなかった表のセルの画像）が 1 つでも
+          あれば、図キャプションごとに図を作り、画像は docx の順でその後ろにある最初の図キャプション（なければ最後の図
+          キャプション。グループが直接持つ画像は最初の図キャプション）の図に含める。図形の中で、すぐ後ろに画像のある図キャプション
+          が、すぐ前に画像のある図キャプションより多ければ（図キャプションを画像の上に置く図形）、その前にある最後の図キャプション
+          （なければ最初の図キャプション）の図に含める。画像がなければ、B2 と同じ決め方（ただし
+          図キャプションは図の下に置くのを先に見るので、前の表を先に当てる）で未使用の表を当て、当たれば表で組んだ図、
+          当たらなければ画像の置き場所だけの図。キャプションだけの図形（画像も表も文字もない）は、
+          今までどおりキャプションの段落として出す（同じ置き場所の要素と figure_units が組む）。
+        - B4 キャプションのない図形: グループが画像を直接持てば、キャプションなしの図 1 つ（中の画像をすべて含める）。持たなければ
+          図にせず、中身を docx の順に本文の要素として出す（文字は段落、表は表、画像だけの段落はキャプションなしの図）。
+          表キャプションだけの図形（本体の表が見つからない）で、グループが画像を直接持つときは、画像で貼った表（下の C）にする。
+          キャプションのない図の中に、キャプションの形の段落（「資料：…」など。float_caption_like）があれば、その段落を図の
+          キャプション、続く文字の段落をキャプションの続き（caption_more）にする（除外しない。種類 fig の置き場所になる）。
+        - 図の画像に写るとみなす図形（表で組んだ図でない図キャプションの図があるか、グループが画像を直接持つ）の、キャプションで
+          ない文字の段落（画像と文字が同じ段落も。画像は図に含める）は TEXTBOX_TEXT_EXCLUDED で除外する。それ以外の図形（表で
+          組んだ図・Word の表だけの図形・画像を直接持たない図形）の文字の段落は、除外せず、図表の後ろに本文の段落として docx の順に
+          出す（info.body_paras。2.4）。
+        - C 画像で貼った表: 図キャプションがなく、本体の表が見つからない表キャプションがあり、画像（グループが直接持つ画像・画像のある
+          段落）があれば、その画像はその表のもの（TableNode.image_paras・extra_images。画像は docx の順で、その前の最後の表キャプション
+          〈なければ最初の表キャプション〉の表に含める。グループが直接持つ画像は最初の表キャプション）。図の画像に写るとみなす図形になる。
+        - B5 表キャプションのある図形で、キャプションのない表と本体のない表キャプションの両方が残るとき（どれがどれか決められない）は
+          None を返し、呼び出し側が中身をそのまま出す（役割は build_body が決める）。判断の一覧に記録する。
+        状態を変えるのは、組めると決まってから。戻り値: [(役割, 要素)]（docx の順。図表は最初の要素の位置）/ None。
         """
+        plan = self.plan
+        fid = info.float.fid
         image_paras = [q for q in info.paras if q.images]
-        if len(info.tables) == 1 and not (groups or others or image_paras or info.images):
+        direct = list(info.images)
+        if len(info.tables) == 1 and not (groups or others or image_paras or direct):
             cells = self.cell_figures(info)
             if cells is not None:
-                return cells        # 表のセルに画像とキャプションが並ぶ図
-        if len(groups) > 1 or others or len(info.tables) > 1 or (info.tables and (image_paras or info.images)):
+                return cells        # B1: 表のセルに画像とキャプションが並ぶ図
+        pos = {id(b): k for k, b in enumerate(blocks)}
+        n = len(blocks)
+        starts = [pos[id(ps[0])] for _, ps in groups]
+        ends = [pos[id(ps[-1])] for _, ps in groups]
+        used = set()
+
+        def match_table(k, side):
+            # side が after なら、後ろで次のキャプションの組より前の最初の未使用の表。before なら、前で前のキャプションの組より
+            # 後ろの最後の未使用の表
+            if side == "after":
+                hi = starts[k + 1] if k + 1 < len(groups) else n
+                seq = blocks[ends[k] + 1:hi]
+            else:
+                lo = ends[k - 1] if k > 0 else -1
+                seq = list(reversed(blocks[lo + 1:starts[k]]))
+            return next((b for b in seq if isinstance(b, Table) and id(b) not in used), None)
+
+        def match_all(ks, sides):
+            # キャプションの組 ks に、まず sides[0] の側の表を当て、残ったキャプションに sides[1] の側の表を当てる
+            got = {k: None for k in ks}
+            for side in sides:
+                for k in ks:
+                    if got[k] is None:
+                        got[k] = match_table(k, side)
+                        if got[k] is not None:
+                            used.add(id(got[k]))
+            return got
+
+        # B2: 表キャプション（表の上にキャプション。なければ表の下）
+        tab_body = match_all([k for k, (role, _) in enumerate(groups) if role == "table_caption"], ("after", "before"))
+        figs = [k for k, (role, _) in enumerate(groups) if role == "fig_caption"]
+        left = [t for t in info.tables if id(t) not in used]
+        cell_imgs = [i for t in left for q in t.paragraphs() for i in q.images]
+        has_img = bool(direct or image_paras or cell_imgs)
+        fig_table = {}
+        if figs and not has_img:
+            # B3: 画像のない図キャプションには、未使用の表（表で組んだ図）。図キャプションは図の下に置くのを先に見る
+            # （図形の外の table_for_figure が、画像の図がない原稿を「図の下」とみなすのと同じ）
+            fig_table = match_all(figs, ("before", "after"))
+            left = [t for t in info.tables if id(t) not in used]
+        if any(t is None for t in tab_body.values()) and left:
+            # B5: どの表がどの表キャプションのものか決められない
+            plan.decide("mechanical", "figure", info.float.anchor_src,
+                        f"図形 {fid} の表とキャプションの組み方を決められないので、中身を docx の順に出した")
             return None
-        if groups and groups[0][0] == "table_caption" and (image_paras or info.images):
-            return None
-        # ここから先は必ず組む（状態を変えるのは、組めると決まってから）
-        for q in info.paras:
-            if q.is_blank and not q.images:
-                self._drop_blank(q)
-        for t in info.tables:
-            self._take_table(t)
-        for q in image_paras:
-            self._take(q, "p")
-        if not groups:
-            # キャプションのない画像・表（これまでの扱い: キャプションなしの図・表）
-            return [("p", q) for q in image_paras] + [("table", t) for t in info.tables]
-        role, caps = groups[0]
-        for q in caps:
-            self._take(q, role, self._caption_decision(q, role))
-        if role == "table_caption":
-            if not info.tables:
-                return [(role, q) for q in caps]
-            return [("node", TableNode(table=info.tables[0], caption=caps[0], caption_more=caps[1:]))]
-        if not (image_paras or info.images or info.tables):
-            return [(role, q) for q in caps]     # キャプションだけ（隣の画像と組にする。これまでの扱い）
-        # 画像と文字が同じ段落（画像だけの段落でないもの）は、画像を図に移し（段落の中では出さない）、
-        # 段落は文字ごと図の直後に本文の段落として出す
-        mixed = [q for q in image_paras if not self.is_image_para(q)]
-        extra = list(info.images) + [i for q in mixed for i in q.images]
-        for q in mixed:
-            self.plan.decide("mechanical", "figure", q.src,
-                             f"テキストボックス・グループ図形 {info.float.fid} の段落「{_para_text(q).strip()[:20]}」は、"
-                             "画像と文字が同じ段落にある。画像は図に入れ、段落の文字は図の直後に本文の段落として出した")
-        self.plan.moved_images.update(i.image_id for i in extra)
-        return ([("node", FigNode(image_paras=[q for q in image_paras if q not in mixed], caption=caps[0],
-                                  caption_more=caps[1:], tables=list(info.tables), extra_images=extra))]
-                + [("p", q) for q in mixed])
+        if not groups and not (direct or image_paras or info.tables or others):
+            return None         # 守り（ここには来ない: 図表のない図形は place_floats が除く）
+        if groups and not (direct or image_paras or info.tables or others):
+            # キャプションだけの図形（画像も表も文字もない）: 今までどおりキャプションの段落として出す
+            for q in info.paras:
+                if q.is_blank:
+                    self._drop_blank(q)
+            out = []
+            for role, ps in groups:
+                for q in ps:
+                    self._take(q, role, self._caption_decision(q, role))
+                    out.append((role, q))
+            return out
+        # C: 図キャプションがなく、本体の表が見つからない表キャプションがあれば、画像（グループが直接持つ画像・画像のある段落）は
+        # その表（画像で貼った表）のもの。画像があって本体のない表キャプションが残るとき、残った表はない（上の B5 で戻っている）
+        tab_imgs = [] if figs or not has_img else [k for k, (role, _) in enumerate(groups)
+                                                   if role == "table_caption" and tab_body[k] is None]
+        # ここから先は必ず組む
+        pictured = bool(direct) or any(fig_table.get(k) is None for k in figs) or bool(tab_imgs)   # 図の画像に写るとみなす図形
+        entries = []                    # [(docx での位置, (役割, 要素))]
+        fig_nodes, tab_nodes = {}, {}
+        for k, (role, ps) in enumerate(groups):
+            for q in ps:
+                self._take(q, role, self._caption_decision(q, role))
+            if role == "table_caption":
+                t = tab_body[k]
+                if t is not None:
+                    self._take_table(t)
+                at = min(starts[k], pos[id(t)]) if t is not None else starts[k]
+                tab_nodes[k] = TableNode(table=t, caption=ps[0], caption_more=ps[1:])
+                entries.append((at, ("node", tab_nodes[k])))
+            else:
+                t = fig_table.get(k)
+                fig = FigNode(image_paras=[], caption=ps[0], caption_more=ps[1:], tables=[t] if t is not None else [])
+                if t is not None:
+                    self._take_table(t)
+                fig.how = "float"
+                fig_nodes[k] = fig
+                at = min(starts[k], pos[id(t)]) if t is not None else starts[k]
+                entries.append((at, ("node", fig)))
+        nocap = None
+        if not figs and direct and not tab_imgs:
+            # キャプションのない図（グループが画像を直接持つ図形）。中の画像をすべて含める。位置は、含める画像のある最初の段落・表
+            # （なければ図形の中身の先頭）
+            nocap = FigNode(image_paras=[])
+            nocap.how = "float"
+            at = [pos[id(q)] for q in image_paras] + [pos[id(t)] for t in left if any(q.images for q in t.paragraphs())]
+            entries.append((min(at) if at else -1, ("node", nocap)))
+
+        def has_image(b):       # 画像のある段落か、本体にしなかった表で、セルに画像のあるもの
+            if isinstance(b, Table):
+                return id(b) not in used and any(q.images for q in b.paragraphs())
+            return b is not None and bool(b.images)
+
+        def beside(j, d):       # blocks[j] の前（d = -1）・後ろ（d = 1）の、空の段落を飛ばした要素
+            j += d
+            while 0 <= j < n and isinstance(blocks[j], Para) and blocks[j].is_blank and not blocks[j].images:
+                j += d
+            return blocks[j] if 0 <= j < n else None
+
+        # 図キャプションを画像の上に置く図形か: すぐ後ろに画像のある図キャプションが、すぐ前に画像のある図キャプションより多い
+        # （同じ数なら、今までどおり画像の下に置くとみなす）
+        caps_above = (sum(1 for k in figs if has_image(beside(ends[k], 1)))
+                      > sum(1 for k in figs if has_image(beside(starts[k], -1))))
+
+        def owner(at):          # docx の位置 at の画像を含める図（画像で貼った表なら表）
+            if nocap is not None:
+                return nocap
+            if tab_imgs:
+                before = [k for k in tab_imgs if starts[k] < at]       # 表キャプションは表の上: その前の最後の表キャプション
+                return tab_nodes[before[-1] if before else tab_imgs[0]]
+            if caps_above:
+                before = [k for k in figs if starts[k] < at]           # 図キャプションは画像の上: その前の最後の図キャプション
+                return fig_nodes[before[-1] if before else figs[0]]
+            after = [k for k in figs if starts[k] > at]
+            return fig_nodes[after[0] if after else figs[-1]]
+
+        cap_ids = {id(q) for _, ps in groups for q in ps}
+        if nocap is not None:
+            # キャプションのない図に、キャプションの形の段落（「資料：…」など。float_caption_like）があれば、その図のキャプション
+            # にする（続く文字の段落〈出典の注記など〉はキャプションの続き）。図の画像に写る文字として除外しない
+            other_ids = {id(q) for q in others}
+            k = next((j for j, b in enumerate(blocks) if id(b) in other_ids and self.float_caption_like(b)), None)
+            if k is not None:
+                lead, more = blocks[k], []
+                box = getattr(lead, "textbox_id", "")
+                for b in blocks[k + 1:]:
+                    if isinstance(b, Para) and b.is_blank and not b.images:
+                        continue
+                    if id(b) not in other_ids:
+                        break
+                    # キャプションの続きは、lead のすぐ後ろに続く、同じテキストボックスの段落だけ（別のテキストボックスのラベルなどは
+                    # 図の画像に写る文字として除外する）。入れ物を区別できないときは、最大 3 段落・合計 300 字まで
+                    if box:
+                        if getattr(b, "textbox_id", "") != box:
+                            break
+                    elif len(more) >= 3 or sum(len(_para_text(q)) for q in more) + len(_para_text(b)) > 300:
+                        break
+                    more.append(b)
+                nocap.caption, nocap.caption_more = lead, more
+                for q in [lead] + more:
+                    self._take(q, "fig_caption", "heuristic")
+                    cap_ids.add(id(q))
+                plan.decide("mechanical", "figure", lead.src,
+                            f"図形 {fid} のキャプションのない図の中の段落「{_para_text(lead).strip()[:20]}」を、キャプションの形"
+                            f"（図・表・資料・写真などで始まる短い段落）なので、その図のキャプションとした"
+                            f"{f'（続く {len(more)} 段落はキャプションの続き）' if more else ''}")
+        moved = []
+        if figs or nocap is not None or tab_imgs:
+            if direct:
+                fig = nocap if nocap is not None else fig_nodes[figs[0]] if figs else tab_nodes[tab_imgs[0]]
+                fig.extra_images.extend(direct)
+                moved += direct
+            for t in left:
+                imgs = [i for q in t.paragraphs() for i in q.images]
+                if imgs:
+                    fig = owner(pos[id(t)])
+                    fig.extra_images.extend(imgs)
+                    moved += imgs
+        for b in blocks:
+            if isinstance(b, Table):
+                if id(b) not in used:
+                    self._take_table(b)
+                    entries.append((pos[id(b)], ("table", b)))
+                continue
+            if id(b) in cap_ids:
+                continue
+            if b.is_blank and not b.images:
+                self._drop_blank(b)
+                continue
+            if b.images and (figs or nocap is not None or tab_imgs):
+                fig = owner(pos[id(b)])
+                if self.is_image_para(b):
+                    fig.image_paras.append(b)
+                    self._take(b, "p")
+                    continue
+                # 画像と文字が同じ段落: 画像は図に含め、文字は図の画像に写るとみなして除外する
+                fig.extra_images.extend(b.images)
+                moved += b.images
+            if pictured:
+                self.plan.region[b.src] = "body"
+                plan.exclude(b, TEXTBOX_TEXT_EXCLUDED)
+                continue
+            self._take(b, "p")
+            entries.append((pos[id(b)], ("p", b)))
+            if not self.is_image_para(b):
+                info.body_paras.append(b)
+        plan.moved_images.update(i.image_id for i in moved)
+        for k in tab_imgs:
+            if tab_nodes[k].image_paras or tab_nodes[k].extra_images:
+                tab_nodes[k].how = "float"
+                plan.decide("mechanical", "table", groups[k][1][0].src,
+                            f"表キャプション「{_para_text(groups[k][1][0]).strip()[:20]}」に対応する表がなく、同じ図形に画像があるので、"
+                            "画像で貼った表とした（表の画像の置き場所を作る）")
+        entries.sort(key=lambda e: e[0])
+        return [e for _, e in entries]
 
     def cell_caption(self, q: Para) -> str | None:
         """表のセルの段落がキャプションか（キャプションのスタイル、またはキャプションの形。float_captions と同じ考え）。
@@ -1495,9 +1954,8 @@ class Classifier:
     def cell_figures(self, info):
         """浮動配置の図形の中の表 1 つのセルに、画像と図キャプションが並ぶ図（N18）を、表を出さずに図に組む。
 
-        戻り値: 組んだ要素の一覧。組まないときは None で、呼び出し側（float_mechanical）がこれまで（0.21.0）の扱いにする
-        （キャプションのない表として出す。位置が機械的に決まる図形はアンカー段落の前に置き、位置を決められない図形は今までどおり
-        AI に任せる）。
+        戻り値: 組んだ要素の一覧。組まないときは None で、呼び出し側（float_units）がこれまで（0.21.0）の扱いにする
+        （キャプションのない表として出す）。
         - 図キャプションが表全体で 1 つ: すべてのセルの画像（行・列の順）を本体にした図 1 つ
         - 2 つ以上: どのセルも「画像とキャプション 1 つ」か「空白だけ」なら、セルごとの図。画像だけのセルとキャプション 1 つだけの
           セルが並ぶ表（画像の行とキャプションの行など）は、隣り合う画像とキャプションの組が一つに決まるときだけ（cell_pairs）
@@ -1505,8 +1963,8 @@ class Classifier:
         だけがある表で組んだ図も、表のまま出す）、表キャプションがある、キャプションでも画像でもない文字の段落（「（a）」などの
         小見出しも。表の構造を捨てると読めなくなるおそれがある）や入れ子の表がある、画像とキャプションの組を一つに決められない。
         組むときのセルの段落は、画像の段落・キャプション（とその続きの出典など）・空白だけなので、表を出さなくても文字は落ちない。
-        画像と文字が同じ段落は、float_mechanical と同じく、画像を図に移し、段落は文字ごと図の直後に本文の段落として出す。
-        状態を変えるのは、組めると決まってから（float_mechanical と同じ約束）。
+        画像と文字が同じ段落は、float_units と同じく、画像を図に含め、文字は図の画像に写るとみなして除外する（TEXTBOX_TEXT_EXCLUDED）。
+        状態を変えるのは、組めると決まってから（float_units と同じ約束）。
         """
         t = info.tables[0]
         grid, blanks = [], []          # grid: 行ごとの [(画像の段落の一覧, [キャプションの組（段落の一覧）…])]
@@ -1564,16 +2022,16 @@ class Classifier:
                 self._take(q, "p")
             for q in caps:
                 self._take(q, "fig_caption", self._caption_decision(q, "fig_caption"))
+            # 画像と文字が同じ段落は、画像を図に含め、文字は図の画像に写るとみなして除外する（修正計画 W1 の 2.4）
             mixed = [q for q in imgs if not self.is_image_para(q)]
             for q in mixed:
-                plan.decide("mechanical", "figure", q.src,
-                            f"テキストボックス・グループ図形 {info.float.fid} の段落「{_para_text(q).strip()[:20]}」は、"
-                            "画像と文字が同じ段落にある。画像は図に入れ、段落の文字は図の直後に本文の段落として出した")
+                plan.exclude(q, TEXTBOX_TEXT_EXCLUDED)
             extra = [i for q in mixed for i in q.images]
             plan.moved_images.update(i.image_id for i in extra)
-            entries.append(("node", FigNode(image_paras=[q for q in imgs if q not in mixed], caption=caps[0],
-                                            caption_more=caps[1:], extra_images=extra)))
-            entries.extend(("p", q) for q in mixed)
+            fig = FigNode(image_paras=[q for q in imgs if q not in mixed], caption=caps[0],
+                          caption_more=caps[1:], extra_images=extra)
+            fig.how = "cell"
+            entries.append(("node", fig))
         return entries
 
     @staticmethod
@@ -1617,92 +2075,13 @@ class Classifier:
             out.append((grid[img[0]][img[1]][0], grid[cap[0]][cap[1]][1][0]))
         return out
 
-    def float_from_spec(self, info, spec):
-        """AI が指定した組み合わせ（ai_assist.float_placements で検証済み）で、浮動配置の図形の中身を組む。"""
-        plan = self.plan
-        paras = {q.src: q for q in info.paras}
-        cells = {q.src: t for t in info.tables for q in t.paragraphs()}
-        cell_paras = {q.src: q for t in info.tables for q in t.paragraphs()}
-        tables = {t.tid: t for t in info.tables}
-        group_imgs = {i.image_id: i for i in info.images}
-        img_para = {i.image_id: q for q in list(info.paras) + list(cell_paras.values()) for i in q.images}
-        used, used_tables, dissolved, entries, descs = set(), set(), set(), [], []
-        for item in spec["items"]:
-            caps = []
-            for src in item.get("caption") or []:       # 検証（ai_assist._placement_problem）は falsy を空の一覧として通す
-                q = paras.get(src) or cell_paras[src]
-                if src in cells:
-                    dissolved.add(cells[src].tid)
-                role = "fig_caption" if item["kind"] == "fig" else "table_caption"
-                self._take(q, role, "ai")
-                caps.append(q)
-                used.add(q.src)
-            image_paras, extra, tbls, mixed = [], [], [], []
-            for x in item.get("body") or []:
-                if x in tables:
-                    tbls.append(tables[x])
-                    used_tables.add(x)
-                    self._take_table(tables[x])
-                elif x in group_imgs:
-                    extra.append(group_imgs[x])
-                else:
-                    q = paras.get(x) or cell_paras.get(x) or img_para[x]
-                    if q.src in cells:
-                        dissolved.add(cells[q.src].tid)
-                    if not self.is_image_para(q):
-                        # 画像と文字が同じ段落: 画像は図に移し、段落は文字ごと図の直後に本文の段落として出す
-                        if q not in mixed:
-                            mixed.append(q)
-                            extra.extend(q.images)
-                            self._take(q, "p")
-                            used.add(q.src)
-                    elif q not in image_paras:
-                        image_paras.append(q)
-                        self._take(q, "p")
-                        used.add(q.src)
-            plan.moved_images.update(i.image_id for i in extra)
-            cap, more = (caps[0], caps[1:]) if caps else (None, [])
-            if item["kind"] == "table":
-                entries.append(("node", TableNode(table=tbls[0], caption=cap, caption_more=more)))
-            else:
-                entries.append(("node", FigNode(image_paras=image_paras, caption=cap, caption_more=more,
-                                                tables=tbls, extra_images=extra)))
-                entries.extend(("p", q) for q in mixed)
-            what = "表" if item["kind"] == "table" else "図"
-            body = "表" if tbls else "画像"
-            if mixed:
-                body += (f"。画像と文字が同じ段落 {', '.join(q.src for q in mixed)} は、画像を図に入れ、"
-                         "文字は図の直後に本文の段落として出した")
-            descs.append(f"{what}「{_para_text(cap)[:20] if cap else 'キャプションなし'}」（本体: {body}）")
-        # 指定に含まれなかった中身は、図表の後にそのまま出す（文字を落とさないため）
-        for q in info.paras:
-            if q.src in used:
-                continue
-            if q.is_blank and not q.images:
-                self._drop_blank(q)
-            else:
-                self._take(q, "p")
-                entries.append(("p", q))
-        for t in info.tables:
-            if t.tid in dissolved:
-                for q in t.paragraphs():
-                    if q.src in used:
-                        continue
-                    if q.is_blank and not q.images:
-                        self._drop_blank(q)
-                    else:
-                        self._take(q, "p")
-                        entries.append(("p", q))
-            elif t.tid not in used_tables:
-                self._take_table(t)
-                entries.append(("table", t))
-        after = plan.paras.get(spec["after"])
-        d = plan.decide("ai", "figure", spec["after"],
-                        f"テキストボックス・グループ図形 {info.float.fid} の中身を{'、'.join(descs)}として組み、段落"
-                        f"「{_para_text(after)[:20] if after else spec['after']}」の後に置いた。{spec.get('reason', '')}",
-                        spec.get("confidence", ""))
-        plan.float_decisions[info.float.fid] = d
-        return entries
+    @staticmethod
+    def float_caption_like(b: Para) -> bool:
+        """キャプションのない図形の図の中の段落が、キャプションの形か（textbox_caption と同じく 80 字以内で「。」で終わらず、
+        図・表・資料・写真・出典などで始まる。RE_FLOAT_CAP_LIKE。番号がなくてよい）。float_units が、図の画像に写る文字として
+        除外せず、その図のキャプションにする（「資料：…」と、その出典の注記。data24 の形）。"""
+        t = nfkc(_para_text(b)).strip()
+        return bool(t) and len(t) <= 80 and not t.endswith("。") and RE_FLOAT_CAP_LIKE.match(t) is not None
 
     @staticmethod
     def textbox_caption(b: Para) -> Optional[str]:
@@ -1721,6 +2100,13 @@ class Classifier:
             return False
         return bool(b.images) and all(a.kind == "image" or (a.kind == "text" and is_ws(a.text)) for a in b.atoms)
 
+    def free_image_para(self, b) -> bool:
+        """画像だけの段落で、まだどの図・表にも含めていない画像（plan.moved_images にない画像）のあるものか。
+
+        グループ図形の画像は結び付いた段落のアトムなので、グループ図形だけが結び付いた空の段落も画像だけの段落になるが、その画像は
+        図形の図（float_units）か本文の図キャプションの図（B6）に含めてあるので、図にしない（キャプションなしの図を 2 つ作らない）。"""
+        return self.is_image_para(b) and any(i.image_id not in self.plan.moved_images for i in b.images)
+
     def assemble_floats(self, flat):
         """図（画像段落＋図キャプション）と表（表キャプション＋表）を組み立て、本文の要素列にする。
 
@@ -1731,6 +2117,9 @@ class Classifier:
         図形とキャプションだけの図形は、同じ位置に仮に置くので組にする）。囲み（BoxNode。置き場所は BOX_PLACE）も前後に数えない
         （図はキャプションの位置に組み立てるので、画像とキャプションの間の囲みは、キャプションが画像の後ろなら図の前、前なら図の
         後ろに出る。表は表キャプションと表の先に来る方の位置に組み立てるので、間の囲みは、キャプションが表の上でも下でも表の後ろに出る）。
+        図キャプションの図は figure_units が組む。最後に、残った画像だけの段落をキャプションなしの図にし、図キャプションの続きの
+        段落の中の画像を図に含め（caption_images）、文字のある段落に結び付いた浮動の画像を段落の後ろのキャプションなしの図にする
+        （anchored_figures）。
         """
         plan = self.plan
         out = []
@@ -1764,9 +2153,13 @@ class Classifier:
         above = sum(1 for k in range(n) if flat[k][0] == "fig_caption" and nxt[k] is not None
                     and self.is_image_para(flat[nxt[k]][1]))
         captions_below = below >= above
+        self.captions_below = captions_below
+        st = SimpleNamespace(flat=flat, out=out, used=used, prev=prev, nxt=nxt, where=where,
+                             captions_below=captions_below, last_out=last_out, ahead=ahead)
         for k, (role, b) in enumerate(flat):
             if role == "node":          # 組み立て済みの図表（浮動配置の図形）
-                put(b, k)
+                if id(b) not in used:   # 本文の図キャプションの図に含めた図形の図（take_float）は出さない
+                    put(b, k)
                 continue
             if id(b) in used:
                 continue
@@ -1782,37 +2175,7 @@ class Classifier:
                             f"キャプションの続きの段落「{_para_text(b)[:20]}」を直前の{'図' if role == 'fig_caption' else '表'}のキャプションに含めた")
                 continue
             if role == "fig_caption":
-                img = None
-                for j in last_out(k, 2):
-                    if isinstance(out[j], PNode) and self.is_image_para(out[j].para):
-                        img = out.pop(j).para
-                        break
-                if img is None:
-                    for j in ahead(k, 2):
-                        # キャプションを画像の下に置く原稿では、直後に図キャプションがある画像はそのキャプションの図のもの
-                        if captions_below and nxt[j] is not None and flat[nxt[j]][0] == "fig_caption":
-                            continue
-                        if self.is_image_para(flat[j][1]) and id(flat[j][1]) not in used:
-                            img = flat[j][1]
-                            used.add(id(img))
-                            break
-                fig = FigNode(image_paras=[img] if img else [], caption=b)
-                if img is None:
-                    # 画像がなければ、隣のキャプションのない表を図の本体にする（表で組んだ図。決定事項 22）
-                    tbl, why = self.table_for_figure(flat, out, k, used, captions_below, self.provisional)
-                    if tbl is not None:
-                        fig.tables.append(tbl)
-                        plan.decide("mechanical", "figure", b.src,
-                                    f"画像のない図キャプション「{_para_text(b).strip()[:20]}」の"
-                                    f"{'直前' if captions_below else '直後'}にある、キャプションのない表 {tbl.tid} を、"
-                                    "図の本体として組んだ（図の中に表を入れる）")
-                    elif why:
-                        plan.figure_issues.append((b.src, why))
-                        plan.decide("mechanical", "figure", b.src, f"図キャプションに対応する画像が見つからない（{why}）",
-                                    applied=False)
-                    else:
-                        plan.decide("mechanical", "figure", b.src, "図キャプションに対応する画像が見つからない（図形・グループ化等の可能性）")
-                put(fig, k)
+                put(self.figure_units(st, k), k)
                 continue
             if role == "table_caption":
                 tbl = None
@@ -1824,9 +2187,19 @@ class Classifier:
                 if tbl is None and last and isinstance(out[last[0]], TableNode) and out[last[0]].caption is None:
                     out[last[0]].caption = b
                     continue
+                node = TableNode(table=tbl, caption=b)
                 if tbl is None:
-                    plan.decide("mechanical", "table", b.src, "表キャプションに対応する表が見つからない")
-                put(TableNode(table=tbl, caption=b), k)
+                    paras = self.table_image_paras(st, k)       # C: 画像で貼った表
+                    if paras:
+                        node.image_paras = paras
+                        node.how = "next" if len(paras) == 1 else "run"
+                        plan.decide("mechanical", "table", b.src,
+                                    f"表キャプション「{_para_text(b).strip()[:20]}」に対応する表がなく、すぐ後ろに画像だけの段落"
+                                    f"{f' {len(paras)} つ' if len(paras) > 1 else ''}があるので、画像で貼った表とした"
+                                    "（表の画像の置き場所を作る）")
+                    else:
+                        plan.decide("mechanical", "table", b.src, "表キャプションに対応する表が見つからない")
+                put(node, k)
                 continue
             if role == "table":
                 put(TableNode(table=b), k)
@@ -1859,6 +2232,10 @@ class Classifier:
         # キャプションのない画像段落 → キャプションなしの図
         final = []
         for node in out:
+            if isinstance(node, PNode) and self.is_image_para(node.para) and not self.free_image_para(node.para):
+                # 画像をすべて図形の図・本文の図キャプションの図に含めた段落（グループ図形だけが結び付いた空の段落）: 文字は空白だけ
+                plan.exclude_blank(node.para)
+                continue
             if isinstance(node, PNode) and self.is_image_para(node.para):
                 fig = FigNode(image_paras=[node.para])
                 imgs = node.para.images
@@ -1870,8 +2247,289 @@ class Classifier:
                     plan.decide("mechanical", "figure", node.para.src, "キャプションのない画像。キャプションなしの図として出力")
                 final.append(fig)
             else:
+                if isinstance(node, FigNode):
+                    self.caption_images(node)
                 final.append(node)
+                final.extend(self.anchored_figures(node))
         return final
+
+    def figure_units(self, st, k) -> FigNode:
+        """図形の外の図キャプション flat[k] の図（FigNode）。上から順に当て、当たったら次へ進まない（A1 と A2 は重ねる）。
+
+        A1 同じ段落: 図キャプションの段落の中の画像（図形〈Float〉の画像を除く）は、その図に含める（plan.moved_images に入れ、
+           <caption> の中には書かない。C006）。
+        A2 隣の画像だけの段落: 前 2 要素以内の画像だけの段落、なければ後ろ 2 要素以内（キャプションを図の下に置く原稿では、直後に
+           図キャプションがある画像は取らない）を 1 つ見つけ、そこからキャプションと反対の側へ続く画像だけの段落を何段落でも含める
+           （C033。前後は同じ置き場所の要素〈same_place〉で数える）。
+        A3 表で組んだ図: A1・A2 で画像がなければ table_for_figure（表で組んだ図には画像の置き場所を作らない。決定 2）。
+        A4 近く: A1〜A3 で本体が付かなかった図形の外の図キャプションだけ、near_images（C030・C029）。近くの段落に結び付いた
+           キャプションのないグループ図形は、その図形ごとこの図に含め、図キャプションの位置に置く（take_float。B6）。
+        A5 どれにも当たらなければ、docx に画像の見つからない図（画像の置き場所は作る。assign_slots）。表を本体にできなかった
+           理由（table_for_figure）は、置き場所の備考（FigNode.note → ImageSlot.note）に残す。
+        画像を含めた決め方は FigNode.how（same_para・run・near）に記録する。st は assemble_floats の状態（flat・out・used・
+        prev・nxt・where・captions_below・last_out・ahead）。
+        """
+        plan = self.plan
+        flat, out, used = st.flat, st.out, st.used
+        b = flat[k][1]
+        here = self.provisional.get(id(b), "")
+        fig = FigNode(image_paras=[], caption=b)
+        cap = _para_text(b).strip()[:20]
+        how = []
+        # A1: 図キャプションの段落の中の画像
+        own = [i for i in b.images if not i.float_id and i.image_id not in plan.moved_images]
+        if own:
+            fig.extra_images.extend(own)
+            plan.moved_images.update(i.image_id for i in own)
+            how.append("same_para")
+            plan.decide("mechanical", "figure", b.src,
+                        f"図キャプション「{cap}」の段落の中の画像{f' {len(own)} つ' if len(own) > 1 else ''}を、"
+                        "その図の画像にした（キャプションの中には出さない）")
+        # A2: 隣の画像だけの段落と、そこから続く画像だけの段落
+        paras, side = [], "前"
+        for j in st.last_out(k, 2):
+            if isinstance(out[j], PNode) and self.free_image_para(out[j].para):
+                idx = [j]
+                for i in range(j - 1, -1, -1):
+                    if st.where[id(out[i])] != here:
+                        continue
+                    if not (isinstance(out[i], PNode) and self.free_image_para(out[i].para)):
+                        break
+                    idx.append(i)
+                idx.sort()
+                paras = [out[i].para for i in idx]
+                for i in reversed(idx):
+                    out.pop(i)
+                break
+        if not paras:
+            side = "後ろ"
+            for j in st.ahead(k, 2):
+                # キャプションを画像の下に置く原稿では、直後に図キャプションがある画像はそのキャプションの図のもの
+                if st.captions_below and st.nxt[j] is not None and flat[st.nxt[j]][0] == "fig_caption":
+                    continue
+                if self.free_image_para(flat[j][1]) and id(flat[j][1]) not in used:
+                    paras.append(flat[j][1])
+                    used.add(id(flat[j][1]))
+                    i = st.nxt[j]
+                    while i is not None and self.free_image_para(flat[i][1]) and id(flat[i][1]) not in used:
+                        if st.captions_below and st.nxt[i] is not None and flat[st.nxt[i]][0] == "fig_caption":
+                            break
+                        paras.append(flat[i][1])
+                        used.add(id(flat[i][1]))
+                        i = st.nxt[i]
+                    break
+        fig.image_paras = paras
+        if len(paras) > 1:
+            how.append("run")
+            plan.decide("mechanical", "figure", b.src,
+                        f"図キャプション「{cap}」の{side}に続く画像だけの段落"
+                        f" {len(paras)} つを、1 つの図にした（画像 1 枚にまとめて入れる）")
+        if own or paras:
+            fig.how = "+".join(how)
+            return fig
+        # A3: 画像がなければ、隣のキャプションのない表を図の本体にする（表で組んだ図。決定事項 22）
+        tbl, why = self.table_for_figure(flat, out, k, used, st.captions_below, self.provisional)
+        if tbl is not None:
+            fig.tables.append(tbl)
+            plan.decide("mechanical", "figure", b.src,
+                        f"画像のない図キャプション「{cap}」の"
+                        f"{'直前' if st.captions_below else '直後'}にある、キャプションのない表 {tbl.tid} を、"
+                        "図の本体として組んだ（図の中に表を入れる）")
+            return fig
+        # A4: 近くの段落の画像（図形の外の図キャプションだけ）
+        near = self.near_images(st, k) if not here and not in_shape(b) else None
+        if near is not None:
+            q, imgs, d, fids = near
+            fig.extra_images.extend(imgs)
+            plan.moved_images.update(i.image_id for i in imgs)
+            fig.how = "near"
+            if imgs:
+                plan.decide("mechanical", "figure", b.src,
+                            f"図キャプション「{cap}」の近くに画像だけの段落がないので、{d} 要素{'前' if st.captions_below else '後ろ'}の"
+                            f"段落「{_para_text(q).strip()[:20]}」にある画像{f' {len(imgs)} つ' if len(imgs) > 1 else ''}を、"
+                            "この図の画像にした")
+            for fid in fids:
+                # B6: 段落に結び付いたキャプションのないグループ図形を、この図に含める（図キャプションの位置に置く）
+                self.take_float(st, fid, fig, cap, d)
+            return fig
+        # A5: docx に画像の見つからない図
+        if why:
+            fig.note = why
+            plan.decide("mechanical", "figure", b.src, f"図キャプションに対応する画像が見つからない（{why}）", applied=False)
+        else:
+            plan.decide("mechanical", "figure", b.src, "図キャプションに対応する画像が見つからない（図形・グループ化等の可能性）")
+        return fig
+
+    def table_image_paras(self, st, k) -> list:
+        """本体の表が見つからない表キャプション flat[k] の、画像で貼った表の画像だけの段落（修正計画 W1 の 2.3 の C の (2)）。
+
+        キャプションのすぐ後ろ（同じ置き場所の要素。空の段落は飛ばす）が画像だけの段落なら、そこから続く画像だけの段落を含める。
+        図キャプションを図の下に置く原稿（captions_below）で、その並びの直後（空の段落を除く）に図キャプションがあるときは、
+        その画像は図キャプションの図のものなので含めない（figure_units の A2 と同じ）。含めた段落は st.used に入れる。
+        """
+        flat, used = st.flat, st.used
+
+        def blank(j):
+            b = flat[j][1]
+            return flat[j][0] != "node" and isinstance(b, Para) and b.is_blank and not b.images
+
+        def free(j):
+            return flat[j][0] == "p" and id(flat[j][1]) not in used and self.free_image_para(flat[j][1])
+
+        def after(j):               # j の後ろの、空の段落でない要素の位置
+            j = st.nxt[j]
+            while j is not None and blank(j):
+                j = st.nxt[j]
+            return j
+
+        first = after(k)
+        if first is None or not free(first):
+            return []
+        run = [first]
+        while True:
+            j = after(run[-1])
+            if j is None or not free(j):
+                break
+            run.append(j)
+        tail = after(run[-1])
+        if st.captions_below and tail is not None and flat[tail][0] == "fig_caption":
+            return []
+        for j in run:
+            used.add(id(flat[j][1]))
+        return [flat[j][1] for j in run]
+
+    def near_images(self, st, k):
+        """図キャプション flat[k] の近く（A4。C030・C029）にある「画像のある段落」のうち最初のものと、その画像。
+
+        キャプションを図の下に置く原稿では前、上に置く原稿では後ろの、NEAR_FIGURE 要素以内（同じ置き場所の要素で数える。
+        組み立て済みの図表〈役割 node〉・図形の中の段落と表・キャプションの続きは数えない）を、キャプションに近い方から見る。
+        ほかの図キャプションと、画像のない見出しは越えない。画像のある段落は、画像だけの段落でない段落（文字のある段落・見出し）
+        で、図形（Float）の画像でない、まだどの図にも含めていない画像（結び付いた浮動の画像・行内の画像）のあるものと、本文の
+        図キャプションの図に含められる図形（キャプションのないグループ図形。caption_floats）が結び付いた段落（グループの画像は、
+        結び付いた段落のアトムになっている。B6）。
+        戻り値: (段落, 画像の一覧, 何要素目か, 図形の ID の一覧) / None。
+        """
+        flat = st.flat
+        step = st.prev if st.captions_below else st.nxt
+        j, d, lead = step[k], 0, True
+        while j is not None and d < NEAR_FIGURE:
+            role, x = flat[j]
+            if role == "node" or (isinstance(x, (Para, Table)) and in_shape(x)):
+                j = step[j]
+                continue
+            if role == "fig_caption":
+                # 後ろを見るとき、すぐ後ろの番号で始まらない図キャプションは、このキャプションの続き（数えない）
+                if (not st.captions_below and lead and isinstance(x, Para)
+                        and not RE_FIGCAP.match(nfkc(_para_text(x)).strip())):
+                    j = step[j]
+                    continue
+                return None
+            lead = False
+            d += 1
+            if isinstance(x, Para):
+                imgs = [] if self.is_image_para(x) else [
+                    i for i in x.images if not i.float_id and i.image_id not in self.plan.moved_images]
+                fids = self.caption_floats(x)
+                if imgs or fids:
+                    return x, imgs, d, fids
+            if role in HEADING_LEVEL:
+                return None         # 画像のない見出しは越えない
+            j = step[j]
+        return None
+
+    def caption_floats(self, q) -> list:
+        """段落 q に結び付いた図形のうち、本文の図キャプションの図に含められるもの（修正計画 W1 の 2.3 の B6）の ID（docx の順）。
+
+        キャプションのないグループ図形（グループが画像を直接持ち、float_units が中身をキャプションなしの図 1 つだけに組んだもの。
+        表・本文の段落を出す図形は含めない）で、機械的に置いたか位置を決められない図形（AI の指定で置いた図形と、本文の最後に
+        仮に置いた図形は含めない）。
+        """
+        out = []
+        for fid, info in self.plan.floats.items():
+            if (info.float.anchor_src != q.src or info.mode not in ("mechanical", "unplaced") or info.where == "end"
+                    or not info.images or info.built != "units"):
+                continue
+            entries = self.float_entries.get(fid) or []
+            if (len(entries) == 1 and entries[0][0] == "node" and isinstance(entries[0][1], FigNode)
+                    and entries[0][1].caption is None and not entries[0][1].tables):
+                out.append(fid)
+        return out
+
+    def take_float(self, st, fid, fig: FigNode, cap: str, d: int):
+        """図形 fid（caption_floats）を、図形の外の本文の図キャプションの図 fig に含める（修正計画 W1 の 2.3 の B6）。
+
+        図形の中身から組んだキャプションなしの図（役割 node）を要素の列から取り除き（組み立て済みなら out から、まだなら used に
+        入れて飛ばす）、その画像だけの段落と画像を fig に移す。図形は FloatInfo.mode = "caption"（キャプションの位置に置いたもの。
+        plan.unplaced_floats に入らない）にし、place_floats が記録した位置の判断を、図キャプションの図に含めたことの記録に書き直す
+        （判断の番号を変えない）。"""
+        plan = self.plan
+        info = plan.floats[fid]
+        node = self.float_entries[fid][0][1]
+        k = next((j for j, x in enumerate(st.out) if x is node), None)
+        if k is not None:
+            st.out.pop(k)
+        else:
+            st.used.add(id(node))
+        fig.image_paras.extend(node.image_paras)
+        fig.extra_images.extend(node.extra_images)
+        info.mode, info.caption_src = "caption", fig.caption.src
+        info.reason, info.where, info.end_why, info.end_after, info.after_src = "", "", "", "", ""
+        anchor = plan.paras.get(info.float.anchor_src)
+        msg = (f"テキストボックス・グループ図形 {fid}（{self.float_summary(info)}）を、本文の図キャプション「{cap}」の図に含めた"
+               f"（キャプションのないグループ図形が、図キャプションの {d} 要素{'前' if st.captions_below else '後ろ'}の段落"
+               f"「{_para_text(anchor).strip()[:20] if anchor is not None else info.float.anchor_src}」に結び付いているため。"
+               "図キャプションの位置に置く）")
+        dec = self.float_place_decision.get(fid)
+        if dec is not None:
+            dec.message, dec.applied = msg, True
+        else:
+            plan.decide("mechanical", "figure", info.float.anchor_src, msg)
+
+    def caption_images(self, node: FigNode):
+        """図キャプションの続きの段落（caption_more）の中の画像（図形の画像を除く）も、その図に含める（A1 と同じ。<caption> の
+        中には書かない）。"""
+        plan = self.plan
+        for q in node.caption_more:
+            imgs = [i for i in q.images if not i.float_id and i.image_id not in plan.moved_images]
+            if imgs:
+                node.extra_images.extend(imgs)
+                plan.moved_images.update(i.image_id for i in imgs)
+                if "same_para" not in node.how.split("+"):
+                    node.how = "+".join([x for x in node.how.split("+") if x] + ["same_para"])
+                plan.decide("mechanical", "figure", q.src,
+                            f"図キャプションの続きの段落「{_para_text(q).strip()[:20]}」の中の画像を、その図の画像にした")
+
+    def anchored_figures(self, node) -> list:
+        """本文の要素 node の、文字のある段落（本文・見出し・箇条書き・引用・別行数式・表キャプション）に結び付いた浮動の画像
+        （行内でなく、図形〈Float〉の画像でもなく、どの図にも含めていないもの）の、キャプションなしの図（2.3 の E）。node の
+        後ろに置く（見出しなら節の最初、箇条書き・引用なら、その終わりの後ろ）。<title> や段落の中には画像を書かない（C030）。
+        docx の画像の位置（ImageRef.draw_id）ごとに図 1 つ。"""
+        plan = self.plan
+        if isinstance(node, Sec):
+            paras = [node.heading] if node.heading is not None else []
+        elif isinstance(node, (PNode, FormulaNode)):
+            paras = [node.para]
+        elif isinstance(node, ListNode):
+            paras = list(node.items)
+        elif isinstance(node, QuoteNode):
+            paras = list(node.paras)
+        elif isinstance(node, TableNode):
+            paras = ([node.caption] if node.caption is not None else []) + list(node.caption_more)
+        else:
+            return []
+        figs = []
+        for q in paras:
+            groups = {}
+            for i in q.images:
+                if not i.inline and not i.float_id and i.image_id not in plan.moved_images:
+                    groups.setdefault(i.draw_id or i.image_id, []).append(i)
+            for imgs in groups.values():
+                plan.moved_images.update(i.image_id for i in imgs)
+                figs.append(FigNode(image_paras=[], extra_images=imgs))
+                plan.decide("mechanical", "figure", q.src,
+                            f"段落「{_para_text(q).strip()[:20]}」に結び付いた画像を、その段落の後ろの"
+                            "キャプションなしの図にした（段落・見出しの中には画像を書かない）")
+        return figs
 
     @staticmethod
     def table_for_figure(flat, out, k, used, captions_below, provisional=None):
@@ -2433,6 +3091,82 @@ class Classifier:
                 plan.locations[b.src] = "英文部分"
                 plan.exclude(b, EN_OTHER_EXCLUDED)
 
+    def pair_app_figures(self):
+        """資料（AppNode）の中の図キャプションの段落を、画像と組んで FigNode(caption) にする（修正計画 W1 の 2.3 の D の「資料」。
+        C078）。本文の図キャプションの A1・A2（figure_units）と同じ規則: 図キャプションの段落の中の画像、前 2 要素以内の画像だけの
+        段落（なければ後ろ 2 要素以内。キャプションを図の下に置く原稿では、直後に図キャプションがある画像は取らない）と、そこから
+        続く画像だけの段落。画像が見つからない図キャプションは、これまでどおり段落のまま。図キャプションは、キャプションのスタイル、
+        または「図N」で始まる短い段落で、すぐ隣が画像だけの段落のもの（本文と同じ推定）。資料の見出しの前後や、資料どうしは越えない
+        （資料ごとに children だけで数える）。"""
+        plan = self.plan
+
+        def free(n) -> bool:
+            return (isinstance(n, FigNode) and n.caption is None and not n.tables and bool(n.image_paras)
+                    and all(self.free_image_para(q) for q in n.image_paras))
+
+        def caption(n, styled_only) -> bool:
+            if not isinstance(n, PNode):
+                return False
+            t = nfkc(_para_text(n.para)).strip()
+            if not RE_FIGCAP.match(t):
+                return False
+            return self.role_of(n.para) == "fig_caption" if styled_only else (len(t) <= 80 and not t.endswith("。"))
+
+        for app in plan.apps:
+            ch = app.children
+            k = 0
+            while k < len(ch):
+                n = ch[k]
+                styled = caption(n, True)
+                if not (styled or caption(n, False)):
+                    k += 1
+                    continue
+                b = n.para
+                label = _para_text(b).strip()[:20]
+                own = [i for i in b.images if not i.float_id and i.image_id not in plan.moved_images]
+                idx, side = [], ""      # 含める画像だけの図（children の位置）と、その側
+                for j in (k - 1, k - 2):
+                    if j >= 0 and free(ch[j]):
+                        idx, side = [j], "前"
+                        while idx[0] - 1 >= 0 and free(ch[idx[0] - 1]):
+                            idx.insert(0, idx[0] - 1)
+                        break
+                if not side:
+                    for j in (k + 1, k + 2):
+                        if j >= len(ch) or not free(ch[j]):
+                            continue
+                        if self.captions_below and j + 1 < len(ch) and caption(ch[j + 1], False):
+                            continue            # 図の下にキャプションを置く原稿: 直後に図キャプションがある画像は、そのキャプションの図のもの
+                        idx, side = [j], "後ろ"
+                        while (idx[-1] + 1 < len(ch) and free(ch[idx[-1] + 1])
+                               and not (self.captions_below and idx[-1] + 2 < len(ch) and caption(ch[idx[-1] + 2], False))):
+                            idx.append(idx[-1] + 1)
+                        break
+                paras = [q for i in idx for q in ch[i].image_paras]
+                if not (own or paras):
+                    k += 1
+                    continue
+                if not styled:
+                    b.role, b.role_origin = "fig_caption", "heuristic"
+                    plan.decide("mechanical", "style", b.src, f"資料の段落「{label}」を図キャプションと推定（「図N」で始まり、隣が画像）")
+                fig = FigNode(image_paras=paras, caption=b, extra_images=own)
+                how = []
+                if own:
+                    plan.moved_images.update(i.image_id for i in own)
+                    how.append("same_para")
+                    plan.decide("mechanical", "figure", b.src, f"資料の図キャプション「{label}」の段落の中の画像"
+                                f"{f' {len(own)} つ' if len(own) > 1 else ''}を、その図の画像にした（キャプションの中には出さない）")
+                if paras:
+                    if len(paras) > 1:
+                        how.append("run")
+                    plan.decide("mechanical", "figure", b.src, f"資料の図キャプション「{label}」の{side}に続く画像だけの段落"
+                                f"{f' {len(paras)} つ' if len(paras) > 1 else ''}を、その図の画像にした")
+                fig.how = "+".join(how)
+                ch[k] = fig                     # 図はキャプションの位置に置く（本文の figure_units と同じ）
+                for i in reversed(idx):
+                    del ch[i]
+                k += 1 - sum(1 for i in idx if i < k)
+
     def note_appendix_sentence(self, b, text, sentence, first):
         """「資料」などで始まり資料の見出しの形（RE_APPENDIX）に合うが、文の形（appendix_sentence）なので資料の見出しにしなかった
         段落を、判断の一覧に記録する（applied=False。レポートの 4 章と、AI 依頼文の「推定:」に載る）。
@@ -2672,6 +3406,224 @@ class Classifier:
         for i, a in enumerate(plan.affs, 1):
             a.aid = f"aff{i}"
         plan.figures, plan.tables, plan.formulas = figs, tabs, forms
+        self.assign_slots()
+
+    def cell_figures_in(self, t) -> list:
+        """表 t（入れ子の表も）のセルの中の図キャプションと、その図の画像の置き場所（修正計画 W1 の 2.3 の D の「表のセル」。C031）。
+
+        図キャプション（図の番号で始まる、キャプションのスタイルかキャプションの形の段落。cell_caption）ごとに、置き場所を必ず 1 つ
+        作る（種類 fig・place inline・how cell。幹は図番号から。誤っても図キャプションの図は出力される）。画像は次の順に探す。
+        (1) 図キャプションが 1 つだけのセルで、そのセルに画像（キャプションの段落の中の画像も）があれば、そのセルの画像。ただし、
+        セルの画像がキャプションの段落に結び付いた浮動（inline でない）の画像だけで、同じ列のすぐ上（図キャプションを図の上に置く
+        原稿では下。captions_below）のセルに (2) の画像があるときは、(2) を優先する（浮動の画像は結び付いた段落の外に描かれうるので、
+        どの図のものか決められない。その浮動の画像は covers に入れず、キャプションなしの置き場所のまま。data17 の形）。
+        (2) 同じ列のすぐ上（下）のセルの画像。そのセルに図キャプションがなく、ほかの図キャプションに使われていないとき。
+        どちらもなければ、covers の空の置き場所（docx でこの図の画像を見つけられなかった図。備考 note に書く）。1 つのセルに
+        図キャプションが 2 つ以上あるセルは、画像の組み合わせを決められないので、どのキャプションも covers の空の置き場所にする
+        （セルの画像はキャプションのない置き場所のまま）。
+        XML は変わらない（表の形のまま、置き場所の最初の画像の位置の <inline-graphic> の名前が図番号になる。covers が空なら、
+        キャプションの段落の先頭に <inline-graphic> を書く。builder.Builder.cell_content）。戻り値: ImageSlot の一覧（幹はまだ
+        付いていない）。covers は docx の順（assign_slots が、最初にたどる画像を先頭にする）。
+        """
+        plan = self.plan
+        order = {img.image_id: k for k, img in enumerate(self.doc.images)}
+        out, claimed = [], set()
+        step = -1 if self.captions_below else 1
+        side = "上" if self.captions_below else "下"
+
+        def images(c):          # セルの段落（入れ子の表の中を除く）の画像で、まだどの図・置き場所にも含めていないもの
+            return [i for q in c.blocks if isinstance(q, Para) for i in q.images
+                    if i.image_id not in plan.moved_images and i.image_id not in plan.slot_of]
+
+        def captions(c):
+            return [q for q in c.blocks if isinstance(q, Para) and self.cell_caption(q) == "fig_caption"
+                    and RE_FIGCAP.match(nfkc(_para_text(q)).strip())]
+
+        def cells_of(table):
+            for row in table.rows:
+                col = row.grid_before
+                line = []
+                for c in row.cells:
+                    line.append((col, max(1, c.gridspan), c))
+                    col += max(1, c.gridspan)
+                yield line
+
+        def empty(cap, why):
+            slot = ImageSlot(key="", kind="fig", label=slot_label(cap), caption=cap, src=cap.src, covers=[],
+                             float_id=cap.float_id, place="inline", how="cell", note=why)
+            out.append(slot)
+            plan.decide("mechanical", "figure", cap.src,
+                        f"表のセルの図キャプション「{_para_text(cap).strip()[:20]}」の画像を docx で見つけられなかった（{why}）。"
+                        "キャプションの段落の先頭に画像の置き場所を作る（表の形は変えない）")
+
+        def scan(table):
+            grid = list(cells_of(table))
+            drops, empties, caprows = [], [], {}     # 浮動の画像を外した図 (列, 行, ラベル)・空の置き場所 (列, 行, 置き場所)・列ごとの図キャプションの行
+            for r, line in enumerate(grid):
+                for col, _, c in line:
+                    for b in c.blocks:
+                        if isinstance(b, Table):
+                            scan(b)
+                    caps = captions(c)
+                    if not caps:
+                        continue
+                    caprows.setdefault(col, []).append(r)
+                    if len(caps) > 1:
+                        for cap in caps:
+                            empty(cap, "1 つのセルに図キャプションが 2 つ以上あり、画像との組み合わせを決められない")
+                        continue
+                    cap = caps[0]
+                    near, near_imgs = None, []
+                    if 0 <= r + step < len(grid):
+                        near = next((x for start, span, x in grid[r + step] if start <= col < start + span), None)
+                        if near is not None and (id(near) in claimed or captions(near)):
+                            near = None
+                        near_imgs = images(near) if near is not None else []
+                    imgs, where, note = images(c), "同じセル", ""
+                    if imgs and near_imgs and all(not i.inline and i.para_src == cap.src for i in imgs):
+                        # キャプションの段落に結び付いた浮動の画像だけ: 同じ列の上（下）のセルの画像を優先し、浮動の画像は含めない
+                        note = (f"キャプションの段落に結び付いた浮動の画像{f' {len(imgs)} つ' if len(imgs) > 1 else ''}は、"
+                                "どの図のものか決められないので、キャプションのない置き場所のまま")
+                        imgs = []
+                        drops.append((col, r, slot_label(cap)))
+                    if not imgs and near_imgs:
+                        imgs, where = near_imgs, f"同じ列の{side}のセル"
+                        claimed.add(id(near))
+                    claimed.add(id(c))
+                    if not imgs:
+                        empty(cap, f"同じセルにも、同じ列の{side}のセルにも、この図のものと決められる画像がない")
+                        empties.append((col, r, out[-1]))
+                        continue
+                    imgs = sorted(imgs, key=lambda i: order.get(i.image_id, len(order)))
+                    fl = next((i.float_id for i in imgs if i.float_id), "") or cap.float_id
+                    out.append(ImageSlot(key="", kind="fig", label=slot_label(cap), caption=cap, src=cap.src, covers=imgs,
+                                         float_id=fl, place="inline", how="cell", note=note))
+                    plan.decide("mechanical", "figure", cap.src,
+                                f"表のセルの図キャプション「{_para_text(cap).strip()[:20]}」の画像{f' {len(imgs)} つ' if len(imgs) > 1 else ''}を、"
+                                f"その図の画像にした（{where}。表の形は変えず、セルの中の画像の名前を図番号にする"
+                                f"{'。' + note if note else ''}）")
+            # 上（下）のセルの画像を優先して外した浮動の画像は、同じ列の次の図キャプション（captions_below でない原稿では前）が空の
+            # 置き場所になったとき、その図の画像かもしれない
+            for col, r, slot in empties:
+                before = [(abs(r - r2), lab) for c2, r2, lab in drops
+                          if c2 == col and (r2 < r if self.captions_below else r2 > r)
+                          and not any(min(r, r2) < x < max(r, r2) for x in caprows.get(col, []))]
+                if before:
+                    lab = min(before)[1]
+                    slot.note += (f"。{lab} のキャプションの段落に結び付いた、キャプションのない画像がこの図の画像かもしれない。"
+                                  "そうなら、その画像をこの図の名前で入れ、キャプションなしの置き場所は外す")
+
+        scan(t)
+        return out
+
+    def float_note(self, fid) -> str:
+        """図形 fid の中身の画像の置き場所の備考（ImageSlot.note）: 本文の最後に置いた図形なら、その理由（なければ ""）。
+        直し方は書かない（修正計画 W1 の 4.2。本文の外の図の直し方の文は report.APP_MOVE_HOW の 1 つにする）。"""
+        info = self.plan.floats.get(fid) if fid else None
+        if info is None or info.mode != "unplaced" or info.where != "end":
+            return ""
+        if info.end_why == "ai":
+            region = OUTSIDE_JA.get(self.plan.region.get(info.end_after, ""), "本文の外")
+            return f"AI が本文の外（{region}）の段落の後ろを指定したため、本文の最後に置いています"
+        return f"{OUTSIDE_JA.get(self.outside.get(fid, ''), '本文の外')}の段落に結び付いているため、本文の最後に置いています"
+
+    def assign_slots(self):
+        """画像の置き場所（article.ImageSlot）を作り、名前の幹を決める（plan.slots・plan.slot_of・FigNode.slot）。
+
+        図（FigNode）ごとに、表で組んだ図（本体が表だけで画像のない図）でなければ置き場所 1 つ（covers は画像だけの段落の画像と、
+        ほかの段落から移した画像〈extra_images〉。キャプションのない図は種類 nocap）。図に含めずに段落の中に残る画像は、docx の
+        画像の位置（ImageRef.draw_id。グループ図形の中の複数の画像は同じ位置）ごとに、キャプションなしの置き場所 1 つ（place inline。
+        XML では今までどおり段落・表のセルの中の <inline-graphic>）。要素の木は、builder が書き出すのとおおむね同じ順（冒頭の英文要旨、
+        本文、付記・謝辞・注・資料）にたどる（plan_figures）。画像を書けない文脈（題目・著者名・所属・引用文献）の段落はたどらない
+        （置き場所を作れない画像は pipeline.lost_images が知らせる）。幹の規則は slot_keys。本文の最後に置いた図形の中身の置き場所の
+        備考には、その理由を書く（float_note）。あわせて、図表の入った図形ごとに、その中身から組んだ図・表の節を FloatInfo.nodes に
+        入れる（XML の順。node_float_ids）。
+        """
+        plan = self.plan
+        slots = []
+        plan.slot_of = {}
+        for info in plan.floats.values():
+            info.nodes = []
+
+        def add(slot):
+            slots.append(slot)
+            for img in slot.covers:
+                plan.slot_of.setdefault(img.image_id, slot)
+
+        cell_slots = {}          # 表のセルの図の置き場所（cell_figures_in が作る）: covers の画像の ID -> 置き場所
+        cell_empty = {}          # 同じく、covers の空の置き場所: キャプションの段落の ID -> 置き場所（キャプションの段落の先頭に書く）
+
+        def inline(p):
+            cs = cell_empty.pop(p.src, None)
+            if cs is not None:
+                add(cs)
+            groups = {}
+            for img in p.images:
+                if img.image_id in plan.slot_of or img.image_id in plan.moved_images:
+                    continue
+                groups.setdefault(img.draw_id or img.image_id, []).append(img)
+            for imgs in groups.values():
+                cs = next((cell_slots[i.image_id] for i in imgs if i.image_id in cell_slots), None)
+                if cs is not None:
+                    # 表のセルの図: 置き場所の最初の画像（この位置の画像）の位置で 1 つ書く
+                    for i in cs.covers:
+                        cell_slots.pop(i.image_id, None)
+                    cs.covers = imgs + [i for i in cs.covers if i not in imgs]
+                    add(cs)
+                    continue
+                if any(i.image_id in plan.slot_of for i in imgs):
+                    continue
+                add(ImageSlot(key="", kind="nocap", src=p.src, covers=imgs, float_id=imgs[0].float_id or p.float_id,
+                              place="inline", note=self.float_note(imgs[0].float_id or p.float_id)))
+
+        def fig(node):
+            covers = [i for ip in node.image_paras for i in ip.images] + list(node.extra_images)
+            node.slot = None
+            if covers or not node.tables:
+                # 場所を示す段落: キャプション、なければ画像だけの段落、なければ画像の結び付いた段落（文字のある段落の後ろの図）
+                src = node.caption.src if node.caption is not None else (
+                    node.image_paras[0].src if node.image_paras else (covers[0].para_src if covers else ""))
+                fl = next((i.float_id for i in covers if i.float_id), "") or next(iter(node_float_ids(node)), "")
+                note = "。".join(x for x in (node.note, self.float_note(fl)) if x)
+                node.slot = ImageSlot(key="", kind="fig" if node.caption is not None else "nocap", caption=node.caption,
+                                      src=src, covers=covers, float_id=fl, place="fig", how=node.how, note=note)
+                add(node.slot)
+
+        def table(node):
+            node.slot = None
+            covers = [i for ip in node.image_paras for i in ip.images] + list(node.extra_images)
+            if node.table is None and covers:
+                # 画像で貼った表（C）: 表の置き場所 1 つ（<table-wrap> の中の <graphic>）
+                fl = next((i.float_id for i in covers if i.float_id), "") or next(iter(node_float_ids(node)), "")
+                note = "。".join(x for x in (node.note, self.float_note(fl)) if x)
+                node.slot = ImageSlot(key="", kind="table", caption=node.caption, src=node.caption.src if node.caption is not None
+                                      else node.image_paras[0].src, covers=covers, float_id=fl, place="table", how=node.how, note=note)
+                add(node.slot)
+
+        for kind, x in plan_figures(plan):
+            if kind == "grid":
+                for slot in self.cell_figures_in(x):
+                    if not slot.covers:
+                        cell_empty[slot.caption.src] = slot
+                    for img in slot.covers:
+                        cell_slots[img.image_id] = slot
+            elif kind == "para":
+                inline(x)
+            elif kind == "fig":
+                fig(x)
+            elif kind == "table":
+                table(x)
+            if kind in ("fig", "table"):
+                for fid in node_float_ids(x):
+                    if fid in plan.floats:
+                        plan.floats[fid].nodes.append(x)
+        order = {src: k for k, src in enumerate(plan.paras)}
+        images = {img.image_id: k for k, img in enumerate(self.doc.images)}
+        for slot, key in zip(slots, slot_keys(slots, order, images)):
+            slot.key = key
+            if slot.caption is not None:
+                slot.label = slot_label(slot.caption)
+        plan.slots = slots
 
 
 def classify(doc, journal, overrides=None, placements=None) -> ArticlePlan:

@@ -52,7 +52,8 @@ UNSHOWN_NUMBERS_MSG = ("題目・副題・著者名・所属の段落に、Word 
 
 @dataclass
 class BuildInfo:
-    images: list = field(default_factory=list)       # 出力した ImageRef（出現順）
+    slots: list = field(default_factory=list)        # 出力した画像の置き場所（article.ImageSlot。XML の出現順。重なりなし）
+    slot_names: dict = field(default_factory=dict)   # 出力した置き場所の幹（ImageSlot.key）-> 名前（Builder.slot_name）
     warnings: list = field(default_factory=list)
     drops: list = field(default_factory=list)        # (src, text, reason)
     exclusions: list = field(default_factory=list)   # Exclusion（書き出しの段階で出力しないと決めたもの）
@@ -299,8 +300,11 @@ class Builder:
         self.split = journal.split_labels if split_labels is None else split_labels
         self.info = BuildInfo()
         self.article_id = meta.article_id(journal)
-        self._img_n = 0
         self._named = set()
+        # 表のセルの図キャプションで、docx に画像の見つからない図の置き場所: キャプションの段落の ID -> 置き場所（cell_content が
+        # キャプションの段落の先頭に <inline-graphic> を書く。structure.Classifier.cell_figures_in）
+        self.cell_empty = {s.caption.src: s for s in plan.slots
+                           if s.place == "inline" and s.kind == "fig" and not s.covers and s.caption is not None}
         marks = word_note_marks(plan, journal)
         fn_numbers = {}
         for fn in plan.fns:
@@ -339,20 +343,33 @@ class Builder:
             self.info.unshown_numbers.append((p.src, self.autonum(p).strip(), what, p.text_only().strip()[:20]))
 
     # ------------------------------------------------------------------ 画像
-    def name_image(self, img) -> str:
-        if id(img) in self._named:
-            return img.export_name
-        # 同じ plan で組み立て直す（Word の番号を出版版 PDF に合わせる、DTD に合わない数式を取り消す）ときは、前の組み立てで付けた名前を使う。
-        # 名前の有無にかかわらず、この組み立てで出力する画像として info.images に加える
-        self._img_n += 1
-        if not img.export_name:
-            ext = (img.target.rsplit(".", 1)[-1].lower() if "." in img.target else "png")
-            ext = {"jpeg": "jpg", "jpg": "jpg", "png": "png", "gif": "gif"}.get(ext, "png")
-            base = self.j.image_name_pattern.format(article_id=self.article_id, n=self._img_n)
-            img.export_name = f"{base}.{ext}"
-        self._named.add(id(img))
-        self.info.images.append(img)
-        return img.export_name
+    def name_image(self, img):
+        """段落の中の画像（emit の image_namer）: その画像の置き場所の名前。置き場所の最初の画像でなければ None（何も書かない。
+        同じ置き場所の 2 つ目以降の画像と、置き場所のない画像）。"""
+        slot = self.plan.slot_of.get(img.image_id)
+        if slot is None or not slot.covers or slot.covers[0] is not img:
+            return None
+        return self.slot_name(slot)
+
+    def slot_name(self, slot) -> str:
+        """画像の置き場所の名前（Graphics/ の中のファイル名）: 「{記事識別子}_{幹}.{拡張子}」（雑誌の設定 image_name_pattern）。
+        この組み立てで出力する置き場所として info.slots に加える（同じ置き場所は 1 度だけ）。
+
+        拡張子は、置き場所の最初の画像（covers[0]）の docx の中のファイルの形式（png・jpg・gif。それ以外と画像のない置き場所は png）。
+        W1 の途中の姿で、docx の画像をそのまま書き出すため（手順 9 で、入れた画像の形式で決める形にする）。
+        """
+        first = slot.covers[0] if slot.covers else None
+        target = first.target if first is not None else ""
+        ext = (target.rsplit(".", 1)[-1].lower() if "." in target else "png")
+        ext = {"jpeg": "jpg", "jpg": "jpg", "png": "png", "gif": "gif"}.get(ext, "png")
+        name = f"{self.j.image_name_pattern.format(article_id=self.article_id, key=slot.key)}.{ext}"
+        if first is not None:
+            first.export_name = name        # W1 の途中の姿: images.export_images が、置き場所の最初の画像をこの名前で書き出す
+        if id(slot) not in self._named:
+            self._named.add(id(slot))
+            self.info.slots.append(slot)
+            self.info.slot_names[slot.key] = name
+        return name
 
     # ------------------------------------------------------------------ 全体
     def build(self):
@@ -836,7 +853,18 @@ class Builder:
         if node.caption is not None:
             self.caption(f, node.caption)
             self.caption_more(f, node.caption_more)
-        graphics = 0
+        self.image_para_blanks(node, node.fid or "図")
+        if node.slot is not None and node.formula is None:
+            self.graphic(f, node.slot)      # 図 1 つに <graphic> 1 つ（置き場所の名前。docx の画像が何枚でも、画像がなくても）
+        for t in node.tables:
+            # 表で組んだ図（問題文など）: 図の中に表を入れる（JATS の fig は table-wrap を含められる）
+            self.table(_sub(f, "table-wrap"), t, node.caption)
+        if node.formula is not None:
+            parent.remove(f)
+            self.formula_image(parent, node)
+
+    def image_para_blanks(self, node, what: str):
+        """図・画像で貼った表に含めた、画像だけの段落（node.image_paras）の空白を、空白の除外として記録する。"""
         for ip in node.image_paras:
             text = _para_text(ip)
             if text and is_ws(text):
@@ -844,31 +872,17 @@ class Builder:
             elif text:
                 # 図の画像の段落は画像だけの段落に限る（structure）。万一ほかの文字があっても除外にはしない
                 # （不変性チェックで出力漏れとして不合格になる）
-                self.info.warnings.append(f"{node.fid or '図'}: 画像の段落 {ip.src} に画像以外の文字がある。"
+                self.info.warnings.append(f"{what}: 画像の段落 {ip.src} に画像以外の文字がある。"
                                           "XML に出力していない（変換ツールの不具合）")
-            for img in ip.images:
-                if node.formula is not None:
-                    continue
-                g = _sub(f, "graphic")
-                g.set(f"{{{XLINK}}}href", self.name_image(img))
-                graphics += 1
-                if img.shape_only:
-                    self.info.warnings.append(
-                        f"{img.image_id}: Word の図形（画像ファイルなし）のため画像化できない。"
-                        f"{img.export_name} を手作業で用意すること")
-        for img in node.extra_images:
-            g = _sub(f, "graphic")
-            g.set(f"{{{XLINK}}}href", self.name_image(img))
-            graphics += 1
-        for t in node.tables:
-            # 表で組んだ図（問題文など）: 図の中に表を入れる（JATS の fig は table-wrap を含められる）
-            self.table(_sub(f, "table-wrap"), t, node.caption)
-        if node.formula is not None:
-            parent.remove(f)
-            self.formula_image(parent, node)
-            return
-        if graphics == 0 and not node.tables and node.caption is not None:
-            self.info.warnings.append(f"{node.fid or '図'}: 画像が見つからないため <graphic> なしで出力")
+
+    def graphic(self, parent, slot):
+        """画像の置き場所 slot の <graphic>（図の <fig>・画像で貼った表の <table-wrap> の中）。"""
+        name = self.slot_name(slot)
+        _sub(parent, "graphic").set(f"{{{XLINK}}}href", name)
+        first = slot.covers[0] if slot.covers else None
+        if first is not None and first.shape_only:
+            self.info.warnings.append(
+                f"{first.image_id}: Word の図形（画像ファイルなし）のため画像化できない。{name} を手作業で用意すること")
 
     def caption(self, holder, cap):
         """図・表のキャプション。自動番号があれば、章見出しと同じく番号を <label> に出し、キャプションの文字は分けない
@@ -899,10 +913,8 @@ class Builder:
         """AI が数式画像と判断した図: 元の画像を残したまま、AI が読み取った MathML を併記する。"""
         df = _sub(parent, "disp-formula")
         alt = _sub(df, "alternatives")
-        for ip in node.image_paras:
-            for img in ip.images:
-                g = _sub(alt, "graphic")
-                g.set(f"{{{XLINK}}}href", self.name_image(img))
+        if node.slot is not None:
+            _sub(alt, "graphic").set(f"{{{XLINK}}}href", self.slot_name(node.slot))
         holder = etree.SubElement(alt, AI)
         holder.set("decision", getattr(node, "formula_decision", "") or "")
         holder.append(copy.deepcopy(node.formula))
@@ -914,6 +926,9 @@ class Builder:
         if node.caption is not None:
             self.caption(tw, node.caption)
             self.caption_more(tw, node.caption_more)
+        self.image_para_blanks(node, node.tid or "表")
+        if node.slot is not None:
+            self.graphic(tw, node.slot)         # 画像で貼った表: <caption> の後ろに <graphic> 1 つ
         if node.table is not None:
             if node.table.skipped_rows and not node.table.rows:
                 self.all_rows_deleted(node)
@@ -1041,6 +1056,10 @@ class Builder:
                 continue
             if not first:
                 _sub(td, "break")
+            slot = self.cell_empty.get(p.src)
+            if slot is not None:
+                # docx に画像の見つからない表のセルの図: キャプションの段落の先頭に置き場所を書く
+                _sub(td, "inline-graphic").set(f"{{{XLINK}}}href", self.slot_name(slot))
             self.autonum_mark(td, p)
             self.em.span(td, p, E.CELL)
             first = False

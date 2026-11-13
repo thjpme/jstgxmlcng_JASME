@@ -33,8 +33,11 @@
     足すか・消すかを PDF から決められない違いは直さず、理由（`TextDiff.why`）を付けて 13 章に出す。
 - 「docx の文字」は Word で表示される文字（変更履歴を承諾し、隠し文字を隠した状態）。段落のつながり（段落記号の削除。`ooxml.joined_paragraphs`）と
   隠し文字の判定（スタイルの `w:vanish`。`ooxml.HiddenRule`）の規則は、読み取り（`docx_reader`）・検証（`fidelity.source_texts`）・ルート2（`pdfdocx`）で共有する。
-- 利用者に知らせること（要対応・要確認）は `report.actions()` に `Action` を足すだけで、レポートの冒頭・14 章・Colab の枠（要対応は赤、要確認は黄）・コマンドラインの標準エラーに出る
-  （個別の表示を render・colab・cli・make_notebook.py に足さない。画面の操作は手順番号や欄の名前を直接書かず、目印 `report.step()` で書く）。コマンドラインの終了コードは、0 が要対応なし、1 が要対応あり（`Result.needs_action`）、2 が中止。
+- 利用者に知らせること（要対応・要確認）と、毎回の手順（`report.STEP`。必須と推奨の別を持つ。AI の仕上げは推奨）は
+  `report.actions()` に `Action` を足すだけで、レポートの冒頭・14 章・Colab の枠（要対応は赤、要確認は黄、手順は青）・コマンドラインの標準エラーに出る
+  （個別の表示を render・colab・cli・make_notebook.py に足さない。画面の操作は手順番号や欄の名前を直接書かず、目印 `report.step()` で書く）。
+  コマンドラインの終了コードは、0 が要対応も残っている必須の手順もなし、1 がどちらかあり（`Result.needs_action`。`report.blocking()`）、2 が中止。
+  推奨の手順は、残っていても失敗しても終了コードに数えない。
 - 詳しくは `docs/DEVELOPMENT.md` の「守るべき原則」。
 
 ## 環境とテスト

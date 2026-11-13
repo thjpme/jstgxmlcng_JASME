@@ -83,7 +83,7 @@ def test_package_layout(journal, meta, tmp_path):
     with zipfile.ZipFile(res.zip_path) as z:
         names = set(z.namelist())
     assert "jasme/31/1/31_1/31_1.xml" in names
-    assert {"jasme/31/1/31_1/Graphics/31_1_01.png", "jasme/31/1/31_1/Graphics/31_1_02.png"} <= names
+    assert {"jasme/31/1/31_1/Graphics/31_1_fig01.png", "jasme/31/1/31_1/Graphics/31_1_fig02.png"} <= names
     assert res.report_path.exists()
     text = res.report_path.read_text(encoding="utf-8")
     assert "文字の不変性チェック" in text and "合格" in text
@@ -117,18 +117,18 @@ def test_images_to_prepare_are_listed_at_top_and_in_checklist(journal, meta, tmp
     from jasme_jats.report import images_to_prepare, render
     # EMF を変換しない設定では、テンプレートの図は「要対応」になる
     res = convert(TEMPLATE, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
-    assert [(n, c) for n, c, _ in images_to_prepare(res)] == [("31_1_01.png", "図1\u3000三角形ABC")]
+    assert [(n, c) for n, c, _ in images_to_prepare(res)] == [("31_1_fig01.png", "図1\u3000三角形ABC")]
     report = res.report_path.read_text(encoding="utf-8")
     top = report.split("## 2.")[0]
     assert "要対応: 画像ファイルを用意できなかった図が 1 件あります" in top
-    assert "jasme_31_1.zip の中の `jasme/31/1/31_1/Graphics/`" in top and "`31_1_01.png`: 図1\u3000三角形ABC" in top
+    assert "jasme_31_1.zip の中の `jasme/31/1/31_1/Graphics/`" in top and "`31_1_fig01.png`: 図1\u3000三角形ABC" in top
     checklist = report.split("## 14.")[1]
-    assert "- [ ] **画像ファイルを用意できなかった図 1 件**" in checklist and "`31_1_01.png`（図1\u3000三角形ABC）" in checklist
+    assert "- [ ] **画像ファイルを用意できなかった図 1 件**" in checklist and "`31_1_fig01.png`（図1\u3000三角形ABC）" in checklist
     # Word の図形で描かれた図（画像ファイルがない）
-    res.images[0] = ImageResult(res.images[0].image_id, "31_1_01.png", "", "missing", "")
+    res.images[0] = ImageResult(res.images[0].image_id, "31_1_fig01.png", "", "missing", "")
     assert images_to_prepare(res)[0][2] == "Word の図形・グラフで描かれていて、docx に画像ファイルがない"
     # 画像がすべて出力できたときは、チェックリストに済みとして載る
-    res.images[0] = ImageResult(res.images[0].image_id, "31_1_01.png", "word/media/x.emf", "converted")
+    res.images[0] = ImageResult(res.images[0].image_id, "31_1_fig01.png", "word/media/x.emf", "converted")
     assert images_to_prepare(res) == []
     report = render(res)
     assert "要対応: 画像ファイル" not in report and "- [x] 画像 1 件はすべて Graphics/ に入っている" in report
@@ -150,14 +150,14 @@ def test_add_images_puts_user_images_into_zip_and_report(journal, meta, tmp_path
     with pytest.raises(ValueError, match="用意が必要な画像ではありません"):
         add_images(res, {"31_1_09.png": _image_bytes()})
     with pytest.raises(ValueError, match="「x.png」を画像として読めません"):
-        add_images(res, {"31_1_01.png": ("x.png", b"not an image")})
+        add_images(res, {"31_1_fig01.png": ("x.png", b"not an image")})
     assert add_images(res, {"31_1_09.png": _image_bytes()}, skip_unneeded=True) == []
     assert images_to_prepare(res)
     # JPEG（CMYK）を渡しても、出力ファイル名の形式（PNG）にして入れる
-    assert add_images(res, {"31_1_01.png": ("図1.jpg", _image_bytes("JPEG", "CMYK"))}) == ["31_1_01.png"]
+    assert add_images(res, {"31_1_fig01.png": ("図1.jpg", _image_bytes("JPEG", "CMYK"))}) == ["31_1_fig01.png"]
     assert images_to_prepare(res) == []
     with zipfile.ZipFile(res.zip_path) as z:
-        assert z.read("jasme/31/1/31_1/Graphics/31_1_01.png")[:4] == b"\x89PNG"
+        assert z.read("jasme/31/1/31_1/Graphics/31_1_fig01.png")[:4] == b"\x89PNG"
     report = res.report_path.read_text(encoding="utf-8")
     assert "要対応: 画像ファイル" not in report and "- [x] 画像 1 件はすべて Graphics/ に入っている" in report
     assert "| 利用者が用意 | 利用者が用意した画像（図1.jpg）を入れた。変換のときの状態: EMF/WMF の変換を行わない設定" in report
@@ -186,11 +186,11 @@ def test_cli_images_option(journal, tmp_path, capsys):
     assert "--images で指定するか" in capsys.readouterr().err
     imgs = tmp_path / "imgs"
     imgs.mkdir()
-    (imgs / "31_1_01.jpg").write_bytes(_image_bytes("JPEG"))      # 拡張子は問わない
+    (imgs / "31_1_fig01.jpg").write_bytes(_image_bytes("JPEG"))      # 拡張子は問わない
     assert main(args + ["--out", str(tmp_path / "b"), "--images", str(imgs)]) == 0
     out = capsys.readouterr()
-    assert "画像を入れて ZIP とレポートを作り直した: 31_1_01.png" in out.out and "要対応" not in out.err
-    assert (tmp_path / "b/jasme/31/1/31_1/Graphics/31_1_01.png").exists()
+    assert "画像を入れて ZIP とレポートを作り直した: 31_1_fig01.png" in out.out and "要対応" not in out.err
+    assert (tmp_path / "b/jasme/31/1/31_1/Graphics/31_1_fig01.png").exists()
 
 
 def test_float_notes_list_unreferenced_and_uncaptioned(journal):
@@ -502,14 +502,14 @@ def test_upload_zip_has_only_this_article(journal, meta, tmp_path):
     names = _names(res.zip_path)
     assert names == ["jasme/31/1/31_1/31_1.xml"]
     assert all(n.isascii() for n in names)
-    assert (tmp_path / "要変換" / "31_1_01.emf").exists()
+    assert (tmp_path / "要変換" / "31_1_fig01.emf").exists()
     assert not (tmp_path / "jasme/31/1/31_1/要変換").exists()
-    assert "要変換/31_1_01.emf" in res.images[0].message
+    assert "要変換/31_1_fig01.emf" in res.images[0].message
     assert res.images[0].message.startswith("EMF/WMF の変換を行わない設定")      # メッセージの先頭の理由は変えない
     assert res.jstage_issues == [] and res.zip_issues == [] and res.not_zipped == []
     # 利用者が用意した画像を入れると、その画像だけが ZIP に加わる
-    add_images(res, {"31_1_01.png": _image_bytes()})
-    assert _names(res.zip_path) == ["jasme/31/1/31_1/31_1.xml", "jasme/31/1/31_1/Graphics/31_1_01.png"]
+    add_images(res, {"31_1_fig01.png": _image_bytes()})
+    assert _names(res.zip_path) == ["jasme/31/1/31_1/31_1.xml", "jasme/31/1/31_1/Graphics/31_1_fig01.png"]
     assert res.zip_issues == [] and res.not_zipped == []
     # 手作りした ZIP: 記事フォルダの中の 要変換/ は、日本語のフォルダ名（EMSGM034E）と想定外の項目（EMSGM074E）
     from jasme_jats.package import zip_problems
@@ -574,9 +574,9 @@ def test_pdf_stays_in_zip_after_add_images(journal, meta, tmp_path):
     res = convert(TEMPLATE, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False, pdf_path=pdf))
     assert res.has_pdf and "jasme/31/1/31_1/31_1.pdf" in _names(res.zip_path)
     res.zip_issues = [("-", "変換のときの値")]               # add_images が計算し直すことを確かめる
-    add_images(res, {"31_1_01.png": _image_bytes()})
+    add_images(res, {"31_1_fig01.png": _image_bytes()})
     assert _names(res.zip_path) == ["jasme/31/1/31_1/31_1.xml", "jasme/31/1/31_1/31_1.pdf",
-                                    "jasme/31/1/31_1/Graphics/31_1_01.png"]
+                                    "jasme/31/1/31_1/Graphics/31_1_fig01.png"]
     assert res.not_zipped == [] and res.zip_issues == []
     assert "- [x] PDF（31_1.pdf）がアップロード用の ZIP に入っている" in res.report_path.read_text(encoding="utf-8")
 
@@ -599,14 +599,14 @@ def test_rerun_with_user_images_keeps_report_consistent(journal, meta, tmp_path)
     opts = Options(out_dir=tmp_path, convert_metafiles=False)
     png = _image_bytes()
     res = convert(TEMPLATE, meta, journal, opts)
-    add_images(res, {"31_1_01.png": png})
+    add_images(res, {"31_1_fig01.png": png})
     res = convert(TEMPLATE, meta, journal, opts)            # 同じ出力フォルダで変換し直す（Colab の手順 5・6）
-    assert res.not_zipped == ["Graphics/31_1_01.png"]       # 前に入れた画像は、入れ直すまで ZIP に入れない
-    add_images(res, {"31_1_01.png": png}, skip_unneeded=True)
+    assert res.not_zipped == ["Graphics/31_1_fig01.png"]       # 前に入れた画像は、入れ直すまで ZIP に入れない
+    add_images(res, {"31_1_fig01.png": png}, skip_unneeded=True)
     assert res.not_zipped == []                              # 入れ直した後は計算し直す
     tenth = res.report_path.read_text(encoding="utf-8").split("## 10.")[1].split("## 11.")[0]
     assert "ZIP に入れなかった" not in tenth
-    assert "jasme/31/1/31_1/Graphics/31_1_01.png" in _names(res.zip_path)
+    assert "jasme/31/1/31_1/Graphics/31_1_fig01.png" in _names(res.zip_path)
 
 
 def test_files_put_by_hand_are_not_zipped(journal, meta, tmp_path):
@@ -805,7 +805,7 @@ def test_cli_template_needs_image_until_given(tmp_path, capsys):
     assert "--images で指定するか" in capsys.readouterr().err
     imgs = tmp_path / "imgs"
     imgs.mkdir()
-    (imgs / "31_1_01.png").write_bytes(_image_bytes())
+    (imgs / "31_1_fig01.png").write_bytes(_image_bytes())
     assert main(args + ["--out", str(tmp_path / "b"), "--images", str(imgs)]) == 0
     assert "要対応" not in capsys.readouterr().err
 
@@ -836,11 +836,11 @@ def test_cli_input_errors_exit_2(tmp_path, capsys):
             os.close(r)
     imgs = tmp_path / "imgs"
     imgs.mkdir()
-    (imgs / "31_1_01.png").write_bytes(b"not an image")     # 読めない画像
+    (imgs / "31_1_fig01.png").write_bytes(b"not an image")     # 読めない画像
     args = [str(TEMPLATE), "--meta", str(META_EXAMPLE), "--no-metafile-conversion", "--out", str(tmp_path / "a")]
     assert main(args + ["--images", str(imgs)]) == 2
     assert "画像: " in capsys.readouterr().err
-    assert not (tmp_path / "a/jasme/31/1/31_1/Graphics/31_1_01.png").exists()
+    assert not (tmp_path / "a/jasme/31/1/31_1/Graphics/31_1_fig01.png").exists()
 
 
 def test_fidelity_failure_is_needs_action(journal, meta, tmp_path):
@@ -863,20 +863,21 @@ def test_fidelity_failure_is_needs_action(journal, meta, tmp_path):
     assert "DTD 検証が不合格" in report.split("## 14.")[1]
 
 
-def test_manual_mode_before_answer_is_needs_action(journal, meta, tmp_path, capsys):
-    """手動モードで AI の回答を貼り戻す前の出力は要対応（決定事項 5(c)）。冒頭は手動モードの説明のまま、14 章とコマンドラインで
-    回答を貼り戻すよう知らせる。"""
+def test_manual_mode_before_answer_is_recommended_step(journal, meta, tmp_path, capsys):
+    """手動モードで AI の回答を貼り戻す前の出力は、推奨の手順（要対応ではない。終了コード 0）。冒頭は手動モードの説明のまま、
+    14 章とコマンドラインで回答を貼り戻すよう知らせる。"""
     from jasme_jats.cli import main
     from jasme_jats.report import actions
     res = convert(FULL, meta, journal, Options(out_dir=tmp_path / "a", ai_mode="manual", convert_metafiles=False))
-    assert [a.key for a in actions(res)] == ["ai_pending", "name_split"] and res.needs_action
+    assert [a.key for a in actions(res)] == ["ai_pending", "name_split"] and not res.needs_action
     report = res.report_path.read_text(encoding="utf-8")
     assert "手動モード: 「AI依頼文.txt」をチャット" in report.split("## 2.")[0]
     assert "AI の回答をまだ反映していない" in report.split("## 14.")[1]
     from conftest import META_EXAMPLE
     assert main([str(FULL), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "b"), "--ai", "manual",
-                 "--no-metafile-conversion"]) == 1
-    assert "--ai manual --ai-response 回答のファイル を指定し" in capsys.readouterr().err
+                 "--no-metafile-conversion"]) == 0
+    err = capsys.readouterr().err
+    assert "手順（推奨）: 手動モードで、AI の回答をまだ反映していません" in err and "--ai manual --ai-response 回答のファイル を指定し" in err
 
 
 # ----------------------------------------------------------------------------- 読み取りの文字ポリシー（修正計画の G）

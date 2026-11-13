@@ -121,6 +121,13 @@ def check_box(title: str, detail: str) -> str:
     return _notice(title, detail, "#d97706", "#fffbeb", "#b45309")
 
 
+def step_box(title: str, detail: str, failed: bool = False, required: bool = True) -> str:
+    """手順（report.STEP。毎回行うこと）を青い枠で表示する HTML。見出しの前に「手順」（推奨の手順は「手順（推奨）」）を付ける。
+    failed（やってみて失敗した）なら見出しを赤字にする。"""
+    head = ("手順" if required else "手順（推奨）") + ": " + title
+    return _notice(head, detail, "#2563eb", "#eff6ff", "#b91c1c" if failed else "#1d4ed8")
+
+
 _SUMMARY = ("border:2px solid #9ca3af;border-radius:8px;padding:10px 16px;margin:12px 0;background:#f9fafb !important;"
             "color:#1f2937 !important;font-size:14px;line-height:1.7")
 
@@ -314,22 +321,29 @@ def step_text(text: str, screen: str = "notebook") -> str:
 
 
 def _box(action, screen: str = "notebook") -> str:
-    """report.Action を枠にする（要対応は赤、要確認は黄。枠の見出しがなければ空文字）。screen は目印の置き換え先（step_text）。"""
-    from .report import NEEDS_ACTION
+    """report.Action を枠にする（要対応は赤、要確認は黄、手順は青。枠の見出しがなければ空文字。済んだ手順の枠は出さない）。
+    screen は目印の置き換え先（step_text）。"""
+    from .report import NEEDS_ACTION, STEP
     if action is None or not action.box_title:
         return ""
-    make = error_box if action.level == NEEDS_ACTION else check_box
-    return make(step_text(action.box_title, screen), step_text(action.box_detail, screen))
+    title, detail = step_text(action.box_title, screen), step_text(action.box_detail, screen)
+    if action.level == STEP:
+        return "" if action.done else step_box(title, detail, failed=action.failed, required=action.required)
+    return (error_box if action.level == NEEDS_ACTION else check_box)(title, detail)
 
 
-def result_boxes(res, level=None, skip=(), screen: str = "notebook") -> str:
-    """変換の結果の、要対応（赤）・要確認（黄）の枠（report.actions の順。なければ空文字）。手順 5・6・8 で使う。
+def result_boxes(res, level=None, skip=(), screen: str = "notebook", blocking: bool = False) -> str:
+    """変換の結果の、要対応（赤）・要確認（黄）・手順（青）の枠（report.actions の順。なければ空文字）。手順 5・6・8 で使う。
 
-    level を "要対応" にすると要対応だけ（手順 8 で一度止めるとき）。skip は出さない知らせの key（手順 5 の手動モードでは、
-    依頼文の枠を出すので ai_pending を出さない）。screen は "notebook"（既定。手順の番号）か "app"（1 画面版。欄の名前）。
+    level を "要対応" にすると要対応だけ。blocking を真にすると、止める知らせ（report.blocking。要対応と、残っている必須の手順）だけ
+    （手順 8 で一度止めるとき）。skip は出さない知らせの key（手順 5 の手動モードでは、依頼文の枠を出すので ai_pending を出さない）。
+    screen は "notebook"（既定。手順の番号）か "app"（1 画面版。欄の名前）。
     """
-    from .report import actions
-    return "".join(_box(a, screen) for a in actions(res) if (level is None or a.level == level) and a.key not in skip)
+    from . import report
+    acts = report.actions(res)
+    if blocking:
+        acts = report.blocking(acts)
+    return "".join(_box(a, screen) for a in acts if (level is None or a.level == level) and a.key not in skip)
 
 
 def missing_images_box(res, screen: str = "notebook") -> str:
@@ -363,8 +377,3 @@ def unplaced_box(plan, partial="", screen: str = "notebook") -> str:
     text = unplaced_text(plan, partial)
     return error_box(*(step_text(t, screen) for t in text)) if text else ""
 
-
-def figure_body_box(res, screen: str = "notebook") -> str:
-    """図の本体（画像・表）が見つからない図があるときの表示（赤い枠）。なければ空文字。"""
-    from .report import figure_body_action
-    return _box(figure_body_action(res), screen)

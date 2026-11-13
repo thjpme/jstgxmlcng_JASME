@@ -4,7 +4,7 @@
 機械的な推定、出力しなかった文字の全件、落とした空白の全件、生成文字、画像、書誌情報、DTD 検証と J-STAGE の登載時チェック、
 出版版 PDF との照合、登載前のチェックリストの順に並べる。
 
-利用者に知らせること（要対応・要確認）は actions() の 1 か所で決める。レポートの冒頭・14 章、Colab の枠（要対応は赤、要確認は黄）
+利用者に知らせること（要対応・要確認・手順）は actions() の 1 か所で決める。レポートの冒頭・14 章、Colab の枠（要対応は赤、要確認は黄、手順は青）
 （colab.result_boxes）、コマンドラインの標準エラーと終了コード（pipeline.Result.needs_action）は、どれもその結果を使う。
 """
 from __future__ import annotations
@@ -61,7 +61,7 @@ CAT_JA = {"style": "段落の役割（スタイル）", "citation": "引用文�
           "formula": "数式", "name": "著者名", "figure": "図", "table": "表", "url": "URL", "note": "注",
           "box": "囲み・図の注記（テキストボックス）"}
 UNRES_JA = {"bibr": "引用文献", "fig": "図の参照", "table": "表の参照", "fn": "注の参照", "float": "図表の位置",
-            "figbody": "図の本体", "box": "囲み・図の注記"}
+            "box": "囲み・図の注記"}
 
 
 def style_unknown_rows(plan):
@@ -80,7 +80,8 @@ def style_unknown_rows(plan):
 
 
 def float_notes(plan):
-    """本文から参照されていない図・表と、キャプションのない表（PDF と照らして確認するためのもの）。"""
+    """本文から参照されていない図・表と、キャプションのない表と、本文の図キャプションの図に含めた図形（PDF と照らして確認する
+    ためのもの。3 章）。"""
     out = []
     figs, tabs = linked_ids(plan, "fig"), linked_ids(plan, "table")
     nf = [f"{f.fid}（{esc(f.caption.plain()[:20])}）" for f in plan.figures
@@ -98,6 +99,17 @@ def float_notes(plan):
             nc.append(f"{t.tid or '-'}（最初のセル「{esc(first[:15])}」）")
     if nc:
         out.append("キャプションのない表（表番号がないため本文からリンクできない。表として出力した）: " + "、".join(nc))
+    # 本文の図キャプションの図に含めた図形（修正計画 W1 の 2.3 の B6。図キャプションの位置に置いたので、位置を決められない図表に数えない）
+    cap = []
+    for fid, info in plan.floats.items():
+        if info.mode != "caption":
+            continue
+        fig = next((f for f in plan.figures if f.caption is not None and f.caption.src == info.caption_src), None)
+        what = f"{fig.fid}「{esc(fig.caption.plain().strip()[:20])}」" if fig is not None and fig.fid else info.caption_src
+        cap.append(f"{fid}（{what}）")
+    if cap:
+        out.append("本文の図キャプションの図に含め、その位置に置いた図形（キャプションのないグループ図形。近くの段落に結び付いていた）: "
+                   + "、".join(cap))
     return out
 
 
@@ -111,68 +123,34 @@ def float_places(plan) -> str:
     return "本文の最後" if n["end"] else "アンカー段落の後ろ"
 
 
-# 図の本体（画像・表）が見つからない図（structure.Classifier.table_for_figure）の対処。レポートの冒頭、Colab の枠、CLI で使う
-# （図ごとの対処は 3 章。figure_body_detail）
-FIGURE_BODY_ACTION = ("XML では、キャプションだけの図になっています。docx でこの図の本体（画像・表）を確かめてください。"
-                      "近くの表が図の本体なら、表を図キャプションのすぐ上（図キャプションを図の上に置く原稿では、すぐ下）に、"
-                      "間にほかの段落を挟まずに置いてから、変換し直してください。その表に表キャプションが付いているときは、"
-                      "表キャプションと図キャプションのどちらが正しいかを著者に確かめてください。図の本体が画像なら、"
-                      "Word でその画像が図キャプションのすぐ隣にあるかを確かめてください（3 章に図ごとの対処があります）。")
-
-
-def figure_body_detail(why: str) -> str:
-    """図の本体が見つからない図の、3 章の理由の欄（理由 why ごとの対処。structure.Classifier.table_for_figure の理由）。
-
-    近くの表に表キャプションが付いている（理由に「表キャプション」がある）ときは、その表は表として出しているので、表を動かす
-    のではなく、図の本体（画像）があるか、表キャプションと図キャプションのどちらが正しいかを確かめる。そのほか（間にほかの段落が
-    ある・逆の向きにある）は、表を図キャプションの隣に置き直す。
-    """
-    head = (f"図キャプションに対応する画像が見つからず、近くの表も図の本体にできなかった（{why}）。"
-            "XML ではキャプションだけの図になる。")
-    if "表キャプション" in why:
-        return head + ("近くの表は、表キャプションの表として出している。その表が表として正しいなら、docx でこの図の本体（画像）を"
-                       "確かめ、Word でその画像が図キャプションのすぐ隣にあるかを確かめること（画像がなければ用意する）。その表が"
-                       "この図の本体なら、表キャプションと図キャプションのどちらが正しいかを著者に確かめてから docx を直し、"
-                       "変換し直すこと")
-    return head + ("docx でこの図の本体（画像・表）を確かめ、表が図の本体なら、表を図キャプションのすぐ上（図キャプションを"
-                   "図の上に置く原稿では、すぐ下）に、間にほかの段落を挟まずに置いてから、変換し直すこと。図の本体が画像なら、"
-                   "Word でその画像が図キャプションのすぐ隣にあるかを確かめること")
-
-
-def figure_issue_labels(plan) -> list:
-    """図の本体が見つからない図の一覧（例: 「図2　間に段落がある問題」（理由））。レポートの冒頭、Colab の枠、CLI で使う。"""
-    out = []
-    for src, why in plan.figure_issues:
-        p = plan.paras.get(src)
-        out.append(f"「{esc(p.plain().strip(), 20) if p is not None else src}」（{esc(why)}）")
-    return out
-
-
 def _image_captions(r) -> dict:
-    """画像の ID → 図のキャプション（図に入っている画像だけ。なければ含まれない）。"""
-    caps = {}
-    for f in r.plan.figures:
-        cap = f.caption.plain().strip() if f.caption is not None else ""
-        for img in [i for ip in f.image_paras for i in ip.images] + list(f.extra_images):
-            caps.setdefault(img.image_id, cap)
-    return caps
+    """画像の置き場所の幹（article.ImageSlot.key。images.ImageResult.key）→ 図・表のキャプション（図〈<fig>〉・画像で貼った表の
+    置き場所と、表のセルの図キャプションの図。キャプションのない図は ""。キャプションのない段落の中の置き場所は含まれない）。"""
+    return {s.key: (s.caption.plain().strip() if s.caption is not None else "")
+            for s in r.plan.slots if s.place in ("fig", "table") or s.kind == "fig"}
 
 
 def images_to_prepare(r) -> list:
     """利用者が用意する必要のある画像（画像ファイルがない Word の図形、変換できなかった EMF など）。
 
     戻り値: [(出力ファイル名, 図のキャプション, 理由)]。レポートの冒頭・14 章、Colab の枠、コマンドラインの表示で使う。
+    理由には、置き場所の備考（article.ImageSlot.note。表のセルで画像を見つけられなかった理由、表で組めなかった理由、本文の
+    最後に置いた理由など）があれば、括弧に入れて添える。
     """
     caps = _image_captions(r)
+    notes = {s.key: s.note for s in r.plan.slots if s.note} if r.plan is not None else {}
     out = []
     for i in r.images:
         if i.status not in ("missing", "failed"):
             continue
-        if i.status == "missing" and not i.source:
+        if i.status == "missing" and not i.source and i.image_id:
             why = "Word の図形・グラフで描かれていて、docx に画像ファイルがない"
         else:
-            why = i.message
-        out.append((i.name, caps.get(i.image_id, ""), why))
+            why = i.message             # docx に画像のない図（キャプションだけの図）は、その理由（pipeline.NO_DOCX_IMAGE）
+        note = notes.get(i.key, "")
+        if note and note not in why:
+            why = f"{why}（{note}）"
+        out.append((i.name, caps.get(i.key, ""), why))
     return out
 
 
@@ -629,6 +607,10 @@ def note_notes(plan):
 # 手順 8 の止め方、コマンドラインの標準エラーと終了コードは、どれも actions の結果だけで決まる（個別の表示を足さない）。
 NEEDS_ACTION = "要対応"     # コマンドラインの終了コード 1、Colab の手順 8 で一度止める、赤い枠、レポートの冒頭・14 章
 TO_CHECK = "要確認"         # 黄色い枠、レポートの冒頭・14 章だけ（終了コードは 0）
+# 毎回の手順（Action.required: 必須か推奨か。Action.done: 済んだか）。青い枠と 14 章の行に出す（レポートの冒頭の囲みには出さない）。
+# 残っている必須の手順は要対応と同じく終了コード 1・Colab の手順 8 で一度止める。推奨の手順は、残っていても失敗しても終了コード 0 で、止めない
+# （止める知らせは blocking の 1 か所で決める）
+STEP = "手順"
 
 
 # box_detail（Colab の枠の本文）などの文の中の、画面の操作を指す目印。ノートブックの手順番号や 1 画面版の欄の名前は、ここには書かず、
@@ -761,12 +743,16 @@ def structure_conflict_text(plan) -> str:
 
 @dataclass
 class Action:
-    """利用者に知らせる 1 件（要対応か要確認）。文面の欄が空なら、そこには出さない。
+    """利用者に知らせる 1 件（要対応・要確認・手順）。文面の欄が空なら、そこには出さない。
 
     top: レポートの冒頭の囲み（Markdown。複数行でもよい）。checklist: 14 章の行。box_title・box_detail: Colab の枠（要対応は赤、
-    要確認は黄）の見出しと本文（画面の操作は目印 step() で書き、colab が画面ごとの語に置き換える。top・checklist はレポートの
+    要確認は黄、手順は青）の見出しと本文（画面の操作は目印 step() で書き、colab が画面ごとの語に置き換える。top・checklist はレポートの
     文なので目印を使わず、ノートブックと 1 画面版の両方の言い方を書く）。cli: コマンドラインの標準エラーに出す文（Colab の手順の
     番号ではなく、コマンドラインの指定で書く）。
+
+    required・done・failed・progress は手順（level が STEP）だけが使う。required: 必須（残っていれば終了コード 1 で止める）か、
+    推奨（止めない）か。done: 済んだ（枠は出さない）。failed: やってみて失敗した（枠の見出しを赤字で出す。終了コードは変えない）。
+    progress: 進み具合の短い文（「あと 4 枚／全部で 7 枚」「回答待ち」など）。
     """
     level: str
     key: str
@@ -775,6 +761,15 @@ class Action:
     box_title: str = ""
     box_detail: str = ""
     cli: str = ""
+    required: bool = True
+    done: bool = False
+    failed: bool = False
+    progress: str = ""
+
+
+def blocking(acts) -> list:
+    """ダウンロードの歯止め・終了コード 1 になる知らせ: 要対応と、残っている必須の手順（推奨の手順と済んだ手順は含まない）。"""
+    return [a for a in acts if a.level == NEEDS_ACTION or (a.level == STEP and a.required and not a.done)]
 
 
 def _fidelity_action(r):
@@ -1003,14 +998,14 @@ def _ai_pending_action(r):
     prompt = r.prompt_path.name if r.prompt_path else "AI依頼文.txt"
     # 冒頭には、変換のときに書いた手動モードの説明（Result.output_note）が出るので、ここでは冒頭に出さない
     return Action(
-        NEEDS_ACTION, "ai_pending",
+        STEP, "ai_pending", required=False, progress="回答待ち",
         checklist=(f"- [ ] **AI の回答をまだ反映していない**（手動モード）: {esc(prompt)} を AI に渡し、返ってきた回答を貼り戻して"
                    "変換し直す（Colab では回答を貼り付けて反映する。ノートブックは手順 6、1 画面版は回答の欄に貼り付けて「反映」。"
                    "コマンドラインでは --ai manual --ai-response 回答のファイル）"),
         box_title="AI の回答をまだ反映していません（手動モード）",
         box_detail=(f"この結果は、AI による補完の前の状態です。{step('prompt')}を AI（claude.ai などのチャット）に渡し、"
                     f"返ってきた回答を{step('paste')}してください。" + floats),
-        cli=(f"要対応: 手動モードで、AI の回答をまだ反映していません（この出力は AI による補完の前の状態）。{prompt} を"
+        cli=(f"手順（推奨）: 手動モードで、AI の回答をまだ反映していません（この出力は AI による補完の前の状態）。{prompt} を"
              "チャット（claude.ai など）に貼り付け、返ってきた回答をファイルに保存して --ai manual --ai-response 回答のファイル を"
              "指定し、変換し直すこと。"
              + floats))
@@ -1083,25 +1078,6 @@ def _forced_action(r):
         cli=(f"要対応: 位置を決められなかった図表 {len(r.forced_floats)} 件を、仮の位置（アンカー段落の後ろ、または"
              "本文の最後）に置きました。XML の中で手作業で正しい位置（Word で表示したときに、図の左上の直上にある本文の段落の後）"
              "に移してください（レポートの冒頭と 3 章）。\n" + "\n".join(f"  {x}" for x in r.forced_floats)))
-
-
-def figure_body_action(r):
-    """図の本体（画像・表）が見つからない図（structure.Classifier.table_for_figure）。なければ None。"""
-    plan = r.plan
-    if not plan.figure_issues:
-        return None
-    labels = figure_issue_labels(plan)
-    n = len(plan.figure_issues)
-    return Action(
-        NEEDS_ACTION, "figbody",
-        top=(f"> **要対応: 図の本体（画像・表）が見つからない図が {n} 件あります（3 章）。** "
-             f"{FIGURE_BODY_ACTION}対象の図: " + "、".join(labels)),
-        checklist=(f"- [ ] 図の本体が見つからない図 {n} 件（3 章の「図の本体」）を docx で確かめ、表が図の本体なら "
-                   "docx を直して変換し直す"),
-        box_title=f"図の本体（画像・表）が見つからない図が {len(labels)} 件あります（要対応）",
-        box_detail=f"{FIGURE_BODY_ACTION}（レポートの冒頭と 3 章）\n" + "\n".join(f"・{x}" for x in labels),
-        cli=(f"要対応: 図の本体（画像・表）が見つからない図 {len(labels)} 件（レポートの冒頭と 3 章）。{FIGURE_BODY_ACTION}\n"
-             + "\n".join(f"  {x}" for x in labels)))
 
 
 # 手動モードで AI の回答を貼り戻す前の、囲みか図の注記か決められなかったテキストボックスの説明（冒頭の手動モードの説明
@@ -1213,22 +1189,12 @@ def _textbox_place_action(r):
 
 def figure_text_exclusions(r) -> list:
     """図表の入ったテキストボックス・グループ図形の中の、キャプションでも図の本体でもない段落で、XML に出力しなかったもの
-    （理由 structure.TEXTBOX_TEXT_EXCLUDED。図の一部とみなした説明・出典など）: [(段落 ID, 文字)]。
+    （理由 structure.TEXTBOX_TEXT_EXCLUDED。図の画像に写るとみなした説明・出典など）: [(段落 ID, 文字)]。
 
-    手動モードで AI の回答を貼り戻す前は、位置を決められない図表の中身を数えない（AI がその図表を placements で組めば、図の
-    後ろに本文の段落として出せる。回答を反映した後も位置を決められなかった図表の中身は数える）。
+    図形の中身の組み方は AI の指定の有無で変わらない（structure.Classifier.float_units）ので、手動モードで AI の回答を貼り戻す
+    前の、位置を決められない図表の中身も数える（修正計画 W1 の 2.4）。
     """
-    plan, pending = r.plan, ai_pending(r)
-    out = []
-    for src, why, text in r.fidelity.excluded:
-        if why != TEXTBOX_TEXT_EXCLUDED:
-            continue
-        p = plan.paras.get(src)
-        info = plan.floats.get(p.float_id) if p is not None and p.float_id else None
-        if pending and info is not None and info.mode == "unplaced":
-            continue
-        out.append((src, text))
-    return out
+    return [(src, text) for src, why, text in r.fidelity.excluded if why == TEXTBOX_TEXT_EXCLUDED]
 
 
 # 図表の入ったテキストボックス・グループ図形の中の文字を出力しなかったときの説明と対処（_textbox_figure_text_action）
@@ -1612,7 +1578,7 @@ def _image_crop_action(r):
             holder.setdefault(img.image_id, r.plan.locations.get(p.src) or p.src)
     rows = []
     for i in imgs:
-        cap = caps.get(i.image_id)
+        cap = caps.get(i.key)
         label = esc(cap, 20) if cap else (f"図に入っていない画像。{esc(holder[i.image_id], 30)}" if i.image_id in holder
                                            else "図に入っていない画像")
         rows.append((i.name, i.image_id, label or "キャプションなし", crop_text(i.crop)))
@@ -2384,11 +2350,19 @@ def actions(r) -> list:
     """
     head = [f(r) for f in (_fidelity_action, _supplement_action, _dtd_action, _table_shape_action,
                            _upload_action, _ai_error_action, _ai_pending_action,
-                           _partial_action, _forced_action, figure_body_action, _textbox_undecided_action,
+                           _partial_action, _forced_action, _textbox_undecided_action,
                            _textbox_place_action, _textbox_figure_text_action, _unplaced_action, images_action,
                            lost_action, lost_autonum_action, _pua_left_action, _abstract_missing_action, _image_crop_action, _image_edits_action, _style_hidden_action, _resultless_field_action, _symbol_action, _abstract_ja_action, _app_after_refs_action, _note_overlap_action, _float_ref_action,
                            _fn_guess_action, _name_split_action, _newline_action)]
     return [a for a in head if a is not None] + pdf_actions(r)
+
+
+def checklist_order(acts) -> list:
+    """14 章に並べる知らせの順: 手順（必須 → 推奨）→ 要対応 → 要確認。それぞれの中は、PDF の項目（PDF_KEYS）を先に、残りを actions の順に。"""
+    ordered = [a for a in acts if a.key in PDF_KEYS] + [a for a in acts if a.key not in PDF_KEYS]
+    steps = [a for a in ordered if a.level == STEP]
+    return ([a for a in steps if a.required] + [a for a in steps if not a.required]
+            + [a for a in ordered if a.level == NEEDS_ACTION] + [a for a in ordered if a.level == TO_CHECK])
 
 
 def render(r) -> str:
@@ -2853,9 +2827,9 @@ def render(r) -> str:
                  "（却下したい変更があれば、却下して保存した docx を「docx から作る」で変換し直す）")
         if fx.skipped_text:
             L.append(f"- [ ] 13 章の、直さなかった箇所（{len(fx.skipped_text)} 件）を確認する")
-    # 要対応・要確認（actions）。PDF の項目を先に、残りを actions の順に。「画像はすべて Graphics/ に入っている」は、XML に
-    # 入らなかった画像の前に出す
-    checks = [a for a in acts if a.key in PDF_KEYS] + [a for a in acts if a.key not in PDF_KEYS]
+    # 手順（必須 → 推奨）→ 要対応 → 要確認（actions）。それぞれの中は、PDF の項目を先に、残りを actions の順に。
+    # 「画像はすべて Graphics/ に入っている」は、XML に入らなかった画像の前に出す
+    checks = checklist_order(acts)
     all_images = bool(r.images) and not images_to_prepare(r) and not lost
     for a in checks:
         if all_images and a.key == "lost":

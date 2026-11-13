@@ -58,7 +58,8 @@ def xl(name):
 
 class Emitter:
     def __init__(self, image_namer, fn_numbers=None, skip_images=()):
-        self.image_namer = image_namer          # ImageRef -> ファイル名
+        # ImageRef -> その画像の置き場所の名前（article.ImageSlot。置き場所の最初の画像でなければ None で、何も書かない）
+        self.image_namer = image_namer
         self.fn_numbers = fn_numbers or {}      # Word の脚注・文末脚注の鍵（model.note_key）-> (fid, 表示する番号の文字列。本誌は「1)」)
         self.skip_images = set(skip_images)     # 図に移したため段落の中では出力しない画像の ID
         self.math_warnings = []
@@ -256,9 +257,12 @@ class Emitter:
                 inf.append(conv.convert(a.math, display=False))
             self.math_warnings.extend(conv.warnings)
         elif a.kind == "image":
-            if ctx.images and a.image.image_id not in self.skip_images:
-                g = etree.SubElement(parent, "inline-graphic")
-                g.set(xl("href"), self.image_namer(a.image))
+            # 飾りの図形（ImageRef.decoration。枠・白い四角・線など）は画像の位置に数えないので、何も書かない
+            if ctx.images and a.image.image_id not in self.skip_images and not a.image.decoration:
+                name = self.image_namer(a.image)
+                if name is not None:
+                    g = etree.SubElement(parent, "inline-graphic")
+                    g.set(xl("href"), name)
         elif a.kind == "fnref":
             # 脚注と文末脚注は ID が重なりうるので、種類と ID の組（注の鍵）で引く（記号を自分で付けた参照も同じ注を指す）
             fid, mark = self.fn_numbers.get(note_key(a.fn_kind, a.fn_id), (None, None))

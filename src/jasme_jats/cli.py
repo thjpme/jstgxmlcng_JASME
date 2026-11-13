@@ -6,8 +6,8 @@
 
 書誌情報ファイル（TOML）の例は examples/meta_example.toml を参照。
 
-終了コード: 0 は要対応なし、1 は要対応あり（report.actions の「要対応」。一覧は標準エラーに出す。--meta がない・
-画像が足りない・手動モードで AI の回答をまだ指定していない、なども 1）、2 は変換を中止した（書誌情報の誤り、AI による補完が
+終了コード: 0 は要対応も残っている必須の手順もなし、1 はどちらかあり（report.blocking。report.actions の「要対応」と、残っている必須の手順。
+一覧は標準エラーに出す。--meta がない・画像が足りない、なども 1。手動モードで AI の回答をまだ指定していないのは推奨の手順なので 0）、2 は変換を中止した（書誌情報の誤り、AI による補完が
 必要な原稿を --ai none で変換したとき、原稿の構造〈同じ種類の後付けの見出しが 2 つ・著者名の付かない所属。K1・K2〉を直す必要が
 あるとき、--images の画像を読めないとき。引数の誤り〈指定したファイル・フォルダがない、
 --ai manual でないのに --ai-response を指定した、など〉も argparse が 2 で止める）。
@@ -53,7 +53,7 @@ def main(argv=None):
     ap.add_argument("--no-metafile-conversion", action="store_true", help="EMF/WMF 画像の変換を行わない")
     ap.add_argument("--images", type=Path,
                     help="画像を用意できなかった図（Word の図形で描かれた図など）の画像を入れたフォルダ。出力のファイル名"
-                         "（25_77_01.png など。拡張子は .png・.jpg・.pdf などでもよい）と同じ名前の画像を Graphics/ に入れる")
+                         "（25_77_fig01.png など。拡張子は .png・.jpg・.pdf などでもよい）と同じ名前の画像を Graphics/ に入れる")
     a = ap.parse_args(argv)
     if a.ai == "api" and a.ai_provider != "claude" and not a.ai_model:
         ap.error(f"--ai-provider {a.ai_provider} では --ai-model でモデル名を指定してください"
@@ -126,11 +126,11 @@ def main(argv=None):
     if res.not_zipped:        # add_images の後の値（ZIP を作り直すと計算し直す）
         print(f"※ 記事フォルダにあるが ZIP に入れなかったファイル {len(res.not_zipped)} 件（前の変換の残りか、手で置いたもの。"
               "PDF は --pdf、画像は --images で指定し直すと入る。レポートの 10 章）: " + ", ".join(res.not_zipped))
-    # 要対応・要確認（report.actions。レポートの冒頭・14 章、Colab の枠と同じもの）。画像を入れた後に調べる
+    # 要対応・要確認・手順（report.actions。レポートの冒頭・14 章、Colab の枠と同じもの）。画像を入れた後に調べる
     for act in actions(res):
         if act.cli:
             print(act.cli, file=sys.stderr)
-    # 終了コード: 0 は要対応なし、1 は要対応あり（要確認だけなら 0）、2 は変換を中止した
+    # 終了コード: 0 は要対応も残っている必須の手順もなし（要確認・推奨の手順だけなら 0）、1 はどちらかあり、2 は変換を中止した
     return 1 if res.needs_action else 0
 
 

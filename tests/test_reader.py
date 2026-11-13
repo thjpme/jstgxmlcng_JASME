@@ -4,6 +4,8 @@
 （ooxml.HiddenRule）、変更履歴で削除された表の行（docx_reader.Reader.read_table）も、ここで確かめる（sample_reader.docx と、
 XML の文字列で作る小さな例）。
 """
+import zipfile
+
 import pytest
 from lxml import etree
 
@@ -945,3 +947,138 @@ def test_group_pic_size_ignores_blip_extlst(tmp_path):
 def test_group_pic_size_scaled_by_chext(tmp_path):
     imgs = _group_images(tmp_path, extent=(1000000, 800000), ch_ext=(2000000, 1600000))
     assert [i.cx_emu for i in imgs] == [500000, 250000]
+
+
+# ---------------------------------------------------------------------------- 画像の位置・中身の要約値・飾り（W1 の手順 2）
+def read_shapes(tmp_path, builder, name="shapes.docx"):
+    """本文に builder(b) の段落を並べた小さな論文を作って読み、(読んだ文書, 画像の一覧) を返す。"""
+    path = tmp_path / name
+
+    def parts(b):
+        return [mf.para(mf.S["sec1"], "１．はじめに")] + builder(b)
+    mf.make_article(path, "画像の位置の検証用文書", parts)
+    doc = read_docx(path)
+    return doc, doc.images
+
+
+def test_draw_id_is_shared_inside_one_drawing(tmp_path):
+    """w:drawing・w:pict・w:object ごとに draw_id を振る: グループ図形の中の画像は同じ値、別の図形・別の段落は別の値。
+    para_src は画像のあるアトムの段落の ID（Para.src）。"""
+    def build(b):
+        r1, r2, r3, r4 = (b.add_image(f"p{k}.png", mf.png_bytes(f"P{k}")) for k in range(4))
+        return [mf.para(mf.S["body"], "一つ目。", mf.pic_group([(r1, 720000, 360000), (r2, 720000, 360000)], 701)),
+                mf.para(mf.S["body"], mf.drawing(r3, 720000, 360000, 703)),
+                mf.para(mf.S["body"], mf.vml_image(r4))]
+    doc, imgs = read_shapes(tmp_path, build)
+    assert len(imgs) == 4
+    assert imgs[0].draw_id == imgs[1].draw_id
+    assert len({i.draw_id for i in imgs}) == 3 and all(i.draw_id.startswith("g") for i in imgs)
+    assert imgs[2].draw_id != imgs[3].draw_id
+    srcs = {a.image.image_id: p.src for p in doc.all_paragraphs() for a in p.atoms if a.kind == "image"}
+    assert all(srcs[i.image_id] == i.para_src for i in imgs)
+    assert imgs[0].para_src == imgs[1].para_src != imgs[2].para_src != imgs[3].para_src
+
+
+def test_digest_follows_the_image_file(tmp_path):
+    """同じ画像ファイルは（名前・場所が違っても）同じ digest（ファイルの中身の SHA-1）、違う中身は違う digest。"""
+    import hashlib
+    same, other = mf.png_bytes("同じ"), mf.png_bytes("別")
+
+    def build(b):
+        r1, r2, r3 = b.add_image("a.png", same), b.add_image("b.png", same), b.add_image("c.png", other)
+        return [mf.para(mf.S["body"], mf.drawing(r1, 720000, 360000, 701)),
+                mf.para(mf.S["body"], "文字", mf.drawing(r2, 360000, 360000, 702)),
+                mf.para(mf.S["body"], mf.drawing(r3, 720000, 360000, 703))]
+    _, imgs = read_shapes(tmp_path, build)
+    assert imgs[0].digest == imgs[1].digest == hashlib.sha1(same).hexdigest()
+    assert imgs[2].digest == hashlib.sha1(other).hexdigest() != imgs[0].digest
+
+
+def test_digest_of_shapes_ignores_position_text_and_ids(tmp_path):
+    """画像のない図形の digest は、図形の XML から文字・位置・ID と名前を除いたもの: 位置・ID・図形の中の文字を変えても同じ、
+    形・塗り・図形の数を変えると違う。"""
+    def build(pos, pid, text):
+        def f(b):
+            return [mf.para(mf.S["body"], mf.shape("rect", "none", pid, anchor=True, h=("column", pos), v=("paragraph", pos))),
+                    mf.para(mf.S["body"], mf.shape_group([("rect", "none", text), ("rect", "red", "")], pid + 10, anchor=True,
+                                                         h=("column", pos), v=("paragraph", pos))),
+                    mf.para(mf.S["body"], mf.shape("ellipse", "none", pid + 20)),
+                    mf.para(mf.S["body"], mf.shape("rect", "red", pid + 30)),
+                    mf.para(mf.S["body"], mf.shape_group([("rect", "none", text)], pid + 40))]
+        return f
+    _, a = read_shapes(tmp_path, build(0, 801, "文字A"), "a.docx")
+    _, b = read_shapes(tmp_path, build(123456, 901, "別の文字"), "b.docx")
+    assert [i.digest for i in a] == [i.digest for i in b]
+    assert all(i.shape_only and len(i.digest) == 40 for i in a)
+    assert len({i.digest for i in a}) == len(a)
+
+
+def test_digest_is_the_same_after_text_edits(tmp_path, journal):
+    """ルート2 の補った docx（本文の文字を変更履歴で直したもの）でも、画像と図形の draw_id・digest・para_src が同じ。"""
+    from jasme_jats import pdfdocx
+
+    def parts(b):
+        r = b.add_image("a.png", mf.png_bytes("図"))
+        return [mf.para(mf.S["sec1"], "１．はじめに"), mf.para(mf.S["body"], "試験の本文です。"),
+                mf.para(mf.S["body"], mf.drawing(r, 720000, 360000, 701)),
+                mf.para(mf.S["body"], mf.shape_group([("rect", "none", "図の中の文字"), ("rect", "none", "")], 811))]
+    src = tmp_path / "orig.docx"
+    mf.make_article(src, "補った docx の検証用文書", parts)
+    texts, plan = pdfdocx._mechanical(src, journal)
+    sid = next(s for s, t in texts.items() if t == "試験の本文です。")
+    fix = pdfdocx.Fix(sid, 5, 7, "でした", "text", "です")
+    out = tmp_path / "fixed.docx"
+    pdfdocx.write_fixed_docx(src, out, plan, [fix])
+    assert fix.applied or not fix.reason
+    with zipfile.ZipFile(out) as z:
+        assert b"w:ins" in z.read("word/document.xml")
+    a, b = read_docx(src).images, read_docx(out).images
+    key = lambda i: (i.draw_id, i.digest, i.para_src, i.decoration, i.shape_only)       # noqa: E731
+    assert [key(i) for i in a] == [key(i) for i in b] and len(a) == 2
+
+
+DECORATIONS = [
+    # (図形の XML を作る関数, 飾りの種類)
+    (lambda: mf.shape("rect", "none"), "frame"),
+    (lambda: mf.shape("roundRect", "none"), "frame"),
+    (lambda: mf.shape("rect", ""), "frame"),                     # 塗りの指定がなければ塗りなし
+    (lambda: mf.shape("rect", "white"), "mask"),
+    (lambda: mf.shape("rect", "bg1"), "mask"),
+    (lambda: mf.shape("roundRect", "window"), "mask"),
+    (lambda: mf.shape("line", ""), "line"),
+    (lambda: mf.shape("straightConnector1", ""), "line"),
+    (lambda: mf.shape("rightArrow", "red"), "line"),
+    (lambda: mf.shape_group([("rect", "none", ""), ("roundRect", "white", "")]), "frame"),
+    (lambda: mf.shape_group([("rect", "white", ""), ("rect", "white", "")]), "mask"),
+    (lambda: mf.shape_group([("rect", "red", "ア"), ("roundRect", "none", "イ")]), "textgroup"),
+    # 飾りにしない（画像の位置に数える）
+    (lambda: mf.shape("ellipse", "none"), ""),
+    (lambda: mf.shape("triangle", "white"), ""),
+    (lambda: mf.shape("rect", "red"), ""),                       # 色つき
+    (lambda: mf.shape("rect", "gray"), ""),                      # 白に明るさの加工（灰色）
+    (lambda: mf.shape("rect", "gradient"), ""),
+    (lambda: mf.shape("flowChartConnector", ""), ""),
+    (lambda: mf.chart_drawing(), ""),
+    (lambda: mf.shape_group([("line", "", ""), ("straightConnector1", "", "")]), ""),            # 線だけのグループ
+    (lambda: mf.shape_group([("rect", "none", ""), ("rect", "none", "文字")]), ""),             # 枠と文字の図形の混ざり
+    (lambda: mf.shape_group([("rect", "none", ""), ("ellipse", "none", "")]), ""),
+    (lambda: mf.shape_group([("rect", "none", "文字"), ("ellipse", "none", "文字")]), ""),
+    (lambda: '<w:r><w:pict><v:shape style="width:10pt;height:10pt"/></w:pict></w:r>', ""),     # VML は飾りにしない
+]
+
+
+@pytest.mark.parametrize("k", range(len(DECORATIONS)))
+def test_shape_decoration(tmp_path, k):
+    """画像を持たない図形の飾りの判定（2.3 の D）。飾りの ImageRef も段落のアトムに残る（位置を数えるため）。"""
+    make, expected = DECORATIONS[k]
+    doc, imgs = read_shapes(tmp_path, lambda b: [mf.para(mf.S["body"], "前。", make(), "後。")])
+    assert len(imgs) == 1 and imgs[0].shape_only
+    assert imgs[0].decoration == expected
+    assert sum(1 for p in doc.all_paragraphs() for a in p.atoms if a.kind == "image") == 1
+
+
+def test_image_files_are_never_decoration(tmp_path):
+    def build(b):
+        return [mf.para(mf.S["body"], mf.drawing(b.add_image("a.png", mf.png_bytes("x")), 720000, 360000, 701))]
+    _, imgs = read_shapes(tmp_path, build)
+    assert imgs[0].decoration == "" and not imgs[0].shape_only

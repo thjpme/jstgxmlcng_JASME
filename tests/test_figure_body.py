@@ -6,7 +6,9 @@ from conftest import CELLS, EDGE, META_EXAMPLE, TABLEFIG
 from lxml import etree
 
 from jasme_jats.cli import main as cli_main
-from jasme_jats.pipeline import AIRequiredError, Options, convert
+from jasme_jats.pipeline import NO_DOCX_IMAGE, AIRequiredError, Options, convert
+from jasme_jats.report import actions, images_to_prepare
+from jasme_jats.structure import TEXTBOX_TEXT_EXCLUDED
 
 XLINK = "http://www.w3.org/1999/xlink"
 
@@ -40,6 +42,12 @@ def figures(root):
             for f in root.iter("fig")}
 
 
+def slot_notes(res):
+    """図の画像の置き場所の備考（本体にできなかった近くの表の理由など。W1 で plan.figure_issues と要対応 figbody の代わり）:
+    キャプションの冒頭 2 字 → 備考（備考のある置き場所だけ）。"""
+    return {s.caption.plain()[:2]: s.note for s in res.plan.slots if s.note and s.caption is not None}
+
+
 def checks_pass(res):
     fid = res.fidelity
     assert fid.ok and fid.final_ok and res.dtd_valid and res.jstage_issues == [], (fid.missing, fid.conflicts)
@@ -55,13 +63,15 @@ def test_cell_figures_without_ai(journal, meta, tmp_path):
     assert res.plan.unplaced_floats == [] and {i.mode for i in res.plan.floats.values()} == {"mechanical"}
     root = load(res)
     assert root.find("body").find(".//table-wrap") is None
-    assert figures(root) == {"図1": (1, 0), "図2": (1, 0), "図3": (2, 0), "図4": (1, 0), "図5": (1, 0)}
+    # 図 1 つに <graphic> 1 つ（図3 の 2 つの画像は 1 枚の置き場所に写るとみなす。W1）
+    assert figures(root) == {"図1": (1, 0), "図2": (1, 0), "図3": (1, 0), "図4": (1, 0), "図5": (1, 0)}
     seq = sequence(root)
     assert after(seq, "試験（2024）にな", 3) == ["図1", "図2", "この段落に図1と図2"]     # アンカー段落の前（機械的な配置）
     assert after(seq, "図3は，二つの画像", 2) == ["図3", "この段落に図3のテキ"]
     assert after(seq, "図4と図5は，画像", 3) == ["図4", "図5", "この段落に図4と図5"]
     hrefs = [g.get(f"{{{XLINK}}}href") for g in root.iter("graphic")]
-    assert sorted(hrefs) == sorted(i.name for i in res.images) and len(hrefs) == 6
+    assert sorted(hrefs) == sorted(i.name for i in res.images) and len(hrefs) == 5
+    assert hrefs == [f"31_1_fig0{n}.png" for n in range(1, 6)]          # 名前は図番号から
     msgs = [d.message for d in res.plan.decisions]
     assert any("セルにある画像とキャプションを、図「図1\u3000左のセルの図」、「図2\u3000右のセルの図」に組んだ（表としては出力しない）"
                in m for m in msgs)
@@ -183,7 +193,10 @@ def test_cell_figures_are_not_fixed_by_route2(journal, meta, tmp_path, monkeypat
     assert fixed and not fixed & cell_srcs                            # 表のセルの段落は直さない（0.21.0 と同じ）
     caps = {"".join(f.find("caption").itertext())[:2] for f in load(res).iter("fig")}
     assert caps == {"図１", "図２", "図3"}                              # 本文の図キャプションだけ PDF に合わせる
-    assert "説明文：左の画像に添えた架空の問題を解く。" in "".join(load(res).itertext())
+    # セルの中で画像と文字が同じ段落の文字は、図の画像に写るとみなして除外する（修正計画 W1 の 2.4。直さない）
+    mixed = next(s for s in cell_srcs if plan.paras[s].plain().endswith("解く。"))
+    assert mixed not in fixed and "説明文" not in "".join(load(res).itertext())
+    assert any(e.src == mixed and e.reason == TEXTBOX_TEXT_EXCLUDED for e in plan.exclusions)
 
 
 def test_cell_figures_one_caption_in_a_row(journal, meta, tmp_path):
@@ -192,7 +205,8 @@ def test_cell_figures_one_caption_in_a_row(journal, meta, tmp_path):
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
     checks_pass(res)
     root = load(res)
-    assert figures(root) == {"図1": (2, 0)} and root.find("body").find(".//table-wrap") is None
+    assert figures(root) == {"図1": (1, 0)} and root.find("body").find(".//table-wrap") is None      # 2 つの画像で置き場所 1 つ
+    assert len(res.plan.figures[0].slot.covers) == 2
 
 
 def test_table_with_caption_but_no_image_stays_a_table(journal, meta, tmp_path):
@@ -214,7 +228,7 @@ def test_table_with_caption_but_no_image_stays_a_table(journal, meta, tmp_path):
 
 def test_cell_figures_of_unplaced_float_and_mixed_paragraph(journal, meta, tmp_path):
     """位置を決められない図形でも、組み方が決まれば組んでアンカー段落の後ろに仮に置く。セルの中で画像と文字が同じ段落は、
-    画像を図に入れ、段落の文字は図の直後の段落に出す（修正計画の決定事項 1 と同じ）。"""
+    画像を図に入れ、段落の文字は図の画像に写るとみなして除外する（修正計画 W1 の 2.4。前は図の直後の段落に出していた）。"""
     path = tmp_path / "cells_down.docx"
     mf.make_b3_cells(path, "down")
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "down", ai_mode="manual", convert_metafiles=False))
@@ -227,26 +241,27 @@ def test_cell_figures_of_unplaced_float_and_mixed_paragraph(journal, meta, tmp_p
     checks_pass(res)
     root = load(res)
     fig = next(f for f in root.iter("fig") if "".join(f.find("caption").itertext()).startswith("図1"))
-    assert len(fig.findall("graphic")) == 1 and "説明文" not in "".join(fig.itertext())
-    nxt = fig.getnext()
-    assert nxt.tag == "p" and "".join(nxt.itertext()) == "説明文：左のセルの画像と同じ段落にある文字。"
-    assert nxt.find("inline-graphic") is None
-    assert any("画像と文字が同じ段落にある" in d.message for d in res.plan.decisions)
+    assert len(fig.findall("graphic")) == 1 and "説明文" not in "".join(root.itertext())
+    assert fig.getnext().tag == "fig"
+    assert [(t, w) for _, w, t in res.fidelity.excluded if t.startswith("説明文")] == [
+        ("説明文：左のセルの画像と同じ段落にある文字。", TEXTBOX_TEXT_EXCLUDED)]
+    assert any(a.key == "textbox_figure_text" for a in actions(res))
 
 
 @pytest.mark.parametrize("shape", ["cells", "float_text"])
 def test_unplaced_float_notice_lists_its_paragraphs(journal, meta, tmp_path, capsys, shape):
-    """位置を決められない図形の中で画像と文字が同じ段落の文字は、図の直後に本文の段落として出すので、手作業で移す図表の
-    知らせ（レポートの冒頭・3 章、Colab の枠、コマンドライン）にも、図表の ID と並べてその段落を示す（図表だけを移すと、
-    段落が仮の位置に残る）。表のセルで組んだ図（cells）と、キャプション 1 つと画像の図形（float_text）。"""
+    """位置を決められない図形の手作業で移す図表の知らせ（レポートの冒頭・3 章、Colab の枠、コマンドライン）に、図表の ID を
+    示す。図形の中で画像と文字が同じ段落の文字は、図の画像に写るとみなして除外する（修正計画 W1 の 2.4）ので、知らせに段落は
+    並ばない（本文の段落として出す図形の文字の段落は test_float_units で見る）。表のセルで組んだ図（cells）と、キャプション
+    1 つと画像の図形（float_text）。"""
     from jasme_jats.colab import unplaced_box
     path = tmp_path / f"{shape}.docx"
     if shape == "cells":
         mf.make_b3_cells(path, "mixed+down")
-        want = "F1・F2 と段落「説明文：左のセルの画像と同じ段落にある文」"
+        want = "F1・F2 "
     else:
         mf.make_float_text(path, down_cm=3)
-        want = "F1 と段落「説明文：図1の画像と同じ段落にある文字。」"
+        want = "F1 "
     resp = tmp_path / "empty.json"
     resp.write_text('{"placements": [], "operations": [], "notes": []}', encoding="utf-8")
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False,
@@ -255,25 +270,27 @@ def test_unplaced_float_notice_lists_its_paragraphs(journal, meta, tmp_path, cap
     assert res.plan.unplaced_floats == ["s1"]
     detail = next(u[3] for u in res.unresolved_after if u[0] == "float")
     assert f"の後ろにある {want}を正しい位置" in detail                       # 3 章
-    assert [x.split(": ", 1)[1].endswith(f"にある {want}") for x in res.forced_floats] == [True]   # 冒頭・CLI
-    assert f"にある {want}" in res.report_path.read_text(encoding="utf-8").split("## 2.")[0]      # 冒頭の要対応
-    assert f"、XML の {want}）" in unplaced_box(res.plan)                     # Colab の枠
+    assert [x.split(": ", 1)[1].endswith(f"にある {want.strip()}") for x in res.forced_floats] == [True]   # 冒頭・CLI
+    assert f"にある {want.strip()}" in res.report_path.read_text(encoding="utf-8").split("## 2.")[0]      # 冒頭の要対応
+    assert f"、XML の {want.strip()}）" in unplaced_box(res.plan)               # Colab の枠
     from jasme_jats.report import NEEDS_ACTION, actions
     assert [a.key for a in actions(res) if a.level == NEEDS_ACTION] == ["forced"]
     # 仮に置いた図表の要対応で 1（--meta を付けて、書誌情報がないことによる要対応〈EMSGM230E〉と分ける）
     assert cli_main([str(path), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli"), "--ai", "manual",
                      "--ai-response", str(resp)]) == 1
-    assert f"にある {want}" in capsys.readouterr().err
+    assert f"にある {want.strip()}\n" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------- 画像のない図キャプションと、隣の表
 def test_caption_less_table_becomes_figure_body(journal, meta, tmp_path, capsys):
     """画像のない図キャプションの直前の、キャプションのない表は、その図の本体にする（fig の中の table-wrap）。
-    表とキャプションの間に段落がある、表に表キャプションが付いている、などで組めないときは、要対応として知らせる。"""
+    表とキャプションの間に段落がある、表に表キャプションが付いている、などで組めないときは、理由を画像の置き場所の備考に残す
+    （W1: 要対応 figbody はなくなり、画像の要る図として知らせる）。"""
     res = convert(TABLEFIG, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
     checks_pass(res)
     root = load(res)
-    assert figures(root) == {"図1": (0, 1), "図2": (0, 0), "図3": (0, 0)}
+    # 表で組んだ図には置き場所を作らない。本体のない図キャプションの図は、置き場所（<graphic> 1 つ）を作る（W1）
+    assert figures(root) == {"図1": (0, 1), "図2": (1, 0), "図3": (1, 0)}
     fig1 = next(f for f in root.iter("fig") if f.get("id") == "F1")
     assert "".join(fig1.find("table-wrap").itertext()).startswith("問1")
     seq = sequence(root)
@@ -281,29 +298,26 @@ def test_caption_less_table_becomes_figure_body(journal, meta, tmp_path, capsys)
     assert after(seq, "図2は，表と図キャプ", 3) == ["表:問2\u3000も", "この段落は表と図キャ", "図2"]
     assert [t.tid for t in res.plan.tables] == ["T1", "T2"]                            # 図の中の表には表の ID を付けない
     plan = res.plan
-    why = {plan.paras[src].plain()[:2]: w for src, w in plan.figure_issues}
-    assert why == {"図2": "図キャプションの前にキャプションのない表があるが、間にほかの段落がある",
+    assert slot_notes(res) == {"図2": "図キャプションの前にキャプションのない表があるが、間にほかの段落がある",
                    "図3": "直前の表に表キャプション「表1\u3000表キャプションの付いた表」が付いている"}
     assert any("画像のない図キャプション「図1\u3000表で組んだ問題」の直前にある、キャプションのない表" in d.message
                for d in plan.decisions)
-    # 3 章の対処は理由ごと: 間に段落があるときは表を置き直す。表に表キャプションが付いているときは、どちらのキャプションが
-    # 正しいか・図の本体の画像があるかを確かめる（表を動かすようには書かない）
-    rows = {u[2][:2]: u[3] for u in res.unresolved_after if u[0] == "figbody"}
-    assert list(rows) == ["図2", "図3"]
-    assert "表を図キャプションのすぐ上" in rows["図2"] and "画像が図キャプションのすぐ隣にあるか" in rows["図2"]
-    assert "表キャプションと図キャプションのどちらが正しいかを著者に確かめて" in rows["図3"]
-    assert "画像が図キャプションのすぐ隣にあるか" in rows["図3"] and "表を図キャプションのすぐ上" not in rows["図3"]
+    # 要対応 figbody（図の本体が見つからない）はなくなった（W1。理由は置き場所の備考に残し、画像の要る図として知らせる）
+    from jasme_jats.report import actions
+    assert "figbody" not in [a.key for a in actions(res)]
+    assert not any(u[0] == "figbody" for u in res.unresolved_after)
     report = res.report_path.read_text(encoding="utf-8")
-    head = report.split("## 2.")[0]
-    assert "要対応: 図の本体（画像・表）が見つからない図が 2 件あります（3 章）" in head
-    assert "| 図の本体 |" in report.split("## 3.")[1].split("## 4.")[0]
-    assert "図の本体が見つからない図 2 件（3 章の「図の本体」）" in report.split("## 14.")[1]
-    warned = [w.split(":")[0] for w in res.warnings if "画像が見つからないため <graphic> なしで出力" in w]
-    assert warned == ["F2", "F3"]                         # 表を本体にした F1 は、画像のない図の警告を出さない
-    # コマンドラインでも知らせる（要対応なので、終了コードは 1。修正計画 D: 要対応の知らせは report.actions に 1 か所）
+    assert "図の本体（画像・表）が見つからない" not in report
+    # 本体のない図 F2・F3 にも画像の置き場所を作るので、「graphic なしで出力」の警告はない（W1）。表を本体にした F1 には置き場所がない
+    assert not any("<graphic> なしで出力" in w for w in res.warnings)
+    # 理由には、置き場所の備考（表で組めなかった理由）を括弧に入れて添える
+    assert [(n, why) for n, _, why in images_to_prepare(res)] == [
+        ("31_1_fig02.png", f"{NO_DOCX_IMAGE}（{slot_notes(res)['図2']}）"),
+        ("31_1_fig03.png", f"{NO_DOCX_IMAGE}（{slot_notes(res)['図3']}）")]
+    # コマンドラインでは、画像の要る図として知らせる（要対応 images。終了コードは 1）
     assert cli_main([str(TABLEFIG), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli")]) == 1
     err = capsys.readouterr().err
-    assert "要対応: 図の本体（画像・表）が見つからない図 2 件" in err and "「図2\u3000間に段落がある問題」" in err
+    assert "図の本体（画像・表）が見つからない" not in err and "31_1_fig02.png" in err
 
 
 def test_caption_above_figure_takes_following_table(journal, meta, tmp_path):
@@ -313,7 +327,7 @@ def test_caption_above_figure_takes_following_table(journal, meta, tmp_path):
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
     checks_pass(res)
     root = load(res)
-    assert figures(root) == {"図5": (1, 0), "図4": (0, 1)} and res.plan.figure_issues == []
+    assert figures(root) == {"図5": (1, 0), "図4": (0, 1)} and slot_notes(res) == {}
     assert after(sequence(root), "図4は，図キャプショ", 2) == ["図4", "以上が図4である。"]
 
 
@@ -338,7 +352,7 @@ def above_marker(b):
     ("above_gap", "図キャプションの後ろにキャプションのない表があるが、間にほかの段落がある"),
 ])
 def test_table_near_caption_that_cannot_be_the_body(journal, meta, tmp_path, shape, why):
-    """近くに表があるのに図の本体にできない形は、理由を付けて要対応にする（表はそのまま表として出す）。"""
+    """近くに表があるのに図の本体にできない形は、理由を画像の置き場所の備考に残す（表はそのまま表として出す。W1）。"""
     cap = mf.para(mf.S["fig_cap"], "図1\u3000本体の見つからない図")
     text = mf.para(mf.S["body"], "この段落は図キャプションと表の間にある。")
 
@@ -359,14 +373,14 @@ def test_table_near_caption_that_cannot_be_the_body(journal, meta, tmp_path, sha
     mf.make_article(path, "表と図キャプションの検証用文書", parts)
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
     checks_pass(res)
-    assert [w for _, w in res.plan.figure_issues] == [why]
-    assert figures(load(res))["図1"] == (0, 0) and any(t.table is not None for t in res.plan.tables)
+    assert list(slot_notes(res).values()) == [why]
+    assert figures(load(res))["図1"] == (1, 0) and any(t.table is not None for t in res.plan.tables)    # 本体なしでも置き場所はある
 
 
 @pytest.mark.parametrize("shape", ["below_tabcap_after", "above_tabcap_gap", "above_tabcap_first"])
 def test_table_with_its_own_caption_is_not_a_candidate(journal, meta, tmp_path, shape):
     """表キャプションの付いた表（表の下に表キャプションを置く書き方、上に置く書き方）は、画像のない図キャプションの近くに
-    あっても図の本体の候補にしない（要対応にもしない）。表は表キャプションの表として出す。"""
+    あっても図の本体の候補にしない（置き場所の備考も付けない）。表は表キャプションの表として出す。"""
     cap = mf.para(mf.S["fig_cap"], "図1\u3000本体の見つからない図")
     tab, tabcap = bare_table("問1\u3000架空の問題"), mf.para(mf.S["tab_cap"], "表1\u3000架空の表")
 
@@ -381,9 +395,9 @@ def test_table_with_its_own_caption_is_not_a_candidate(journal, meta, tmp_path, 
     mf.make_article(path, "表キャプションの付いた表の検証用文書", parts)
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", convert_metafiles=False))
     checks_pass(res)
-    assert res.plan.figure_issues == []
+    assert slot_notes(res) == {}
     root = load(res)
-    assert figures(root)["図1"] == (0, 0)
+    assert figures(root)["図1"] == (1, 0)                # 本体なしでも置き場所（<graphic> 1 つ）はある
     wraps = {"".join(t.find("caption").itertext())[:2]: "".join(t.find(".//td").itertext())[:2]
              for t in root.iter("table-wrap") if t.find("caption") is not None}
     assert wraps == {"表1": "問1"}
@@ -482,12 +496,12 @@ def test_provisional_float_is_not_paired_with_outside(journal, meta, tmp_path, s
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", ai_mode="manual", convert_metafiles=False,
                                                ai_response='{"placements": [], "operations": [], "notes": []}'))
     checks_pass(res)
-    assert res.plan.unplaced_floats == ["s1"] and res.plan.figure_issues == []
+    assert res.plan.unplaced_floats == ["s1"] and slot_notes(res) == {}
     root = load(res)
     seq = sequence(root)
     detail = next(u[3] for u in res.unresolved_after if u[0] == "float")
     if shape == "float_table":
-        assert figures(root) == {"図1": (0, 0)}
+        assert figures(root) == {"図1": (1, 0)}
         assert after(seq, "この段落に表だけの図", 3) == ["表:図形の中", "表:図形の中", "図1"]
         assert "にある T1・T2 を正しい位置" in detail             # 本文の図 F1 は、図形の中身ではない
     elif shape == "float_between":
@@ -495,7 +509,7 @@ def test_provisional_float_is_not_paired_with_outside(journal, meta, tmp_path, s
         assert after(seq, "図9は，キャプショ", 3) == ["図1", "図2", "以上で終わる。"]
         assert "にある F3 を正しい位置" in detail
     else:
-        assert figures(root) == {"図9": (1, 0), "図2": (0, 0)}
+        assert figures(root) == {"図9": (1, 0), "図2": (1, 0)}
         assert after(seq, "この段落にキャプショ", 3) == ["図2", "表:問1\u3000架", "以上で終わる。"]
         assert "にある F2 を正しい位置" in detail
 
@@ -529,12 +543,13 @@ def test_provisional_float_is_not_paired_with_outside_captions(journal, meta, tm
                                                ai_response='{"placements": [], "operations": [], "notes": []}'))
     checks_pass(res)
     assert res.plan.unplaced_floats == ["s1"] and res.plan.floats["s1"].where == "anchor"
-    issues = [why for _, why in res.plan.figure_issues]
+    issues = list(slot_notes(res).values())
     detail = next(u[3] for u in res.unresolved_after if u[0] == "float")
     got = floats_in_body(load(res))
     if shape == "prov_tabcap":
-        assert got == ["T1:表1:", "None:-:g", "T2:-:t"]      # 図形の表キャプションだけ・図形の画像・本文の表
-        assert "にある T1 とキャプションのない図を正しい位置" in detail     # 本文の表 T2 は、図形の中身ではない
+        # 図形の表キャプションと、その図形の画像（画像で貼った表。W1 の 2.3 の C）・本文の表
+        assert got == ["T1:表1:g", "T2:-:t"]
+        assert "にある T1 を正しい位置" in detail                 # 本文の表 T2 は、図形の中身ではない
     elif shape == "prov_tables":
         assert got == ["None:-:g", "T1:-:t", "T2:-:t", "T3:表1:"]  # 本文の表キャプションは図形の表に付けない
         assert "にある T1・T2 とキャプションのない図を正しい位置" in detail
@@ -558,14 +573,17 @@ def test_provisional_float_is_not_paired_with_outside_captions(journal, meta, tm
     elif shape == "prov_next_caption":
         # 本文の「図2」（画像の上のキャプション）は、すぐ後ろの本文の画像と組にする（その後ろの、仮に置いた図形の「図3」は
         # 本文の画像の後ろの要素として数えない）
-        assert got == ["F1:図1:g", "F2:図2:g", "F3:図3:", "F4:図4:t"]
+        assert got == ["F1:図1:g", "F2:図2:g", "F3:図3:g", "F4:図4:t"]
         f2 = next(f for f in res.plan.figures if f.fid == "F2")
         assert [q.float_id for q in f2.image_paras] == [""]
         assert "にある F3・F4 を正しい位置" in detail
     elif shape == "prov_count_above":
-        # 図キャプションは図の上（本文の図1）。仮に置いた図形の「図2」と、その前の本文の画像は、下のキャプションとして数えない
-        assert got == ["F1:図1:g", "None:-:g", "F2:図2:", "T1:表1:t"]
-        assert issues == ["直後の表の次に表キャプションがあり、どちらの表か決められない"]
+        # 図キャプションは図の上（本文の図1）。仮に置いた図形の「図2」と、その前の本文の画像は、下のキャプションとして数えない。
+        # 図1 の後ろに続く画像だけの段落 2 つは、どちらも図1 に含める（W1 の C033。前はキャプションのない図が 1 つできた）
+        assert got == ["F1:図1:g", "F2:図2:g", "T1:表1:t"]
+        assert len(res.plan.figures[0].image_paras) == 2 and res.plan.figures[0].slot.how == "run"
+        # 図形の中身は float_units が組む（表は後ろの表キャプションのもの。図2 は画像の置き場所だけの図。備考は付けない）
+        assert issues == []
         assert "にある F2・T1 を正しい位置" in detail
     else:
         # 本文のスタイルの「表2…」の段落は、仮に置いた図形の表と隣でも、表キャプションにしない（本文の段落のまま）
@@ -614,7 +632,7 @@ def test_provisional_floats_at_same_place_are_paired(journal, meta, tmp_path, ap
         assert after(seq, "この段落に二つの図", 2) == ["図1", "以上で終わる。"]
         assert all("の後ろにある F1 を正しい位置" in d for d in rows.values())
     else:
-        assert floats_in_body(root) == ["None:-:g", "F1:図1:"]       # キャプションのない図と、キャプションだけの図
+        assert floats_in_body(root) == ["None:-:g", "F1:図1:g"]       # キャプションのない図と、キャプションだけの図（置き場所はある）
         assert after(seq, "この段落に画像だけ", 2) == ["図?", "この段落にキャプショ"]
         assert after(seq, "この段落にキャプショ", 2) == ["図1", "以上で終わる。"]
         assert "の後ろにある図表の中身を正しい位置" in rows["キャプションなし"]
@@ -622,7 +640,8 @@ def test_provisional_floats_at_same_place_are_paired(journal, meta, tmp_path, ap
 
 def test_figure_without_image_or_table_nearby_is_unchanged(journal, meta, tmp_path):
     """近くに表の候補がない、画像のない図キャプション（キャプションだけのテキストボックスなど）は、今までどおり判断の一覧に
-    記録するだけ（要対応にしない）。"""
+    記録し、画像の置き場所（備考なし）を作る。"""
     res = convert(EDGE, meta, journal, Options(out_dir=tmp_path, convert_metafiles=False))
-    assert res.plan.figure_issues == []
+    assert slot_notes(res) == {}
+    assert any(s.kind == "fig" and not s.covers for s in res.plan.slots)
     assert any(d.message == "図キャプションに対応する画像が見つからない（図形・グループ化等の可能性）" for d in res.plan.decisions)

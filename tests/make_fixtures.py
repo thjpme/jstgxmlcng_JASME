@@ -241,6 +241,55 @@ def group(rid, pic_cx, pic_cy, inner, pid, cx, cy, **pos):
     return anchored(graphic, fallback, pid, cx, cy, **pos)
 
 
+# 画像を持たない図形（飾りの判定・画像の位置の数え方の検証用）
+WSP_FILL = {"none": "<a:noFill/>",
+            "white": '<a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>',
+            "bg1": '<a:solidFill><a:schemeClr val="bg1"/></a:solidFill>',
+            "window": '<a:solidFill><a:sysClr val="window" lastClr="FFFFFF"/></a:solidFill>',
+            "gray": '<a:solidFill><a:schemeClr val="bg1"><a:lumMod val="95000"/></a:schemeClr></a:solidFill>',
+            "red": '<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>',
+            "gradient": "<a:gradFill><a:gsLst/></a:gradFill>",
+            "": ""}
+WPS_URI = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+WPG_URI = "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"
+
+
+def wsp(prst="rect", fill="none", text="", x=0):
+    """図形 1 つ（wps:wsp）。prst は図形の形、fill は WSP_FILL の鍵、text があればテキストボックス（文字のある図形）にする。"""
+    txbx = f'<wps:txbx><w:txbxContent>{para(S["body"], text)}</w:txbxContent></wps:txbx>' if text else ""
+    return (f'<wps:wsp><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="{x}" y="0"/><a:ext cx="720000" cy="360000"/></a:xfrm>'
+            f'<a:prstGeom prst="{prst}"><a:avLst/></a:prstGeom>{WSP_FILL[fill]}</wps:spPr>{txbx}<wps:bodyPr/></wps:wsp>')
+
+
+def _shape_run(graphic, pid, anchor, h, v):
+    if anchor:
+        return anchored(graphic, "", pid, 720000, 360000, h=h, v=v)
+    return (f'<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="720000" cy="360000"/>'
+            f'<wp:docPr id="{pid}" name="図形 {pid}"/>{graphic}</wp:inline></w:drawing></w:r>')
+
+
+def shape(prst="rect", fill="none", pid=801, anchor=False, h=("column", 0), v=("paragraph", 0)):
+    """画像も文字も持たない単独の図形（枠・白い四角・線・矢印など）。anchor なら浮動配置（h, v は位置のずれ）。"""
+    graphic = f'<a:graphic><a:graphicData uri="{WPS_URI}">{wsp(prst, fill)}</a:graphicData></a:graphic>'
+    return _shape_run(graphic, pid, anchor, h, v)
+
+
+def shape_group(shapes, pid=811, anchor=False, h=("column", 0), v=("paragraph", 0)):
+    """図形のグループ（wpg:wgp）。shapes は [(prst, fill, text), ...]。画像は持たない。"""
+    inner = "".join(wsp(p, f, t, x=k * 800000) for k, (p, f, t) in enumerate(shapes))
+    graphic = (f'<a:graphic><a:graphicData uri="{WPG_URI}"><wpg:wgp><wpg:cNvGrpSpPr/><wpg:grpSpPr/>{inner}</wpg:wgp>'
+               '</a:graphicData></a:graphic>')
+    return _shape_run(graphic, pid, anchor, h, v)
+
+
+def chart_drawing(pid=821, rid="rId999"):
+    """グラフ（c:chart）の図形。"""
+    graphic = ('<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">'
+               f'<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="{rid}"/>'
+               '</a:graphicData></a:graphic>')
+    return _shape_run(graphic, pid, False, ("column", 0), ("paragraph", 0))
+
+
 def cell(content, span=1, vmerge=None, width=2000):
     tcpr = f'<w:tcW w:w="{width}" w:type="dxa"/>'
     if span > 1:
@@ -1156,7 +1205,8 @@ def make_article(path, title, body_parts, endnotes=(), refs=None, footnotes=(), 
     body_parts(b) は本文の段落（章見出しから）の XML の一覧を返す。本文で「試験（2024）」を引用すると、引用文献にリンクされる。
     endnotes・footnotes は Word の文末脚注・脚注の XML（endnote()・footnote()）の一覧。
     refs(b) は、引用文献 1 件の後ろに足す段落（引用文献の段落など）の XML の一覧を返す（省略すると足さない）。
-    abstract は英文要旨の段落の文字の一覧、appendix は英文要旨の後ろ（資料）の段落の XML の一覧（省略すると足さない）。
+    abstract は英文要旨の段落の文字の一覧、appendix は英文要旨の後ろ（資料）の段落の XML の一覧（省略すると足さない。
+    画像を使うときは appendix(b) の形の関数）。
     bullet: 箇条書き（list_item の numId=6）の記号を「•」から変えるときの記号（出版版 PDF との照合の「●」など）。
     """
     b = Builder()
@@ -1171,7 +1221,7 @@ def make_article(path, title, body_parts, endnotes=(), refs=None, footnotes=(), 
     if refs is not None:
         body += refs(b)
     body += front_en(b, "A Small Article", "For Checking", [("Rokuro SHIKEN", "Fictional University")], list(abstract))
-    body += tail(b, appendix=appendix)
+    body += tail(b, appendix=appendix(b) if callable(appendix) else appendix)
     b.save(path, body)
 
 
@@ -1609,6 +1659,271 @@ def make_b3_place(path, outside=False, variant=""):
     """位置を決められない図表の仮の置き場所の原稿（AI 補完が必要。ALL_DOCS には入れない。variant は b3_place_parts）。"""
     make_article(path, "仮の置き場所の検証用文書", lambda b: b3_place_parts(b, variant),
                  refs=lambda b: b3_place_refs(b, outside))
+
+
+# ----------------------------------------------------------------------------- 図形の外の図の決め方（修正計画 W1 の手順 4）
+def anchored_drawing(rid, cx, cy, pid, h=("column", 0), v=("paragraph", 0)):
+    """浮動配置（wp:anchor）の画像 1 つ（図形〈グループ・テキストボックス〉ではない。段落に結び付いた浮動の画像）。"""
+    graphic = (f'<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+               f'<pic:pic><pic:nvPicPr><pic:cNvPr id="{pid}" name="図"/><pic:cNvPicPr/></pic:nvPicPr>'
+               f'<pic:blipFill><a:blip r:embed="{rid}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
+               f'<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>'
+               f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic>')
+    return ('<w:r><w:drawing><wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" '
+            'behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/>'
+            f'<wp:positionH relativeFrom="{h[0]}"><wp:posOffset>{h[1]}</wp:posOffset></wp:positionH>'
+            f'<wp:positionV relativeFrom="{v[0]}"><wp:posOffset>{v[1]}</wp:posOffset></wp:positionV>'
+            f'<wp:extent cx="{cx}" cy="{cy}"/><wp:wrapTopAndBottom/><wp:docPr id="{pid}" name="図 {pid}"/>'
+            f'{graphic}</wp:anchor></w:drawing></w:r>')
+
+
+def figs_parts(b: Builder, variant):
+    """図形の外の図キャプションと画像の並び（修正計画 W1 の 2.3 の A1〜A5・E・D。図キャプションは図の下）。variant:
+
+    run_frame: 画像だけの段落・枠の図形だけの段落・画像だけの段落・図キャプション（C033・C028）。
+    same_para_before / same_para_after: 図キャプションの段落の先頭・末尾に画像（C006）。
+    near3 / near4: 画像の結び付いた本文の段落の 3 / 4 要素後ろに、画像のない図キャプション（C030）。
+    near_other_caption: 画像の結び付いた本文の段落と、画像のない図キャプションの間に、別の図（画像と図キャプション）。
+    near_above: 図キャプションを図の上に置く原稿（図9 とその後ろの画像）で、画像のない図キャプションと、その続きの段落の後ろ
+    2 要素目に、画像の結び付いた本文の段落。
+    heading: 浮動の画像の結び付いた章見出し（近くに図キャプションがない）。
+    table_first: 画像だけの段落・本文の段落・キャプションのない表・図キャプション（表で組んだ図。画像はキャプションなし）。
+    deco: 枠の図形だけの段落（行内）と、白い四角の図形だけの段落（浮動）。
+    ellipse_chart: 楕円の図形だけの段落と、グラフだけの段落。
+    """
+    im = [b.add_image(f"figs_{variant}_{k}.png", png_bytes(f"Figs {k}", size=(300, 200))) for k in range(1, 4)]
+    pic = [drawing(im[k], 1440000, 960000, 941 + k) for k in range(3)]
+    float_pic = anchored_drawing(im[2], 1440000, 960000, 951)
+    cap = para(S["fig_cap"], "図1\u3000架空の図")
+    text = [para(S["body"], f"これは間にある本文の段落{k}である。") for k in range(1, 4)]
+    head = [para(S["sec1"], "１．図の並び"), para(S["body"], "試験（2024）にならう。")]
+    body = {
+        "run_frame": [para(S["body"], pic[0]), para(S["body"], shape("rect", "none", pid=961)), para(S["body"], pic[1]), cap],
+        "same_para_before": [para(S["fig_cap"], pic[0], "図1\u3000キャプションの段落の中の画像")],
+        "same_para_after": [para(S["fig_cap"], "図1\u3000キャプションの段落の中の画像", pic[0])],
+        "near3": [para(S["body"], "この段落に浮動の画像が結び付いている。", float_pic), text[0], text[1], cap],
+        "near4": [para(S["body"], "この段落に浮動の画像が結び付いている。", float_pic), text[0], text[1], text[2], cap],
+        "near_other_caption": [para(S["body"], "この段落に浮動の画像が結び付いている。", float_pic), para(S["body"], pic[0]),
+                               para(S["fig_cap"], "図1\u3000画像のある図"), para(S["fig_cap"], "図2\u3000画像のない図")],
+        "near_above": [para(S["fig_cap"], "図9\u3000上のキャプションの図"), para(S["body"], pic[0]), text[0],
+                       para(S["fig_cap"], "図1\u3000画像のない図"), para(S["fig_cap"], "（出典：架空の資料）"), text[1],
+                       para(S["body"], "この段落に浮動の画像が結び付いている。", float_pic)],
+        "heading": [para(S["sec2"], "（１）浮動の画像の結び付いた見出し", float_pic), text[0], text[1]],
+        "table_first": [para(S["body"], pic[0]), text[0], table([[cell("問1\u3000架空の問題")]]), cap],
+        "deco": [para(S["body"], shape("rect", "none", pid=961)), para(S["body"], shape("rect", "white", pid=962, anchor=True)),
+                 text[0]],
+        "ellipse_chart": [para(S["body"], shape("ellipse", "none", pid=961)), para(S["body"], chart_drawing(pid=962)), text[0]],
+    }[variant]
+    return head + body + [para(S["body"], "以上で終わる。")]
+
+
+def make_figs(path, variant):
+    """図形の外の図の決め方の原稿（variant は figs_parts。ALL_DOCS には入れない。tests/test_figure_units.py）。"""
+    make_article(path, "図の並びの検証用文書", lambda b: figs_parts(b, variant))
+
+
+# ----------------------------------------------------------------------------- 浮動配置の図形の中身（修正計画 W1 の手順 5）
+def float_group(pics, shapes, boxes, pid, cx, cy, **pos):
+    """浮動配置のグループ図形（wpg:wgp）。pics は [(rid, cx, cy)]（グループが直接持つ画像）、shapes は [(prst, fill)]（文字のない
+    図形）、boxes は中身の XML の一覧（テキストボックス 1 つずつ。キャプション・文字）。"""
+    inner = ""
+    for k, (rid, w, h) in enumerate(pics):
+        inner += (f'<pic:pic><pic:nvPicPr><pic:cNvPr id="{pid + k + 1}" name="図"/><pic:cNvPicPr/></pic:nvPicPr>'
+                  f'<pic:blipFill><a:blip r:embed="{rid}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
+                  f'<pic:spPr><a:xfrm><a:off x="{k * 1500000}" y="0"/><a:ext cx="{w}" cy="{h}"/></a:xfrm>'
+                  '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>')
+    inner += "".join(wsp(p, f, x=k * 800000) for k, (p, f) in enumerate(shapes))
+    inner += "".join(f'<wps:wsp><wps:cNvSpPr/><wps:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></wps:spPr>'
+                     f'<wps:txbx><w:txbxContent>{x}</w:txbxContent></wps:txbx><wps:bodyPr/></wps:wsp>' for x in boxes)
+    graphic = (f'<a:graphic><a:graphicData uri="{WPG_URI}"><wpg:wgp><wpg:cNvGrpSpPr/><wpg:grpSpPr/>{inner}</wpg:wgp>'
+               '</a:graphicData></a:graphic>')
+    fallback = ("<w:pict><v:group>" + "".join(f"<v:shape><v:textbox><w:txbxContent>{x}</w:txbxContent></v:textbox></v:shape>"
+                                             for x in boxes) + "</v:group></w:pict>")
+    return anchored(graphic, fallback, pid, cx, cy, **pos)
+
+
+def float_figs_parts(b: Builder, variant):
+    """浮動配置の図形の中身の組み方（修正計画 W1 の 2.3 の B・2.4）。図形はどれも図の左上がアンカー段落の左上にある（位置は
+    機械的に決まる）。variant に「_down」を付けると、図形をアンカー段落から 2 cm 下にずらす（位置を決められない）。
+
+    group: 画像 2 枚・線・白い四角・文字のテキストボックス・図キャプションのテキストボックスをまとめたグループ図形（C002・C004）。
+    two_figs: テキストボックスに、画像だけの段落・図1・画像だけの段落・図2。
+    two_tables: テキストボックスに、表1（表の上のキャプション）・表・表・表2（表の下のキャプション）。
+    table_fig_note: テキストボックスに、キャプションのない表・図1・注の文字（表で組んだ図。注は本文の段落）。
+    ambiguous: テキストボックスに、表・表1・表・表2（どの表がどの表キャプションのものか決められない）。
+    nocap_group: キャプションのないグループ図形（画像 1 枚と文字のテキストボックス）。
+    nocap_textbox: キャプションのないテキストボックスに、文字の段落・表・画像だけの段落。
+    anchor_tabcap / anchor_figcap / anchor_image: 図キャプションと画像のテキストボックスを、本文の表キャプション（後ろに表）・
+    本文の図キャプション（前に画像）・本文の画像だけの段落（後ろに図キャプション）に結び付ける。
+    near_group3 / near_group4: キャプションのないグループ図形（画像 1 枚と文字のテキストボックス）を結び付けた本文の段落の
+    3 / 4 要素後ろに、画像のない本文の図キャプション（修正計画 W1 の 2.3 の B6。C029）。
+    near_group_empty: near_group3 と同じで、グループ図形を結び付けた段落が空の段落。
+    two_figs_above: テキストボックスに、図1・画像だけの段落・図2・画像だけの段落（図キャプションを画像の上に置く図形）。
+    nocap_source: キャプションのないグループ図形（画像 1 枚と、文字「点Ｐ」・「資料：…」・引用のある出典の注記のテキストボックス。
+    data24 の形）。nocap_label: 同じ形で、「資料：…」が図形の先頭にあり、後ろに別のテキストボックスのラベルの文字が続く。
+    """
+    kind, down = variant.replace("_down", ""), variant.endswith("_down")
+    cm = B3_CM
+    pos = dict(v=("paragraph", 2 * cm if down else 0), wrap="wrapTopAndBottom")
+    im = [b.add_image(f"float_figs_{variant}_{k}.png", png_bytes(f"Float {k}", size=(300, 200))) for k in range(1, 4)]
+
+    def pic(k, pid):
+        return para(S["body"], drawing(im[k], 1440000, 960000, pid))
+
+    def bare(text):
+        return table([[cell(text)]])
+
+    def tb(inner, pid=1001):
+        return textbox(inner, pid, cx=12 * cm, cy=6 * cm, **pos)
+
+    head = [para(S["sec1"], "１．図形の中身"), para(S["body"], "試験（2024）にならい，図形の中身の組み方を確かめる。")]
+    anchor = "この段落に図形が結び付いている。本文の段落としての長さを持たせる。"
+    fig_box = tb(pic(0, 1002) + para(S["fig_cap"], "図5　図形の中の図"))
+    shapes = {
+        "group": float_group([(im[0], 1440000, 960000), (im[1], 1440000, 960000)], [("line", "none"), ("rect", "white")],
+                             [para(S["body"], "点Ａと点Ｂを結ぶ。"), para(S["fig_cap"], "図1　グループ図形の図")],
+                             1001, 12 * cm, 6 * cm, **pos),
+        "two_figs": tb(pic(0, 1002) + para(S["fig_cap"], "図1　一つ目の図") + pic(1, 1003)
+                       + para(S["fig_cap"], "図2　二つ目の図")),
+        "two_tables": tb(para(S["tab_cap"], "表1　上のキャプションの表") + bare("上の表の中身") + bare("下の表の中身")
+                         + para(S["tab_cap"], "表2　下のキャプションの表")),
+        "table_fig_note": tb(bare("問1　架空の問題") + para(S["fig_cap"], "図1　表で組んだ図")
+                             + para(S["body"], "注：架空の注である。")),
+        "ambiguous": tb(bare("前の表の中身") + para(S["tab_cap"], "表1　一つ目の表") + bare("間の表の中身")
+                        + para(S["tab_cap"], "表2　二つ目の表")),
+        "nocap_group": float_group([(im[0], 1440000, 960000)], [], [para(S["body"], "点Ｐ")], 1001, 8 * cm, 4 * cm, **pos),
+        "nocap_textbox": tb(para(S["body"], "図形の中の説明の文である。") + bare("図形の中の表")
+                            + pic(0, 1002)),
+        "two_figs_above": tb(para(S["fig_cap"], "図1　上のキャプションの図") + pic(0, 1002)
+                             + para(S["fig_cap"], "図2　二つ目の上のキャプションの図") + pic(1, 1003)),
+        "nocap_source": float_group([(im[0], 1440000, 960000)], [],
+                                    [para(S["body"], "点Ｐ"),
+                                     para(S["body"], "資料：　架空の授業プリントの問い") + para(S["body"], "※試験（2024）を基に筆者作成")],
+                                    1001, 8 * cm, 4 * cm, **pos),
+        "nocap_label": float_group([(im[0], 1440000, 960000)], [],
+                                   [para(S["body"], "資料：　架空の授業プリントの問い"), para(S["body"], "点Ａ"),
+                                    para(S["body"], "ラベルの文字：" + "あ" * 40) + para(S["body"], "いろいろ" * 30)],
+                                   1001, 8 * cm, 4 * cm, **pos),
+    }
+    if kind in shapes:
+        return head + [para(S["body"], anchor, shapes[kind]), para(S["body"], "以上で終わる。")]
+    if kind.startswith("near_group"):
+        text = [para(S["body"], f"これは間にある本文の段落{k}である。") for k in range(1, 4)]
+        lead = para(S["body"], shapes["nocap_group"]) if kind == "near_group_empty" else para(S["body"], anchor, shapes["nocap_group"])
+        return head + [lead] + text[:3 if kind == "near_group4" else 2] + [
+            para(S["fig_cap"], "図1　近くの段落の図形の図"), para(S["body"], "以上で終わる。")]
+    body_pic = para(S["body"], drawing(im[2], 1440000, 960000, 1011))
+    if kind == "anchor_tabcap":
+        return head + [para(S["tab_cap"], "表1　本文の表", fig_box), bare("本文の表の中身"),
+                       para(S["body"], "以上で終わる。")]
+    if kind == "anchor_figcap":
+        return head + [body_pic, para(S["fig_cap"], "図1　本文の図", fig_box), para(S["body"], "以上で終わる。")]
+    assert kind == "anchor_image", variant
+    return head + [para(S["body"], drawing(im[2], 1440000, 960000, 1011), fig_box), para(S["fig_cap"], "図1　本文の図"),
+                   para(S["body"], "以上で終わる。")]
+
+
+def make_float_figs(path, variant):
+    """浮動配置の図形の中身の組み方の原稿（variant は float_figs_parts。ALL_DOCS には入れない。tests/test_float_units.py）。"""
+    make_article(path, "図形の中身の検証用文書", lambda b: float_figs_parts(b, variant))
+
+
+# ----------------------------------------------------------------------------- 画像で貼った表・表のセルの図・資料の図（修正計画 W1 の手順 7）
+def table_images_parts(b: Builder, variant):
+    """画像で貼った表・表のセルの図・資料の図（修正計画 W1 の 2.3 の C・D）の並び。図キャプションは図の下（既定）。variant:
+
+    tab_next: 表キャプション・画像だけの段落（C の (2)）。tab_run: 表キャプション・空の段落・画像だけの段落 2 つ。
+    tab_two: 表キャプション・画像・表キャプション・画像。tab_then_fig: 表キャプション・画像・図キャプション（画像は図のもの）。
+    tab_not_next: 表キャプション・本文の段落・画像（画像は表のものにしない）。
+    tab_group: 本文の段落に、画像 1 枚のグループ図形と、表キャプションだけのテキストボックスが結び付く（C の (1)。図の左上が
+    アンカー段落の左上にある）。tab_textbox: テキストボックスに、表キャプション・画像だけの段落・注の文字。
+    cell_up: 表のセルに、画像（1 行目）とその下のキャプション（2 行目。キャプションのスタイル）の図1、同じ形でスタイルのない
+    キャプションの図2。cell_same: 同じセルに、キャプションと画像。cell_none: キャプションの上のセルに画像がない
+    （画像は別の列のセル）。cell_two: 同じセルに図キャプションが 2 つ。cell_above: 図キャプションを図の上に置く原稿
+    （本文の図9 の後ろに画像）で、表のセルの 1 行目にキャプション・2 行目に画像。cell_float: 1 列の表の行ごとに、浮動の
+    グループ図形（画像 1 枚）を結び付けたキャプションのない段落・同じ形のグループ図形を結び付けた図1 のキャプション・空の段落・
+    画像のない図2 のキャプション・グループ図形の段落・図3 のキャプション（data17 の形。図1 は上のセルの画像、キャプションに
+    結び付いた画像はキャプションなしのまま、図2 は画像の見つからない図）。
+    """
+    im = [b.add_image(f"tabimg_{variant}_{k}.png", png_bytes(f"Tab {k}", size=(300, 200))) for k in range(1, 5)]
+
+    def group(k, pid):
+        return float_group([(im[k], 1440000, 960000)], [], [], pid, 4 * B3_CM, 3 * B3_CM, v=("paragraph", 0),
+                           wrap="wrapTopAndBottom")
+
+    def pic(k, pid):
+        return para(S["body"], drawing(im[k], 1440000, 960000, pid))
+
+    cm = B3_CM
+    head = [para(S["sec1"], "１．画像の表"), para(S["body"], "試験（2024）にならい，表1に結果を示す。")]
+    cap1 = para(S["tab_cap"], "表1\u3000画像で貼った表")
+    text = para(S["body"], "これは間にある本文の段落である。")
+    pos = dict(v=("paragraph", 0), wrap="wrapTopAndBottom")
+    anchor = "この段落に図形が結び付いている。本文の段落としての長さを持たせる。"
+    body = {
+        "tab_next": [cap1, pic(0, 1001)],
+        "tab_run": [cap1, para(S["body"], ""), pic(0, 1001), pic(1, 1002)],
+        "tab_two": [cap1, pic(0, 1001), para(S["tab_cap"], "表2\u3000二つ目の画像の表"), pic(1, 1002)],
+        "tab_then_fig": [cap1, pic(0, 1001), para(S["fig_cap"], "図1\u3000表ではなく図")],
+        "tab_not_next": [cap1, text, pic(0, 1001)],
+        "tab_group": [para(S["body"], anchor, float_group([(im[0], 1440000, 960000)], [], [para(S["tab_cap"], "表1\u3000グループの表")],
+                                                          1001, 12 * cm, 6 * cm, **pos))],
+        "tab_textbox": [para(S["body"], anchor, textbox(para(S["tab_cap"], "表1\u3000図形の中の表") + pic(0, 1002)
+                                                        + para(S["body"], "注：画像に写る文字である。"), 1001,
+                                                        cx=12 * cm, cy=6 * cm, **pos))],
+        "cell_up": [table([[cell([pic(0, 1001)])], [cell(para(S["fig_cap"], "図1\u3000上の画像の図"))]]), text,
+                    table([[cell([pic(1, 1002)])], [cell(para(S["body"], "図2：スタイルのないキャプション"))]])],
+        "cell_same": [table([[cell([pic(0, 1001), para(S["fig_cap"], "図1\u3000同じセルの図")])]])],
+        "cell_none": [table([[cell(para(S["body"], "見出し")), cell([pic(0, 1001)])],
+                             [cell(para(S["fig_cap"], "図1\u3000画像のない列の図")), cell("説明")]])],
+        "cell_two": [table([[cell([pic(0, 1001), para(S["fig_cap"], "図1\u3000一つ目"), pic(1, 1002),
+                                   para(S["fig_cap"], "図2\u3000二つ目")])]])],
+        "cell_above": [para(S["fig_cap"], "図9\u3000上のキャプションの図"), pic(2, 1003), text,
+                       table([[cell(para(S["fig_cap"], "図1\u3000下の画像の図"))], [cell([pic(0, 1001)])]])],
+        "cell_float": [table([[cell(para(S["body"], group(0, 1101)))],
+                              [cell(para(S["fig_cap"], group(1, 1201), "図1\u3000上のセルの図"))],
+                              [cell(para(S["body"], ""))],
+                              [cell(para(S["fig_cap"], "図2\u3000画像の見つからない図"))],
+                              [cell(para(S["body"], group(2, 1301)))],
+                              [cell(para(S["fig_cap"], "図3\u3000三つ目の図"))]])],
+    }[variant]
+    return head + body + [para(S["body"], "以上で終わる。")]
+
+
+def make_table_images(path, variant):
+    """画像で貼った表・表のセルの図の原稿（variant は table_images_parts。ALL_DOCS には入れない。tests/test_table_images.py）。"""
+    make_article(path, "画像の表の検証用文書", lambda b: table_images_parts(b, variant))
+
+
+def app_figures_parts(b: Builder, variant):
+    """資料の図キャプション（修正計画 W1 の 2.3 の D の「資料」）。英文要旨の後ろに「資料1」の見出しと、variant の並び:
+
+    below: 画像だけの段落・図キャプション（スタイルあり）。after: 図キャプション・画像だけの段落。own: 画像を含む図キャプション。
+    run: 画像だけの段落 2 つ・図キャプション。plain: スタイルのない「図1　…」・画像（隣が画像なので図キャプションと推定）。
+    none: 画像のない図キャプション。two: 画像・図キャプション・画像・図キャプション。
+    """
+    im = [b.add_image(f"appfig_{variant}_{k}.png", png_bytes(f"App {k}", size=(300, 200))) for k in range(1, 3)]
+
+    def pic(k, pid):
+        return para(S["abs"], drawing(im[k], 1440000, 960000, pid))
+
+    head = [para(S["abs"], "資料1\u3000架空の授業プリント"), para(S["abs"], "資料の本文である。")]
+    cap = para(S["fig_cap"], "図1\u3000資料の図")
+    return head + {
+        "below": [pic(0, 1001), cap],
+        "after": [cap, pic(0, 1001)],
+        "own": [para(S["fig_cap"], drawing(im[0], 1440000, 960000, 1001), "図1\u3000資料の図")],
+        "run": [pic(0, 1001), pic(1, 1002), cap],
+        "plain": [pic(0, 1001), para(S["abs"], "図1\u3000スタイルのない資料の図")],
+        "none": [cap],
+        "two": [pic(0, 1001), cap, pic(1, 1002), para(S["fig_cap"], "図2\u3000二つ目の資料の図")],
+    }[variant]
+
+
+def make_app_figures(path, variant):
+    """資料の図キャプションの原稿（variant は app_figures_parts。ALL_DOCS には入れない。tests/test_table_images.py）。"""
+    make_article(path, "資料の図の検証用文書", lambda b: [para(S["sec1"], "１．本文"), para(S["body"], "本文の段落である。")],
+                 appendix=lambda b: app_figures_parts(b, variant))
 
 
 # ----------------------------------------------------------------------------- sample_outside（本文の外の図形。修正計画の N7）

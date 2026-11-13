@@ -59,13 +59,12 @@ def test_manual_mode_waits_for_answer(tmp_path):
     st = filled(tmp_path)
     st.set_inputs(ai_mode="manual")
     st.convert()
-    assert st.waiting_for_answer and st.needs_action
+    assert st.waiting_for_answer
+    assert not st.needs_action      # 回答待ちは推奨の手順なので、要対応に数えない
     assert "AI の回答をまだ反映していません" not in st.result_html()    # 依頼文の欄があるので枠は出さない
     assert st.prompt_text()
-    # 要対応が残っていると、そのままではダウンロードできない
+    # 回答待ちは推奨の手順なので、ダウンロードを止めない
     path, note = st.download()
-    assert path is None and "AI の回答をまだ反映していません" in note
-    path, note = st.download(accept_todo=True)
     assert path and note == ""
     with pytest.raises(InputError, match="貼り付けられていません"):
         st.apply_answer("  ")
