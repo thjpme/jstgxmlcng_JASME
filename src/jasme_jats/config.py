@@ -44,6 +44,8 @@ class JournalConfig:
     front_lines: list = field(default_factory=list)   # 冒頭の誌名行（冒頭部の装飾。structure.front_decoration）
     styles: dict = field(default_factory=dict)
     manuscript_types: dict = field(default_factory=dict)   # 原稿種別の選択肢（日本語 → 英語）
+    pdf_issue_line: str = ""      # 出版版 PDF の 1 ページ目の誌名の行の正規表現（名前付きグループ volume・issue・year・fpage・lpage。pdfbiblio）
+    pdf_date_labels: dict = field(default_factory=dict)   # PDF の日付のラベル（received・revised・accepted → 「投稿受付」など。pdfbiblio）
 
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "JournalConfig":
@@ -52,7 +54,9 @@ class JournalConfig:
             data = tomllib.load(f)
         j = data.get("journal", {})
         d = data.get("defaults", {})
-        return cls(styles=data.get("styles", {}), manuscript_types=data.get("manuscript_types", {}), **j, **d)
+        pb = data.get("pdf_biblio", {})
+        return cls(styles=data.get("styles", {}), manuscript_types=data.get("manuscript_types", {}),
+                   pdf_issue_line=str(pb.get("issue_line", "")), pdf_date_labels=dict(pb.get("date_labels", {})), **j, **d)
 
     def subjects(self, meta) -> tuple:
         """原稿種別（日本語, 英語）。英語が入力されていなければ、選択肢の対応表から決める。"""
@@ -227,10 +231,21 @@ class ArticleMeta:
         known = {f for f in cls.__dataclass_fields__}
         return cls(**{k: v for k, v in d.items() if k in known})
 
-    @classmethod
-    def load(cls, path) -> "ArticleMeta":
+    @staticmethod
+    def read_dict(path) -> dict:
+        """TOML の [article] の中身（読んだままの辞書）。"""
         with open(path, "rb") as f:
-            return cls.from_dict(tomllib.load(f).get("article", {}))
+            return dict(tomllib.load(f).get("article", {}))
+
+    @classmethod
+    def load(cls, path, defaults: Optional[dict] = None) -> "ArticleMeta":
+        """TOML の [article] から読む。defaults（PDF から読んだ値など。キーは ArticleMeta の欄の名前）は、TOML にない・空の欄だけ埋める。"""
+        d = cls.read_dict(path)
+        for k, v in (defaults or {}).items():
+            cur = d.get(k)
+            if cur is None or (isinstance(cur, str) and not cur.strip()):
+                d[k] = v
+        return cls.from_dict(d)
 
     def article_id(self, j: JournalConfig) -> str:
         if not (self.volume and self.fpage):

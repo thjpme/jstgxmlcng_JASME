@@ -405,7 +405,7 @@ def test_appendix_headings_with_period_inside_or_lower_case_word(journal, meta, 
 
 def test_japanese_paragraph_in_abstract_is_reported(journal, meta, tmp_path):
     # 和文の論文で、英文要旨の中に、かな・漢字が 3 割以上の段落があれば知らせる（資料などの和文が英文要旨に入っているかも
-    # しれない）。自動では移さない。判断の一覧（applied=False）、10 章の警告、レポートの冒頭と 14 章の要確認
+    # しれない）。自動では移さない。判断の一覧（applied=False）、10 章の警告、レポートの冒頭の要確認
     path = tmp_path / "ja.docx"
     mf.make_article(path, "英文要旨の中の和文の検証用文書",
                     lambda b: [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "本文。")],
@@ -423,7 +423,7 @@ def test_japanese_paragraph_in_abstract_is_reported(journal, meta, tmp_path):
          "ください")]
     assert {a.level for a in actions(res) if a.key == "abstract_ja"} == {TO_CHECK} and not res.needs_action
     report = res.report_path.read_text(encoding="utf-8")
-    top, ch14 = report.split("## 2.")[0], report.split("## 14.")[1]
+    top, ch14 = report.split("## 1.")[1].split("## 2.")[0], report.split("## することの一覧")[1].split("## 1.")[0]
     assert "> **要確認: 英文要旨に、和文と思われる段落が 1 件あります（10 章）。**" in top
     assert f"対象の段落: {src}「問2\u3000架空の和文の問題文である…」" in top        # 段落の例は 15 文字まで
     assert "- [ ] **英文要旨の中の和文の段落**（1 件。10 章）" in ch14
@@ -483,7 +483,7 @@ def test_japanese_paragraph_in_abstract_of_english_article_is_not_reported(journ
 
 def test_appendix_after_references_is_warned(journal, meta, tmp_path):
     # 引用文献の後ろの、章見出しのスタイルの「資料　…」と本文のスタイルの「資料2　…」。暫定の判断で資料（app-group）にはせず、
-    # 引用文献の段落のまま出力して（文字は落とさない）、10 章の警告とレポートの冒頭・14 章の要確認で知らせる（決定事項 8(b) は
+    # 引用文献の段落のまま出力して（文字は落とさない）、10 章の警告とレポートの冒頭の要確認で知らせる（決定事項 8(b) は
     # 利用者に未確認）。参考文献のスタイルの段落は、「資料」で始まっても引用文献の 1 件として知らせない。空白だけの見出しのスタイルの
     # 段落と、引用文献を分ける見出しのスタイルの小見出し（「＜英文献＞」。資料の見出しの形でない）も知らせない
     refs = [mf.para(S["ref"], "資料\u3000架空統計（2023）．『架空の統計』．架空出版．"), mf.para(S["sec1"], "\u3000"),
@@ -511,8 +511,8 @@ def test_appendix_after_references_is_warned(journal, meta, tmp_path):
     assert f"{src}: 引用文献の中に、資料の見出しと思われる段落「資料\u3000架空の授業プリント」があります。今の版では、" in "".join(res.warnings)
     assert {a.level for a in actions(res) if a.key == "app_after_refs"} == {TO_CHECK}
     report = res.report_path.read_text(encoding="utf-8")
-    assert "> **要確認: 引用文献などの後ろに、資料の見出しと思われる段落があります（10 章）。**" in report.split("## 2.")[0]
-    assert "- [ ] **引用文献などの後ろの資料の見出し**（3 件。10 章）" in report.split("## 14.")[1]
+    assert "> **要確認: 引用文献などの後ろに、資料の見出しと思われる段落があります（10 章）。**" in report.split("## 1.")[1].split("## 2.")[0]
+    assert "- [ ] **引用文献などの後ろの資料の見出し**（3 件。10 章）" in report.split("## することの一覧")[1].split("## 1.")[0]
 
 
 # ----------------------------------------------------------------------------- 文字だけのテキストボックス（修正計画の D1）
@@ -578,7 +578,7 @@ def test_label_and_undecided_textboxes_are_excluded(journal, meta, tmp_path, cap
     assert acts["textbox_undecided"].level == TO_CHECK and "label" not in acts
     assert not any(a.level == NEEDS_ACTION for a in actions(res)) and not res.needs_action
     report = res.report_path.read_text(encoding="utf-8")
-    top, ch14 = report.split("## 2.")[0], report.split("## 14.")[1]
+    top, ch14 = report.split("## 1.")[1].split("## 2.")[0], report.split("## することの一覧")[1].split("## 1.")[0]
     ch3 = report.split("## 3.")[1].split("## 4.")[0]
     assert ("**要確認: 囲み（問題文・ヒントなど）か図の注記か決められなかったテキストボックスが 3 件あり、その文字を XML に"
             "出力していません（3 章・6 章）。**") in top and "AI による補完を使うと" not in top
@@ -783,7 +783,7 @@ def test_text_in_figure_textbox_is_notified(journal, meta, tmp_path):
     assert (act.level, act.key) == (TO_CHECK, "textbox_figure_text") and not res.needs_action
     src = next(s for s, p in res.plan.paras.items() if p.plain() == SOURCE_NOTE)
     report = res.report_path.read_text(encoding="utf-8")
-    top, ch14 = report.split("## 2.")[0], report.split("## 14.")[1]
+    top, ch14 = report.split("## 1.")[1].split("## 2.")[0], report.split("## することの一覧")[1].split("## 1.")[0]
     assert ("> **要確認: 図の画像に写るものとして、XML の本文に出していない文字があります（図形 1 つ。6 章）。**"
             in top) and "> - 図1（fig01）の図形: 25 字「出典：架空の町の資料（2020）をもとに…」" in top
     assert "本文として読ませたい文字なら、Word でその文字を図形の外（本文の段落）に出して、変換し直してください" in top
@@ -878,7 +878,7 @@ def test_near_image_counts_two_elements(between, kind, journal, meta, tmp_path):
     # 1 章の「テキストボックスの文字」の行は、中身のある章だけを示す（図の注記だけなら 3 章を示さない）
     row = ("| テキストボックスの文字（4 章・6 章・10 章） | 図の注記として除外 1 件 |" if kind == "label"
            else "| テキストボックスの文字（3 章・4 章・6 章） | 決められずに除外 1 件（要確認） |")
-    assert row in res.report_path.read_text(encoding="utf-8").split("## 2.")[0]
+    assert row in res.report_path.read_text(encoding="utf-8").split("## 1.")[1].split("## 2.")[0]
 
 
 # ---- K5: 本文スタイルの「注」だけの段落（表の注の見出しなど）で、後付けに切り替えたまま本文に戻らない
@@ -1025,7 +1025,7 @@ def test_table_note_without_chapter_heading_reaches_refs_is_reported(journal, me
     assert d.applied and "注の番号で始まらない" in d.message and res.plan.paras[d.src].plain() == "注"
     assert res.plan.fn_guess_checks and res.plan.fn_guess_checks[0][1] == "kept"
     report = res.report_path.read_text(encoding="utf-8")
-    assert "注」だけの段落" in report.split("## 2.")[0]
+    assert "注」だけの段落" in report.split("## 1.")[1].split("## 2.")[0]
     assert not res.needs_action
 
 
@@ -1140,7 +1140,7 @@ def _manual_roles(path, resp, meta, journal, out):
 
 
 def fn_guess_texts(act):
-    """利用者向けの文（レポートの冒頭・14 章・Colab の枠・コマンドライン）をまとめて返す。"""
+    """利用者向けの文（レポートの冒頭・Colab の枠・コマンドライン）をまとめて返す。"""
     return [act.top, act.checklist, act.box_title, act.box_detail, act.cli]
 
 
@@ -1250,7 +1250,7 @@ def test_fn_guess_numbered_paragraphs_in_returned_range_are_reported(journal, me
 
 def test_fn_guess_advice_says_which_paragraphs_join_the_notes(journal, meta, tmp_path):
     """0.29.0 の最後の点検: 「注見出し」にすると、後付けの見出しまでの段落（後ろの章も）が注の節に入る注意を、「注見出し」を勧めるすべての
-    場合（戻した・戻した範囲に注の番号がある・注の節として扱った）と、すべての出口（レポートの冒頭・14 章・Colab の枠・コマンドライン）に、
+    場合（戻した・戻した範囲に注の番号がある・注の節として扱った）と、すべての出口（レポートの冒頭・Colab の枠・コマンドライン）に、
     どの段落か分かる形（最初と最後の段落の ID と抜粋、件数）で添える。その範囲は、実際に「注見出し」にしたときに注の節に入る段落と一致する。"""
     clause = "後ろの章見出しとその本文も含めてすべて注の節に入ります"
     cases = {
@@ -1382,7 +1382,7 @@ def fn_styled_article(tmp_path, tokens, name, styles):
 
 @pytest.mark.parametrize("case", list(FN_SPAN_CASES))
 def test_fn_guess_advice_for_several_notes_decides_all_notes_before_reconverting(case, journal, meta, tmp_path):
-    """0.29.0 の 5 回目の点検: 文字から注の見出しと推定される「注」が 2 つ以上ある結果では、要確認 fn_guess の助言（冒頭・14 章・枠・
+    """0.29.0 の 5 回目の点検: 文字から注の見出しと推定される「注」が 2 つ以上ある結果では、要確認 fn_guess の助言（冒頭・枠・
     コマンドライン）に、「注見出し」にするのは注の節の「注」1 つだけにし、ほかの「注」は「注本文」スタイルにするなど、すべての「注」の
     扱いを決めてから変換し直す注意と、対象の「注」の段落 ID と抜粋を添える（先の「注」だけを「注見出し」にして変換し直すと、後ろの
     「注」も注の見出しと推定されて先の見出しが出力されないので、変換が中止される。StructureConflictError）。1 つのときは添えない。

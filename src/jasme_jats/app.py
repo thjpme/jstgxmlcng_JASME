@@ -25,11 +25,12 @@ from . import __version__
 from . import report as rp
 from .ai_assist import API_KEY_NAMES, DEFAULT_MODEL, cost_note
 from .colab import (ANSWER_LABEL, APPLY_LABEL, CONVERT_LABEL, ai_finish_of, check_box, error_box, manual_guide, report_details,
-                    result_boxes, step_text, structure_conflict_box, summary_box)
+                    result_boxes, step_text, structure_conflict_box, summary_box, wrong_paper_box)
 from .config import ArticleMeta, JournalConfig, keyword_language_mismatch, keyword_problem
 from .images import match_names
+from .pdfbiblio import biblio_inputs, read_biblio
 from .imagelist import check_frame
-from .pipeline import Options, StructureConflictError, add_images, convert, kept_images, reapply_images
+from .pipeline import Options, StructureConflictError, WrongPaperError, add_images, convert, kept_images, reapply_images
 from .report import (actions, ai_done, ai_state, blocking, clash_images_text, image_rows, images_action, shorten_shown, shown_text,
                      unmatched_image_text)
 
@@ -38,19 +39,19 @@ MAX_IMAGE_SLOTS = 30          # 図ごとの行（ファイル選択）の数。
 FIXED_VIEWS = 10              # 画面の更新（build_app の views）の先頭の固定の部品の数。その後ろに、図ごとのファイル選択、「入れない」のチェックが MAX_IMAGE_SLOTS 個ずつ続く
 
 # 画面の入力欄。名前は AppState.inputs の鍵で、画面の部品の並びもこの順（INPUT_NAMES）
-ROUTES = [("docx から作り、出版版 PDF で補う", "pdf"), ("docx から作る", "docx")]
 AI_MODES = [("使わない", "none"), ("手動（チャットに貼り付け）", "manual"), ("API（Claude）", "api")]
 PEER_REVIEWS = ["査読あり", "査読なし"]
 AUTO_MODEL = "自動（最新の Opus）"
 OTHER_TYPE = "その他"
 DEFAULTS = {
-    "route": "pdf", "docx": None, "pdf": None,
+    "docx": None, "pdf": None,
     "volume": "", "issue": "", "fpage": "", "lpage": "", "peer_review": None, "manuscript_type": None,
     "approved": "", "keywords_ja": "", "keywords_en": "", "pub_date": "", "epub_date": "", "received": "", "accepted": "",
     "corresp": "", "doi": "", "subject_other": "", "subject_other_en": "",
     "ai_mode": "manual", "model": DEFAULT_MODEL, "split_labels": False,
 }
 INPUT_NAMES = list(DEFAULTS)
+PDF_FIELDS = ("volume", "issue", "fpage", "lpage", "received", "accepted")      # PDF を選んだときに読んで入れる欄（pdfbiblio.INPUT_KEYS と同じ）
 # 次の論文のために空にする項目（巻・号・査読の有無・原稿種別・AI の設定は残す）
 PER_ARTICLE = ("docx", "pdf", "fpage", "lpage", "approved", "keywords_ja", "keywords_en", "pub_date", "epub_date", "received",
                "accepted", "corresp", "doi", "subject_other", "subject_other_en")
@@ -58,9 +59,9 @@ LABELS = {"docx": "docx", "pdf": "PDF", "volume": "巻", "issue": "号", "fpage"
           "peer_review": "査読の有無", "manuscript_type": "原稿種別", "approved": "最終査読日", "keywords_ja": "キーワード（日本語）",
           "keywords_en": "キーワード（英語）", "pub_date": "発行日", "epub_date": "J-STAGE 公開日", "received": "受付日",
           "accepted": "受理日", "corresp": "責任著者", "doi": "DOI", "subject_other": "原稿種別（日本語）",
-          "subject_other_en": "原稿種別（英語）", "route": "作り方", "split_labels": "SPLIT_LABELS"}
+          "subject_other_en": "原稿種別（英語）", "split_labels": "SPLIT_LABELS"}
 # 変わると依頼文も変わり得る入力の名前（stale_text の文の分岐に使う）
-DOCXISH = (LABELS["docx"], LABELS["pdf"], LABELS["route"], LABELS["split_labels"])
+DOCXISH = (LABELS["docx"], LABELS["pdf"], LABELS["split_labels"])
 # 変換の結果を左右する入力（前回の変換と比べる）。AI の方法・モデルは次に変換するときに使う設定なので比べない（O3）
 COMPARED_INPUTS = tuple(n for n in INPUT_NAMES if n not in ("ai_mode", "model"))
 
@@ -166,6 +167,7 @@ class AppState:
         # Options.ai_cache で渡す（依頼の番号・モデルが同じなら API を呼ばない。修正計画 W8 の 4.6）。reset() では消さない
         # （別の論文では依頼の番号が違うので使われない）
         self.ai_cache: Optional[str] = None
+        self.pdf_got: dict = {}                # 直前の pdf_selected() が PDF から読んで欄に入れた値（欄の名前 → 値）
 
     @property
     def out_dir(self) -> Path:
@@ -181,8 +183,7 @@ class AppState:
     def missing(self) -> list:
         """変換を押すのに足りない必須項目の名前（空なら押せる）。"""
         f = self.inputs
-        need = ["docx"] + (["pdf"] if f["route"] == "pdf" else []) + ["volume", "issue", "fpage", "lpage", "peer_review",
-                                                                        "manuscript_type"]
+        need = ["docx", "volume", "issue", "fpage", "lpage", "peer_review", "manuscript_type"]
         out = [LABELS[k] for k in need if not str(f[k] or "").strip()]
         if f["manuscript_type"] == OTHER_TYPE:
             out += [LABELS[k] for k in ("subject_other", "subject_other_en") if not str(f[k] or "").strip()]
@@ -191,13 +192,49 @@ class AppState:
     def can_convert(self) -> bool:
         return not self.missing()
 
+    # ---- PDF から書誌情報を先に入れる（W5）
+    def pdf_selected(self, path) -> str:
+        """PDF を選んだとき: 1 ページ目から巻・号・ページ・受付日・受理日を読み、読めた項目の欄を PDF の値にする（入力済みでも書き換える。
+        その後に打ち直した値が使われる）。戻り値は、PDF の欄の下に出す注記（Markdown。選び直して空なら空の文字）。
+        読めなかったときは欄を変えない。XML に出すのはいつも欄の値で、PDF の値との違いは変換の後の知らせ meta_pdf が出す。"""
+        self.pdf_got = {}
+        if not path:
+            return ""
+        b = read_biblio(path, JournalConfig.load())
+        got = biblio_inputs(b)
+        if not got:
+            return ("PDF から巻・号・ページを読めませんでした（1 ページ目に「数学教育学研究 第 n 巻 第 n 号 … pp.n〜n」のような誌名の行が"
+                    "見つかりません）。入力してください。")
+        for k, v in got.items():
+            self.inputs[k] = v
+        self.pdf_got = got
+        parts = []
+        if got.get("volume"):
+            parts.append("巻 " + got["volume"])
+        if got.get("issue"):
+            parts.append("号 " + got["issue"])
+        if got.get("fpage") and got.get("lpage"):
+            parts.append(f"ページ {got['fpage']}〜{got['lpage']}")
+        else:
+            parts += [LABELS[k] + " " + got[k] for k in ("fpage", "lpage") if got.get(k)]
+        for k, word in (("received", "受付日"), ("accepted", "受理日")):
+            if got.get(k):
+                parts.append(f"{word} {got[k]}")
+        src = []
+        if b.line:
+            src.append("1 ページ目の誌名の行")
+        if got.get("received") or got.get("accepted"):
+            src.append("投稿受付・採用決定の日付")
+        return ("PDF から読んで入れました: " + "・".join(parts) + "（" + "と、".join(src) + "）。"
+                "違っていれば欄を書き換えてください。査読の有無・原稿種別・発行日は PDF から読めないので入力してください。")
+
     def _article_meta(self) -> ArticleMeta:
         """入力から ArticleMeta を作る。誤りは InputError（ノートブックの手順 3 と同じ確かめ）。"""
         f = self.inputs
         miss = self.missing()
         if miss:
             raise InputError("次の項目が足りません: " + "、".join(miss))
-        text = {k: str(f[k] or "").strip() for k in DEFAULTS if k not in ("docx", "pdf", "route", "split_labels")}
+        text = {k: str(f[k] or "").strip() for k in DEFAULTS if k not in ("docx", "pdf", "split_labels")}
         if text["peer_review"] not in PEER_REVIEWS:
             raise InputError("査読の有無を選んでください。")
         if text["peer_review"] == "査読なし" and text["approved"]:
@@ -243,8 +280,6 @@ class AppState:
                     out[name] = ("読めない", str(v))
             elif name == "split_labels":
                 out[name] = bool(v)
-            elif name == "route":
-                out[name] = str(v)
             elif name in ("subject_other", "subject_other_en") and f["manuscript_type"] != OTHER_TYPE:
                 out[name] = ""
             else:
@@ -285,6 +320,8 @@ class AppState:
         miss = self.missing()
         if miss:
             parts.append("足りない項目: " + "、".join(miss))
+            if not self.inputs["pdf"] and any(LABELS[k] in miss for k in ("volume", "issue", "fpage", "lpage")):
+                parts[-1] += "（PDF を選ぶと、巻・号・ページ・受付日・受理日が入ります）"
         changed = self.changed_inputs()
         note = self.stale_text(changed) if changed else self.settings_note()
         if note:
@@ -320,6 +357,8 @@ class AppState:
             res = convert(run.docx, run.meta, run.journal, opts)
         except StructureConflictError as e:
             raise InputError(step_text(str(e), "app"), structure_conflict_box(str(e), "app"))
+        except WrongPaperError as e:
+            raise InputError(step_text(str(e), "app"), wrong_paper_box(str(e), "app"))
         if res.ai.mode == "api" and res.ai_answer_path is not None:
             self.ai_cache = res.ai_answer_path.read_text(encoding="utf-8")
         step(0.9, "画像を入れ直しています…")
@@ -358,7 +397,7 @@ class AppState:
         self.run = None
         local_docx, local_pdf = self._copy_inputs()
         f = self.inputs
-        self.run = RunInputs(compared=compared, docx=local_docx, pdf=local_pdf, route=str(f["route"]),
+        self.run = RunInputs(compared=compared, docx=local_docx, pdf=local_pdf, route="pdf" if local_pdf else "docx",
                              split_labels=bool(f["split_labels"]), ai_mode=f["ai_mode"], model=_model_value(f["model"]),
                              meta=meta, journal=journal, docx_name=Path(f["docx"]).name, api_key=api_key)
         step(0.2, self.convert_note())
@@ -604,6 +643,7 @@ class AppState:
         self.kept = {}
         self.run = None
         self.paper_changed = False
+        self.pdf_got = {}
         self._last_docx = None
         shutil.rmtree(self.work / "input", ignore_errors=True)
         shutil.rmtree(self.out_dir, ignore_errors=True)
@@ -645,10 +685,11 @@ def build_app(state: AppState, io: "IO | None" = None):
 
     with gr.Blocks(title="論文 docx → J-STAGE XML 変換") as demo:
         gr.Markdown(f"# 論文 docx → J-STAGE XML 変換　版 {__version__}\n[説明書]({DOCS})")
-        route = gr.Radio(ROUTES, value=DEFAULTS["route"], label="作り方",
-                         info="PDF がまだないときは「docx から作る」")
         docx = gr.File(label="docx（論文の Word ファイル）", file_types=[".docx"], file_count="single")
         pdf = gr.File(label="PDF（J-STAGE に登載する PDF）", file_types=[".pdf"], file_count="single")
+        gr.Markdown("出版版 PDF（J-STAGE に登載する PDF）を入れると、全角・半角や句読点などの表記を PDF に合わせ、"
+                    "巻・号・ページ・受付日・受理日を PDF から入れます。PDF がまだないときは空のままで変換できます（表記は docx のままです）。")
+        pdf_note = gr.Markdown()                      # PDF から書誌情報を読んで入れたときの知らせ（AppState.pdf_selected）
         with gr.Row():
             volume = gr.Textbox(label="巻", info="半角の英数字")
             issue = gr.Textbox(label="号")
@@ -702,10 +743,11 @@ def build_app(state: AppState, io: "IO | None" = None):
             next_btn = gr.Button("次の論文")
         download_html = gr.HTML()                      # 「ZIP を保存」のボタン（download_button_html）
 
-        inputs = [route, docx, pdf, volume, issue, fpage, lpage, peer_review, manuscript_type, approved, keywords_ja,
+        inputs = [docx, pdf, volume, issue, fpage, lpage, peer_review, manuscript_type, approved, keywords_ja,
                   keywords_en, pub_date, epub_date, received, accepted, corresp, doi, subject_other, subject_other_en,
                   ai_mode, model, split_labels]
         assert len(inputs) == len(INPUT_NAMES)
+        fields = dict(zip(INPUT_NAMES, inputs))
         views = [message, result, manual_col, prompt, images_col, images_md, accept, download_html, bulk_files,
                  check_view] + image_files + skip_boxes
         assert len(views) == FIXED_VIEWS + 2 * MAX_IMAGE_SLOTS
@@ -803,8 +845,14 @@ def build_app(state: AppState, io: "IO | None" = None):
             state.reset()
             return [state.inputs[n] for n in INPUT_NAMES] + view() + [""]
 
+        def on_pdf(path):
+            """PDF を選んだら、読めた書誌情報を欄に入れる（欄の変更は on_change が拾って state に写す）。"""
+            note = state.pdf_selected(path)
+            return [gr.update(value=state.pdf_got[k]) if k in state.pdf_got else gr.update() for k in PDF_FIELDS] + [note]
+
         for comp in inputs:
             comp.change(on_change, inputs, [go, ready], api_name=False)
+        pdf.change(on_pdf, [pdf], [fields[k] for k in PDF_FIELDS] + [pdf_note], api_name=False)
         go.click(on_convert, inputs, views + [answer, ready])
         apply_btn.click(on_apply, [answer], views)
         images_btn.click(on_images, [bulk_files] + image_files + skip_boxes, views)

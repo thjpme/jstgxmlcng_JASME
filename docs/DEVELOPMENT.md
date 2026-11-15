@@ -21,7 +21,7 @@ python -m pytest
 
 | ファイル | 役割 |
 |---|---|
-| `ooxml.py` | docx の低水準処理。**文字ポリシー**（何を docx の文字とみなすか）と、検証用の独立した文字列取り出し `canonical_text()`・`canonical_texts()`。読み取り・検証・ルート2 が共有する規則: 段落記号の削除でつなぐ段落（`joined_paragraphs()`。つなげないものは `unjoined_deleted_marks()`）と、隠し文字の判定（`HiddenRule`。直接の指定・文字スタイル・段落スタイル・既定の書式の `w:vanish`）、`mc:AlternateContent` の採る側（`choose_alternate()`。`preprocess()` が使う）、記号フォントの記号（`SYMBOL_TABLES`・`symbol_char()`・`sym_char()`・`w_t_text()`。Symbol・Wingdings 系の私用領域の符号を、フォントごとの表で Unicode にする。C011） |
+| `ooxml.py` | docx の低水準処理。**文字ポリシー**（何を docx の文字とみなすか）と、検証用の独立した文字列取り出し `canonical_text()`・`canonical_texts()`。読み取り・検証・PDF に合わせる処理が共有する規則: 段落記号の削除でつなぐ段落（`joined_paragraphs()`。つなげないものは `unjoined_deleted_marks()`）と、隠し文字の判定（`HiddenRule`。直接の指定・文字スタイル・段落スタイル・既定の書式の `w:vanish`）、`mc:AlternateContent` の採る側（`choose_alternate()`。`preprocess()` が使う）、記号フォントの記号（`SYMBOL_TABLES`・`symbol_char()`・`sym_char()`・`w_t_text()`。Symbol・Wingdings 系の私用領域の符号を、フォントごとの表で Unicode にする。C011） |
 | `docx_reader.py` | docx → 中間表現（`model.py` の `Document` / `Para` / `Atom`）。コンテンツコントロール（`w:sdt`）・`w:customXml` に包まれた表の行・セル、テキストボックスの段落・表も、文書の順にたどって読む（`_children()`）。テキストボックスごとに `model.TextBox`（ID・アンカー段落・行内か・VML の位置指定・グループの中か・幅と高さ）を記録し、中の段落・表に `textbox_id` を付ける（入れ子の内側は外側の ID）。Word の脚注・文末脚注は、種類と ID の組の注の鍵（`model.note_key`。「footnote:5」。人が読む表記は `model.note_label`）で区別する（番号・リンク・PDF との照合・レポートのどれも、この鍵で注を引く）。削除の変更履歴の中の脚注・文末脚注の参照は、参照にせず `Document.deleted_note_refs` に記録する。段落記号が削除された段落は、次の段落とつないで連鎖の最初の段落の ID の 1 つの段落として読み（`Document.joined`。スタイルの違うものは `Document.joins`）、つなげないものは 10 章の警告にする。変更履歴で削除された、文字のない表の行は読み飛ばす（`Document.deleted_rows`）。スタイル・既定の書式の設定で隠した文字・画像は、隠し文字の一覧とは別にも記録する（`Document.style_hidden`・`ImageRef.hidden_style`。規則が暫定なので要確認）。記号フォントの私用領域の符号（箇条書きの記号・`w:sym`・ランの `w:t`）を Unicode にしたもの・しなかったものは `Document.symbols`（`model.SymbolReplaced`）に記録する（要確認 `symbol_replaced`）。結果を持たないまま終わるフィールド（`separate` がない、または結果が空）のうち、Word では表示のあるもの（EQ の囲い文字・分数・ルビ、SYMBOL、フォームのチェックボックスなど。`ooxml.FIELD_DRAWN`）は `Document.resultless_fields`（`model.ResultlessField`。段落の ID・種類・コード・位置・段落の文字）に記録する（要確認 `resultless_field`。XML は変えない）。画像の Word のトリミング・回転などの加工は読まない（画像は書き出さないため。W1 の手順 16 で `ImageRef.crop`・`edits` をなくした）。画像の置き場所を決める手がかりとして、画像ごとに `ImageRef.draw_id`（同じ `w:drawing`・`w:pict`・`w:object` の画像は同じ値）・`digest`（画像ファイルまたは図形の XML の SHA-1）・`para_src`、画像を持たない図形の飾りの種類 `decoration`（`shape_decoration`）も記録する（`draw_id`・`digest` は画像の置き場所の単位と名前の幹に使う〈`structure.Classifier.assign_slots`〉。`decoration` は出力にはまだ使わない）。表の行の前後で飛ばしたグリッド（`w:gridBefore`・`w:gridAfter`）は `Row.grid_before`・`grid_after`、行の番号は `Row.number` に読み、`w:gridSpan` の 0・負・数でない値は 1 にそろえる（`_grid_span`） |
 | `numbering.py` | Word の自動段落番号を表示どおりの文字列にする。`w:numStyleLink` は、styles.xml の番号付けスタイルをたどって段の定義を得る（`Numbering(root, styles_root)`。`_follow_style_links`）。num の `w:lvlOverride/w:lvl`（段の書式の上書き）は、書かれた子要素（start・numFmt・lvlText・番号の書式のフォント）だけを abstractNum の段の定義に重ね、`w:startOverride` は、その num を最初に使った段落で数えを振り直す（`Numbering.label`。lvl の start より優先。0.30.0。R6）。数えは Word と同じく abstractNum ごとで、同じ abstractNum を使う num は番号を共有する（振り直した後に元の num に戻ると、振り直した後の続き。C008・R7。振り直しの開始番号は `restarts` に持ち、数えの初期値と、上位の段が未出現のときの `%n` の両方に使う）。表の削除された行を読み飛ばすときは、数え方を `Numbering.snapshot()`・`restore()` で戻す（`counters` を直接触らない）。`w:isLgl`・`w:lvlRestart` などは未対応（`docs/REVIEW_2026-11.md` の R8・R11） |
 | `omml.py` | Word の数式（OMML）→ MathML 2.0。根号の `degHide` が真でも `m:deg` に文字があれば `mroot`（文字を落とさない。`h_rad`） |
@@ -32,17 +32,18 @@ python -m pytest
 | `ai_assist.py` | AI による仕上げ（依頼文の作成、API 呼び出し（Claude・ChatGPT・Gemini・Sakana AI）、回答の検証と適用。既定の AI モデルは `DEFAULT_MODEL` と `DEFAULT_MODEL_INFO`〈表示名・料金・提供終了の予定〉の 1 か所で決める。回答の形は `RESPONSE_SCHEMA`（request_id・pdf と種類ごとの一覧 placements・boxes・boundaries・links・names・style_fixes・notes。修正計画 W8 の手順 10）。途中で切れた回答から、最後まで書かれた図表の位置の指定だけを読む `parse_cut_response()`）。依頼の番号 `request_stamp`（R-構造の印-本文の印）で、どの依頼文への回答かを `check_answer` が確かめる（構造の印が違う・番号のない回答は使わない。段落の ID のずれは先頭の文字で読み替える。W8 の手順 17）。回答の欄に貼られた依頼文（行頭の見出し `REQUEST_TITLE`・`DATA_HEADING`。`RE_REQUEST_HEADING`）・`{` で始まるコードブロックが 2 つ以上ある回答・見本の写し（値がまるごと「＜…＞」の項目。`RE_SAMPLE_VALUE`）を含む回答・`operations` を持つ前の形の回答（`OLD_FORM_MSG`）は、回答全体を `ValueError` で断る（`_misuse`・`_copied_sample`。C019）。回答の最上位が一覧（`[ ]`）のもの・回答の項目がないもの・一覧でない項目・入れ子が深すぎるもの（`RecursionError`）は読めない回答にし、それぞれの文（`TOP_ARRAY_MSG`・`SINGLE_OP_MSG`・`NO_OPS_MSG`・`OPS_NOT_LIST_MSG`・`DEEP_MSG`）で出し直しを頼む（0.30.0。A9・A10）。検証は種類ごと（`link_ops`・`name_ops`・`style_fixes`・`boundary_overrides`・`float_placements`・`box_kinds`・`missing_answers`。要素の型は `_items`、段落の先頭の文字は `head_of`・`same_head`）。区切りの可否は `boundary_problem()`（`set_role_problem()` を先に通す）。`notes` は `_notes_list` で文字列の一覧にする。`apply_ops` は、リンクと姓名の区切りを検証して適用し、題目・著者名・所属・引用文献・別行数式の段落へのリンクを不採用にする。AI が図・表にリンクを付けた参照は、範囲が重なるものだけ `plan.float_unlinked` から除く。docx の画像は AI に渡さない（W1）。依頼文は `build_request` が `AIRequest`（【作業する方へ】・指示の部分・データの部分。手動は `manual_text()`、API は system に `system_text()`、利用者の内容に `data`）で作り、出す節と番号は `request_sections` の 1 か所で決める（W8 の手順 13。データの部分は、段落の節・図表式の一覧〈手順 14〉、未解決の一覧・スタイルを確かめる段落・除外・氏名〈手順 15。未解決の項目は `linker.Unresolved` で、段落の表記と何回目か〉、位置を決める図・表とテキストボックスの節〈手順 16〉）。位置を決められない図形には位置（`after`）だけを聞き、図形ごとに「中身」（変換ツールが組んだ図・表の ID とキャプションの段落。`float_contents`。画像の ID は書かない）・仮の位置・docx の配置（日本語）・推定を書く（`float_section`。段落は「## 本文」に載せた段落〈`after_ids`〉で示す） |
 | `emit.py` / `builder.py` | XML の組み立て（文字は必ず `jx:span` の中に書く。囲みは `<boxed-text>`。本文の最上位では `<p>` で包む）。表のセルの段落の中の改行の前に `<break/>` を補い（`emit.Ctx.breaks`）、改行のある段落を `BuildInfo.newlines` に記録して 10 章の警告にする。姓と名の区切りがない氏名は `BuildInfo.unsplit_names`（段落の ID・氏名・言語。AI 依頼文に使う）に記録し、英文の氏名なら 10 章の警告にする。和文の氏名は `split_eastern` の規則で分け（字の間に空白を入れて揃えた氏名は、いちばん長い空白か、推定した境目で分ける。字の間の空白・氏名の前後の空白は `Emitter.drop()` で落とす）、いちばん長い空白・推定で分けた氏名と分けられなかった氏名を `BuildInfo.name_splits` に記録して要確認 `name_split` にする（`pdfdocx._name_shape` も同じ規則を使う）。すべての行が見出し行の表は `<thead>` を作らず `<tbody>` にし、謝辞 `<ack>` の中の別行数式・表・リストは `<p>` で包む。表の縦の結合（`Builder.table`）は、幅の同じ継続だけを結合し、見出し行から本文の行へは延ばさず（どちらも 10 章の警告）、すべてのセルが継続の行は出力せずに `rowspan` を出力する行だけで数え、行の前後で飛ばしたグリッドは空のセルで埋める（出力した表は `BuildInfo.tables`）。Word の自動番号は、どの場所でも生成文字（`jx:gen kind="autonum" src="段落 ID"`）で出す（`autonum_mark`・`caption`・`heading_title`）。題目・副題・著者名・所属の番号は出さず、`BuildInfo.unshown_numbers` に記録して 10 章の警告にする。画像は置き場所（`article.ImageSlot`）ごとに 1 つ書く（図 1 つに `<graphic>` 1 つ。段落の中の画像は置き場所の最初の画像の位置だけに `<inline-graphic>`。名前は `Builder.slot_name`、出力した置き場所は `BuildInfo.slots`） |
 | `tracking.py` | 変換途中の目印の定義（`jx:gen` の kind が autonum なら `src` に番号の段落 ID） |
-| `fidelity.py` | 文字の不変性チェック（出力した段落が除外にも記録されていないか、空白だけとした除外が本当に空白だけか、も確かめる）と、ルート2 の補完の確かめ（`verify_supplement`。補った docx が元の docx から (A) と報告した (B) 以外に変わっていないか。照合・直しとは別の実装で、共有するのは `pdfmatch` の表の定数と `pdfdocx` の `AUTHOR`・`PARTS` だけ）。`final_check` は、最終出力が実体を解決するパーサでも読めることと、実体の宣言（`<!ENTITY`）がないことも確かめ、読めない・宣言があるときは `FidelityResult.final_unreadable`、文字の差分があるときは `final_differs` を立てる（`report._fidelity_action` が文を分ける） |
+| `fidelity.py` | 文字の不変性チェック（出力した段落が除外にも記録されていないか、空白だけとした除外が本当に空白だけか、も確かめる）と、補完の確かめ（`verify_supplement`。補った docx が元の docx から組版の違い（区分 (1)。1 文字ずつの対と決まった空白の削除）以外に変わっていないか。照合・直しの結果は受け取らず、別の実装で、共有するのは `pdfmatch` の表の定数（`PUNCT_CLASSES` を含む）と `pdfdocx` の `AUTHOR`・`PARTS` だけ）。`final_check` は、最終出力が実体を解決するパーサでも読めることと、実体の宣言（`<!ENTITY`）がないことも確かめ、読めない・宣言があるときは `FidelityResult.final_unreadable`、文字の差分があるときは `final_differs` を立てる（`report._fidelity_action` が文を分ける） |
 | `validate.py` | DTD 検証（`dtd/` に J-STAGE 指定 DTD を同梱）。`resolve_entities=False` なので未定義の実体参照は見つからない（`fidelity.final_check` が補う）。`jats_element_names()` は同梱 DTD の要素名（`report.md_tag` が使う）。`validate(xml, where)` のエラーは `DtdError`（文字列。「引用文献 129件目（B129）「…」: 日本語の説明（lxml の英語の文）」）で、検証用に整形した写しを検証し直して、エラーの行から id を持つ祖先を引く（出力の XML は変えない。`where` は `pipeline.dtd_places` の {id: 場所の文}）。同じ文は `group_errors` で件数にまとめる（`report._dtd_action`・12 章） |
 | `floats.py` | 浮動配置の図形（テキストボックス・グループ図形）の位置: 機械的に配置できるかの判定、AI に渡す位置の説明と行数の推定。文字だけのテキストボックスが囲みか図の注記か決められないかの判定（`textbox_kind`。しきい値は `BOX_CHARS` などの定数）と行数の推定（`box_lines`） |
-| `pdfmatch.py` | 出版版 PDF との照合（段落ごとの対応付けと、違いの一覧）。違いを組版の違い（(A)。`typeset_pair`・`QUOTE_CLASSES`・`NUMBER_PAIRS`・`case_paragraphs`。`TextDiff.kind` が `typeset`、全角・半角の `width`・PDF にない空白の `drops`、Word が付ける番号の `numbers`）・校正の直し（(B)。`kind` が `text`）・決められない違い（(C)。`TextDiff.why`）に分ける。1 つの違いに (A) と (B) が混ざるときは `diff_parts`（`typeset_ops`）で直す単位に分ける。PDF のページ番号・誌名の行・柱・投稿受付日など（組版で入る文字）と、docx にない図・表の中の文字は照合に使わず、段落の途中にあったものを一覧にする（`pdf_stream()`、`PdfCheck.ignored_lines`）。照合の位置（`PdfStream.keys`・`_joint`・`_align` など）は「1 文字 = 1 キー」を前提にするので、照合の鍵 `key()` は必ず 1 文字を返す（`lower()` が 2 文字になる「İ」だけは小文字にせず、そのまま返す。C056）。ページの途中の数字だけの行（引用文献の「pp.11-」の後の「16」のような前の行の続きを除く）・何ページにも出る行は、照合する列から除き、行全体でしか docx の文字と一致させない（`PdfStream.line_only`）。段落ごとの PDF の窓は、全段落を docx の順につないでまとめて照合して決める（`_joint`。0.21.0。PDF の中で表・図・ほかの段落に分断された段落も照合する）。docx に足すか・docx の文字を消すか決められない違いは、理由付きで直さない（`TextDiff.why`。`EDGE_WHY`・`UNSURE_WHY`・`WHOLE_WHY`・`LONG_WHY`・`DISPLACED_WHY`・`HEAD_WHY`・`MATH_WHY`〈文字として取り出せない数式の位置。`PdfStream.formula`〉）。docx のダッシュ（en dash・em dash など）と同じ位置の PDF の行末の「-」は、(A) のダッシュ・ハイフンとして PDF に合わせて「-」に直す（`DASHES`。docx のハイフンの仲間〈`HYPHENS`。「‐」、Word の改行なしハイフン「‑」など〉と、PDF の行末の docx と違う「-」「‐」も、行の途中と同じく PDF に合わせる） |
-| `pdfdocx.py` | ルート2: 出版版 PDF で補った docx（Word の変更履歴つき）を作る。組版の違い（`Fix` の kind が `width`・`space`・`glyph`）と校正の直し（kind が `text`）を直す。書き込んだ後に文字列と構造（役割・領域・リンク・注の区切り・著者と所属・姓と名の分け方。`_verify`・`_structure`）を確かめる。段落の文字（`paragraph_units()`）と段落のつながり（`_chains()`）は、読み取りと同じ規則（`ooxml.HiddenRule`・`joined_paragraphs`）で決める。空白の削除は根拠の全角・半角の直しに片方向で従う（`Fix.needs`・`spread_reasons`。1 つの違いを分けた組は `FixGroup`・`link_fixes`）。入力の docx と書き出し先が同じファイルなら `write_fixed_docx` は書く前に `ValueError`（`same_file`）。削除されたランの図形は `paragraph_units` で読み飛ばす |
+| `pdfmatch.py` | 出版版 PDF との照合（段落ごとの対応付けと、違いの一覧）。違いを表記の違い（区分 (1)。`typeset_pair`・`QUOTE_CLASSES`・`PUNCT_CLASSES`・`NUMBER_PAIRS`・`case_paragraphs`。`TextDiff.kind` が `typeset`、全角・半角の `width`・PDF にない空白の `drops`、Word が付ける番号の `numbers`）・内容の違い（`kind` が `text`）・決められない違い（`TextDiff.why`）に分ける。1 つの違いに表記の違いと内容の違いが混ざるときは `diff_parts`（`typeset_ops`）で直す単位に分ける。照合の最後に `grade` が、違いのそれぞれに知らせるかの区分（`TextDiff.level`: `FIX`・`SILENT`・`CONTENT`・`UNSURE` ＝ (1)〜(4)。内訳の名前 `label`）を付ける（違いを `typeset_ops` で部分に分けて `_part_label` で内訳を決め、いちばん重いものを違いの区分にする。内容の違いのうち docx の文字が PDF の別の位置にそのままあるものは裏取りで `UNSURE`〈`elsewhere`〉。区分を読むのは `level_of`、`PdfCheck.content_diffs`・`silent_diffs`・`unsure_diffs`。文字の規則は `nfk`・`loose`・`core`・`unreadable`・`script`、注番号の位置は `_note_spans`。見つからない段落のうち PDF にそのままあるものは `found_elsewhere`。表のセル・囲みの行〈8 文字以上〉のうち PDF のどこにもないものは `cell_misses`〈`CELL_MIN`。簡易な確かめ。文字は直さず、要確認 `pdf_mismatch` の一覧の最後と 13.1 に載せる〉）。別の論文かの判定は `paper_verdict`〈`PdfCheck.verdict`: 空・`suspect`・`wrong`・`garbled`。数える段落のうち見つからない段落が半分を超えたときだけ、PDF の文字を読めたか〈`pdf_readable`。読めなければ `garbled` で `ok` を偽にする〉と題目の一致の割合〈`_title_ratio`。0.6 未満で `wrong`〉を見る。知らせは要確認 `pdf_mismatch`、中止は `pipeline.WrongPaperError`〉）。区分は知らせ（`report.py`）と、直す・直さないの判断の根拠（`pdfdocx.hold`）に使う（照合の判断と `kind`・`fixable`・`why` は区分では変えない）。PDF のページ番号・誌名の行・柱・投稿受付日など（組版で入る文字）と、docx にない図・表の中の文字は照合に使わず、段落の途中にあったものを一覧にする（`pdf_stream()`、`PdfCheck.ignored_lines`）。照合の位置（`PdfStream.keys`・`_joint`・`_align` など）は「1 文字 = 1 キー」を前提にするので、照合の鍵 `key()` は必ず 1 文字を返す（`lower()` が 2 文字になる「İ」だけは小文字にせず、そのまま返す。C056）。ページの途中の数字だけの行（引用文献の「pp.11-」の後の「16」のような前の行の続きを除く）・何ページにも出る行は、照合する列から除き、行全体でしか docx の文字と一致させない（`PdfStream.line_only`）。段落ごとの PDF の窓は、全段落を docx の順につないでまとめて照合して決める（`_joint`。0.21.0。PDF の中で表・図・ほかの段落に分断された段落も照合する）。docx に足すか・docx の文字を消すか決められない違いは、理由付きで直さない（`TextDiff.why`。`EDGE_WHY`・`UNSURE_WHY`・`WHOLE_WHY`・`LONG_WHY`・`DISPLACED_WHY`・`HEAD_WHY`・`MATH_WHY`〈文字として取り出せない数式の位置。`PdfStream.formula`〉）。docx のダッシュ（en dash・em dash など）と同じ位置の PDF の行末の「-」は、(1) のダッシュ・ハイフンとして PDF に合わせて「-」に直す（`DASHES`。docx のハイフンの仲間〈`HYPHENS`。「‐」、Word の改行なしハイフン「‑」など〉と、PDF の行末の docx と違う「-」「‐」も、行の途中と同じく PDF に合わせる） |
+| `pdfdocx.py` | 出版版 PDF で補った docx（Word の変更履歴つき）を作る。表記の違い（区分 (1)。`Fix` の kind が `width`・`space`・`glyph`）だけを直す。`plan_fixes` は内容の違い（kind が `text`）の Fix も理由なしで返し、書き込む前に `hold` が理由を付ける（内容の違い `CONTENT_REASON`、同じ違いの組、直さない違いに間 1 文字以下で続く表記の直しと、止めたかっこの組のもう片方 `ADJACENT_REASON`。`UNFIXABLE_REASON` の違いは始まりにしない）。理由のない kind `text` の Fix を `write_fixed_docx` に渡すと `ValueError`（`check_held`）。書き込んだ後に文字列と構造（役割・領域・リンク・注の区切り・著者と所属・姓と名の分け方。`_verify`・`_structure`）を確かめる。段落の文字（`paragraph_units()`）と段落のつながり（`_chains()`）は、読み取りと同じ規則（`ooxml.HiddenRule`・`joined_paragraphs`）で決める。空白の削除は根拠の全角・半角の直しに片方向で従う（`Fix.needs`・`spread_reasons`。1 つの違いを分けた組は `FixGroup`・`link_fixes`。かっこの全角・半角の直しは、直すと組の全角・半角が混ざるなら、書き込みの段階でも直さない〈`Fix.pair`〉）。入力の docx と書き出し先が同じファイルなら `write_fixed_docx` は書く前に `ValueError`（`same_file`）。削除されたランの図形は `paragraph_units` で読み飛ばす |
+| `pdfbiblio.py` | 出版版 PDF の 1 ページ目から書誌情報（巻・号・年・最初と最後のページ・投稿受付日・再投稿受付日・採用決定日・PDF のページ数）を読む（W5。手順 11）。`read_biblio(pdf_path, journal) -> PdfBiblio`（読めない項目は空で、例外にしない）・`biblio_from_pages`・`biblio_inputs`（入力欄に入れる文字列。再投稿受付日は入れない）・`fill_missing`（入力の空の欄だけ埋める）・`mismatches`（入力と PDF の違い。読めなかった項目と空の入力は比べない）・`page_count_ok`。誌ごとの形（誌名の行の正規表現・日付のラベル）はコードに書かず、`JournalConfig.pdf_issue_line`・`pdf_date_labels`（`data/jasme.toml` の `[pdf_biblio]`）に置く。XML に出すのはいつも入力の値で、PDF の値は入力の手助けと知らせにだけ使う。`pipeline.convert` が `Result.pdf_biblio` に読み、`report._meta_pdf_action`（入力と違えば `meta_pdf`。巻・号・ページは要対応、日付・年・ページ数は要確認）・11 章の「PDF から読んだ値」の列・`cli.py`（`--meta` の空の項目を埋める。`ArticleMeta.load(path, defaults)`・`read_dict`）が使う（W5。手順 12） |
 | `jstage_rules.py` | J-STAGE のアップロード時チェック（記事アップロードメッセージ一覧）のうち XML だけで判定できるものの再現 |
-| `images.py` / `imagelist.py` / `package.py` / `report.py` | 作業する人が入れる図・表の画像の受け取り（`images.SlotImage`〈置き場所ごとの状態〉・`check_user_image`〈中身が PNG・JPEG・GIF かを確かめるだけで、バイト列は変えない〉・`match_names`〈ファイル名を置き場所の幹に合わせる〉。docx の画像は書き出さない。修正計画 W1）、入れた画像を XML に反映する `package.apply_images()`（1 か所）、ZIP、レポート（図の画像の一覧 `report.image_rows`、場所の文 `report.slot_where`）、取り違えの確かめの一覧 `imagelist.write_check()`（出力フォルダに別の HTML「{記事識別子}_図の確かめ.html」を書く。`Result.check_path`。ZIP に入れない）。アップロード用の ZIP に入れるものは `package.upload_entries()` だけで決め（今回の XML・今回指定した PDF・作業する人が入れた画像）、作った ZIP は `package.zip_problems()` で読み直して確かめる（`Result.zip_issues`）。記事フォルダにあるのに ZIP に入れなかったファイルは `package.unzipped_files()`（`Result.not_zipped`。レポートの 10 章）。利用者への知らせ（要対応・要確認）は `report.actions()` の 1 か所で `report.Action` の一覧にする（レポートの冒頭・14 章、Colab の赤い枠、コマンドラインの標準エラーと終了コードはこれだけで決まる。`docs/DESIGN.md` の 3 章）。知らせの文の画面の操作は目印 `report.step()` で書く（`STEP_NAMES`）。レポートの生のタグは `md_tag()` で囲む。要確認 `float_ref`（リンクしなかった図・表の参照。手で足す方法 `float_ref_manual` だけを書く。AI の状態で文を分けた `float_ref_ai` は W8 の手順 7 でなくした）と `fn_guess`（文字から推定した「注」の扱い）の `Action` を足した。0.30.0 で、要対応 `table_shape`（出力した表の形の崩れ。12 章の「表の形の確かめ」）・`autonum_lost`（XML に出なかった Word の自動番号。8 章）を足した（要確認 `image_crop`・`image_edits` は W1 でなくした）。0.31.0 で、要確認 `excluded_unsure`（論文の中の位置を決められずに除いた段落。理由ごとの直し方は `UNPLACED_GUIDE`）と要対応 `abstract_missing`（英文要旨が見つからない）を足し、構造の衝突で中止するときの文 `structure_conflict_text`（`actions` の知らせではない）を足した |
-| `pipeline.py` / `cli.py` | 全体の流れ（画像の置き場所を作れなかった画像の検出 `lost_images()`・XML の画像の名前の確かめ `image_problems()`・飾りの記録 `decorations()`、表の形の確かめ `table_problems()`、自動番号の出力漏れの検出 `lost_autonums()`、最終の XML に残った私用領域の文字の検出 `pua_chars()`〈要対応 `pua_left`〉、記号フォントの記号を置き換えたものの集計 `symbols_replaced()`〈要確認 `symbol_replaced`〉を含む）とコマンドライン。`Result.needs_action`（要対応があるか）・`Result.pdf_fallback`（ルート2 で PDF の文字を読めなかった）・`Result.supplement`（ルート2 の補完の確かめ。不合格は `Result.ok` も偽）。コマンドラインの終了コードは、0 が要対応も残っている必須の手順もなし、1 がどちらかあり（`report.blocking()`。推奨の手順は数えない。一覧は標準エラー）、2 が中止（`StructureConflictError`。位置を決められない図表では中止しない〈W8 の決定 4〉。K1・K2 の構造の衝突は AI を呼ぶ前に、ルート2 では補う前の元の docx で確かめて中止し、補った docx を残さない〈`_drop_fixed`。O7〉。AI の set_role で衝突ができたときは `_reject_roles` で不採用にして組み直す〈理由 `CONFLICT_ROLE_WHY`〉）。補った docx の書き出し先は `pipeline.fixed_docx_path`（入力が同じファイルなら `_2`、`_3`…の別名） |
+| `images.py` / `imagelist.py` / `package.py` / `report.py` | 作業する人が入れる図・表の画像の受け取り（`images.SlotImage`〈置き場所ごとの状態〉・`check_user_image`〈中身が PNG・JPEG・GIF かを確かめるだけで、バイト列は変えない〉・`match_names`〈ファイル名を置き場所の幹に合わせる〉。docx の画像は書き出さない。修正計画 W1）、入れた画像を XML に反映する `package.apply_images()`（1 か所）、ZIP、レポート（図の画像の一覧 `report.image_rows`、場所の文 `report.slot_where`）、取り違えの確かめの一覧 `imagelist.write_check()`（出力フォルダに別の HTML「{記事識別子}_図の確かめ.html」を書く。`Result.check_path`。ZIP に入れない）。アップロード用の ZIP に入れるものは `package.upload_entries()` だけで決め（今回の XML・今回指定した PDF・作業する人が入れた画像）、作った ZIP は `package.zip_problems()` で読み直して確かめる（`Result.zip_issues`）。記事フォルダにあるのに ZIP に入れなかったファイルは `package.unzipped_files()`（`Result.not_zipped`。レポートの 10 章）。利用者への知らせ（要対応・要確認）は `report.actions()` の 1 か所で `report.Action` の一覧にする（レポートの冒頭（することの一覧と囲み）、Colab の赤い枠、コマンドラインの標準エラーと終了コードはこれだけで決まる。`docs/DESIGN.md` の 3 章）。知らせの文の画面の操作は目印 `report.step()` で書く（`STEP_NAMES`）。レポートの生のタグは `md_tag()` で囲む。要確認 `float_ref`（リンクしなかった図・表の参照。手で足す方法 `float_ref_manual` だけを書く。AI の状態で文を分けた `float_ref_ai` は W8 の手順 7 でなくした）と `fn_guess`（文字から推定した「注」の扱い）の `Action` を足した。0.30.0 で、要対応 `table_shape`（出力した表の形の崩れ。12 章の「表の形の確かめ」）・`autonum_lost`（XML に出なかった Word の自動番号。8 章）を足した（要確認 `image_crop`・`image_edits` は W1 でなくした）。0.31.0 で、要確認 `excluded_unsure`（論文の中の位置を決められずに除いた段落。理由ごとの直し方は `UNPLACED_GUIDE`）と要対応 `abstract_missing`（英文要旨が見つからない）を足し、構造の衝突で中止するときの文 `structure_conflict_text`（`actions` の知らせではない）を足した。出版版 PDF の知らせは `report.pdf_actions`（`pdf_fallback`・`pdf_unread`・要確認 `pdf_mismatch`〈PDF と文字が違う箇所。内容の違い〈`pdfmatch.CONTENT`〉だけ。`mismatch_diffs`・`mismatch_cells`・`mismatch_lines`。表のセルの見つからない行も件数に入る〉・`pdf_suspect`。表記の違いと照合に使わなかった PDF の文字は知らせにしない。W3 の手順 6）。 |
+| `pipeline.py` / `cli.py` | 全体の流れ（画像の置き場所を作れなかった画像の検出 `lost_images()`・XML の画像の名前の確かめ `image_problems()`・飾りの記録 `decorations()`、表の形の確かめ `table_problems()`、自動番号の出力漏れの検出 `lost_autonums()`、最終の XML に残った私用領域の文字の検出 `pua_chars()`〈要対応 `pua_left`〉、記号フォントの記号を置き換えたものの集計 `symbols_replaced()`〈要確認 `symbol_replaced`〉を含む）とコマンドライン。`Result.needs_action`（要対応があるか）・`Result.pdf_fallback`（PDF に合わせるはずが PDF の文字を読めなかった）・`Result.supplement`（補完の確かめ。不合格は `Result.ok` も偽）。コマンドラインの終了コードは、0 が要対応も残っている必須の手順もなし、1 がどちらかあり（`report.blocking()`。推奨の手順は数えない。一覧は標準エラー）、2 が中止（`StructureConflictError`・別の論文のファイルの `WrongPaperError`。位置を決められない図表では中止しない〈W8 の決定 4〉。K1・K2 の構造の衝突は AI を呼ぶ前に、PDF に合わせるときは補う前の元の docx で確かめて中止し、補った docx を残さない〈`_drop_fixed`。O7〉。AI の set_role で衝突ができたときは `_reject_roles` で不採用にして組み直す〈理由 `CONFLICT_ROLE_WHY`〉）。補った docx の書き出し先は `pipeline.fixed_docx_path`（入力が同じファイルなら `_2`、`_3`…の別名） |
 | `colab.py` | Colab ノートブックの表示部品（手動モードの依頼文の枠、要対応（赤）・要確認（黄）の枠 `result_boxes()`〈`missing_images_box()` などは、その中の 1 つの枠〉、結果の要約の灰色の枠 `summary_box()`、畳んで出すレポート全文 `report_details()`〈Markdown → HTML は `markdown_text_only`〉）と、続けて変換するときの入力の確認。画面の操作の目印（`report.step`）は `STEP_WORDS`（`notebook`・`app`・`cli`）と `step_text` が画面ごとの語に置き換え、枠を作る関数は `screen` 引数（既定 `notebook`）を受ける。中止の枠は `structure_conflict_box`（0.31.0）。枠は白地に暗い文字に固定し（`LIGHT_STYLE`・クラス `jasme-light`。色は `!important`）、ダークモードでも読める（0.31.1） |
-| `app.py` | 一般の利用者用の 1 画面の操作画面（Gradio。`docs/GUI_PLAN.md`。ノートブック `JASME_docx_to_JSTAGE_XML_GUI.ipynb` の 1 セルから `launch()` で開く）。`AppState`（Gradio に依存しない。入力・結果・「変換できるか」「要対応が残っているか」「手動モードで回答待ちか」「足りない画像」・ZIP・次の論文のリセット）と `build_app(state, io)`（画面。Colab に依存する操作は `io`）、`launch()`（share は常に False）。表示は `colab.py` の部品を使う。Gradio の版は pyproject の `gui` で固定。0.27.2 で一般の利用者用の画面として採用（従来のノートブックも残す。`docs/GUI_PLAN.md` の 8 章）。想定外の例外は `AppState.crash()` で赤い枠にし（`convert`・`apply`・`images`・`download` の操作別の案内。`report.actions()` の知らせではない）、変換したときの入力の写し `AppState.run`（`RunInputs`。ファイルは中身の sha256 で比べる）を `convert` が作り、`_run`・`apply_answer`・`add_images`・`download` はこの写しだけを使う。入力が写しと違えば、前の結果・貼り付けた回答・入れた画像を残したまま理由の文で断る（`changed_inputs`・`stale_text`。「このままダウンロード」でも断る。同じファイルの選び直しは変わっていない扱い。AI の方法・モデルは比べず、次の変換から使う）。手動かどうかも写しで決める（O3）。`convert` は確かめが済むまで前の結果と写しを変えず、`_run` は Options を作ってから前の結果 `self.res` を捨てる。別の論文に変えて変換すると回答の欄を空にし、前に別の依頼文へ反映したのと同じ文字の回答は断る（0.30.0）。手動の欄を見せるかは `answer_box_open`（手動モードで作った結果のときだけ、AI による仕上げが済んでいない〈`report.ai_done` が偽。回答待ち・失敗・一部〉か、`float_ref`・`textbox_undecided`・`abstract_missing` の枠が出ているあいだ）。中止（`StructureConflictError`）は `_run` が `InputError` にして枠で出す |
-| `config.py` | 本誌の設定の読み込みと、記事ごとの書誌情報（`ArticleMeta.from_dict()`。巻・号・ページは NFKC にして、巻・号・開始ページが半角の英数字でなければ欄の名前を示して止める。日付は `_date()` で 2026/3/31 などの書き方も読む） |
+| `app.py` | 一般の利用者用の 1 画面の操作画面（Gradio。`docs/GUI_PLAN.md`。ノートブック `JASME_docx_to_JSTAGE_XML_GUI.ipynb` の 1 セルから `launch()` で開く）。`AppState`（Gradio に依存しない。入力・結果・「変換できるか」「要対応が残っているか」「手動モードで回答待ちか」「足りない画像」・ZIP・次の論文のリセット）と `build_app(state, io)`（画面。Colab に依存する操作は `io`）、`launch()`（share は常に False）。表示は `colab.py` の部品を使う。Gradio の版は pyproject の `gui` で固定。0.27.2 で一般の利用者用の画面として採用（従来のノートブックも残す。`docs/GUI_PLAN.md` の 8 章）。想定外の例外は `AppState.crash()` で赤い枠にし（`convert`・`apply`・`images`・`download` の操作別の案内。`report.actions()` の知らせではない）、変換したときの入力の写し `AppState.run`（`RunInputs`。ファイルは中身の sha256 で比べる）を `convert` が作り、`_run`・`apply_answer`・`add_images`・`download` はこの写しだけを使う。入力が写しと違えば、前の結果・貼り付けた回答・入れた画像を残したまま理由の文で断る（`changed_inputs`・`stale_text`。「このままダウンロード」でも断る。同じファイルの選び直しは変わっていない扱い。AI の方法・モデルは比べず、次の変換から使う）。手動かどうかも写しで決める（O3）。`convert` は確かめが済むまで前の結果と写しを変えず、`_run` は Options を作ってから前の結果 `self.res` を捨てる。別の論文に変えて変換すると回答の欄を空にし、前に別の依頼文へ反映したのと同じ文字の回答は断る（0.30.0）。手動の欄を見せるかは `answer_box_open`（手動モードで作った結果のときだけ、AI による仕上げが済んでいない〈`report.ai_done` が偽。回答待ち・失敗・一部〉か、`float_ref`・`textbox_undecided`・`abstract_missing` の枠が出ているあいだ）。中止（`StructureConflictError`）は `_run` が `InputError` にして枠で出す。PDF を選ぶと `pdf_selected(path)`（`build_app` の `pdf.change`）が `pdfbiblio.read_biblio` で巻・号・ページ・受付日・受理日を読み、読めた欄を PDF の値にして注記を返す（入力済みでも書き換える。読めなければ欄を変えない。XML に出すのは欄の値で、違いは `meta_pdf` が知らせる。W5） |
+| `config.py` | 本誌の設定の読み込みと、記事ごとの書誌情報（`ArticleMeta.from_dict()`。巻・号・ページは NFKC にして、巻・号・開始ページが半角の英数字でなければ欄の名前を示して止める。日付は `_date()` で 2026/3/31 などの書き方も読む。`JournalConfig.pdf_issue_line`・`pdf_date_labels` は PDF の 1 ページ目から書誌情報を読む形〈`data/jasme.toml` の `[pdf_biblio]`。`pdfbiblio.py`〉） |
 | `data/jasme.toml` | 本誌の設定（誌名・ISSN・DOI 形式・スタイル名の対応表〈テンプレートの別の版の「英文要約見出し」「英文要約」も別名で英文要旨にする〉、冒頭の誌名行 `front_lines` など） |
 
 ## 守るべき原則
@@ -72,14 +73,14 @@ python -m pytest
    番号を出さないと決めた題目・副題・著者名・所属は `BuildInfo.unshown_numbers` に記録して飛ばす）。最終の XML に私用領域（U+E000–U+F8FF）の文字が残ったら、
    `pipeline.pua_chars()` が段落 ID・符号・フォント・生成文字か docx の文字かを添えて要対応 `pua_left` で知らせる。守りは、最後の組み立ての木と `BuildInfo` を使う。
 4. 構造の区切りとして空白を落とす場合は `Emitter.drop()` を使う（空白以外は落とせない）。著者名の前後の空白と、和文の著者名の字の間の空白（「試　験　六　郎」。`builder.split_eastern`）も同じく `Emitter.drop()` で落とし、理由を付けて 7 章に記録する（C010・C072）。
-5. 新しい種類の docx の要素に対応するときは、`ooxml.canonical_text()`（検証側）と `docx_reader.py`（変換側）、ルート2 の
+5. 新しい種類の docx の要素に対応するときは、`ooxml.canonical_text()`（検証側）と `docx_reader.py`（変換側）、PDF に合わせる処理の
    `pdfdocx.paragraph_units()`・`raw_paragraph_ids()` の 3 か所を同じ文字ポリシーで直し（数式の中の要素なら `omml.run_text()` も）、その要素を含む docx を `tests/make_fixtures.py` に
    加えてテストする。段落のつながり（`ooxml.joined_paragraphs()`）と隠し文字の判定（`ooxml.HiddenRule`）は 3 か所で共有する（規則は
    `ooxml.py` の 1 か所に置き、文字の取り出しは別々の実装のまま。規則そのものの誤りは不変性チェックで見つからないので、単体テストで確かめる）。
    テキストボックス内の段落は別の段落だが、削除の変更履歴（`w:del`・`w:moveFrom`）の中の図形の段落は欠番にする（`ooxml.in_deleted_run`。
    読み取り・検証・`pdfdocx.paragraph_units()` の 3 か所で同じ）。
    `mc:AlternateContent` は、前処理（`ooxml.preprocess()`）が `ooxml.choose_alternate()` の採る側の中身に置き換える（読み取り・検証が共有）。
-   ルート2 の `pdfdocx.raw_paragraph_ids()`・`paragraph_units()` も同じ `choose_alternate()` で採る側を決める（採らない側の段落は数えない。
+   PDF に合わせる処理の `pdfdocx.raw_paragraph_ids()`・`paragraph_units()` も同じ `choose_alternate()` で採る側を決める（採らない側の段落は数えない。
    ランの中の採る側の `w:t` は直せない単位）。読める名前空間（`UNDERSTOOD_NS`）を増やすときは、その名前空間の Choice が実際の原稿で出る形を確かめて
    `tests/test_alternate.py` に足す。
    記号フォント（Symbol・Wingdings 系）の私用領域の符号は、`ooxml.SYMBOL_TABLES` の表（フォントごと。確かな対応だけ）で Unicode にする。`w:sym` は `sym_char()`、`w:t` は
@@ -87,7 +88,7 @@ python -m pytest
    `numbering.bullet_text()` が同じ表を使う。表を増やすときは、フォントごとに Unicode に同じ意味の文字があるものだけを足し、`tests/test_symbols.py` に足す。
    最終の XML に残った私用領域の文字は `pipeline.pua_chars()` が要対応 `pua_left` で知らせる。
    結果を持たないまま終わるフィールド（EQ の囲い文字など。Word がフィールドコードから描く表示）は、docx の文字ではないので XML に出さない
-   （読み取り・検証・ルート2 とも同じに捨てる。囲い文字を合成して文字を作ることはしない）。読み取りが `ooxml.resultless_field_kind()` で
+   （読み取り・検証・PDF に合わせる処理とも同じに捨てる。囲い文字を合成して文字を作ることはしない）。読み取りが `ooxml.resultless_field_kind()` で
    表示のある種類（`FIELD_DRAWN`）だけを `Document.resultless_fields` に記録し、`report._resultless_field_action` が要確認で知らせる。
    種類を増やすときは `tests/test_resultless_fields.py` に足す。
    画像で補うこともできる（修正計画 W1 の手順 15）: 画像を書ける文脈の段落（`structure.plan_figures` が返す段落。題目・著者名・所属・引用文献は含まない）の
@@ -95,33 +96,34 @@ python -m pytest
    `Emitter.span` が、書き出す範囲の中にある位置（`ResultlessField.pos`。`Para.text_only` の文字数。`Emitter.plain_pos` が `plain()` の位置にする）に
    `<inline-graphic>` を書く（文字のアトムを位置で分けるだけで、`Para` には新しい種類のアトムを入れない）。入れていない任意の置き場所は
    `package.apply_images` が取り除くので、入れないときの XML は今と同じで、手順 `images` にも数えない。
-6. 出版版 PDF で補うときは、XML ではなく docx を直す（ルート2「docx から作り、出版版 PDF で補う」。`pdfdocx.py`、`docs/DESIGN.md` の 4.4）。
-   補った docx は Word の変更履歴つきで利用者が確かめられ、それを変換する処理はルート1 と同じなので、1.〜5. はそのまま当てはまる。
-   `pdfdocx.py` を直すときは、書き込んだ後の確かめ（読み直した文字列と、段落の役割・リンク・注の区切り）を外さないこと。PDF の組版で
-   入る文字（ページ番号・誌名の行・柱・投稿受付日など）と、docx にない図・表の中の文字は docx に足さない（`pdfmatch.pdf_stream()` の印で
-   照合に使わず、足さなかった文字はレポートの 13 章に載せる）。docx に足すか・docx の文字を消すかを PDF から決められない違い（分断された
-   段落の端、数式など文字として読み取れない部分の隣など）は、足す・消す側に倒さず、理由（`TextDiff.why`）を付けて直さずに 13 章に出す。
-   (A) の直しは、`typeset_pair` の対と、全角・半角の文字か Word が付ける番号（自動番号・脚注番号）のすぐ隣の半角の空白の削除を超えて文字を変えない。
-   PDF にない空白の削除（`drops`）は、根拠の全角・半角の直し（`PdfCheck.drop_basis`）に**片方向で**従わせる（`pdfdocx.Fix.needs`）:
-   根拠の直しを直さないことになったら（どの段階でも。`pdfdocx.spread_reasons`）空白の削除も直さない（空白だけが残ると、docx にも PDF にも
-   ない文字になる）が、空白の削除が直せなくても根拠の直しは直す（双方向にすると、空白が直せないだけで全角・半角の直しまで止まる）。
-   根拠に Word が付ける番号がある空白は、番号の直しが止められないので従わせない。1 つの違い（`TextDiff`）を分けた直す箇所の組
-   （`FixGroup`）だけが双方向。補った docx の書き出し先が入力の docx と同じファイルなら別名にする（`pipeline.fixed_docx_path`）。
-   `pdfmatch`・`pdfdocx` を直すときは、補完の確かめ
-   （`fidelity.verify_supplement`）を外さず、表の定数を変えるときは `typeset_pair` と補完の確かめの判定が同じ答えになること（テスト）を
-   確かめる。表に記号を足すのは実測で出たときだけ。
+6. 出版版 PDF に表記を合わせるときは、XML ではなく docx を直す（`pdfdocx.py`、`docs/DESIGN.md` の 4.4）。直すのは表記の違い（区分 (1)）だけで、内容の違いは
+   PDF から足さない・消さない・置き換えない（`pdfdocx.hold` が、内容の違いの直しと、それに続く (1) の直しを書き込みから外す。`plan_fixes` は「PDF に合わせるなら
+   何を変えるか」を返す関数のまま変えず、照合のテストが使う）。補った docx を変換する処理は PDF のないときと同じなので、1.〜5. はそのまま当てはまる。
+   `pdfdocx.py` を直すときは、書き込んだ後の確かめ（読み直した文字列と、段落の役割・リンク・注の区切り）を外さないこと。
+   PDF の組版で入る文字（ページ番号・誌名の行・柱・投稿受付日など）と、docx にない図・表の中の文字は docx に足さない（`pdfmatch.pdf_stream()` の印で照合に使わず、
+   使わなかった文字はレポートの 13 章に件数を載せる）。
+   (1) の直しは、`typeset_pair` の対と、全角・半角の文字か Word が付ける番号のすぐ隣の半角の空白の削除を超えて文字を変えない。句読点の対（`PUNCT_CLASSES`）は
+   句点どうし・読点どうしだけで、句点と読点、句読点とほかの約物は対にしない。PDF にない空白の削除（`drops`）は、根拠の全角・半角の直しに片方向で従わせる
+   （`pdfdocx.Fix.needs`。根拠に Word が付ける番号がある空白は、番号の直しが止められないので従わせない）。1 つの違いを分けた直す箇所の組
+   （`FixGroup`）だけが双方向で、組に内容の違いがあれば組の全部を直さない。直さない違い（Word の番号・数式・リンクにかかるものを除く）に、間の docx の文字が
+   1 文字以下で続く (1) の直しも直さない（一続きの規則。「(１）」のような、docx にも PDF にもない形を作らない）。
+   違いの区分（`pdfmatch.grade`）を変えるときは、実際の原稿 28 論文で、区分ごとの件数と、(3) の誤報を数え直す（`docs/FIELD_TEST_2026-11.md` の対応の記録に書く）。
+   知らせるのは (3) だけで、(2)・(4) を知らせに上げない。
+   `pdfmatch`・`pdfdocx` を直すときは、補完の確かめ（`fidelity.verify_supplement`）を外さず、表の定数を変えるときは `typeset_pair` と補完の確かめの判定が
+   同じ答えになること（テスト）を確かめる。補完の確かめは、照合・直しの結果を引数に受け取らない。表に対を足すのは、実測で出て、所有者が決めたときだけ。
+   補った docx の書き出し先が入力の docx と同じファイルなら別名にする（`pipeline.fixed_docx_path`）。
 7. アップロード用 ZIP に入れるものは `package.upload_entries()` だけで決め（`{aid}.xml`・今回置いた `{aid}.pdf`・作業する人が入れた画像
    〈`images.SlotImage` の状態が user〉）、できた ZIP は `package.zip_problems()` で読み直して確かめる（画像は、置き場所にない名前の画像と、入れたのに
    ZIP にない画像を見る。まだ入れていない画像は、手順 `images` が伝えるので数えない）。記事フォルダにあるのに入れなかったファイルは `Result.not_zipped` に持ち、
    レポート 10 章で知らせる（`res.warnings` には入れない）。
-8. 利用者に知らせること（要対応・要確認・手順）は `report.actions()` に `report.Action` を 1 つ足す（冒頭の文・14 章の行・Colab の枠の
-   見出しと本文・コマンドラインの文）。レポートの冒頭・14 章、Colab の手順 5・6・8、コマンドラインに個別の表示を足さない。
-   要対応はコマンドラインの終了コード 1 と Colab の手順 8 で一度止めること、要確認は黄色い枠と冒頭・14 章だけ（終了コード 0）。
+8. 利用者に知らせること（要対応・要確認・手順）は `report.actions()` に `report.Action` を 1 つ足す（冒頭の文・することの一覧の行・Colab の枠の
+   見出しと本文・コマンドラインの文）。レポートの冒頭（することの一覧と囲み）、Colab の手順 5・6・8、コマンドラインに個別の表示を足さない。
+   要対応はコマンドラインの終了コード 1 と Colab の手順 8 で一度止めること、要確認は黄色い枠と冒頭（することの一覧と囲み）だけ（終了コード 0）。
    毎回の手順（`report.STEP`）は `Action.required`（必須か推奨か）と `done`（済んだか）・`failed`（失敗したか）・`progress`（進み具合の短い文）を持ち、
-   青い枠（`colab.step_box`。済んだ手順は出さない）と 14 章の行に出す（冒頭の囲みには出さない）。残っている必須の手順は要対応と同じく
+   青い枠（`colab.step_box`。済んだ手順は出さない）と することの一覧の行に出す（冒頭の囲みには出さない）。残っている必須の手順は要対応と同じく
    終了コード 1・手順 8 で一度止める。推奨の手順（今は、AI による仕上げ `ai_finish`。状態は `report.ai_state` の未実行・回答待ち・済み・一部・失敗）は、残っていても失敗しても終了コード 0 で、止めない
    （`report.blocking()` が、止める知らせを決める 1 か所。`Result.needs_action`・手順 8・1 画面版のダウンロードの歯止めはこれを使う）。
-   14 章は手順（必須 → 推奨）→ 要対応 → 要確認の順（`report.checklist_order`）。
+   することの一覧は手順（必須 → 推奨）→ 要対応 → 要確認の順（`report.checklist_order`）。
    コマンドラインの終了コードは、0 が要対応も残っている必須の手順もなし、1 がどちらかあり、2 が中止。
    `Action.box_detail` では、ノートブックの手順番号や 1 画面版の欄の名前を直接書かず、目印 `report.step(名前)`（名前は `report.STEP_NAMES`）で
    書く。画面ごとの語は `colab.STEP_WORDS`（`notebook`・`app`・`cli`）の 1 か所に書き、枠を作る関数が `screen` 引数で置き換える
@@ -129,9 +131,11 @@ python -m pytest
    案内もこの表の語で組み立てる（`app.py` から `report.step` を使う）。目印の名前を足すときは、すべての画面に語を足す。`top`・`checklist`（レポートの文）は目印を使わず、
    「ノートブックは手順 N、1 画面版は…」と両方の言い方を書く。目印は U+0000 で挟む（docx 由来の文字に同じ並びがあっても目印と読まれない）。
    1 画面版の想定外の例外の枠（`app.AppState.crash()`）は、`report.actions()` の知らせではなく、例外の表示（変換ツールの不具合の可能性として
-   赤い枠で出す）。変換の中止（`pipeline.StructureConflictError`。終了コード 2）も `report.actions()` の知らせではなく例外の表示で、
-   文は目印で書き、コマンドライン（`cli.py`）・1 画面版（`app.py`）・ノートブック（手順 5・6）が同じ枠の関数（`colab.structure_conflict_box`）か
-   `colab.step_text` で出す。1 画面版の手動の欄（依頼文・回答の欄・「反映」）は、知らせの key ではなく AI による仕上げの状態（`report.ai_done`）で
+   赤い枠で出す）。変換の中止（`pipeline.StructureConflictError`、別の論文の PDF の `pipeline.WrongPaperError`〈`pdfmatch.paper_verdict` が
+   `wrong`。文は `report.wrong_paper_text`〉。終了コード 2）も `report.actions()` の知らせではなく例外の表示で、
+   文は目印で書き、コマンドライン（`cli.py`）・1 画面版（`app.py`）・ノートブック（手順 5・6）が同じ枠の関数（`colab.structure_conflict_box`・
+   `colab.wrong_paper_box`）か `colab.step_text` で出す（`WrongPaperError` は XML・ZIP・レポート・補った docx を作らない。`pdfdocx.make_fixed_docx` は
+   `wrong` なら docx を書かずに返す。`verdict` が `suspect` のときは中止せず、要確認 `pdf_suspect`）。1 画面版の手動の欄（依頼文・回答の欄・「反映」）は、知らせの key ではなく AI による仕上げの状態（`report.ai_done`）で
    決める（`app.AppState.answer_box_open`。AI を勧める文は推奨の手順 `ai_finish` の 1 か所で、ほかの知らせには Word での直し方だけを書く。修正計画 W8 の手順 7）。
 9. f 文字列の式の中にバックスラッシュ・外側と同じ種類の引用符を書かない（Python 3.12 で許される書き方で、3.10・3.11 では `SyntaxError`
    になり、モジュールが読めない。`pyproject.toml` の下限は 3.10）。式は変数に出してから f 文字列に入れる。`tests/test_syntax.py` が、3.12 以降でも見つけられるよう
@@ -184,18 +188,18 @@ python -m pytest
 - `tests/test_symbols.py`: 記号フォントの私用領域の符号（C011）。フォントごとの表（1 文字が 1 文字・私用領域ではない・フォントを取り違えない）と、箇条書きの記号が段の書式の
   フォントの表で Unicode になること（`numbering.bullet_text()`。Wingdings の F09F・F0A1・F06E。表から外した F0B2 は私用領域のまま。Symbol の F0B7・Wingdings の F0D8・フォントなしの F0B7 は今までどおり）、
   置き換えが要確認 `symbol_replaced` の 1 件（件数でまとめる。以前の版から同じ文字の置き換えは知らせず 8 章の表にだけ）になること、表にない符号が要対応 `pua_left`（段落 ID・符号・フォント・生成文字か docx の文字か。
-  終了コード 1）になること、`w:sym` と記号フォントのランの `w:t` の読み方が読み取り・検証・ルート2 の直す単位で同じなこと、ルート2 で F09F と PDF の「・」が要対応にならないこと。
+  終了コード 1）になること、`w:sym` と記号フォントのランの `w:t` の読み方が読み取り・検証・PDF に合わせる処理の直す単位で同じなこと、PDF に合わせる処理で F09F と PDF の「・」が要対応にならないこと。
   小さな docx は `make_fixtures.make_article` で作り、テストの中で numbering.xml の記号とフォントを差し替える。
 - `tests/test_alternate.py`: `mc:AlternateContent` の採る側（`ooxml.choose_alternate()`。C012）。Requires を名前空間で解決して Choice か Fallback を採ること
   （読める名前空間の一覧・接頭辞が別の名前空間に結び付く形・接頭辞が未宣言の形・Choice が空の形・Fallback がない形）、記号の挿入（`w16se:symEx` の丸数字）が
-  ルート1 の XML にちょうど 1 回入ること、ルート2 で PDF の同じ字を (B) で足さず補完の確かめも合格すること、図形のあるランを含む段落が今までどおり
-  ルート2 で直せること、ルート2 の段落番号が読み取りと同じこと。小さな docx はテストの中でその場で作る。
+  PDF に合わせないときの XML にちょうど 1 回入ること、PDF に合わせる処理で PDF の同じ字を足さず補完の確かめも合格すること、図形のあるランを含む段落が今までどおり
+  PDF に合わせる処理で直せること、その段落番号が読み取りと同じこと。小さな docx はテストの中でその場で作る。
 - `tests/test_resultless_fields.py`: 結果を持たないフィールドの知らせ（C013）。EQ（`separate` なし・結果が空）が要確認 `resultless_field` の 1 件になること
   （段落の ID・種類・段落の文字の抜粋〈位置に印〉。同じ段落は 1 行。XML の文字は変わらず不変性チェックは合格）、表示のない種類（XE・TC・SET など）と結果のあるフィールド
   （PAGE・HYPERLINK・結果が空の REF）、削除・隠し文字の中のフィールドでは出ないこと、表のセル・脚注・`w:fldSimple` も記録されること、6 章に全件が載ること。
   任意の置き場所（手順 15）は、入れないと XML が今と同じで手順に数えないこと、入れるとその位置（段落の先頭・終わり・太字の途中・表のセル）に `<inline-graphic>` が入り
   文字は不変で DTD に合うこと、同じコードは幹に `_2` が付くこと、題目・引用文献には作らないこと、`lost` にならないこと、持ち越しとまとめて入れる名前。
-  小さな docx はテストの中でその場で作る。ルート2 で PDF から読んだ中身の文字を補う動き（補った docx を Word で開くと二重に見える）は、別の作業（校正の直しの書き込みの見直し）で扱う。
+  小さな docx はテストの中でその場で作る。PDF から読んだ中身の文字は docx に書き込まない（W2。`pdfdocx.hold`。補った docx を Word で開くと二重に見える問題はなくなった）。
 - `tests/test_reader.py`: 読み取った段落の文字が、検証側（`ooxml.canonical_texts()`。段落記号の削除でつないだ段落は連鎖の最初の段落の ID に
   連結した文字で、後ろの段落の ID は欠番）と一致すること。逆向きに、文字のある段落
   （本文・表・テキストボックス・Word の脚注・文末脚注）がすべて 1 回だけ読まれていること。`sample_reader.docx` の、コンテンツコントロール
@@ -246,7 +250,7 @@ python -m pytest
   `AI回答.json` に写さず、もう一度変換すると呼び直すこと、PDF を渡せなかった理由ごとの直し方、Claude の出力の途中で別のモデルに切り替わったときに
   text の部をつないで読み、答えたモデルを記録すること、費用の文（`cost_note`）、ノートブックの手順 4・5、回答待ちの文の PDF の添付、見出しの「推奨」。
 - `tests/test_ai_stamp.py`: 依頼の番号と段落の先頭の文字での回答の確かめ（修正計画 W8 の手順 17。`ai_assist.request_stamp`・`check_answer`）。
-  依頼の番号が同じ docx で同じ・段落の文字を直すと後半だけ・文献を足すと前半が変わる・ルート2 の全角・半角の補いで前半が変わらないこと、
+  依頼の番号が同じ docx で同じ・段落の文字を直すと後半だけ・文献を足すと前半が変わる・PDF に合わせる処理の全角・半角の補いで前半が変わらないこと、
   (a) 今の依頼文への回答を使い、ID を書き違えた指定を先頭の文字で読み替えること（短い head・合う段落のない head は不採用）、(b) 段落を足した
   原稿に足す前の回答を入れると placements・links が読み替わり carried に件数が出ること・同じ先頭の段落が 2 つなら読み替えないこと、
   (c) 文献を足した原稿・別の論文・request_id のない回答を 1 件も使わず ai_finish が「失敗」になること、全角の番号・途中で切れた回答の番号。
@@ -291,7 +295,7 @@ python -m pytest
   囲み・注記・決められないもの・位置を決められない図形の中の全角空白だけの段落で不変性チェックに合格すること。
   最上位が一覧（`[ ]`）の回答・`operations` のない回答（操作 1 件だけの回答も）・入れ子が深すぎる回答を、操作 0 件で通さず読めない回答にすること
   （推奨の手順 `ai_finish` の「失敗」。途中で切れた最上位の一覧も反映しない）、`{ }` でない操作を理由付きで不採用に記録すること（0.30.0。A9・A10）。
-  同じ第一著者・同じ年の文献が 3 件以上あるときの曖昧さの判定（いちばんよく当てはまる候補が 1 つなら採る。K10）は `tests/test_refparse.py`。
+  同じ第一著者・同じ年の文献が 3 件以上あるときの曖昧さの判定（いちばんよく当てはまる候補が 1 つなら採る。K10）と、文献リストにあるのに「該当なし」になっていた引用の形（和文に続けた欧文の著者・et al. の前のコンマ・区切りなしの著者・2 語の姓・「編」・ひらがなをはさむ団体名。C164 の前後。誤ったリンクを作らない確かめも）は `tests/test_refparse.py`。
 - `tests/test_floats.py`: 浮動配置の図表（`tests/fixtures/sample_float.docx` と模擬回答 `tests/data/ai_response_sample_float.json`）。
   AI を使わない設定でも中止しないこと（W8）、機械的な配置、`placements` の検証と適用（位置〈after〉だけを読み、`items` は、あってもなくても、誤っていても
   読まないこと）。`sample_float_text.docx`（ALL_DOCS には入れない）で、図形の中で画像と文字が同じ段落にあるとき、画像を図に入れ、文字を
@@ -320,7 +324,7 @@ python -m pytest
   キャプションが同じセルにあるセルと画像だけ・キャプションだけのセルがまじる表、結合したセルのある表、セルの「図1は…」の文）は、
   0.21.0 と同じくキャプションのない表として出すこと（位置が機械的に決まる図形は AI なしでも止めずにアンカー段落の前、位置を
   決められない図形は AI に任せる。文字は落とさない）、セルに画像のない表（図キャプションと問題文だけ）は今までどおり表のまま出すこと、
-  組んだ図のキャプションと画像と同じ段落の文字をルート2 で直さないこと（0.21.0 と同じ。本文の図キャプションは直す）、AI 依頼文の
+  組んだ図のキャプションと画像と同じ段落の文字をPDF に合わせる処理で直さないこと（0.21.0 と同じ。本文の図キャプションは直す）、AI 依頼文の
   「位置が決まっている図・表と囲みの中身」でセルで組んだ図をキャプションの段落で示すこと。画像のない図キャプションの
   隣のキャプションのない表（`sample_b3_tablefig.docx`）を図の本体にすること、組めない形（間に段落〈1 つ・2 つ〉・表キャプション・逆の
   向き・直後の表の次の表キャプション）は、理由を画像の置き場所の備考（`ImageSlot.note`）に残すこと、表キャプションの付いた表（表の上・
@@ -372,7 +376,7 @@ python -m pytest
   アンカー段落の前の `<boxed-text>` になり（中の自動番号の段落は `<list>`、「(1)」の別行数式は FD1 で本文の「式(1)」からリンク、全角空白
   だけの段落は空白の除外）、行内の囲みはアンカー段落の後ろ、VML の position:absolute の囲みは位置を推定してアンカー段落の後ろ（要確認）、
   画像の近くの小さな「A 点」は図に重ねた注記として除外（10 章の警告。要確認にしない）、幅が広く短い「（ヒント）」と N2 の「注」
-  「Area model」は決められないものとして除外して要確認（冒頭・14 章・3 章・コマンドラインの標準エラー。終了コード 0）、図キャプション
+  「Area model」は決められないものとして除外して要確認（冒頭（することの一覧と囲み）・3 章・コマンドラインの標準エラー。終了コード 0）、図キャプション
   だけのテキストボックスは今までどおり図のキャプション、空・全角空白だけのテキストボックスは何も知らせないこと。VML の幅が cm・% で
   読めないときは、画像の近くの短い文字でも図の注記にせず、決められないもの（要確認）にすること（pt なら注記。
   `test_vml_width_in_cm_near_image_is_undecided`）。本文の最上位の囲みは
@@ -380,7 +384,7 @@ python -m pytest
   （`test_text_only_textbox_becomes_boxed_text`）。囲みは図表の組み立てで隣の要素として数えず、画像の段落の行内の囲みと本文スタイルの
   「図1」、図キャプションの段落の左上の囲み 2 つ、本文スタイルの「表1」の段落の行内の囲みと表でも、図・表に ID とキャプションが付き、
   本文の「図1」「表1」がリンクになること（`test_boxes_do_not_split_figures`）。図表の入ったテキストボックスの中の、キャプションでない
-  文字（出典など）の除外を要確認で知らせ（冒頭・14 章・Colab の枠・コマンドライン）、AI の set_role・placements では戻せないこと、
+  文字（出典など）の除外を要確認で知らせ（冒頭（することの一覧と囲み）・Colab の枠・コマンドライン）、AI の set_role・placements では戻せないこと、
   位置を決められない図表の中身も、手動モードで回答を貼り戻す前から数えること（W1 の 2.4。`test_text_in_figure_textbox_is_notified`・
   `test_text_in_unplaced_figure_textbox_is_notified_before_answer`）。浮動配置でないテキストボックスの本文スタイルの「図1　…」は
   図のキャプションのままで、囲み・注記の判定に回さないこと。囲みの中の引用・図の参照もリンクになること（`test_links_inside_box`）。
@@ -390,17 +394,17 @@ python -m pytest
   `jasme_jats.pipeline` などを import して循環 import がないこと（循環 import は最初の import で落ちる）、`article.py` が `model.py` の
   ほかに jasme_jats のモジュールを import しないこと、`article.py` で定義する名前（ノード・`ArticlePlan`・`_para_text`）が `structure`
   からも同じものとして import できること。
-- `tests/test_names.py`: 著者名の姓と名の分け方（C010・C064・C072）。`builder.split_eastern` の規則（空白が 1 か所・いちばん長い空白〈全角の空白は半角 2 つ分〉・いちばん長い空白が 2 か所以上のときの境目の推定〈論文の中の引用の形の「姓だけ」の表記、なければ字数。「中1」などの一般の語は手がかりにしない〉・注の参照とその前の空白・空白のない氏名。同じ入力なら同じ結果）、変換で字の間・前後の空白を落として姓と名に分け、不変性チェック・最終出力・DTD が合格すること、7 章の理由・4 章の記録、要確認 `name_split` の文（コードの名前を書かない。字数だけの推定はより強い言い方）、AI の `split_name` が字の間に空白のある氏名を受け付けて機械の推定より優先し、「AI が分けた」行として知らせに残ること（機械と同じ位置の指定は今までの知らせのまま。空白が 1 か所の氏名の扱いは変えない）、推定を含むときに枠の見出し・チェック項目・コマンドラインの文に書くこと、依頼文に推定で分けた氏名が載ること、ルート2 で `pdfdocx._name_shape` が補完の前後で同じになり、補完の確かめが合格すること。
+- `tests/test_names.py`: 著者名の姓と名の分け方（C010・C064・C072）。`builder.split_eastern` の規則（空白が 1 か所・いちばん長い空白〈全角の空白は半角 2 つ分〉・いちばん長い空白が 2 か所以上のときの境目の推定〈論文の中の引用の形の「姓だけ」の表記、なければ字数。「中1」などの一般の語は手がかりにしない〉・注の参照とその前の空白・空白のない氏名。同じ入力なら同じ結果）、変換で字の間・前後の空白を落として姓と名に分け、不変性チェック・最終出力・DTD が合格すること、7 章の理由・4 章の記録、要確認 `name_split` の文（コードの名前を書かない。字数だけの推定はより強い言い方）、AI の `split_name` が字の間に空白のある氏名を受け付けて機械の推定より優先し、「AI が分けた」行として知らせに残ること（機械と同じ位置の指定は今までの知らせのまま。空白が 1 か所の氏名の扱いは変えない）、推定を含むときに枠の見出し・チェック項目・コマンドラインの文に書くこと、依頼文に推定で分けた氏名が載ること、PDF に合わせる処理で `pdfdocx._name_shape` が補完の前後で同じになり、補完の確かめが合格すること。
 - `tests/test_lost_images.py`: 画像を入れる場所を作れなかった画像の検出（`pipeline.lost_images()`。要対応 `lost`）。引用文献の段落の画像（画像だけの段落・行内の画像）、
   冒頭の除外した段落の中の画像、本文から参照されていない Word の文末脚注の中の画像が、レポートの冒頭・9 章・
-  14 章、コマンドライン（終了コード 1）、Colab の枠に出ること（直し方は資料を英文要旨の後ろに移す〈`report.APP_MOVE_HOW`〉・本文に移す・消すで、
+  することの一覧、コマンドライン（終了コード 1）、Colab の枠に出ること（直し方は資料を英文要旨の後ろに移す〈`report.APP_MOVE_HOW`〉・本文に移す・消すで、
   手順 `images` の行と置き場所の備考には出ないこと。参照された文末脚注の中の画像は、注の中に出力すること）。隠し文字の中の
   画像は対象にしないこと（文字スタイルで隠した画像は、スタイルの隠し文字の要確認で知らせ、ランに直接付けた隠し文字の画像は知らせない。
-  `test_style_hidden_image_is_noticed`）、既存の fixture（AI の模擬回答・ルート2 を含む）では 0 件であること。引用文献の段落に結び付いた図形（画像と
+  `test_style_hidden_image_is_noticed`）、既存の fixture（AI の模擬回答・PDF に合わせる処理を含む）では 0 件であること。引用文献の段落に結び付いた図形（画像と
   図キャプション。0.24.1 までは出力漏れ）の画像は、図に入る（位置を決められない図表。AI を使わない設定でも止めず、AI が位置を答えなければ
   本文の最後に置いて要確認 `float_end`。修正計画の N7・W8）こと。0.24.1 までの暫定の知らせ（「テキストボックスの中の文字 N 段落を、XML に
   出力していません」）を出さず、文字だけのテキストボックスの囲みは boxed-text に出し、囲みか図の注記か決められないものだけを要確認で
-  知らせること（冒頭・14 章・コマンドラインの標準エラー。終了コード 0。図表の入ったテキストボックスの中の文字の要確認は
+  知らせること（冒頭（することの一覧と囲み）・コマンドラインの標準エラー。終了コード 0。図表の入ったテキストボックスの中の文字の要確認は
   `tests/test_structure.py` と `tests/test_image_guards.py`）も。
 - `tests/test_image_guards.py`: 画像の守りと知らせ（修正計画 W1 の手順 11）。`lost_images()` が置き場所をすべて書いた XML で調べること（「入れない」で
   要素を取り除いた最終の XML で調べると置き場所なしになる）、「入れない」は変換し直して持ち越しても `lost` にならないこと、XML の `xlink:href` を壊すと
@@ -415,15 +419,15 @@ python -m pytest
   ノートブックは `tests/test_notebook.py`（手順 1 に LibreOffice がない・手順 7 の `NO_IMAGE`・手順 8 が `blocking` で止める）。
 - `tests/test_imagelist.py`: 取り違えの確かめの一覧（`imagelist.check_html`・`write_check`。修正計画 W1 の手順 12）。行の数と並びが `report.image_rows` と同じこと、
   キャプション・備考の `<`・`&` のエスケープ、`embed` なしは `Graphics/` への相対リンク・ありは埋め込み、画像を入れるたびに作り直されること、ファイルが記事フォルダの外にあり
-  ZIP に入らないこと、1 枚にまとめる図の備考、図形で描いた図と飾りの分かれ方、レポートの 9 章・14 章と `image_same` の案内。
+  ZIP に入らないこと、1 枚にまとめる図の備考、図形で描いた図と飾りの分かれ方、レポートの 9 章・することの一覧と `image_same` の案内。
 - `tests/test_tables.py`: 表の組み立て（修正計画 2026-11 の u3-tables。0.30.0）。すべてのセルが縦の結合の継続の行を出力せず、`rowspan` を出力した行だけで
   数えること、見出し行から本文の行へ結合を延ばさないこと・幅の違う継続を結合しないこと（どちらも 10 章の警告）、横に広いセルで結合が切れること、
   `gridBefore`・`gridAfter` を空のセルで埋めること、削除された結合元の下の継続が新しい結合元になること。表の形の確かめ（`pipeline.table_problems`）の
-  単体の判定（誤報しないこと、組み立ての記録がない表）、`w:gridSpan` が 0 の表を変換できること、崩れた表が要対応 `table_shape`（冒頭・12 章・14 章・枠・
+  単体の判定（誤報しないこと、組み立ての記録がない表）、`w:gridSpan` が 0 の表を変換できること、崩れた表が要対応 `table_shape`（冒頭・12 章・することの一覧・枠・
   コマンドライン）になり、ふつうの表では鳴らないこと、最後の組み立ての木を使うこと。`tests/private` の原稿があれば、形の崩れが 0 件であること。
 - `tests/test_lost_autonums.py`: 自動番号の出力漏れの守り（`pipeline.lost_autonums`。u3-autonum。0.30.0）。番号を出していない段落を見つけること、
   `actions()` で `autonum_lost` が `lost` のすぐ後ろに出ること、番号を出さないと決めた段落（題目・著者名・所属など）を飛ばすこと、すべての fixture で
-  0 件であること、DTD に合わない数式を取り消して組み立て直した後・ルート2 で番号を PDF に合わせた後も、最後の木を使うこと。場所ごとの自動番号の
+  0 件であること、DTD に合わない数式を取り消して組み立て直した後・PDF に合わせる処理で番号を PDF に合わせた後も、最後の木を使うこと。場所ごとの自動番号の
   出し方（表のセル・引用・別行数式・英文要旨・キャプションの `<label>`・注の 1 段落目と 2 段落目以降・題目・著者名・所属の 10 章の警告）は `tests/test_article.py`。
 - `tests/test_user_images.py`: 作業する人が入れる図・表の画像の受け取り（修正計画 W1 の手順 8・9）。`check_user_image`（PNG・透過 PNG・GIF・JPEG・
   Exif の向きつき JPEG を受け付けて形式と幅×高さを読む、拡張子でなく中身で決める、PDF・TIFF・BMP・WebP・0 バイトを理由つきで断る）、`match_names`
@@ -454,7 +458,7 @@ python -m pytest
   組み立てと不変性チェックの欠落の段落と一致すること（中止しない対照の形では両方とも空）、衝突の種類ごとの記録の中身、すべての箇所を一度に集めること、
   空白だけの見出しは前でも後ろでも空白の除外になること、中止の文のとおりに Word で直した docx が合格すること（間に別の節があるときに見出しだけを
   消すと段落が別の節に入ることも）。`tests/test_pipeline.py` で、中止すると XML・ZIP・レポート・`AI依頼文.txt` を作らないこと、位置を決められない
-  図表のある原稿でも出ること、ルート2 では補った docx を作る前に止まること（O7。位置を決められない図表では中止せず、補った docx が残る。W8）、前の変換の補った docx は消さないこと、
+  図表のある原稿でも出ること、PDF に合わせるときは補った docx を作る前に止まること（O7。位置を決められない図表では中止せず、補った docx が残る。W8）、前の変換の補った docx は消さないこと、
   コマンドラインの終了コード 2。`tests/test_ai.py` で、元の docx の衝突は AI を反映する前に止まること、AI の set_role で衝突ができると 2 段で
   不採用になること（範囲の外の set_role は採用のまま。区切り以外の役割も反映する形に差し替えて確かめる）と `conflict_overrides` の範囲。`tests/test_colab.py`・`tests/test_app.py`・`tests/test_notebook.py` で、
   中止の枠（3 画面で目印が残らない）、1 画面版の状態、ノートブックの手順 5・6 が止まること。
@@ -464,7 +468,7 @@ python -m pytest
   画像を入れ直した後に計算し直すこと、手作りした ZIP での `zip_problems()`（EMSGM034E・053E・059E・073E・074E と記事フォルダの外・XML がない。
   画像の置き場所を渡したときの 2 つは `tests/test_image_guards.py`）、
   入れた画像（状態 user）だけが ZIP に入ること（`zip_image_names()`）、画像を入れた後も PDF が ZIP に残ること、記事フォルダに残った PDF を
-  もう一度指定できること、画像ファイルがない図の 9 章の備考（手順 7・`--images`）、14 章の PDF の行。
+  もう一度指定できること、画像ファイルがない図の 9 章の備考（手順 7・`--images`）、することの一覧の PDF の行。
   書誌情報の入力: 全角の巻・号・ページの正規化とその知らせ、英数字以外の巻などのエラー（コマンドラインは終了コード 2）、
   日付の書き方（`test_dates_accept_common_forms`）。`tests/test_notebook.py` で、手順 3 の表示とエラーも確かめる。
 - `tests/test_links.py`: 注・図表へのリンクの規則（修正計画の H。D2・M5）。`sample_links.docx`（注番号が「1)」の書き方の論文）で、
@@ -479,7 +483,7 @@ python -m pytest
   論文の書き方・全角の「２）」・番号だけの論文の「＜用語＞¹」（比較の記号は直前の判定に使わない）と「12㎝²」（単位の記号）、
   囲み（boxed-text）の中の上付き、注の一覧と引用文献の上付きを書き方の判定に数えないこと、run を通らない `fn_marks`。
   `_sup_marks` の種類（直前・直後の文字と符号の境界）・`SupMark.shaped`（書き方の判定に数えるもの）と `occurrence_at` の単体テストも。
-  ルート2 で番号だけの注の docx を「1)」の形の出版版 PDF で補うときの今の振る舞い（1 つでも直さない段落があると直しがすべて止まる。
+  PDF に合わせる処理でで番号だけの注の docx を「1)」の形の出版版 PDF で補うときの今の振る舞い（1 つでも直さない段落があると直しがすべて止まる。
   `test_route2_note_style_change`。extract_pages を差し替える。`docs/DESIGN.md` の 4.4・7 章）。語の中の「図1」「表1」（地図1・図表1・発表1回目・
   概念図1・代表1名・付表1）をリンクせず記録し、「図表1と表1」の後ろの表1・「地図1、図2」の図2 をリンクすること、記録の `link_figure`
   を貼り戻せること、`Linker.float_refs` の単体テスト（docs/fix_plan_repro_tests.py の再現テストの逆。英語の参照は直前の文字を見ないこと、
@@ -500,24 +504,24 @@ python -m pytest
   手で書いた注と番号が重なる Word の注を 10 章の警告と要確認で知らせること（番号が重ならなければ知らせない）、Word の注の段落への set_role を採用しないこと、
   レポートの 1 章・8 章の表記（脚注だけで、リンクのない注・記号を自分で付けた注もなければ 0.23.1 と同じ）、
   `model.note_key`・`note_label`。
-- `tests/test_supplement.py`: ルート2 の補完の確かめ（`fidelity.verify_supplement`）。`sample_pdfcheck` のルート2 で合格し、数・1 章の行・
-  コマンドラインの「補完の確かめ: 合格」が出ること、補った docx が元の docx から変わる形のうち、(A) の表にない文字への書き換え（直す箇所の
-  すり替え）・報告していない変更・報告したのに書き込まれていない直し・変更履歴でない書き換えを不合格にすること（不変性チェックは合格のまま
+- `tests/test_supplement.py`: 補完の確かめ（`fidelity.verify_supplement`）。`sample_pdfcheck` を PDF に合わせて変換して合格し、数・1 章の行・
+  コマンドラインの「補完の確かめ: 合格」が出ること、補った docx が元の docx から変わる形のうち、表記の対の表にない文字への書き換え（直す箇所の
+  すり替え）・守り（`pdfdocx.hold`・`check_held`）を外して書き込んだ内容の違い・手で足した対でない置き換え・変更履歴でない書き換えを不合格にすること（不変性チェックは合格のまま
   で、補完の確かめだけが見つける）、数式の後ろの直しと段落記号の削除をまたぐ直しでも合格すること（位置でなく変更履歴の単位で当てる）、
   Word が付ける番号が表にない字形（「●」→「◆」）なら不合格、補完の確かめの対の判定（`fidelity._pair`）と `pdfmatch.typeset_pair` が文字の
-  集合のすべての対で同じ答えになること（片方だけ直すと落ちる）、ルート1 と PDF を読めなかったルート2 では行わない（None）こと。
-- `tests/test_pdfmatch.py`: 出版版 PDF との照合（`sample_pdfcheck.docx` と `.pdf`）。ルート1 で docx の文字を変えずに違いを報告すること、
-  ルート2 で補った docx（変更履歴を却下すると元の docx に戻る、書式が残る）を作って変換すること、リンクの文字・
+  集合のすべての対で同じ答えになること（片方だけ直すと落ちる）、PDF に合わせないとき（`--route docx`）と PDF を読めなかったときは行わない（None）こと。
+- `tests/test_pdfmatch.py`: 出版版 PDF との照合（`sample_pdfcheck.docx` と `.pdf`）。`--route docx` で docx の文字を変えずに違いを報告すること、
+  PDF に合わせて補った docx（変更履歴を却下すると元の docx に戻る、書式が残る）を作って変換すること、リンクの文字・
   英文の空白を直さないこと、直すと注を認識できなくなるときに注の番号を docx のままにすること、Word が付ける番号（脚注・文末脚注の番号の
-  鍵は注の鍵〈`("fnref", "footnote:5")` など〉。ルート2 で文末脚注の番号を PDF に合わせ、文末脚注の段落の直しを word/endnotes.xml に
+  鍵は注の鍵〈`("fnref", "footnote:5")` など〉。PDF に合わせて文末脚注の番号を直し、文末脚注の段落の直しを word/endnotes.xml に
   書き込むこと）。直すと英文要旨と資料の境が動く直し（英文要旨の「資料-1 …」→「資料－1 …」）を直さないこと（`pdfdocx._structure` の領域の比べ）。
   組版で入る文字（`extract_pages` を差し替えた、形だけを本誌の出版版 PDF にまねた架空の文字で）: 段落の途中のページ番号
   （「（1）」「－ 1 －」。ページの最後の行にあり、次のページの最初の行が引用文献の「16」のものも）・柱（8 文字未満のもの、
   2 ページの記事のもの）・投稿受付日（本文の行につながるもの、2 行にわたるもの、古い形。本文の「…日受付分」は直すこと）を
   docx に足さないこと、ページの途中の数字だけの行（表のセル・引用文献の「pp.11-」や「p.」の後の「16」・docx の表を本文に
   書いた段落の数字）を消さないこと、柱の隣の本当の直しは直すこと、PDF の側に柱や表・図の中の文字しかない位置の docx の文字は
-  理由付きで直さないこと（PDF の文字は行の変わり目に「⏎」）、照合に使わなかった文字がレポートの 13 章（段落ごとに 1 行、
-  数字だけの行はまとめる）・冒頭の要約・14 章に載ること。表・図の中の文字（整数のセルの表がページの最後にあり、段落の最後の
+  理由付きで直さないこと（PDF の文字は行の変わり目に「⏎」）、照合に使わなかった文字がレポートの 13.3 に行数だけ載ること
+  （W2 の手順 7 から一覧は出さない。冒頭の要約・することの一覧には出さない）。表・図の中の文字（整数のセルの表がページの最後にあり、段落の最後の
   短い行が次のページにある形、数字のセルの表が段落の後ろの近くを分断する形、ページの途中の図の点の名前・軸のラベル）を
   docx に足さず、段落の後ろを消さないこと（照合の窓を 0.19.0 より短くしない）、表のセルの数字が docx の直された数字と偶然
   一致してもセルの文字を入れないこと、PDF にだけある 20 文字以上の文字を足さない規則の長さを照合に使わない文字を除く前で
@@ -529,8 +533,7 @@ python -m pytest
   にしか出ないページの最後の柱の次のときは、直さない違いとして 13 章に出す）、本文の行が「，」で終わった直後（次のページの最初を
   含む）の表のセル・図の目盛りや、表の「－」のセルの次の数字のセルは、続きとみなさずに表の数字を docx に入れないこと。段落の
   最後・最初の行が、行全体でしか一致させない行で、出版版で直されているとき（「，」の後の年、「p.」の後のページ、別の行の見出しの
-  番号。`test_corrected_*`）は、docx の文字を消さずに直さない違い（`HEAD_WHY`）にし、ルート2 の 13.5 で「PDF と同じ文字に
-  なりました」と言わないこと、段落のすぐ後ろの行がほかの段落なら、段落の最後の消された文字を今までどおり消すこと。行全体でしか
+  番号。`test_corrected_*`）は、docx の文字を消さずに直さない違い（`HEAD_WHY`）にし、13.3 に載せること、段落のすぐ後ろの行がほかの段落なら、段落の最後の消された文字を今までどおり消すこと。行全体でしか
   一致させない行を除いて照合すること（よく似た文献〈2018a・2018b〉の間に図の目盛りや柱があっても文献の文字を消さない。行全体で
   一致させた行の後ろを照合し直すときも）、20 文字の規則の長さに行全体でしか一致させない行の文字を数えないこと（表の数字の行・
   柱のすぐ隣の、校正で足された短い文字は足す）、20 文字以上で段落の行にかかるものは直さない違い（`LONG_WHY`）として 13 章に
@@ -551,7 +554,7 @@ python -m pytest
   em dash・水平線・マイナス・数字幅のダッシュ。「-」に直す。PDF の行末が U+FFFE なら docx のまま。docx にダッシュのない位置の
   行末のハイフネーションは足さない。行の途中のダッシュの違いは PDF の文字に合わせる。docx のハイフンの仲間〈「‐」、Word の改行
   なしハイフン「‑」〉と、PDF の行末の docx と違う「-」「‐」も PDF に合わせる。Word の改行なしハイフンの記号〈w:noBreakHyphen〉は、
-  ルート2 で要素ごと削除の変更履歴にして「-」を挿入する〈却下すると元に戻る〉）、表・ほかの段落・小さな図の後ろ（次のページの
+  PDF に合わせる処理でで要素ごと削除の変更履歴にして「-」を挿入する〈却下すると元に戻る〉）、表・ほかの段落・小さな図の後ろ（次のページの
   最初を含む。間に 1 ページ目の最後の投稿受付日の行・段の区切りの受付日の行・次のページの最初の柱があっても）に出た段落の
   最後の 3〜9 文字が校正で直されていても、消さずに出版版の文字に直すこと（図の中の行のよく使う文字「時」「を」と並べて図の
   中の文字を足さない。大きく直されていれば docx のまま 13 章に出す。本当に消された最後の文は今までどおり消す。対照）、校正で
@@ -576,13 +579,13 @@ python -m pytest
   はさまずにつながった図の中の文字（「…考察した。図３」）を足さないこと（校正で足された文・引用の後ろの「。」は足す）、段落の
   最後に足す文字が次の行にだけある形（行の幅いっぱいの最後の行の次の「。」だけの行、英文の最後の 1 語だけのページの最後の
   行）を黙って捨てずに直さない違い（`EDGE_WHY`）として 13 章に出すこと（見出しの後ろの行や、段落の最後の行のすぐ後ろでない
-  行は、文の続きとみなさないこと）、13 章で docx の数式を「〓」で示し、ルート2 の 13.3 で PDF にだけある文字の行の docx の欄に
+  行は、文の続きとみなさないこと）、13 章で docx の数式を「〓」で示し、13.3 で PDF にだけある文字の行の docx の欄に
   足す位置の前後の文字を出すこと、表に「〓」があるときは docx の欄と PDF の欄での意味の違いを表の前に添えること（Colab の
   枠も同じ。`tests/test_colab.py`）。段落記号の削除で 2 つの `w:p` に分けた段落（`make_fixtures.make_pdfcheck(split=True)` でテストの中で作る。
-  PDF は今の `sample_pdfcheck.pdf`）を、どちらのルートでも 1 つの段落として照合し、ルート2 で 1 つの段落として直すこと（直した docx の `w:p` の
+  PDF は今の `sample_pdfcheck.pdf`）を、PDF に合わせるときも合わせないときも 1 つの段落として照合し、PDF に合わせる処理で 1 つの段落として直すこと（直した docx の `w:p` の
   数と段落記号の削除はそのまま）、段落記号の削除をまたぐ直しが前と後ろの `w:p` の `w:t` に分かれて入ること（境目に足す文字は前の `w:p`）、
   `paragraph_units()` に隠し文字の規則を渡し、つないだ段落の単位を連結した文字が、`sample_reader.docx` のすべての段落で読み取りと同じこと
-  （読み取り・検証・ルート2 の 3 か所が同じ文字ポリシー。修正計画の G）、直す段落の途中に文字スタイルで隠した文字のある docx
+  （読み取り・検証・PDF に合わせる処理 の 3 か所が同じ文字ポリシー。修正計画の G）、直す段落の途中に文字スタイルで隠した文字のある docx
   （`make_pdfcheck(hidden=True)`。`split=True` とも組み合わせる。テストの中で作る）でも、隠し文字のない docx と同じ箇所をすべて直し、
   隠した文字は直した docx に残って XML に出ないこと（`write_fixed_docx()` が規則を `paragraph_units()` に渡していること）。
 - 段落の中の改行と、読み取りの文字ポリシーの出力（修正計画の G）: `tests/test_pipeline.py` で、段落記号の削除でつないだ段落が 1 つの `<p>`
@@ -592,12 +595,12 @@ python -m pytest
   `emit.Emitter.span` の単体のふるまい（`<xref>` の中の改行には入れず、改行の数には数えて `<break/>` の数には数えない）、レポートの
   6 章（つないだ段落〈つないだ段落の文字の冒頭を添える〉・読み飛ばした行・隠し文字の改行・スタイルで隠した文字）・10 章（改行の一覧。
   セルの段落は表のキャプションで示す）・4 章（スタイルの違う段落をつないだ判断）、スタイル・既定の書式で隠した文字と、題目・引用文献の
-  改行の要確認（冒頭・14 章・Colab の枠・コマンドラインの標準エラー。終了コード 0。スタイルで隠した文字は段落ごとに数え、空白だけの
+  改行の要確認（冒頭（することの一覧と囲み）・Colab の枠・コマンドラインの標準エラー。終了コード 0。スタイルで隠した文字は段落ごとに数え、空白だけの
   段落は数えない。`test_style_hidden_action_counts_paragraphs`）、本文の段落の改行と、ランに直接付けた隠し文字だけの `sample_edge.docx`
   では、10 章の一覧と 6 章の一覧だけで要確認にしないこと。すべての行が変更履歴で削除された表は、キャプションと空の表を
   出力して 10 章の警告に出し、6 章の読み飛ばした行の一覧ではキャプションで示すこと（`test_table_with_all_rows_deleted`）。
 - 要対応・要確認の知らせ（`report.actions()`。修正計画の D）: `tests/test_pipeline.py` で、J-STAGE のアップロード時チェックの問題
-  （受付日が受理日より後）が要対応としてレポートの冒頭・14 章とコマンドライン（終了コード 1・標準エラーのメッセージ ID）に出ること、
+  （受付日が受理日より後）が要対応としてレポートの冒頭（することの一覧と囲み）とコマンドライン（終了コード 1・標準エラーのメッセージ ID）に出ること、
   `--meta` がないとき（EMSGM230E）・画像が足りないとき・手動モードで回答をまだ指定していないときも 1 で、画像を渡すと 0 になること、
   不変性チェック・DTD 検証の不合格が冒頭に出て要対応になること、指定したファイル・フォルダがないとき（トレースバックにしない）と
   `--images` の画像を読めないときは中止の 2 になること（ファイルの代わりにフォルダを指定したときも 2、プロセス置換の /dev/fd/NN は通すこと）。
@@ -608,10 +611,10 @@ python -m pytest
   一度止まり、もう一度押すとダウンロードすること（要対応がなければ止めないこと。要確認だけでも止めないこと。変換し直して別の要対応が
   残ればもう一度止めること）、手順 5・6 の枠を `result_boxes()` で出すこと（手順 6 はセルを実行して、AI のエラーの枠がレポートより前に
   出ることを確かめる）。
-  `tests/test_pdfmatch.py` で、ルート2 で PDF の文字を読めない（画像だけ・壊れた PDF・pypdfium2 がない）ときに「出版版 PDF で
-  補えませんでした」（要対応、終了コード 1）、ルート1 では「照合できませんでした」（要確認、0）、別の記事の PDF の疑いの枠が
-  出ること、すべて直せたルート2 では知らせがないこと、照合に使わなかった PDF の文字・ルート1 の PDF との違い・ルート2 で直さなかった
-  箇所が要確認（終了コード 0）であること、冒頭の並び（要対応 → ルート2 の固定の案内 → PDF の知らせ。文字だけのテキストボックスの
+  `tests/test_pdfmatch.py` で、PDF に合わせるときに PDF の文字を読めない（画像だけ・壊れた PDF・pypdfium2 がない）と「出版版 PDF を
+  読めませんでした」（要対応 `pdf_fallback`、終了コード 1）、`--route docx` では「照合できませんでした」（要確認 `pdf_unread`、0）、別の記事の PDF の疑いの枠が
+  出ること、すべて直せて内容の違いがないときは `pdf_mismatch` がないこと、照合に使わなかった PDF の文字・`--route docx` の PDF との違い・
+  直さなかった内容の違いが要確認（終了コード 0）であること、冒頭の並び（することの一覧 → 要対応 → 要確認。文字だけのテキストボックスの
   要確認が要対応の後ろに出ることは `tests/test_lost_images.py`）。`tests/test_ai.py` で、`--ai api` で API キーがないとき・`call_api` が TypeError を
   受けたときに止まらずに知らせること（N5。API キーがあるときの TypeError は「API キーが見つかりません」にしないこと）。
 - GitHub Actions（`.github/workflows/test.yml`）で push のたびに実行される。
@@ -655,12 +658,13 @@ print('行全体でしか一致させない行:', list(dict.fromkeys(st.lines[st
 " tests/private/pdf/記事.pdf
 ```
 
-docx と組にして確かめるときは、`--pdf` を付けて（ルート2）変換し、レポートの 13.1（補った箇所に、ページ番号・受付日を足したもの、
-本文の文字を消したものがないか）・13.2（組版の違い）・13.3（直さなかった箇所と理由）・13.7（照合に使わなかった PDF の文字に、本文の文字がないか）・13.8（補完の確かめ）を見る。
+docx と組にして確かめるときは、`--pdf` を付けて変換し、レポートの 13.1（PDF と違う箇所。内容の違い。校正の直しが docx に入っているか）・13.2（PDF に合わせた表記と、合わせなかった表記の件数。変更の全件は
+補った docx の変更履歴）・13.3（照合できなかった箇所と、PDF に見つからない段落。照合に使わなかった PDF の文字は行数だけで、一覧はない）・
+13.4（補完の確かめ）を見る。
 照合の処理を変えたときは、変更の前後の版で同じ docx と PDF を変換して、レポートと XML を比べる。
 試験用の PDF を LibreOffice で docx から作るときの注意: ぶら下げ組になった行末の「。」「，」が PDF の文字列に含まれないことがあり、
-ルート2 はそれを校正で消された文字として変更履歴で消す（`docs/REVIEW_2026-11.md` の P4）。本誌の出版版 PDF では未確認なので、
-LibreOffice の PDF で 13.1 に句読点の削除だけが並ぶときは、PDF の側の欠落を疑う。
+PDF に合わせる処理はそれを校正で消された文字として変更履歴で消すことがあった（`docs/REVIEW_2026-11.md` の P4。W2 以降は内容の違いを書き込まないので消さない）。本誌の出版版 PDF では未確認なので、
+LibreOffice の PDF で 13.1・13.3 に句読点の削除だけが並ぶときは、PDF の側の欠落を疑う。
 
 ## よくある拡張
 
@@ -786,6 +790,7 @@ Claude Code の環境の作り方）を読む。
 結果を記録する。J-STAGE の試験登載で、表のセルの `<break/>`（改行の位置と、セルの中の段落の間。全文 XML 作成マニュアルの td・th の文字修飾の一覧にない）の表示と、アップロードのときのエラーの有無を確かめる（`docs/JSTAGE_NOTES.md`）。手元のテストデータ1〜3 には段落記号の削除・隠し文字・削除された行はなく、出力が変わるのはテストデータ3 のセルの `<break/>` と題目の改行の要確認だけ |
 | 注・図表へのリンクの規則（0.27.0） | 修正計画（`docs/FIX_PLAN.md`）の H で、上付きの指数・単位（cm²・x²・s⁻¹）を注にリンクせず、論文ごとに注番号の書き方（「1)」の形か、番号だけの上付きか）を判定し（D2・決定事項 15）、語の中の「図1」「表1」（地図1・付表1・発表1回目など）を図・表にリンクしないようにした（M5・決定事項 16。`docs/DESIGN.md` の 6 章）。リンクしなかったものは、その番号の注・図表があれば判断の一覧（4 章）と AI 依頼文の「# 機械がリンクできなかった箇所」〈W8 の手順 15。前は「推定:」の行〉に載る（要対応・要確認にはしない。ただし 0.29.0 で、同じ種類のキャプションの番号が重なる・キャプションに枝番がある〈図1-1・図1-2、図2.1〉ときの参照は、誤ったリンクを出さないためリンクせず〈その番号の参照と、番号のすぐ後ろに枝番が続く「図1-2」。枝番のキャプションがない論文の「図1-2」は今までどおり範囲〉、判断の一覧と `ArticlePlan.float_unlinked` に記録して要確認 `float_ref` で知らせる。`linker.Linker.float_numbers`・`float_refs`、`report._float_ref_action`）。架空の docx（`sample_links.docx`・`sample_links_bare.docx`）でのみ確かめていて、テストデータ1〜3 には上付きの指数・単位も、番号だけの注も、語の中の図表番号もない（0.26.0 と出力が同じ）。試験運用で、指数の多い論文の記録の件数（上限は置いていない）、番号だけの注の論文、「1)」の注と番号だけの注が混ざった論文、実際の AI（Claude）が記録から `link_note`・`link_figure` を提案するかを確かめる。番号だけの論文で英字・数字の直後の注番号（「Piaget¹」）は指数とみなしてリンクしない、表のセルの中の表の注の印（上付きの「1)」）が 1 つあると番号だけの論文も「1)」の書き方とみなす（セルを判定に数えるかは暫定）、キャプションの番号の直後の上付きの数字（「図1²　…」）は図の番号の一部として読む（structure.py。0.26.0 から。structure.py を触る回で直す）など、残る形は `docs/DESIGN.md` の 7 章（図・表の番号の直後の上付き〈「図1¹」〉は指数とみなさない）。ルート2 で、番号だけの注の docx を「1)」の形の出版版 PDF に合わせるとき、注番号のある段落のうち 1 つでも直さない段落（PDF に見つからない段落・表のセル）があると、直しがすべて止まる（注と関係のない誤字の直しも。要確認 pdf_unfixed。0.26.0 は直していた。`docs/DESIGN.md` の 4.4）。H では pdfdocx.py に触らないので、B2.1 の後に、直した docx の読み直しと最後の変換で元の docx の書き方の判定を使うように直す（修正計画の H の「残る限界」。利用者に、この形の原稿がどのくらいあるかを確かめる）。「1)」の書き方の論文の番号だけの上付きの数字を 1 件ずつ記録すること（決定事項 15 の「段落ごとに 1 行」は明らかな指数だけ）と、論文の書き方の判定に、上付きの文字だけで「1)」「注1」の形になった注番号だけを数えること（上付きの「1」＋本文の「)」は、文の括弧のこともあるので数えない）は暫定。漢字 1 字の後の正しい参照（「上図1」「同図2」「右図1」「本表1」）もリンクしない（決定事項 16）ので、試験運用で実際の論文での頻度を見る。英文 1 語の著者名は、10 章の警告で知らせる（決定事項 17 で AI 依頼文にも載せていたが、AI の姓と名の答えは和文の氏名にしか使えないので、W8 の手順 15 から載せない。C043） |
 | ルート2 の主軸の変更と補完の確かめ（0.28.0） | 修正計画（`docs/FIX_PLAN.md`）の J で、ルート2 を「docx から作り、出版版 PDF で補う」に改めた（違いを (A) 組版の違い・(B) 校正の直し・(C) 決められない違いに分け、(A) は PDF に合わせて要確認にしない。`docs/DESIGN.md` の 4.4）。補った docx が元の docx から (A) と報告した (B) 以外に変わっていないことを、照合・直しとは別の実装で確かめる（`fidelity.verify_supplement`）。試験運用で確かめること: 本誌の出版版 PDF 5 本とテストデータ1〜3 で、補完の確かめが偽の不合格にならないか（変更履歴の単位の中で (B) の文字列が `Fix` と違う並びになる形）、実測で出ていない字形（波線・中点・三点リーダなど）が (B) として 13.1 に出る量、英文の著者名・所属の照合の誤検出。補完の確かめの速さ（照合全体の 1.05 倍以内を目安）も測る |
+| 出版版 PDF との照合の見直し（W2〜W5。0.34.0 の予定。版は監督が上げる） | 違いを 4 つの区分に分け（`pdfmatch.grade`）、docx に直すのは表記の違い（区分 (1)）だけにした（内容の違いは書き込まない。`pdfdocx.hold`）。知らせは `pdf_mismatch` 1 つ、`meta_pdf`（書誌情報）、別の論文のファイルでの中止（`WrongPaperError`）。作り方の選択をやめ、PDF があれば合わせる（`--route docx` だけが合わせない）。巻・号・ページ・日付は PDF から読んで入力欄に先に入れる（`pdfbiblio.py`）。レポートは 14 章をなくして冒頭に「することの一覧」を置いた。0.28.0 の「(B) を補う」「補った校正の直し」は廃止（設計と実装の記録は `docs/fix_plan_release/units/W2.md`） |
 | 2026-11 の点検で見つけた問題 | `docs/REVIEW_2026-11.md`。S1（すぐ直す）6 件のうち、K1（後付けの見出しが同じ種類で 2 つあると先の見出し・節が落ちる）と K2（所属だけの段落・行が続くと所属が落ちる）は、0.31.0 で検出して変換を中止するようにした（2026-11-06 の判断。段落 ID・抜粋・Word での直し方を表示し、終了コード 2。英文要旨の見出しが 2 つある形も同じ。2026-11-04 の「変換の前に人の手で弾く」判断は置き換えた）。P1・P2・A1・A2 と S2 の 14 件は 0.29.0 で直した（直し方は同文書の「対応の記録」）。0.29.0 の最後の点検で見つかり、修正と再点検の上限 3 回に達したため直していなかった 3 件と小さいもの 6 件（レポートの docx の抜粋にタグに見える文字が Colab の全文表示で消える、AI がリンクを付けた参照を `float_unlinked` から除く一致が位置を見ない、`fn_guess` の助言の注意が付く条件、画面ごとの文の細かい食い違い）も、0.29.0 のまま直した（同文書の「0.29.0 の最後の点検の指摘の直し方」）。S3 のうち K10・R6・A9・A10・O3・O5 と、別の AI の点検の指摘 1・3・4・5・6（sanitize の同じ出力先、トリミングした画像、1 画面版の入力の混ざり、
 表の縦結合、表のセルの自動番号）は 0.30.0 で直した（`docs/FIX_PLAN_2026-11.md`）。K7（注の節の中の表）・K12（英文の部分の位置を決められない除外に知らせがない）・O7（ルート2 で中止しても補った docx が残る）と別の AI の点検の指摘 2・10 は 0.31.0 で直した。残りの S3・S4 は未対応（件数は同文書の「対応の記録」）。試験運用で確かめること: 枝番つきのキャプションの原稿での `float_ref` の件数と、利用者が手でリンクを付けるか、表の注の見出し「注」の原稿での `fn_guess`（戻した・注の節にしたの両方）の判断が合っているか、付記・謝辞・資料の自動番号の段落（`<list>`・`jx:gen`）の J-STAGE での表示、0.30.0 で出すようにした自動番号（後付け・英文要旨の見出しの `<title>` の先頭の番号、図・表のキャプションの `<label>` の番号）と飛ばしたグリッドを埋めた空のセルの J-STAGE での表示、切り取った画像の位置、0.31.0 で出すようにした注の節の中の表（`<fn><p><table-wrap>`）の J-STAGE での表示。直す順番の案は同文書の最後 |
 | 正式リリース | 試験運用で問題がなければ、版を 1.0.0 にする |

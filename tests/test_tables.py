@@ -314,10 +314,10 @@ def test_table_shape_is_needs_action(journal, meta, tmp_path, broken_table, caps
     assert keys[0] == "table_shape"      # 不変性・DTD・補完は合格なので、いちばん前に出る
     assert len(res.table_problems) == 1 and res.table_problems[0].name == "表 T1"
     report = res.report_path.read_text(encoding="utf-8")
-    assert "出力した XML の表 1 件の形が崩れています" in report.split("## 2.")[0]
+    assert "出力した XML の表 1 件の形が崩れています" in report.split("## 1.")[1].split("## 2.")[0]
     ch12 = report.split("## 12.")[1].split("## 13.")[0]
     assert "### 表の形の確かめ" in ch12 and "見つかった問題" in ch12 and "縦の結合（rowspan）" in ch12
-    assert "表の形が崩れている 1 件" in report.split("## 14.")[1]
+    assert "表の形が崩れている 1 件" in report.split("## することの一覧")[1].split("## 1.")[0]
     assert cli_main([str(path), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli"),
                      ]) == 1
     err = capsys.readouterr().err

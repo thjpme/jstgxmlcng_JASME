@@ -89,7 +89,7 @@ def test_dtd_failure_names_ref_and_paragraph_and_suggests_moving_appendix(journa
     chapter12 = report.split("## 12.")[1].split("### J-STAGE")[0]
     assert chapter12.count("Element disp-formula is not declared in mixed-citation") == 1
     assert "（2 件）" in chapter12 and bs[0].rid in chapter12 and bs[1].rid in chapter12 and bs[1].para.src in chapter12
-    assert "英文要旨の後ろ" in report.split("## 2.")[0].split("要対応: J-STAGE 指定の DTD")[1].split("\n\n")[0]
+    assert "英文要旨の後ろ" in report.split("## 1.")[1].split("## 2.")[0].split("要対応: J-STAGE 指定の DTD")[1].split("\n\n")[0]
     # XML は変えない: DTD 不合格のまま、引用文献の中に別行数式が出る
     root = etree.fromstring(res.xml_path.read_bytes().split(b"\n", 2)[2])
     assert len(root.findall(".//mixed-citation/disp-formula")) == 2

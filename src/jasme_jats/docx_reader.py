@@ -2,7 +2,7 @@
 
 文字の扱いは ooxml.py の文字ポリシーに従う。ここで作る「アトム」の文字列を連結したものが、
 ooxml.canonical_texts() で独立に取り出した文字列と一致することを、最後に fidelity.py で確かめる。
-段落記号の削除でつながる段落（ooxml.joined_paragraphs）と隠し文字の判定（ooxml.HiddenRule）は、検証・ルート2 と同じ規則を使う:
+段落記号の削除でつながる段落（ooxml.joined_paragraphs）と隠し文字の判定（ooxml.HiddenRule）は、検証・route pdf と同じ規則を使う:
 つながる段落は連鎖の最初の段落の ID の 1 つの段落として読み（後ろの段落の ID は欠番）、つなげない段落記号の削除は
 レポートの 10 章の警告で知らせる。変更履歴で削除された表の行のうち、Word で表示される文字・画像などが残らない行は読み飛ばして
 記録する。スタイル・既定の書式の設定で隠した文字・画像は、隠し文字の判定が暫定なので別にも記録する（要確認で知らせる）。
@@ -152,7 +152,7 @@ class Reader:
         self._float = None      # 読み取り中の浮動配置の図形（Float）
         self.textboxes = []
         self._textbox = None    # 読み取り中のテキストボックス（TextBox）。入れ子の内側を読む間も外側のまま
-        # 隠し文字の判定（検証・ルート2 と同じ規則）と、読み取り中の w:p の段落の状態（HiddenRule.para_state）
+        # 隠し文字の判定（検証・route pdf と同じ規則）と、読み取り中の w:p の段落の状態（HiddenRule.para_state）
         self.hidden_rule = HiddenRule(self.pkg.xml("word/styles.xml"))
         self._pstate = False
         # 段落記号の削除でつなぐ段落（部品ごと。_set_joins）: 連鎖の最初の w:p -> 連鎖、連鎖の後ろの w:p の集合

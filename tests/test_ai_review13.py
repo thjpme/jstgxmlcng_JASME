@@ -3,7 +3,7 @@
 - API で出版版 PDF を渡したのに、AI が PDF を見ていない回答は AI回答.json に写さず、もう一度変換すると呼び直す（利用者向け 1）。
   PDF を渡せなかったときは、渡せなかった理由に合わせた直し方を書く。
 - Claude の回答が出力の途中で別のモデルに切り替わったとき（fallbacks）、text の部をつないで読み、答えたモデルを記録する（API の形の確かめ (1)(2)）。
-- ノートブックの手順 5 の並び（利用者向け 2）、費用の文（3）、手順 4 の勧め方（4）、2 章・14 章の回答待ちの文の PDF（8）、見出しの「推奨」（10）。
+- ノートブックの手順 5 の並び（利用者向け 2）、費用の文（3）、手順 4 の勧め方（4）、2 章・することの一覧の回答待ちの文の PDF（8）、見出しの「推奨」（10）。
 """
 import json
 import types
@@ -160,7 +160,7 @@ def test_notebook_step4_and_step5_order():
 
 
 def test_waiting_answer_texts_ask_for_the_pdf(journal, meta, tmp_path):
-    """利用者向け 7・8: 回答待ちの 2 章と 14 章の行は、位置を聞く図形があれば出版版 PDF の添付を言う。2 章の見出しに「要確認」を付けない。"""
+    """利用者向け 7・8: 回答待ちの 2 章と することの一覧の行は、位置を聞く図形があれば出版版 PDF の添付を言う。2 章の見出しに「要確認」を付けない。"""
     res = convert(PLACE, meta, journal, Options(out_dir=tmp_path / "p", ai_mode="manual"))
     text = res.report_path.read_text(encoding="utf-8")
     ch2 = text.split("## 2. AI による仕上げ\n")[1].split("## 3.")[0]

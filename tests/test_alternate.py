@@ -147,7 +147,7 @@ def test_symex_is_not_inserted_again_by_route2(tmp_path, journal, meta, monkeypa
     assert not any("①" in f.new for f in fx.fixes)
     out = texts(load(res))
     assert out.count("視点①から始める。") == 1
-    assert res.fidelity.ok and res.supplement is not None and res.supplement.ok and res.supplement.supplied == 0
+    assert res.fidelity.ok and res.supplement is not None and res.supplement.ok
     assert para_text(source_texts(res.docx_fix.path), "視点") == "視点①から始める。"
     assert "<w:ins " not in pdfdocx_xml(res.docx_fix.path)
 
@@ -159,16 +159,16 @@ def pdfdocx_xml(path):
 
 def test_symex_with_other_fix_in_same_paragraph(tmp_path, journal, meta, monkeypatch):
     """記号の挿入のある段落の別の箇所は、今までどおり PDF に合わせて直せる（記号の挿入の単位は直せない単位として数える
-    ので、直す位置はずれない）。"""
+    ので、直す位置はずれない）。直すのは表記の違い（全角・半角）だけ（内容の違いは書き込まない。W2）。"""
     from test_pdfmatch import n10_article
-    n10_article(tmp_path, journal, symex_article(tmp_path, ("から始める。",)))
-    pages = n10_pages([*SMALL_FRONT, *body_lines("視点①から順に始める。"), *body_lines(TALK), *N10_TAIL])
+    n10_article(tmp_path, journal, symex_article(tmp_path, ("から(順に)始める。",)))
+    pages = n10_pages([*SMALL_FRONT, *body_lines("視点①から（順に）始める。"), *body_lines(TALK), *N10_TAIL])
     res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "pdf", docx=tmp_path / "n10.docx")
     fx = res.docx_fix
-    assert [(f.old, f.new) for f in fx.fixes if f.applied and f.kind == "text"] == [("", "順に")]
-    assert res.supplement.ok and res.supplement.supplied == 1
-    assert texts(load(res)).count("視点①から順に始める。") == 1
-    assert para_text(source_texts(res.docx_fix.path), "視点") == "視点①から順に始める。"
+    assert [(f.old, f.new) for f in fx.applied] == [("(", "（"), (")", "）")]
+    assert res.supplement.ok
+    assert texts(load(res)).count("視点①から（順に）始める。") == 1
+    assert para_text(source_texts(res.docx_fix.path), "視点") == "視点①から（順に）始める。"
 
 
 def test_paragraph_ids_skip_only_unchosen_branch():
@@ -195,10 +195,10 @@ def test_route2_fixes_paragraph_holding_a_textbox(tmp_path, journal, meta, monke
     文字には入らない。ランの中の mc:AlternateContent の図形は _Complex にしない）。"""
     from test_pdfmatch import n10_article
     box = mf.textbox(mf.para(mf.S["body"], "枠の中の文"), 611)
-    n10_article(tmp_path, journal, [("body", ["枠を示す", box, "ので説明する。"]), ("body", TALK)])
-    pages = n10_pages([*SMALL_FRONT, *body_lines("枠を示すので順に説明する。"), *body_lines(TALK), *N10_TAIL])
+    n10_article(tmp_path, journal, [("body", ["枠を示す", box, "ので(順に)説明する。"]), ("body", TALK)])
+    pages = n10_pages([*SMALL_FRONT, *body_lines("枠を示すので（順に）説明する。"), *body_lines(TALK), *N10_TAIL])
     res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "pdf", docx=tmp_path / "n10.docx")
-    assert [(f.old, f.new) for f in res.docx_fix.fixes if f.applied and f.kind == "text"] == [("", "順に")]
-    assert res.supplement.ok and res.supplement.supplied == 1
+    assert [(f.old, f.new) for f in res.docx_fix.applied] == [("(", "（"), (")", "）")]
+    assert res.supplement.ok
     doc = read_docx(res.docx_fix.path)
     assert [p.text_only() for p in doc.all_paragraphs() if p.in_textbox] == ["枠の中の文"]

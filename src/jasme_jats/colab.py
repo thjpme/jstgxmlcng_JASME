@@ -187,12 +187,12 @@ def summary_box(res) -> str:
             ("出版版 PDF との照合", pdf_summary(res), True),
             ("AI による仕上げ", ai_summary(res), True)]      # 推奨の手順なので、失敗でも赤くしない（修正計画 W8 の 4.8）
     sup = getattr(res, "supplement", None)
-    if sup is not None:             # ルート2 で補完の確かめを行ったときだけ
+    if sup is not None:             # route pdf で補完の確かめを行ったときだけ
         rows.insert(4, ("出版版 PDF による補完の確かめ", "合格" if sup.ok else "不合格（この XML は登載に使わないでください）", sup.ok))
     if res.docx_fix is not None:
-        rows.append(("PDF で補った docx", f"{res.docx_fix.path.name}（変更履歴つき。ダウンロードする ZIP に入ります）", True))
+        rows.append(("表記を PDF に合わせた docx", f"{res.docx_fix.path.name}（変更履歴つき。ダウンロードする ZIP に入ります）", True))
     elif res.pdf_fallback:
-        rows.append(("PDF で補った docx", "作れませんでした（PDF の文字を読めなかったため、docx を補わずに変換しました）", False))
+        rows.append(("表記を PDF に合わせた docx", "作れませんでした（PDF の文字を読めなかったため、docx を補わずに変換しました）", False))
     lines = "".join(f"<div style='white-space:pre-wrap{'' if ok else ';color:#b91c1c !important;font-weight:bold'}'>"
                     f"{html.escape(label)}: {html.escape(value)}</div>" for label, value, ok in rows)
     return f"{LIGHT_STYLE}<div class='jasme-light' style=\"{_SUMMARY}\"><div style='font-weight:bold;margin-bottom:2px'>結果の要約</div>{lines}</div>"
@@ -283,6 +283,14 @@ def structure_conflict_box(message: str, screen: str = "notebook") -> str:
     return error_box("原稿の構造を直す必要があります（変換を中止しました）", step_text(message, screen))
 
 
+def wrong_paper_box(message: str, screen: str = "notebook") -> str:
+    """docx と PDF が別の論文か、大きく違う版のようで変換を中止したときの表示（赤い枠）。
+
+    message は pipeline.WrongPaperError の文（画面の操作の目印つき）。screen は目印の置き換え先（step_text）。
+    """
+    return error_box("docx と PDF が別の論文か、大きく違う版のようです（変換を中止しました）", step_text(message, screen))
+
+
 # ---------------------------------------------------------------------------- 画面の操作の言い方（画面ごと）
 # report.Action.box_detail などの文は、画面の操作を目印（report.step）で書く。ノートブックの手順番号・1 画面版（app.py）の欄の名前・
 # コマンドラインの指定の違いは、ここ 1 か所の表だけで決める。目印の名前は report.STEP_NAMES と同じ（食い違いはテストで見つける）。
@@ -299,14 +307,14 @@ APPLY_LABEL = "反映"                                             # 回答を�
 CONVERT_LABEL = "変換する"                                       # 変換するボタン（回答なしで作り直す）
 STEP_WORDS = {
     "notebook": {
-        "docx": "手順 2", "pdf": "手順 2", "route": "手順 2", "meta": "手順 3",
+        "docx": "手順 2", "pdf": "手順 2", "meta": "手順 3",
         "ai_choose": "手順 4 で AI による仕上げの方法を「API で自動実行」か「手動（チャットに貼り付け）」にして ▶ を押し、手順 5 から",
         "prompt": "手順 5 の依頼文", "paste": "手順 6 に貼り付けて ▶ を押", "repaste": "手順 6 で貼り付け直し",
         "convert_again": "手順 5 をもう一度実行",
         "answer_field": "手順 6 の貼り付けの欄", "apply_button": "手順 6 の ▶",
         "images": "手順 7「図の画像を入れる」", "pdf_attach": "出版版 PDF を同じメッセージに添付して"},
     "app": {
-        "docx": "「docx（論文の Word ファイル）」の欄", "pdf": "「PDF（J-STAGE に登載する PDF）」の欄", "route": "「作り方」の欄",
+        "docx": "「docx（論文の Word ファイル）」の欄", "pdf": "「PDF（J-STAGE に登載する PDF）」の欄",
         "meta": "巻・号・ページなどの入力欄",
         "ai_choose": f"「AI による仕上げの方法」の欄を「手動（チャットに貼り付け）」か「API（Claude）」にして「{CONVERT_LABEL}」を押し、",
         "prompt": "依頼文", "paste": f"「{ANSWER_LABEL}」の欄に貼り付けて「{APPLY_LABEL}」を押",
@@ -316,7 +324,7 @@ STEP_WORDS = {
         # 結果の下の「図の画像」の欄（AppState.images_markdown の見出し。まとめて入れる欄・図ごとの行・「画像を入れる」が並ぶ）
         "images": "「図の画像」の欄", "pdf_attach": "出版版 PDF を同じメッセージに添付して"},
     "cli": {
-        "docx": "docx の指定", "pdf": "--pdf の指定", "route": "--route の指定", "meta": "--meta の指定",
+        "docx": "docx の指定", "pdf": "--pdf の指定", "meta": "--meta の指定",
         "ai_choose": "--ai manual か --ai api を指定して",
         "prompt": "AI依頼文.txt", "paste": "ファイルに保存して --ai manual --ai-response 回答のファイル を指定",
         "repaste": "ファイルに保存して --ai manual --ai-response 回答のファイル を指定し直し",
@@ -382,15 +390,3 @@ def lost_images_box(res, screen: str = "notebook") -> str:
     from .report import lost_action
     return _box(lost_action(res), screen)
 
-
-def pdf_diff_box(res, screen: str = "notebook") -> str:
-    """出版版 PDF との照合で確認が必要なことがあるときの表示（要対応は赤、要確認は黄の枠。report.pdf_actions）。なければ空文字。
-
-    ルート1（docx から作る）: docx と PDF で文字が違う箇所。PDF の文字を読めなければ「照合できませんでした」（要確認）。
-    ルート2（docx から作り、出版版 PDF で補う）: 直さなかった箇所と、補った後も残る違い（組版の違いは数えない。補った docx は
-    変換結果の ZIP に入る）。PDF の文字を読めなければ「出版版 PDF で補えませんでした」（要対応）。補完の確かめの不合格の枠は
-    ここではなく result_boxes()（report.actions の全部）に出る。どちらでも、docx の段落の半分以上が PDF に
-    見つからなければ「別の記事の PDF かもしれません」、照合に使わなかった PDF の文字があればその枠も出す。
-    """
-    from .report import pdf_actions
-    return "".join(_box(a, screen) for a in pdf_actions(res))

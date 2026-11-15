@@ -130,7 +130,7 @@ def test_b_answer_to_previous_draft_is_reread(journal, meta, tmp_path):
     assert [why for _, why in res.ai.rejected] == [CARRIED_NO_HEAD_WHY]
     assert res.ai.carried == ai_assist.CARRIED_MSG.format(n=4, m=3) and ai_state(res) != "失敗"
     assert "原稿を直す前の回答です。" in _sec2(res)
-    # 冒頭・14 章・枠・コマンドラインにも、要確認 ai_carried で知らせる（点検 review13 原則 6。終了コードは変えない）
+    # 冒頭・枠・コマンドラインにも、要確認 ai_carried で知らせる（点検 review13 原則 6。終了コードは変えない）
     act = next(a for a in actions(res) if a.key == "ai_carried")
     assert act.level == "要確認" and res.ai.carried in act.box_detail and res.ai.carried in act.cli and act.checklist
     # links も読み替わる（FULL の d18 の前に段落を足す）

@@ -12,7 +12,7 @@ from jasme_jats.app import AppState, InputError, type_choices
 def filled(tmp_path, docx=FULL, **extra):
     """必須項目をそろえた状態。"""
     st = AppState(tmp_path / "work")
-    st.set_inputs(route="docx", docx=str(docx), volume="31", issue="1", fpage="1", lpage="12", peer_review="査読あり",
+    st.set_inputs(docx=str(docx), volume="31", issue="1", fpage="1", lpage="12", peer_review="査読あり",
                   manuscript_type=type_choices()[0], ai_mode="none", **extra)
     return st
 
@@ -20,11 +20,10 @@ def filled(tmp_path, docx=FULL, **extra):
 def test_missing_items_block_conversion(tmp_path):
     st = AppState(tmp_path / "work")
     assert not st.can_convert()
-    assert st.missing() == ["docx", "PDF", "巻", "号", "最初のページ", "最後のページ", "査読の有無", "原稿種別"]
+    assert st.missing() == ["docx", "巻", "号", "最初のページ", "最後のページ", "査読の有無", "原稿種別"]
     with pytest.raises(InputError, match="足りません: docx"):
         st.convert()
-    st.set_inputs(route="docx")
-    assert "PDF" not in st.missing()               # docx から作るときは PDF が要らない
+    assert "PDF" not in st.missing()               # PDF は必須にしない（なければ表記は docx のまま）
     st.set_inputs(manuscript_type=app.OTHER_TYPE)
     assert "原稿種別（日本語）" in st.missing() and "原稿種別（英語）" in st.missing()
     with pytest.raises(KeyError):
@@ -464,7 +463,7 @@ def test_manual_fields_stay_for_repaste(tmp_path):
     from jasme_jats.colab import result_boxes
     from jasme_jats.report import actions, ai_done
     st = AppState(tmp_path / "work")
-    st.set_inputs(route="docx", docx=str(FLOAT), volume="31", issue="1", fpage="1", lpage="12", peer_review="査読あり",
+    st.set_inputs(docx=str(FLOAT), volume="31", issue="1", fpage="1", lpage="12", peer_review="査読あり",
                   manuscript_type=type_choices()[0], ai_mode="manual")
     demo = app.build_app(st, app.IO())
     fns = {f.fn.__name__: f.fn for f in demo.fns.values()}
@@ -538,14 +537,14 @@ def test_app_words_match_the_real_labels(tmp_path):
     st = AppState(tmp_path / "work")
     demo = app.build_app(st, app.IO())
     labels = {getattr(b, "label", None) for b in demo.blocks.values()} | {getattr(b, "value", None) for b in demo.blocks.values()}
-    for label in (colab.ANSWER_LABEL, colab.APPLY_LABEL, colab.CONVERT_LABEL, "作り方", "AI による仕上げの方法",
+    for label in (colab.ANSWER_LABEL, colab.APPLY_LABEL, colab.CONVERT_LABEL, "AI による仕上げの方法",
                   "docx（論文の Word ファイル）", "PDF（J-STAGE に登載する PDF）"):
         assert label in labels, label
     words = colab.STEP_WORDS["app"]
     assert set(words) == set(STEP_NAMES)
     # 語の中の「…」で囲んだ名前は、画面のラベルにある（選択肢の名前を除く）。「AI の回答」だけの略は書かない
     quoted = {q for w in words.values() for q in re.findall(r"「([^」]+)」", w)}
-    choices = {"手動（チャットに貼り付け）", "API（Claude）", "docx から作り、出版版 PDF で補う", "図の画像"}
+    choices = {"手動（チャットに貼り付け）", "API（Claude）", "図の画像"}
         # 「図の画像」は結果の下の欄の見出し（AppState.images_markdown の "### 図の画像"。test_images_box_uses_app_words で確かめる）
     assert quoted - choices <= labels, quoted - choices - labels
     assert "AI の回答" not in quoted
@@ -828,7 +827,7 @@ def test_manual_fields_stay_open_for_missing_abstract(tmp_path):
     from test_structure import _no_abstract_style_docx
     from jasme_jats.report import actions, ai_state
     st = AppState(tmp_path / "work")
-    st.set_inputs(route="docx", docx=str(_no_abstract_style_docx(tmp_path)), volume="31", issue="1", fpage="1", lpage="12",
+    st.set_inputs(docx=str(_no_abstract_style_docx(tmp_path)), volume="31", issue="1", fpage="1", lpage="12",
                   peer_review="査読あり", manuscript_type=type_choices()[0], ai_mode="manual")
     demo = app.build_app(st, app.IO())
     fns = {f.fn.__name__: f.fn for f in demo.fns.values()}
@@ -872,3 +871,104 @@ def test_structure_conflict_view_keeps_pending_screen(tmp_path):
     out = fns["on_convert"](*[st.inputs[n] for n in app.INPUT_NAMES])
     assert any(isinstance(x, str) and "最後の所属の段落" in x for x in out)
     assert st.res is None
+
+
+# ---- PDF から書誌情報を先に入れる（W5 の手順 13。PDF の文字・数字は架空）
+def pdf_biblio_pages(line="数学教育学研究 第 7 巻 第 2 号 2030 pp.11〜24", dates="2029年6月1日投稿受付\n2029年11月20日採用決定"):
+    from test_pdfmatch import head_pages
+    pages = head_pages()
+    pages[0] = f"{line}\n{dates}\n" + pages[0]
+    return pages
+
+
+def test_pdf_selected_fills_six_fields(tmp_path, monkeypatch):
+    from jasme_jats import pdfmatch
+    from jasme_jats.pdfbiblio import INPUT_KEYS
+    monkeypatch.setattr(pdfmatch, "extract_pages", lambda path: pdf_biblio_pages())
+    assert app.PDF_FIELDS == INPUT_KEYS
+    st = filled(tmp_path, received="2020-01-01")          # 入力済みでも PDF の値にする（先に入れる。その後の打ち直しが使われる）
+    note = st.pdf_selected(str(tmp_path / "a.pdf"))
+    f = st.inputs
+    assert (f["volume"], f["issue"], f["fpage"], f["lpage"], f["received"], f["accepted"]) == ("7", "2", "11", "24", "2029-06-01", "2029-11-20")
+    assert st.pdf_got == {"volume": "7", "issue": "2", "fpage": "11", "lpage": "24", "received": "2029-06-01", "accepted": "2029-11-20"}
+    assert note == ("PDF から読んで入れました: 巻 7・号 2・ページ 11〜24・受付日 2029-06-01・受理日 2029-11-20"
+                    "（1 ページ目の誌名の行と、投稿受付・採用決定の日付）。違っていれば欄を書き換えてください。"
+                    "査読の有無・原稿種別・発行日は PDF から読めないので入力してください。")
+    f["volume"] = "8"                                      # 打ち直した値がそのまま使われる（PDF の値で戻さない）
+    assert st.inputs["volume"] == "8"
+
+
+def test_pdf_selected_unreadable_changes_nothing(tmp_path, monkeypatch):
+    from jasme_jats import pdfmatch
+    monkeypatch.setattr(pdfmatch, "extract_pages", lambda path: ["（1）\n本文だけのページ"])      # 誌名の行も日付もない
+    st = filled(tmp_path, received="2020-01-01")
+    note = st.pdf_selected(str(tmp_path / "a.pdf"))
+    assert "読めませんでした" in note and "入力してください" in note
+    assert st.pdf_got == {} and st.inputs["volume"] == "31" and st.inputs["received"] == "2020-01-01"
+    assert st.pdf_selected(None) == "" and st.pdf_got == {}          # 選びを消したときは注記も消す
+    monkeypatch.setattr(pdfmatch, "extract_pages", lambda path: (_ for _ in ()).throw(RuntimeError("壊れた PDF")))
+    assert "読めませんでした" in st.pdf_selected(str(tmp_path / "b.pdf"))        # 壊れた PDF でも例外にしない
+
+
+def test_pdf_selected_reports_only_what_was_read(tmp_path, monkeypatch):
+    from jasme_jats import pdfmatch
+    monkeypatch.setattr(pdfmatch, "extract_pages", lambda path: pdf_biblio_pages(dates=""))
+    st = AppState(tmp_path / "work")
+    note = st.pdf_selected(str(tmp_path / "a.pdf"))
+    assert "巻 7・号 2・ページ 11〜24（1 ページ目の誌名の行）。" in note and "受付日" not in note
+    assert "received" not in st.pdf_got and st.inputs["received"] == ""
+
+
+def test_ready_text_hints_pdf_when_biblio_missing(tmp_path, monkeypatch):
+    st = AppState(tmp_path / "work")
+    assert "PDF を選ぶと、巻・号・ページ・受付日・受理日が入ります" in st.ready_text()
+    st.set_inputs(pdf=str(tmp_path / "a.pdf"))
+    assert "PDF を選ぶと" not in st.ready_text()
+    st.set_inputs(pdf=None, volume="31", issue="1", fpage="1", lpage="12")
+    assert "PDF を選ぶと" not in st.ready_text()
+
+
+def test_build_app_wires_pdf_change(tmp_path, monkeypatch):
+    """画面の pdf.change が、6 つの欄と注記に届く（欄の変更は on_change が state に写す）。"""
+    import gradio as gr
+    demo = app.build_app(AppState(tmp_path / "work"), app.IO())
+    fns = [d for d in demo.fns.values() if getattr(d.fn, "__name__", "") == "on_pdf"]
+    assert len(fns) == 1 and len(fns[0].outputs) == len(app.PDF_FIELDS) + 1
+    assert isinstance(fns[0].outputs[-1], gr.Markdown)
+
+
+def test_pdf_selected_after_convert_keeps_images(tmp_path, monkeypatch):
+    """変換の後に PDF を選び直しても、入れた画像の記録（state.kept）は消さない（入力が変わったことは changed_inputs が断る。W1 の持ち越し）。"""
+    from jasme_jats import pdfmatch
+    monkeypatch.setattr(pdfmatch, "extract_pages", lambda path: pdf_biblio_pages())
+    st = filled(tmp_path)
+    st.convert()
+    st.kept = {"x": object()}
+    st.pdf_selected(str(tmp_path / "a.pdf"))
+    assert st.kept and st.res is not None and "巻" in st.changed_inputs()
+
+
+# ---------------------------------------------------------------------------- 作り方の欄をなくした（W2 の手順 14）
+def test_no_route_field_and_route_follows_pdf(tmp_path):
+    """画面に「作り方」の欄も入力の名前 route もない。PDF は必須にしない（なければ docx のまま変換できる）。"""
+    assert "route" not in app.DEFAULTS and "route" not in app.INPUT_NAMES and "route" not in app.COMPARED_INPUTS
+    assert not hasattr(app, "ROUTES") and "作り方" not in app.LABELS.values()
+    st = AppState(tmp_path / "work")
+    demo = app.build_app(st, app.IO())
+    labels = {getattr(b, "label", None) for b in demo.blocks.values()}
+    assert "作り方" not in labels and "PDF（J-STAGE に登載する PDF）" in labels
+    with pytest.raises(KeyError):
+        st.set_inputs(route="pdf")
+    assert "PDF" not in st.missing()
+
+
+def test_convert_without_pdf_is_docx_and_with_pdf_fixes_notation(tmp_path):
+    """PDF なし: route は docx で変換できる。PDF あり: route は pdf で、表記を PDF に合わせた docx ができる。"""
+    from conftest import PDFCHECK, PDFCHECK_PDF
+    pytest.importorskip("pypdfium2")
+    st = filled(tmp_path / "a", docx=PDFCHECK)
+    st.convert()
+    assert st.run.route == "docx" and st.run.pdf is None and st.res.route == "docx" and st.res.docx_fix is None
+    st = filled(tmp_path / "b", docx=PDFCHECK, pdf=str(PDFCHECK_PDF))
+    st.convert()
+    assert st.run.route == "pdf" and st.res.route == "pdf" and st.res.docx_fix is not None and st.res.docx_fix.path.exists()

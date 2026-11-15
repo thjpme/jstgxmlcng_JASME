@@ -1,31 +1,41 @@
-"""ルート2（docx から作り、出版版 PDF で補う）: 出版版 PDF で補った docx（Word の変更履歴つき）を作る。
+"""route pdf（出版版 PDF に合わせる）: 出版版 PDF に表記を合わせた docx（Word の変更履歴つき）を作る。
 
-Word の文字が正で、出版版 PDF（印刷所の校正を経たもの）からは著者校正の直しを補う。docx の段落と PDF の照合（pdfmatch.py）の
-結果から、段落ごとの直す箇所を決め、元の docx の XML（前処理しないもの）のランを分けて、削除（w:del）と挿入（w:ins）の変更履歴
-として書き込む（作成者名は AUTHOR の 1 つ）。書式（太字・斜体・上付きなど）は、直す文字のランの書式をそのまま使う。
+Word の文字が正で、出版版 PDF（印刷所の組版を経たもの）からは表記の違い（区分 (1)。pdfmatch.grade）だけを補う。docx の段落と
+PDF の照合（pdfmatch.py）の結果から、段落ごとの直す箇所を決め（plan_fixes）、書き込まない直しに理由を付け（hold）、元の
+docx の XML（前処理しないもの）のランを分けて、削除（w:del）と挿入（w:ins）の変更履歴として書き込む（作成者名は AUTHOR の
+1 つ）。書式（太字・斜体・上付きなど）は、直す文字のランの書式をそのまま使う。
 
-  ・直すもの（組版の違い。(A)。Fix の kind width・space・glyph）: 英数字・記号の全角・半角と、その文字のすぐ前後の PDF にない
-    空白、ダッシュ・ハイフンの字形、引用符の字形・向き、英文の題目・副題・著者名・所属の大文字・小文字（pdfmatch.typeset_pair）
-  ・直すもの（校正の直し。(B)。Fix の kind text）: 語句の追加・削除・置き換えで、組版の違いに還元できないもの（「資料」→
-    「付録」など）。1 つの違いに (A) と (B) が混ざるときは pdfmatch.diff_parts で分ける。足す文字は PDF の文字のまま
+  ・直すもの（表記の違い。(1)。Fix の kind width・space・glyph）: 英数字・記号の全角・半角と、その文字のすぐ前後の PDF にない
+    空白、句読点（句点どうし・読点どうし）、ダッシュ・ハイフンの字形、引用符の字形・向き、英文の題目・副題・著者名・所属の
+    大文字・小文字（pdfmatch.typeset_pair）
+  ・書き込まないもの（内容の違い。Fix の kind text）: 語句の追加・削除・置き換えなど、表記の違いに還元できないもの（「ふくろう」
+    →「みみずく」など）。plan_fixes は「PDF に合わせるなら何を変えるか」を返す関数のまま、内容の違いの Fix も作る（1 つの違いに
+    表記の違いと内容の違いが混ざるときは pdfmatch.diff_parts で分ける）。書き込む直前に hold が理由（CONTENT_REASON）を付け、
+    同じ違いを分けた表記の直しも丸ごと止める（FixGroup。spread_reasons）。書き込まない内容の違いと、理由（pdfmatch.TextDiff.why）
+    のある決められない違いに、間の docx の文字が 1 文字以下で続く表記の直しも、連鎖でたどって書き込まない（一続きの規則。
+    ADJACENT_REASON。「(1)」と PDF の「１）」で「(１）」のような、docx にも PDF にもない形を作らない。止めたかっこの組のもう片方も
+    止める）。かっこの全角・半角の直しは、組のもう片方が後の段階で止まったときや、もう片方に直す箇所がないとき（リンクの中の
+    文字など）も、組の全角・半角が混ざる形にならないように止める（Fix.pair。spread_reasons）。ただし数式・Word が付ける番号・リンクの文字にかかる違い（UNFIXABLE_REASON）は、一続きの規則の始まりにしない。
+    理由のない kind text の Fix を write_fixed_docx に渡すと ValueError（hold を通さずに内容の違いを書き込まないための守り。
+    check_held）
   ・直さないもの: 表のセル・数式・図の中の文字（照合しない）、PDF の中に見つからない段落、数式・Word が付ける番号・
     リンクの文字にかかる違い、フィールドの結果・タブ・記号などの文字、空白だけの違い（PDF の空白は信頼できない）、
     段落の文字列を読み取り（docx_reader）と同じに組み立てられない段落（図形を含む段落など）、PDF のページ番号・誌名の行・
     柱・投稿受付日などや、docx にない図・表の中の文字とみなした文字（docx に足さない。PDF の側にその文字しかない位置の
-    docx の文字も消さない）、照合で直し方を決められなかった違い（(C)。pdfmatch.TextDiff.why。段落の最初・最後の、どこまでが
+    docx の文字も消さない）、照合で直し方を決められなかった違い（pdfmatch.TextDiff.why。段落の最初・最後の、どこまでが
     段落の文字か決められない文字、文字として取り出せない数式の位置にかかるものなど）。1 つの違いを分けた直す箇所の一部が
-    ほかの直す箇所と重なるときは、その違いの直す箇所をすべて直さない（(A) と (B) に分けたものも、まとめて直さない）。
+    ほかの直す箇所と重なるときは、その違いの直す箇所をすべて直さない。
     PDF にない空白の削除（kind space）は、根拠の全角・半角の直し（kind width。PdfCheck.drop_basis）に従わせる（Fix.needs）:
-    根拠の直しを直さないことになったら（重なる・構造の確かめ・注の番号を守る・直せない文字にかかるなど、どの段階でも。
-    spread_reasons）、空白の削除も直さない（空白だけを消すと、docx にも PDF にもない文字になる）。向きは片方向で、空白の
-    削除が直せなくても、根拠の全角・半角の直しは直す（空白が残るだけで、docx のままの文字なので）。根拠が複数の全角・半角の
+    根拠の直しを直さないことになったら（重なる・内容の違いに続く・構造の確かめ・注の番号を守る・直せない文字にかかるなど、
+    どの段階でも。spread_reasons）、空白の削除も直さない（空白だけを消すと、docx にも PDF にもない文字になる）。向きは片方向で、
+    空白の削除が直せなくても、根拠の全角・半角の直しは直す（空白が残るだけで、docx のままの文字なので）。根拠が複数の全角・半角の
     直しなら、どれか 1 つでも直さないときは直さない。根拠に Word が付ける番号がある空白の削除は、番号の直し（変換のときに必ず
     PDF に合わせる）が止められることがなく、番号だけで消してよい根拠になるので、全角・半角の直しに従わせない
   ・Word が付ける番号（自動段落番号・脚注番号）は docx の文字ではないので、ここでは直さず、変換のときに全角・半角と字形を
     PDF に合わせる（pipeline の plan.pdf_numbers）
 
 できた docx は Word で開いて、変更を 1 つずつ承諾・却下できる。本ツールの読み取りは、挿入を残し削除を除いた文字
-（すべて承諾した状態）を読むので、この docx をルート1 と同じ処理で変換すると、(A) と (B) を当てはめた文字の XML になる。
+（すべて承諾した状態）を読むので、この docx をPDF のないときと同じ処理で変換すると、表記の直しを当てはめた文字の XML になる。
 書き込んだ後に docx を読み直し、段落の文字列が直した結果と一致することを確かめる（一致しない段落は直さずに作り直す）。
 段落の役割・領域・リンク・注の区切り・著者と所属の数・氏名の姓と名の分け方が元の docx と同じに決まることも確かめる
 （_structure。合わない箇所は直さずに作り直す）。
@@ -52,7 +62,7 @@ from .ooxml import (BR_TEXT_TYPES, MC_NS, M_NS, NO_RULE, HiddenRule, choose_alte
                     paragraph_ids, paragraph_mark_deleted, parse_xml, preprocess, sym_char, w, w_t_text)
 
 XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
-# 書き込む変更履歴の作成者名（組版の違いと校正の直しで分けない。利用者の判断、2026-11）。ルート2 の補完の確かめ（fidelity）も、
+# 書き込む変更履歴の作成者名（表記の直しだけを書くので種類で分けない。利用者の判断、2026-11）。route pdf の補完の確かめ（fidelity）も、
 # この名前で、このツールが書き込んだ変更履歴を見分ける
 AUTHOR = "jasme-jats（出版版 PDF による補完）"
 # 直す段落のある XML の部品と、段落 ID の頭文字（docx_reader・fidelity と同じ。Word の脚注・文末脚注の段落も直す）
@@ -67,9 +77,9 @@ class Fix:
     start: int            # docx の段落（plain）の中の範囲 [start, end)。start == end なら、その位置に足す
     end: int
     new: str              # PDF の文字（削除なら空）
-    # 組版の違い（(A)）: width（英数字・記号の全角・半角）/ space（PDF にない空白の削除）/ glyph（ダッシュ・ハイフン・引用符・
-    # 大文字・小文字。細かい種類は pdfmatch.typeset_pair(old, new, case=True) で分かる）。校正の直し（(B)）と、直せない違い
-    # （(C)。reason に理由）: text
+    # 表記の違い（(1)）: width（英数字・記号の全角・半角）/ space（PDF にない空白の削除）/ glyph（句読点・ダッシュ・ハイフン・
+    # 引用符・大文字・小文字。細かい種類は pdfmatch.typeset_pair(old, new, case=True) で分かる）。内容の違いと、直せない違い
+    # （reason に理由）: text（書き込まない。hold が理由を付ける）
     kind: str
     old: str = ""         # docx の文字
     applied: bool = False
@@ -80,10 +90,14 @@ class Fix:
     # kind space の空白の削除が従う、根拠の全角・半角の直し（Fix）。どれか 1 つでも直さないことになったら、この空白の削除も
     # 直さない（片方向。根拠の直しは、空白の削除に関係なく直す）
     needs: list = field(default_factory=list, repr=False, compare=False)
+    # かっこの全角・半角の直しの、組のもう片方のかっこ（hold が付ける。_BracketPair）。直すと組の全角・半角が混ざる形
+    # （「(1）」）になるなら、どの段階でも直さない（spread_reasons。組のもう片方の直しが止まったときと、もう片方に直す箇所が
+    # ないとき〈リンクの中の文字など〉）
+    pair: object = field(default=None, repr=False, compare=False)
 
     @property
     def typeset(self) -> bool:
-        """組版の違い（(A)）の直す箇所か。"""
+        """表記の違い（(1)）の直す箇所か。"""
         return self.kind != "text"
 
 
@@ -117,10 +131,19 @@ def spread_reasons(fixes) -> bool:
       理由は、直さない理由のまま。
     ・空白の削除（Fix.needs の全角・半角の直しがある）: 根拠の直しのどれかが直らなければ、空白の削除も直さない（片方向。
       根拠の直しは、空白の削除が直らなくても直す）。理由は、どの直しに連動して直さないかが分かる文。
+    ・かっこの全角・半角の直し（Fix.pair がある）: 直すと、組のもう片方のかっこ（そちらの直しを当てはめた後の文字）と全角・半角が
+      混ざるなら直さない（「(1）」のような、docx にも PDF にもない形にしない。どちらの側から見ても同じなので双方向）。理由は、
+      組のもう片方のどの直しに連動して直さないかが分かる文。
     fixes に入っている直す箇所の組・根拠が対象で、組・根拠のほかの直す箇所は fixes になくてもよい。直す箇所が変わったか。"""
     changed = False
     while True:
         step = False
+        for f in fixes:
+            if not f.reason and f.pair is not None:
+                why = f.pair.mixed(f)
+                if why:
+                    f.reason = why
+                    step = True
         for g in {id(f.group): f.group for f in fixes if f.group is not None}.values():
             bad = next((m for m in g.members if m.reason), None)
             if bad is None:
@@ -146,8 +169,8 @@ class DocxFix:
     fixes: list = field(default_factory=list)        # Fix（直したもの・直さなかったもの）
     unmatched: list = field(default_factory=list)    # PDF の中に見つからなかった段落
     check: object = None                             # 元の docx と PDF の照合（pdfmatch.PdfCheck）
-    texts: dict = field(default_factory=dict)        # 元の docx の段落の文字列（直した段落・見つからない段落・照合に
-    #                                                  使わなかった PDF の文字のある段落。レポート用）
+    texts: dict = field(default_factory=dict)        # 元の docx の段落の文字列（直した段落・違いのある段落・見つからない段落・
+    #                                                  照合に使わなかった PDF の文字のある段落。レポート用）
     locations: dict = field(default_factory=dict)    # 元の docx の段落の場所（レポート用）
 
     @property
@@ -159,23 +182,14 @@ class DocxFix:
         return [f for f in self.fixes if not f.applied]
 
     @property
-    def applied_text(self) -> list:
-        """補った校正の直し（(B)。kind text の直したもの）。"""
-        return [f for f in self.applied if not f.typeset]
-
-    @property
     def applied_typeset(self) -> list:
-        """PDF に合わせた組版の違い（(A)）。"""
+        """PDF に合わせた表記の違い（(1)）。"""
         return [f for f in self.applied if f.typeset]
 
     @property
-    def skipped_text(self) -> list:
-        """直さなかった校正の直しと、決められない違い（(B)・(C)。要確認）。"""
-        return [f for f in self.skipped if not f.typeset]
-
-    @property
     def skipped_typeset(self) -> list:
-        """直せなかった組版の違い（(A)。ほかの直す箇所と重なる、直せない文字にかかる、構造が変わるなど。要確認にしない）。"""
+        """直せなかった表記の違い（(1)。ほかの直す箇所と重なる、内容の違いに続く、直せない文字にかかる、構造が変わるなど。
+        要確認にしない）。内容の違い（kind text）は書き込まないので、直したものの一覧はない（fixes を kind で引く）。"""
         return [f for f in self.skipped if f.typeset]
 
 
@@ -184,9 +198,12 @@ def plan_fixes(plan, check) -> list:
     """照合の結果（PdfCheck）から、段落ごとの直す箇所（Fix）の一覧を作る。
 
     全角・半角（check.width）と PDF にない空白（check.drops）は 1 文字ずつの組版の違い（kind width・space）。違い（check.diffs）は
-    pdfmatch.diff_parts で直す単位に分け、組版の違いの文字は kind width・glyph、校正の直しは kind text にする。直せない違い
+    pdfmatch.diff_parts で直す単位に分け、組版の違いの文字は kind width・glyph、内容の違いは kind text にする。直せない違い
     （fixable が偽）は分けずに理由付きの 1 つの Fix にし、kind は組版の違いだけのもの（TextDiff.kind typeset）なら width か
-    glyph、それ以外は text（(C) と、番号・数式・リンクにかかる校正の直し）。"""
+    glyph、それ以外は text（決められない違いと、番号・数式・リンクにかかる内容の違い）。
+
+    「PDF に合わせるなら何を変えるか」を返す関数で、内容の違い（kind text）の Fix も理由なしで返す。書き込む前に必ず hold を
+    通す（make_fixed_docx。照合のテストは、この戻り値で PDF の形を組み立てられるかを確かめる）。"""
     from .pdfmatch import diff_parts
     fixes = []
     widths = {}      # (段落 ID, 位置) -> 全角・半角の直し
@@ -218,10 +235,9 @@ def plan_fixes(plan, check) -> list:
         old = text[d.start:d.end]
         if not d.fixable:
             kind = _typeset_kind(d.docx, d.pdf) if d.kind == "typeset" else "text"
-            fixes.append(Fix(d.src, d.start, d.end, d.pdf, kind, old,
-                             reason=d.why or "数式・Word が付ける番号・リンクの文字にかかる、または足す位置を決められない"))
+            fixes.append(Fix(d.src, d.start, d.end, d.pdf, kind, old, reason=d.why or UNFIXABLE_REASON))
             continue
-        # 違う部分の中でも、文字ごとに最小限の変更にし、組版の違いと校正の直しを分ける（「58」→「５８９」は「5」「8」の
+        # 違う部分の中でも、文字ごとに最小限の変更にし、組版の違いと内容の違いを分ける（「58」→「５８９」は「5」「8」の
         # 全角・半角と、「９」の追加）
         first = len(fixes)
         for a, b, new, kind in diff_parts(text, d, d.src in case_srcs):
@@ -247,6 +263,137 @@ def plan_fixes(plan, check) -> list:
         if not spread_reasons(fixes):
             break
     return fixes
+
+
+# 直さない理由（hold が付ける）
+UNFIXABLE_REASON = "数式・Word が付ける番号・リンクの文字にかかる、または足す位置を決められない"
+CONTENT_REASON = "内容の違い（PDF から docx に、内容を足さない・消さない・置き換えない）"
+ADJACENT_REASON = "直さない違いに続く表記の違い（一部だけ直すと、docx にも PDF にもない形になる）"
+# 一続きの規則: 直さない違いとの間の docx の文字がこれ以下なら、続く表記の直しも直さない
+ADJACENT_GAP = 1
+# 一続きの規則の、かっこの組: 片方を直さないなら、組のもう片方も直さない（「（2020)」のような、docx にも PDF にもない形にしない）。
+# 値は組の種類（全角・半角を問わない）
+BRACKETS = {"(": "(", "（": "(", ")": ")", "）": ")", "[": "[", "［": "[", "]": "]", "］": "]"}
+
+
+def hold(fixes, texts=None) -> None:
+    """書き込まない直す箇所に理由を付ける（plan_fixes の後、write_fixed_docx の前。make_fixed_docx）。
+
+    (a) 内容の違い（kind text）で理由のないもの → CONTENT_REASON。
+    (b) spread_reasons（同じ違いを分けた表記の直しも止まる。FixGroup）。
+    (c) 一続きの規則: 書き込まない kind text の直す箇所（内容の違いと、理由 why のある決められない違い。UNFIXABLE_REASON の
+        ものは始まりにしない）と、その組の直す箇所、またはこの規則で止めた直す箇所から、間の docx の文字が ADJACENT_GAP 以下で
+        続く表記の直し（kind width・space・glyph）を、連鎖でたどって書き込まない → ADJACENT_REASON。段落の中だけ。
+        段落の文字 texts（段落 ID → plain）があれば、止めた直す箇所の範囲にあるかっこ（BRACKETS）の、組のもう片方のかっこの
+        表記の直しも止め（ADJACENT_REASON）、そこからも続けてたどる。
+    (d) もう一度 spread_reasons（空白の削除の連動と、止めた表記の直しの組）。
+    texts があれば、(d) の前に、かっこの全角・半角の直しに組のもう片方のかっこを付ける（Fix.pair。_pair_brackets）。これで、(d) と後の段階
+    （書き込みの段階で直せない文字にかかる・構造が変わる、など）で止まったかっこの組のもう片方も、spread_reasons で止まる。"""
+    by_src = {}
+    for f in fixes:
+        by_src.setdefault(f.src, []).append(f)
+    for f in fixes:
+        if f.kind == "text" and not f.reason:
+            f.reason = CONTENT_REASON
+    spread_reasons(fixes)
+
+    def start(f):
+        if f.kind == "text":
+            return bool(f.reason) and f.reason != UNFIXABLE_REASON
+        return f.reason in (CONTENT_REASON, ADJACENT_REASON)
+    for src, fs in by_src.items():
+        partner = _bracket_partners(texts[src]) if texts and src in texts else {}
+        stops = [f for f in fs if start(f)]
+        rest = [f for f in fs if not f.reason and f.typeset]
+        while stops and rest:
+            pair = {partner[q] for s in stops for q in range(s.start, s.end) if q in partner}
+            hit = [g for g in rest if any(_gap(g, s) <= ADJACENT_GAP for s in stops)
+                   or any(g.start <= q < g.end for q in pair)]
+            for g in hit:
+                g.reason = ADJACENT_REASON
+            rest = [g for g in rest if not g.reason]
+            stops = hit
+        if src in (texts or {}):
+            _pair_brackets(fs, texts[src])
+    spread_reasons(fixes)
+
+
+def _bracket_partners(text: str) -> dict:
+    """段落の文字のかっこの組（全角・半角を問わない。入れ子は内側から）: 位置 → 組のもう片方の位置。組にならないかっこは入れない。"""
+    out, stack = {}, []
+    for i, c in enumerate(text):
+        k = BRACKETS.get(c)
+        if k in ("(", "["):
+            stack.append((i, k))
+        elif k:
+            if stack and stack[-1][1] == ("(" if k == ")" else "["):
+                o, _ = stack.pop()
+                out[o], out[i] = i, o
+    return out
+
+
+FULL_BRACKETS = frozenset("（）［］")
+
+
+def _bracket_swap(f: Fix) -> bool:
+    """1 文字のかっこを、同じ種類のかっこ（全角・半角の違いだけ）に直す直す箇所か。"""
+    return (f.end - f.start == 1 and len(f.old) == 1 and len(f.new) == 1 and f.old in BRACKETS
+            and BRACKETS.get(f.new) == BRACKETS[f.old])
+
+
+@dataclass(eq=False)
+class _BracketPair:
+    """かっこの全角・半角の直し（Fix.pair）の、組のもう片方のかっこ: 位置 at、docx の文字 char、その位置にかかる直す箇所 cover。"""
+    at: int
+    char: str
+    cover: list = field(default_factory=list)
+
+    def mixed(self, f: Fix) -> str:
+        """f を直すと組の全角・半角が混ざるなら、直さない理由（混ざらない・決められないなら空）。"""
+        live = [g for g in self.cover if not g.reason]
+        if not live:
+            other = self.char
+        elif len(live) == 1 and _bracket_swap(live[0]):
+            other = live[0].new
+        else:                   # もう片方をかっこ以外に直す: 組の形を決められないので、この規則では止めない
+            return ""
+        if (f.new in FULL_BRACKETS) == (other in FULL_BRACKETS):
+            return ""
+        held = next((g for g in self.cover if g.reason), None)
+        if held is not None:
+            desc = _fix_desc(held) if held.kind in ("width", "space") else f"直し「{held.old}」→「{held.new}」"
+            return (f"かっこの組のもう片方の{desc}を直さないので、連動して直さない（片方だけ直すと、docx にも PDF にも"
+                    f"ない形になる。その理由: {held.reason}）")
+        return (f"かっこの組のもう片方「{self.char}」に直す箇所がない（リンクの中の文字など）ので、直さない（片方だけ直すと、"
+                "docx にも PDF にもない形になる）")
+
+
+def _pair_brackets(fs, text: str) -> None:
+    """1 つの段落の直す箇所のうち、かっこの全角・半角の直しに、組のもう片方のかっこ（_BracketPair）を付ける。docx で組の全角・半角が
+    もともと混ざっているもの（「(1）」）には付けない（直せば混ざらなくなることがある）。"""
+    partner = _bracket_partners(text)
+    for f in fs:
+        if not _bracket_swap(f) or f.start not in partner:
+            continue
+        p = partner[f.start]
+        if (text[f.start] in FULL_BRACKETS) != (text[p] in FULL_BRACKETS):
+            continue
+        f.pair = _BracketPair(p, text[p], [g for g in fs if g is not f and g.start <= p < g.end])
+
+
+def check_held(fixes) -> None:
+    """内容の違いを書き込まない守り（write_fixed_docx の入口）: 理由（reason）のない kind text の直す箇所があれば ValueError。
+    plan_fixes は内容の違いの Fix も理由なしで返すので、hold を通さずに write_fixed_docx を呼ぶ新しいコードが内容の違いを
+    書き込まないようにする。"""
+    bad = [f for f in fixes if f.kind == "text" and not f.reason]
+    if bad:
+        raise ValueError(f"理由のない内容の違いの直す箇所があります（hold を通してください）: {bad[0].src} "
+                         f"「{bad[0].old}」→「{bad[0].new}」")
+
+
+def _gap(a: Fix, b: Fix) -> int:
+    """2 つの直す箇所の間の docx の文字の数（重なれば 0 以下）。"""
+    return b.start - a.end if (a.start, a.end) <= (b.start, b.end) else a.start - b.end
 
 
 def _typeset_kind(docx: str, pdf: str) -> str:
@@ -402,7 +549,7 @@ def paragraph_units(p, hidden=None) -> list:
             editable = not fields and not alt
             if tag == w("t"):
                 # 記号フォントのランの w:t の私用領域の文字は、Unicode にした文字を読む（ooxml.w_t_text。1 文字が 1 文字なので、
-                # 文字の位置 k は元の w:t のまま）。この文字を直す (A)(B) の直しは、直した文字で置き換える
+                # 文字の位置 k は元の w:t のまま）。この文字を直す直しは、直した文字で置き換える
                 out.extend((c, ch if editable else None, k) for k, c in enumerate(w_t_text(ch, r)[0]))
             elif tag in (w("tab"), w("ptab")):
                 out.append(("\t", None, 0))
@@ -572,12 +719,15 @@ def same_file(a, b) -> bool:
 def write_fixed_docx(src_path, dst_path, plan, fixes, skip=frozenset(), date=None):
     """直す箇所を変更履歴として書き込んだ docx を dst_path に作る。skip の段落は直さない。
 
+    理由（reason）のない内容の違い（kind text）の直す箇所があれば ValueError（hold を通してから呼ぶ）。
+
     段落記号の削除でつながる段落（_chains）は、連鎖の最初の段落の ID で、連鎖の w:p ごとの単位（paragraph_units）を連結して
     直す。連鎖の後ろの段落の ID には直す箇所がない（読み取りの段落がない）。
     """
     if same_file(src_path, dst_path):
         # 入力を読みながら同じファイルを書き出すと、入力が壊れる（書き込む前に止める。呼び出し側が別の名前にする）
         raise ValueError(f"入力の docx と、補った docx の書き出し先が同じファイルです: {dst_path}")
+    check_held(fixes)
     date = date or _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     writer = _Writer(date)
     # 呼び出し側が先に直さないことにした直す箇所に連動するものも、先に直さないことにする。_apply_paragraph も広げるが、skip の段落と
@@ -648,8 +798,8 @@ def _all_paragraphs(doc):
 
 
 def make_fixed_docx(docx_path, pdf_path, out_path, journal) -> DocxFix:
-    """ルート2 の最初の段階: docx と PDF を照合し、組版の違いと校正の直しを出版版 PDF で補った docx（変更履歴つき）を out_path に
-    作る。
+    """route pdf の最初の段階: docx と PDF を照合し、表記の違い（(1)）を出版版 PDF に合わせた docx（変更履歴つき）を out_path に
+    作る。内容の違いは書き込まない（hold）。
 
     書き込んだ後に読み直して、(1) 直した段落の文字列が直した結果と一致するか、(2) 段落の役割・領域（英文要旨・資料など）・
     リンク（注・引用文献・図表など）・注の区切り・著者と所属の数・氏名の姓と名の分け方が元の docx と同じに決まるかを確かめる。
@@ -665,8 +815,12 @@ def make_fixed_docx(docx_path, pdf_path, out_path, journal) -> DocxFix:
     fix = DocxFix(path=out_path, check=check, unmatched=list(check.unmatched))
     if not check.ok:            # PDF の文字を読めない: docx は作らない（呼び出し側が元の docx を変換する）
         return fix
+    if check.verdict == "wrong":    # 別の論文の PDF（pdfmatch.paper_verdict）: docx は作らない（呼び出し側が WrongPaperError で中止する）
+        return fix
     fix.fixes = plan_fixes(plan, check)
-    for s in {f.src for f in fix.fixes} | set(fix.unmatched) | {src for src, _ in check.ignored_lines}:
+    # 内容の違いと、それに続く表記の直しは書き込まない（理由は 8 回の作り直しでも保つ）
+    hold(fix.fixes, {s: plan.paras[s].plain() for s in {f.src for f in fix.fixes}})
+    for s in {f.src for f in fix.fixes} | {d.src for d in check.diffs} | set(fix.unmatched) | {src for src, _ in check.ignored_lines}:
         fix.texts[s] = plan.paras[s].plain()
         fix.locations[s] = plan.locations.get(s, "")
     reasons = {id(f): f.reason for f in fix.fixes}      # 照合の段階で直さないと決めたもの

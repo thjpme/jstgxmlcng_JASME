@@ -24,7 +24,8 @@ NAME_CH = CJK + KATA
 YR = r"(?:1[5-9]|20)\d{2}[a-z]?"
 Y = rf"{YR}(?:/{YR})?|n\.\s?d\.|印刷中|in press|forthcoming"
 DASH = r"[-−–—―‐\u2011~〜ー]"
-LATIN_NAME = r"[A-ZÀ-ÖØ-Þ][\w'’\-]+"
+# 欧文の姓。\w は和文の文字も含むので、除く（「ESMについてはGoos」の全体を 1 つの姓にしない。C164）
+LATIN_NAME = rf"[A-ZÀ-ÖØ-Þ](?:[^\W_{HIRA}{KATA}{CJK}]|['’\-])+"
 INITIAL = r"[A-ZÀ-ÖØ-Þ]"
 LATIN_PARTICLE = (r"(?:of|the|for|and the|de|du|da|del|van|von|der|den|la|le"
                   r"|school|university|institute|department|ministry|association|society|council|committee|center|centre)")
@@ -68,7 +69,10 @@ def norm_name(s):
 def name_match(cname, rname, latin):
     if not cname or not rname:
         return False
-    return cname == rname if latin else rname.startswith(cname)
+    if latin:
+        # 文献リストの姓が 2 語（Esparza Puga・Van Dooren）で、本文が最後の語だけのときも合わせる（C164）
+        return cname == rname or rname.endswith(" " + cname)
+    return rname.startswith(cname)
 
 
 def bracket_groups(s):
@@ -113,7 +117,7 @@ def parse_authors(auth):
         names = [norm_name(c) for c in chunks if c]
         latin = False
     else:
-        names = re.findall(rf"({LATIN_NAME}(?:\s(?:[a-z]+\s)?{LATIN_NAME})?)\s*,\s*{INITIAL}\.?(?:\s?-?{INITIAL}\.?)*(?=\s*(?:,|&|and\b|$))", a)
+        names = re.findall(rf"({LATIN_NAME}(?:\s(?:[a-z]+\s)?{LATIN_NAME})?)\s*,\s*{INITIAL}\.?(?:\s?-?{INITIAL}\.?)*(?=\s*(?:,|&|and\b|$)|\s+{LATIN_NAME}(?:\s(?:[a-z]+\s)?{LATIN_NAME})?\s*,\s*{INITIAL})", a)
         names = [n.lower() for n in names]
         if not names:
             chunks = [c.strip() for c in re.split(r"&|\band\b|,", a) if c.strip() and not initials.fullmatch(c.strip())]
@@ -201,7 +205,16 @@ def split_names(names_str, known):
     out = []
     for c in chunks:
         if re.search(f"[{NAME_CH}]", c):
+            # 「新村編」「平凡社編」の編は、文献側の parse_authors と同じく著者名に含めない（C164）
+            c = re.sub(r"(?:編著?|監修|監訳|編集)$", "", c.strip()) or c
+            whole = norm_name(c)
             m = re.search(f"[{NAME_CH}・]+$", c)
+            # ひらがななどをはさむ団体名（「…数理科学分野の参照基準検討分科会」）は、段落の文字の全体が文献の著者名の頭と一致するときだけ全体を使う
+            # （漢字だけを取ると、名前の後ろ側だけになって合わない。全体が一致しなければ今までどおり）
+            if m and m.group(0) != c and len(whole) >= 8 and any(itaiji(k).startswith(itaiji(whole)) for k in known):
+                r, ok = whole, True
+                out.append((r, ok))
+                continue
             c = m.group(0) if m else c
             r, ok = resolve_cjk(norm_name(c), known)
         else:
@@ -268,7 +281,7 @@ def extract_citations(text_nfkc, known):
             base = max(0, m.start() - 120)
             pre = text_nfkc[base:m.start()].rstrip().rstrip(",").rstrip()
             etal = bool(RE_ETAL_TAIL.search(pre))
-            pre2 = re.sub(r"[’']s$", "", RE_ETAL_TAIL.sub("", pre).rstrip())
+            pre2 = re.sub(r"[’']s$", "", RE_ETAL_TAIL.sub("", pre).rstrip().rstrip(",").rstrip())     # 「Cai, Morris, et al.」の et al. の前のコンマも除く（C164）
             mm = re.search(rf"([{NAME_CH}]+(?:(?:\s*[・,、]\s*(?:&\s*)?|\s*&\s*|\s+and\s+)[{NAME_CH}]+)*)$", pre2) \
                 or re.search(rf"({LATIN_NAME}(?:\s+(?:{LATIN_PARTICLE}\s+)*{LATIN_NAME})*"
                              rf"(?:(?:\s*,\s*(?:and\s+|&\s*)?|\s+and\s+|\s*&\s*){LATIN_NAME}(?:\s+(?:{LATIN_PARTICLE}\s+)*{LATIN_NAME})*)*)$", pre2)
@@ -318,7 +331,12 @@ def match_citation(c, refs):
             rn = r.parsed["names"]
             co = len(c["names"]) > 1 and len(rn) > 1 and all(name_match(a, b, r.parsed["latin"]) for a, b in zip(c["names"][1:], rn[1:]))
             n_ok = r.parsed["n_authors"] == len(c["names"]) or (c["etal"] and r.parsed["n_authors"] >= 2)
-            return (co, n_ok)
+            # 「Bakker et al.」は、著者 1 人の文献ではない（2 人以上）。欧文の文献が 3 人以上なら、2 人の文献（et al. は使わない）より先に選ぶ
+            # （同じ第一著者・同じ年の文献が複数あるときの順位だけに効く。1 件しかなければ今までどおり）
+            if c["etal"] and r.parsed["latin"]:
+                n_ok = r.parsed["n_authors"] >= 2
+                return (co, n_ok, r.parsed["n_authors"] >= 3)
+            return (co, n_ok, False)
         best = max(fit(x) for x in exact)
         top = [x for x in exact if fit(x) == best]
         if len(top) > 1:

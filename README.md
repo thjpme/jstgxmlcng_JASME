@@ -60,8 +60,8 @@ OPENAI_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml --o
 GEMINI_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai api --ai-provider gemini --ai-model モデル名
 SAKANA_API_KEY=... python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --ai api --ai-provider sakana --ai-model モデル名
 python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --images 画像フォルダ   # 図・表の画像（fig01.png・25_77_fig01.png など。PNG・JPEG・GIF）を入れる
-python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --pdf 記事.pdf               # docx から作り、出版版 PDF で補う
-python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --pdf 記事.pdf --route docx  # docx から作る（PDF とは照合だけ）
+python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --pdf 記事.pdf               # 出版版 PDF に表記を合わせて作る（巻・号・ページ・日付は、書誌情報ファイルに書かなければ PDF から読む）
+python -m jasme_jats 論文.docx --meta 書誌情報.toml --out output --pdf 記事.pdf --route docx  # 表記を合わせず docx のまま作る（PDF とは照合だけ）
 ```
 
 書誌情報ファイルの例: [examples/meta_example.toml](examples/meta_example.toml)

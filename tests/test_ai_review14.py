@@ -4,7 +4,7 @@
 - 2 段の図形への指定は、キャプションのある PDF のページと違えば使わない（原則 2）。途中で切れた回答の理由（原則 5）。
 - 応答のモデル名が違うだけでは「安全上の判定で断られた」と書かない（原則 3）。
 - 位置を聞いた図形が組み直しで本文に移っても、wide にしない（原則 6）。
-- 1 画面版の「押すると」（利用者向け 1）、手動の案内の枠の色と見出し（2）、14 章の行（3）、2 段の図形の数と説明（4・5）、
+- 1 画面版の「押すると」（利用者向け 1）、手動の案内の枠の色と見出し（2）、することの一覧の行（3）、2 段の図形の数と説明（4・5）、
   style_check の直し方の文（8）。
 """
 import json
@@ -46,12 +46,12 @@ def test_wide_only_unseen_answer_with_pdf_sent_is_told_and_not_kept(journal, met
     assert "もう一度変換して、AI を呼び直す" in fin.checklist
     res2 = convert(CELLS, meta, journal, api_opts(tmp_path / "out2", pdf_path=pdf))
     assert len(calls) == 2 and not res2.ai.reused
-    # PDF を見た回答は写し、使い回す（2 段の図形も AI の位置に移る。14 章の済みの行に数を添える）
+    # PDF を見た回答は写し、使い回す（2 段の図形も AI の位置に移る。することの一覧の済みの行に数を添える）
     calls = fake_api(monkeypatch, _answer(CELLS, [("s1", after)], status="見た", pages=1))
     res3 = convert(CELLS, meta, journal, api_opts(tmp_path / "out3", pdf_path=pdf))
     assert res3.plan.floats["s1"].mode == "ai" and report.ai_done(res3) and res3.ai_answer_path is not None
     done = finish(res3)
-    assert done.done and "（ほかに、2 段にまたがる図形 1 個（" in done.checklist and "を PDF の位置に移した）" in done.checklist
+    assert done.done and "。ほかに、2 段にまたがる図形 1 個（" in done.checklist and "を PDF の位置に移した、2 段にまたがる図形 1 個（" in done.checklist and "は機械的な位置のまま）" in done.checklist
 
 
 def test_wide_only_waiting_box_asks_for_pdf(journal, meta, tmp_path):
@@ -129,7 +129,7 @@ def test_asked_float_does_not_become_wide(journal, meta, tmp_path):
 
 def test_convert_again_reads_naturally_on_every_screen(journal, meta, tmp_path, monkeypatch):
     """利用者向け 1: PDF を渡したのに見ていない回答の案内は、どの画面の語でも「…してください」に続く（1 画面版で「押すると」にならない）。
-    14 章の行も、もう一度変換して呼び直すと書く（利用者向け 3）。"""
+    することの一覧の行も、もう一度変換して呼び直すと書く（利用者向け 3）。"""
     _, plan, _ = _mechanical(PLACE, journal)
     from test_ai_pdf_seen import place_answer
     fake_api(monkeypatch, place_answer(plan, status="添付なし"))
@@ -144,7 +144,7 @@ def test_convert_again_reads_naturally_on_every_screen(journal, meta, tmp_path, 
 
 
 def test_pdf_not_sent_checklist_says_how(journal, meta, tmp_path, monkeypatch):
-    """利用者向け 3: PDF を渡せなかった回答の 14 章の行は、渡せなかった理由ごとの直し方（枠・コマンドラインと同じ分け方）。"""
+    """利用者向け 3: PDF を渡せなかった回答の することの一覧の行は、渡せなかった理由ごとの直し方（枠・コマンドラインと同じ分け方）。"""
     _, plan, _ = _mechanical(PLACE, journal)
     from test_ai_pdf_seen import place_answer
     fake_api(monkeypatch, place_answer(plan, status="添付なし"))

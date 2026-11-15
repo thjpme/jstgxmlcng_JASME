@@ -1,8 +1,9 @@
 """補完の確かめ（fidelity.verify_supplement）のテスト。
 
-ルート2 の補った docx が、元の docx から、組版の違い（(A)）と 13.1 に報告した校正の直し（(B)）以外に変わっていないことを、
-照合（pdfmatch）・書き込み（pdfdocx）とは別の実装で確かめる。照合・書き込みに不具合があるときに不合格になることを、
-直す箇所をすり替える・一覧から消す・変更履歴でなく書き換える形で確かめる（設計 U1 の 5.2 の 11〜18）。
+ルート2 の補った docx が、元の docx から、組版の違い（区分 (1)。1 文字ずつの対と、決まった空白の削除）以外に変わっていないことを、
+照合（pdfmatch）・書き込み（pdfdocx）とは別の実装で確かめる。照合の結果は受け取らない（W2 の手順 5）ので、照合・書き込みに
+不具合があるときに不合格になることを、直す箇所をすり替える・守り（hold・check_held）を外して内容の違いを書き込む・変更履歴でなく
+書き換える形で確かめる（設計 U1 の 5.2 の 11〜18）。
 """
 import shutil
 import zipfile
@@ -12,14 +13,14 @@ import pytest
 import make_fixtures as mf
 from conftest import META_EXAMPLE, PDFCHECK, PDFCHECK_PDF
 from jasme_jats import pdfdocx, pdfmatch, pipeline
-from jasme_jats.fidelity import (NUMBER_WHY, UNIT_WHY, UNTRACKED_WHY, UNWRITTEN_WHY, _pair, _unit_ends, source_texts,
+from jasme_jats.fidelity import (NUMBER_WHY, UNIT_WHY, UNTRACKED_WHY, _pair, _unit_typeset, source_texts,
                                  supplement_targets, verify_supplement)
 from jasme_jats.pipeline import Options, convert
 from test_pdfmatch import (FRONT, N10_TAIL, PUB12, REST, SMALL_FRONT, TALK, body_lines, convert_with_pages, load,
                            n10_article, n10_pages)
 from test_pdfmatch import texts as xml_texts
 
-SUP_ROW = "出版版 PDF による補完の確かめ（ルート2）"
+SUP_ROW = "出版版 PDF による補完の確かめ"
 
 
 def route2(tmp_path, meta, journal, name="r2"):
@@ -32,15 +33,15 @@ def report(res):
 
 # ---------------------------------------------------------------------------- 11. 合格
 def test_supplement_passes_on_pdfcheck(journal, meta, tmp_path, capsys):
-    """sample_pdfcheck のルート2 で合格。組版の違い 43 文字（全角・半角と、その前後の空白）と、補った校正の直し 1 つ
-    （「資料」→「付録」）。1 章の行と、コマンドラインの「補完の確かめ: 合格」。"""
+    """sample_pdfcheck のルート2 で合格。組版の違い 43 文字（全角・半角と、その前後の空白）。内容の違い（「資料」→「付録」）は
+    書き込まない（W2）ので、補った校正の直しは 0。1 章の行と、コマンドラインの「補完の確かめ: 合格」。"""
     pytest.importorskip("pypdfium2")
     res = route2(tmp_path, meta, journal)
     sup = res.supplement
     assert sup is not None and sup.ok and sup.problems == []
-    assert (sup.typeset, sup.supplied) == (43, 1)
+    assert sup.typeset == 43
     assert res.ok and not res.needs_action
-    head = report(res).split("## 2.")[0]
+    head = report(res).split("## 1.")[1].split("## 2.")[0]
     row = next(line for line in head.splitlines() if SUP_ROW in line)
     assert "合格" in row and "不合格" not in row and "43" in row
     from jasme_jats.cli import main
@@ -72,7 +73,7 @@ def test_supplement_detects_non_typeset_change(journal, meta, tmp_path, monkeypa
     assert "［［］" in new
     from jasme_jats.report import actions
     assert "supplement" in [a.key for a in actions(res)]
-    section = report(res).split("### 13.8")[1]
+    section = report(res).split("### 13.4")[1]
     assert "**不合格**" in section and "| d12 |" in section
     from jasme_jats.cli import main
     assert main([str(PDFCHECK), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli"), "--pdf",
@@ -81,36 +82,72 @@ def test_supplement_detects_non_typeset_change(journal, meta, tmp_path, monkeypa
     assert "補完の確かめ: 不合格" in captured.out and "補完の確かめが不合格" in captured.err
 
 
-def test_supplement_detects_unreported_change(journal, meta, tmp_path, monkeypatch):
-    """(B) の直す箇所（「資料」→「付録」）を、書き込んだ後に直す箇所の一覧から消す（報告していない変更）→ 不合格。"""
+def test_supplement_detects_content_written_without_guards(journal, meta, tmp_path, monkeypatch):
+    """退行の守り（W2 の手順 5 の (b)）: hold と write_fixed_docx の守り（check_held）を外すと、内容の違いの直す箇所（「資料」→「付録」）が
+    補った docx に書き込まれる。照合が報告していても、補完の確かめは報告を受け取らず、対でない置き換えとして不合格にする
+    （要対応 supplement・終了コード 1）。"""
     pytest.importorskip("pypdfium2")
-    orig = pipeline.make_fixed_docx
-
-    def drop_text(*args, **kwargs):
-        fx = orig(*args, **kwargs)
-        fx.fixes = [f for f in fx.fixes if f.kind != "text"]
-        return fx
-    monkeypatch.setattr(pipeline, "make_fixed_docx", drop_text)
+    monkeypatch.setattr(pdfdocx, "hold", lambda fixes, texts=None: None)
+    monkeypatch.setattr(pdfdocx, "check_held", lambda fixes: None)
     res = route2(tmp_path, meta, journal)
-    assert res.fidelity.ok and not res.supplement.ok and not res.ok
+    assert any(f.old == "資料" and f.applied for f in res.docx_fix.fixes)       # 報告した（書き込んだ）のに不合格
+    assert res.fidelity.ok and not res.supplement.ok and not res.ok and res.needs_action
     assert [(src, why) for src, _, _, why in res.supplement.problems] == [("d13", UNIT_WHY)]
     assert "［資料］" in res.supplement.problems[0][1] and "［付録］" in res.supplement.problems[0][2]
+    from jasme_jats.report import actions
+    assert "supplement" in [a.key for a in actions(res)]
 
 
-def test_supplement_detects_unwritten_fix(journal, tmp_path):
-    """対照: 報告した (B) の直す箇所が、補った docx に書き込まれていない → 不合格（報告したのに書き込まれていない）。"""
+def test_supplement_detects_hand_added_replacement(journal, tmp_path):
+    """補った docx に、対でない置き換え（「試験」→「見本」）を、このツールの変更履歴として手で足すと不合格（W2 の手順 5 の (a)）。"""
     pytest.importorskip("pypdfium2")
     fx = pdfdocx.make_fixed_docx(PDFCHECK, PDFCHECK_PDF, tmp_path / "fixed.docx", journal)
-    extra = pdfdocx.Fix("d17", 0, 2, "見本", "text", "試験", applied=True)
-    sup = verify_supplement(PDFCHECK, fx.path, fx.fixes + [extra], fx.check.case_srcs, fx.check.original, {})
-    assert not sup.ok and sup.problems == [("d17", "試験", "見本", UNWRITTEN_WHY)]
+    assert verify_supplement(PDFCHECK, fx.path, fx.check.case_srcs, fx.check.original, {}).ok
+    import re
+    edited = tmp_path / "edited.docx"
+    with zipfile.ZipFile(fx.path) as zin, zipfile.ZipFile(edited, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "word/document.xml":
+                text = data.decode("utf-8")
+                m = re.search(r"<w:r>(<w:rPr>.*?</w:rPr>)?<w:t[^>]*>に基づく</w:t></w:r>", text)
+                assert m, "実験用の文字が見つからない"
+                rpr = m.group(1) or ""
+                au = f'w:author="{pdfdocx.AUTHOR}" w:date="2026-01-01T00:00:00Z"'
+                rep = (f'<w:del w:id="9001" {au}><w:r>{rpr}<w:delText>に基づく</w:delText></w:r></w:del>'
+                       f'<w:ins w:id="9002" {au}><w:r>{rpr}<w:t>による</w:t></w:r></w:ins>')
+                data = (text[:m.start()] + rep + text[m.end():]).encode("utf-8")
+            zout.writestr(item, data)
+    sup = verify_supplement(PDFCHECK, edited, fx.check.case_srcs, fx.check.original, {})
+    assert not sup.ok and [(src, why) for src, _, _, why in sup.problems] == [("d12", UNIT_WHY)]
+    assert "に基づく" in sup.problems[0][1] and "による" in sup.problems[0][2]
+
+
+@pytest.mark.parametrize("d, i, ok", [
+    ("。", "，", False),                 # (c) 句点 → 読点（類をまたぐ）
+    ("。", "：", False),                 # 句点 → 他の約物
+    ("。", "．", True),                  # (f) 類の中
+    ("，", "、", True),
+    ("\u3000", "", False),               # (d) 全角の空白の削除
+    ("ふくろう", "みみずく", False),      # 対でない置き換え
+    ("試験", "", False),                 # 内容の削除
+    ("", "付録", False),                 # 内容の挿入
+    ("(", "（", True),
+])
+def test_supplement_unit_rule(d, i, ok):
+    """変更の単位の規則（_unit_typeset）: 1 文字ずつの対だけが組版の違いで、対でない置き換え・類をまたぐ句読点・全角の空白の削除・
+    内容の足し引きは説明できない（None）。数は対の文字の数。"""
+    n = _unit_typeset(d, i, False)
+    assert (n is not None) == ok
+    if ok:
+        assert n == (0 if d == i else len(d))
 
 
 def test_supplement_detects_untracked_edit(journal, tmp_path):
     """補った docx の w:t を変更履歴なしで書き換える → 不合格（このツールの変更履歴を却下した文字が元の docx と違う）。"""
     pytest.importorskip("pypdfium2")
     fx = pdfdocx.make_fixed_docx(PDFCHECK, PDFCHECK_PDF, tmp_path / "fixed.docx", journal)
-    sup = verify_supplement(PDFCHECK, fx.path, fx.fixes, fx.check.case_srcs, fx.check.original, {})
+    sup = verify_supplement(PDFCHECK, fx.path, fx.check.case_srcs, fx.check.original, {})
     assert sup.ok
     edited = tmp_path / "edited.docx"
     with zipfile.ZipFile(fx.path) as zin, zipfile.ZipFile(edited, "w", zipfile.ZIP_DEFLATED) as zout:
@@ -121,7 +158,7 @@ def test_supplement_detects_untracked_edit(journal, tmp_path):
                 assert text.count(">に基づく<") == 1
                 data = text.replace(">に基づく<", ">に基く<").encode("utf-8")
             zout.writestr(item, data)
-    sup = verify_supplement(PDFCHECK, edited, fx.fixes, fx.check.case_srcs, fx.check.original, {})
+    sup = verify_supplement(PDFCHECK, edited, fx.check.case_srcs, fx.check.original, {})
     assert not sup.ok and [(src, why) for src, _, _, why in sup.problems] == [("d12", UNTRACKED_WHY)]
 
 
@@ -155,10 +192,10 @@ def test_supplement_detects_space_deletion_between_words(journal, meta, tmp_path
     (" (", "［", False, False),          # 隣が対でない
 ])
 def test_supplement_space_deletion_rule(d, i, at_start, ok):
-    """空白の削除の規則（_unit_ends）: 半角の空白で、d の中のすぐ隣を全角・半角の対として並べたときか、段落の先頭のときだけ (A)。"""
-    assert (_unit_ends(d, i, [], 0, False, at_start) != {}) == ok
+    """空白の削除の規則（_unit_typeset）: 半角の空白で、d の中のすぐ隣を全角・半角の対として並べたときか、段落の先頭のときだけ (A)。"""
+    assert (_unit_typeset(d, i, False, at_start) is not None) == ok
     # 単位の後ろが番号（注の参照のすぐ前）なら、後ろの空白も (A)
-    assert _unit_ends(" ", "", [], 0, False, False, True) != {} and _unit_ends("\t", "", [], 0, False, False, True) == {}
+    assert _unit_typeset(" ", "", False, False, True) is not None and _unit_typeset("\t", "", False, False, True) is None
 
 
 NOTE_BODY = ["脚注の付いた文 ", mf.footnote_ref(5), " と後ろの 文のつづきである。"]
@@ -252,24 +289,25 @@ def test_supplement_with_formula_and_joined_paragraphs(journal, meta, tmp_path, 
     """数式の後ろの直し（読み取りの段落の文字では数式は 1 文字、検証の文字では数式の文字なので、位置がずれる）と、段落記号の
     削除をまたぐ直し（前の w:p の最後と後ろの w:p の最初にかかる直し）でも合格する（位置ではなく、変更履歴の単位で当てる）。"""
     prob = ["各回の結果から相対度数を求め，これを試行の確率とよび，", mf.omath(mf.mr("p") + mf.mr("q")),
-            "の値の変化を表に記録した。"]
+            "の値の変化を(表)に記録した。"]
     n10_article(tmp_path, journal, [("body", prob), ("body", TALK)])
-    pub = "各回の結果から相対度数を求め，これを試行の確率とよび，pqの値の変化を表に順に記録した。"
+    pub = "各回の結果から相対度数を求め，これを試行の確率とよび，pqの値の変化を（表）に記録した。"
     pages = n10_pages([*SMALL_FRONT, *body_lines(pub), *body_lines(TALK), *N10_TAIL])
     res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "pdf", docx=tmp_path / "n10.docx")
     fx = res.docx_fix
-    assert [(f.old, f.new) for f in fx.fixes if f.applied and f.kind == "text"] == [("", "順に")]
-    assert res.supplement is not None and res.supplement.ok and res.supplement.supplied == 1
-    # 段落記号の削除をまたぐ直し（「。授」→「，本」。前の w:p の最後の文字と後ろの w:p の最初の文字にかかる）
+    assert [(f.old, f.new) for f in fx.fixes if f.applied] == [("(", "（"), (")", "）")]
+    assert res.supplement is not None and res.supplement.ok and res.supplement.typeset == 2
+    # 段落記号の削除の両側の直し（前の w:p の最後の「。」→「．」と、後ろの w:p の「2」→「２」。内容の違いの「資料」→「付録」は
+    # 書き込まない。W2。段落記号の削除をまたぐ 1 つの直しの書き込みは test_pdfmatch.test_fix_across_deleted_paragraph_mark）
     split = tmp_path / "split.docx"
     mf.make_pdfcheck(split, split=True)
-    d13 = "詳しくは付録の授業計画案を参照されたい，本業は２回行った。"
+    d13 = "詳しくは付録の授業計画案を参照されたい．授業は２回行った。"
     pages = ["\n".join(["（1）", *FRONT, PUB12, d13, *REST[1:]])]
     (tmp_path / "s").mkdir()
     res = convert_with_pages(tmp_path / "s", monkeypatch, journal, meta, pages, "pdf", docx=split)
-    texts = [(f.old, f.new) for f in res.docx_fix.fixes if f.applied and f.kind == "text"]
-    assert texts == [("資料", "付録"), ("。授", "，本")]
-    assert res.fidelity.ok and res.supplement.ok and res.supplement.supplied == len(texts)
+    assert [(f.old, f.new) for f in res.docx_fix.fixes if f.applied and f.src == "d13"] == [("。", "．"), ("2", "２")]
+    assert [(f.old, f.applied) for f in res.docx_fix.fixes if f.kind == "text"] == [("資料", False)]
+    assert res.fidelity.ok and res.supplement.ok
 
 
 # ---------------------------------------------------------------------------- 16. Word が付ける番号
@@ -280,7 +318,7 @@ def test_supplement_number_edits(new, ok, tmp_path):
     shutil.copyfile(PDFCHECK, tmp_path / "a.docx")
     original = {("auto", "d20"): "●", ("fnlist", "1"): "(1)"}
     numbers = {("auto", "d20"): new, ("fnlist", "1"): "（1）"}
-    sup = verify_supplement(tmp_path / "a.docx", PDFCHECK, [], set(), original, numbers)
+    sup = verify_supplement(tmp_path / "a.docx", PDFCHECK, set(), original, numbers)
     assert sup.ok == ok
     if not ok:
         assert sup.problems == [("auto:d20", "●", "◆", NUMBER_WHY)]
@@ -291,7 +329,8 @@ def test_supplement_number_edits(new, ok, tmp_path):
 # ---------------------------------------------------------------------------- 17. 照合の述語と同じ答え
 # 「İ」は大文字・小文字の対で lower() が 2 文字になる（C056）
 PAIR_CHARS = ([chr(c) for c in range(0x20, 0x7F)] + [chr(c) for c in range(0xFF01, 0xFF5F)]
-              + list(pdfmatch.HYPHENS + pdfmatch.DASHES) + list("\"“”'’‘＂＇") + list("●・〜～…") + list("İı"))
+              + list(pdfmatch.HYPHENS + pdfmatch.DASHES) + list("\"“”'’‘＂＇") + list("●・〜～…") + list("İı")
+              + list("．.。｡，,、､"))
 
 
 def test_supplement_pairs_agree_with_pdfmatch():
@@ -308,10 +347,10 @@ def test_supplement_pairs_agree_with_pdfmatch():
 def test_supplement_none_on_route1_and_fallback(journal, meta, tmp_path):
     """ルート1 と、PDF を読めなかったルート2 では補完の確かめを行わず（None）、1 章に行が出ない。"""
     res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "r1", pdf_path=PDFCHECK_PDF))
-    assert res.supplement is None and SUP_ROW not in report(res).split("## 2.")[0]
+    assert res.supplement is None and SUP_ROW not in report(res).split("## 1.")[1].split("## 2.")[0]
     (tmp_path / "broken.pdf").write_bytes(b"")
     res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "fb", pdf_path=tmp_path / "broken.pdf", route="pdf"))
-    assert res.pdf_fallback and res.supplement is None and SUP_ROW not in report(res).split("## 2.")[0]
+    assert res.pdf_fallback and res.supplement is None and SUP_ROW not in report(res).split("## 1.")[1].split("## 2.")[0]
 
 
 def test_source_texts_unchanged_by_check(journal, tmp_path):
@@ -320,7 +359,7 @@ def test_source_texts_unchanged_by_check(journal, tmp_path):
     fx = pdfdocx.make_fixed_docx(PDFCHECK, PDFCHECK_PDF, tmp_path / "fixed.docx", journal)
     before = fx.path.read_bytes()
     texts = source_texts(fx.path)
-    verify_supplement(PDFCHECK, fx.path, fx.fixes, fx.check.case_srcs, fx.check.original, {})
+    verify_supplement(PDFCHECK, fx.path, fx.check.case_srcs, fx.check.original, {})
     assert fx.path.read_bytes() == before and source_texts(fx.path) == texts
 
 
@@ -376,7 +415,8 @@ def test_supplement_space_not_left_alone_inside_other_authors_insertion(journal,
 
 def test_supplement_space_not_left_alone_when_structure_check_stops_width(journal, meta, tmp_path, monkeypatch):
     """(a) 構造の確かめ（_lost → _protect → _kept）が「(」の全角・半角の直しを止めるとき（「(」の範囲にかかるリンクが崩れる
-    ものとして）、その前の空白の削除だけが残らない。「)」と後ろの空白は止められた範囲にかからないので、今までどおり直す。"""
+    ものとして）、その前の空白の削除だけが残らない。「)」と後ろの空白は止められた範囲にかからないが、「)」は「(」と組のかっこなので
+    連動して止まり（Fix.pair。「(３）」にしない。点検 review16 の指摘）、後ろの空白も「)」に連動して止まる。"""
     pytest.importorskip("pypdfium2")
     calls = []
     orig = pdfdocx._lost
@@ -391,19 +431,22 @@ def test_supplement_space_not_left_alone_when_structure_check_stops_width(journa
     monkeypatch.setattr(pdfdocx, "_lost", lost)
     res = p1_convert(tmp_path, monkeypatch, journal, meta, P1_DOCX)
     assert len(calls) >= 2
-    assert p1_summary(res) == [("space", " ", "", False), ("width", "(", "（", False), ("width", ")", "）", True),
-                               ("space", " ", "", True)]
-    space, width = [f for f in res.docx_fix.fixes if f.src == "d12"][:2]
+    assert p1_summary(res) == [("space", " ", "", False), ("width", "(", "（", False), ("width", ")", "）", False),
+                               ("space", " ", "", False)]
+    space, width, close, after = [f for f in res.docx_fix.fixes if f.src == "d12"]
     assert width.reason == pdfdocx.STRUCTURE_REASON
     assert space.reason == f"全角・半角の直し「(」→「（」を直さないので、連動して直さない（その理由: {pdfdocx.STRUCTURE_REASON}）"
+    assert close.reason.startswith("かっこの組のもう片方の全角・半角の直し「(」→「（」を直さないので、連動して直さない")
+    assert after.reason.startswith("全角・半角の直し「)」→「）」を直さないので")
     assert res.fidelity.ok and res.supplement.ok and res.supplement.problems == []
-    assert "授業の最初に確認した値 (３）の後ろで，生徒は話し合いを続け，その様子を記録した。" in xml_texts(load(res))
+    assert P1_DOCX in xml_texts(load(res))
 
 
 def test_supplement_space_not_left_alone_when_note_number_is_kept(journal, meta, tmp_path, monkeypatch):
-    """(c) ある注の番号を直すと注を認識できなくなるとき、すべての注の番号を docx のままにする（NOTE_REASON）。別の注の番号の
+    """(c) ある注の番号を直すと注を認識できなくなるとき、すべての注の番号を docx のままにする（NOTE_REASON）。注の番号の
     括弧を半角にする直し（PDF「注(注3)もある」）と、その前の空白の削除（docx「注 （注3）もある」）は、いっしょに直さない。
-    注の番号でない文字の全角・半角（箇条の番号）は今までどおり直す。"""
+    注の番号でない文字の全角・半角（箇条の番号）は今までどおり直す。ほかの注番号の形の違い（「（注1）」→「1）」）は内容の違いで
+    書き込まない（W2）ので、注は崩れない。構造の確かめが「（注3）」の直しで注を崩すものとして（_lost を差し替える）確かめる。"""
     from conftest import NOTES
     pytest.importorskip("pypdfium2")
     src = tmp_path / "notes.docx"
@@ -415,17 +458,29 @@ def test_supplement_space_not_left_alone_when_note_number_is_kept(journal, meta,
                 assert text.count("注（注3）") == 1
                 blob = text.replace("注（注3）", "注 （注3）").encode("utf-8")
             zout.writestr(item, blob)
-    pages = ["本文の大きさで書いた注番号1）と，角括弧の注番号［注2］がある文。\n"
+    pages = ["注の書き方の検証用文書\n本文の大きさで書いた注番号1）と，角括弧の注番号［注2］がある文。\n"
              "箇条の番号（1）と（2）は注へのリンクにしない。2 段落からなる注(注3)もある。\n"
              "引用および参考文献\n試験三郎（2022）．「注の書き方」．『架空誌』，第3巻，pp.5-6．\n"
              "注\n１）本文の大きさで書かれた注番号の注である。\n［注2］角括弧で書かれた注番号の注である。\n"
              "３）2 段落からなる注の 1 段落目である。\n"]
     monkeypatch.setattr(pdfmatch, "extract_pages", lambda path: pages)
+    calls = []
+    orig = pdfdocx._lost
+
+    def lost(original, fixed):
+        calls.append(1)
+        found = orig(original, fixed)
+        if len(calls) == 1:
+            q = "箇条の番号 (1) と (2) は注へのリンクにしない。2 段落からなる注 （注3）もある。".index("（注3")
+            found.append(("d13", (q, q + 4), pdfdocx.NOTE_REASON, ""))     # 注の参照「（注3）」の範囲
+        return found
+    monkeypatch.setattr(pdfdocx, "_lost", lost)
     (tmp_path / "dummy.pdf").write_bytes(b"%PDF-1.4\n")
     res = convert(src, meta, journal, Options(out_dir=tmp_path / "o", pdf_path=tmp_path / "dummy.pdf", route="pdf"))
-    note = [f for f in res.docx_fix.fixes if f.src == "d13" and f.reason]
+    assert len(calls) >= 2
+    note = [f for f in res.docx_fix.fixes if f.src == "d13" and f.reason and f.kind != "text"]
     assert [(f.kind, f.old, f.new) for f in note] == [("space", " ", ""), ("width", "（", "("), ("width", "）", ")")]
-    assert note[1].reason == pdfdocx.NOTE_REASON
+    assert note[1].reason == note[2].reason == pdfdocx.NOTE_REASON
     assert note[0].reason == f"全角・半角の直し「（」→「(」を直さないので、連動して直さない（その理由: {pdfdocx.NOTE_REASON}）"
     assert ("d13", "(", "（") in {(f.src, f.old, f.new) for f in res.docx_fix.applied}
     assert res.fidelity.ok and res.fidelity.final_ok and res.supplement.ok and res.supplement.problems == []
@@ -499,7 +554,8 @@ def test_supplement_width_is_fixed_when_structure_check_stops_space(journal, met
 def test_supplement_space_after_note_number_does_not_follow_width(ins, journal, meta, tmp_path, monkeypatch):
     """根拠に Word が付ける番号（箇条の自動番号）と全角・半角の文字の両方がある空白（「● (一つ目)」の番号と「(」の間）は、番号だけで
     消してよい根拠があるので、「(」の全角・半角の直しに従わせない。「(」がほかの作成者の挿入の中で直せなくても、空白は消す
-    （drop_basis に両方の根拠が出る）。"""
+    （drop_basis に両方の根拠が出る）。直せない「(」の組の「)」は連動して止まり（Fix.pair。「(一つ目）」にしない。点検 review16 の
+    指摘）、その後ろの空白も「)」に連動して止まる。"""
     pytest.importorskip("pypdfium2")
     item = " (一つ目) の項目として，架空の授業の記録を集めた。"
     txt = ([" ", '<w:ins w:id="2" w:author="x"><w:r><w:t>(</w:t></w:r></w:ins>', "一つ目) の項目として，架空の授業の記録を集めた。"]
@@ -513,11 +569,11 @@ def test_supplement_space_after_note_number_does_not_follow_width(ins, journal, 
     src = next(s for s, p in res.docx_fix.check.drop_basis.items() if 0 in p)
     assert res.docx_fix.check.drop_basis[src][0] == {("number", "auto", src), ("width", 1)}
     fixes = [f for f in res.docx_fix.fixes if f.src == src]
-    assert [(f.kind, f.old, f.applied) for f in fixes] == [("space", " ", True), ("width", "(", not ins), ("width", ")", True),
-                                                          ("space", " ", True)]
+    assert [(f.kind, f.old, f.applied) for f in fixes] == [("space", " ", True), ("width", "(", not ins),
+                                                          ("width", ")", not ins), ("space", " ", not ins)]
     assert fixes[0].needs == [] and fixes[3].needs == [fixes[2]]
     assert res.fidelity.ok and res.supplement.ok and res.supplement.problems == []
-    assert ("(一つ目）の項目として，架空の授業の記録を集めた。" if ins else "（一つ目）の項目として，架空の授業の記録を集めた。") in xml_texts(load(res))
+    assert ("(一つ目) の項目として，架空の授業の記録を集めた。" if ins else "（一つ目）の項目として，架空の授業の記録を集めた。") in xml_texts(load(res))
 
 
 def test_supplement_rounds_keep_stopped_fixes_stopped(journal, meta, tmp_path, monkeypatch):
@@ -553,7 +609,8 @@ def test_supplement_rounds_keep_stopped_fixes_stopped(journal, meta, tmp_path, m
 
 def test_supplement_skipped_paragraph_keeps_linked_reason(journal, meta, tmp_path, monkeypatch):
     """読み直した文字列が合わず段落ごと直さない回（skip）でも、前の回に構造の確かめで止めた「(」に従う空白の削除の理由は、連動の理由の
-    まま（write_fixed_docx が skip の段落に飛ばす前に広げる）。ほかの直しの理由は「書き込んだ後に読み直した…」。次の回で何も復活しない。"""
+    まま（write_fixed_docx が skip の段落に飛ばす前に広げる）。組の「)」も「(」に連動した理由になり（Fix.pair）、その後ろの空白も
+    「)」に連動した理由になる。次の回で何も復活しない。"""
     pytest.importorskip("pypdfium2")
     lost_calls, verify_calls = [], []
     orig_lost, orig_verify = pdfdocx._lost, pdfdocx._verify
@@ -579,7 +636,8 @@ def test_supplement_skipped_paragraph_keeps_linked_reason(journal, meta, tmp_pat
     space1, width1, width2, space2 = [f for f in res.docx_fix.fixes if f.src == "d12"]
     assert width1.reason == pdfdocx.STRUCTURE_REASON
     assert space1.reason == f"全角・半角の直し「(」→「（」を直さないので、連動して直さない（その理由: {pdfdocx.STRUCTURE_REASON}）"
-    assert width2.reason == space2.reason == "書き込んだ後に読み直した文字列が合わなかった"
+    assert width2.reason.startswith("かっこの組のもう片方の全角・半角の直し「(」→「（」を直さないので")
+    assert space2.reason == f"全角・半角の直し「)」→「）」を直さないので、連動して直さない（その理由: {width2.reason}）"
     assert res.fidelity.ok and res.supplement.ok and P1_DOCX in xml_texts(load(res))
 
 
@@ -618,14 +676,14 @@ def test_write_fixed_docx_spreads_before_skipped_paragraph(journal, tmp_path):
 
 
 def test_report_shows_blank_only_cells_as_words(journal, meta, tmp_path, monkeypatch):
-    """レポート 13 章の表で、空白だけの文字（空白の削除の行の docx の欄）は空欄に見えないよう「（半角の空白）」と書く（F18）。
-    docx・XML の文字には影響しない（表示だけ）。他の欄の文字はそのまま。"""
+    """直せなかった表記の違い（空白の削除と全角・半角の直しが連動して止まったもの）は、13.2 に件数だけ載る（表にしない。W2 の手順 7）。
+    docx・XML の文字には影響しない。"""
     pytest.importorskip("pypdfium2")
     parts = ["授業の最初に確認した値 ", '<w:ins w:id="2" w:author="x"><w:r><w:t>(３)</w:t></w:r></w:ins>',
              " の後ろで，生徒は話し合いを続け，その様子を記録した。"]
     res = p1_convert(tmp_path, monkeypatch, journal, meta, parts)
     report = res.report_path.read_text(encoding="utf-8")
-    rows = [line for line in report.splitlines() if "連動して直さない" in line]
-    assert len(rows) == 2 and all(line.startswith("| d12 |") for line in rows), rows
-    assert [line.split("|")[3].strip() for line in rows] == ["（半角の空白）"] * 2, rows          # docx の欄
+    sec = report.split("### 13.2")[1].split("### 13.3")[0]
+    assert "合わせなかった表記の違い（docx のまま。確認は要りません）: 直せない位置にあるもの" in sec and " 4。" in sec
+    assert "連動して直さない" not in report and "|" not in sec
     assert P1_DOCX in xml_texts(load(res))

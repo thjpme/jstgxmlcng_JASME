@@ -117,7 +117,7 @@ def test_unseen_answer_leaves_ai_finish(journal, meta, tmp_path):
 
 
 def test_seen_answer_finishes(journal, meta, tmp_path):
-    """見た回答（ツールに PDF がないときは「見た（確かめられない）」）なら手順が済み、14 章の行は PDF を見たと書く。"""
+    """見た回答（ツールに PDF がないときは「見た（確かめられない）」）なら手順が済み、することの一覧の行は PDF を見たと書く。"""
     _, plan, _ = _mechanical(PLACE, journal)
     res = run(journal, meta, tmp_path, place_answer(plan))
     assert res.ai.pdf_seen in PDF_SEEN_OK == ("見た", "見た（確かめられない）") and res.ai.pdf_seen == "見た（確かめられない）"

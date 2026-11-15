@@ -1522,11 +1522,14 @@ def call_api(system_text, request_text, attachment, model=DEFAULT_MODEL, api_key
     text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
     out.raw = text
     served = getattr(msg, "model", None)
-    if isinstance(served, str) and served and served != model:
+    switched = any(getattr(b, "type", "") == "fallback" for b in msg.content)
+    if isinstance(served, str) and served and (served != model or switched):
         # 断られて切り替わったと書くのは、content に fallback の部があるときだけ（別名のモデル名で頼むと、応答の model が解決後の
-        # ID になることがあるので、名前の違いだけでは断られたと書かない。点検 review14 原則 3）
-        if any(getattr(b, "type", "") == "fallback" for b in msg.content):
-            note = f"安全上の判定で断られたため、{served} が回答した"
+        # ID になることがあるので、名前の違いだけでは断られたと書かない。点検 review14 原則 3）。fallback の部があれば、応答のモデル名が
+        # 指定と同じでも記録する（切り替わった先の名前が応答に出ないことがある。点検 review14 の残り 3）
+        if switched:
+            note = (f"安全上の判定で断られたため、{served} が回答した" if served != model
+                    else f"安全上の判定で断られ、別のモデルに切り替わった（応答のモデル名は指定と同じ {served}）")
         else:
             note = f"API の応答のモデル名は {served}（指定は {model}）"
         out.model_note = f"{out.model_note}。{note}" if out.model_note else note
@@ -2557,7 +2560,7 @@ def answerable_boxes(plan: ArticlePlan) -> list:
 def structure_lines(plan: ArticlePlan) -> list:
     """依頼の番号の構造の印にする行: リンク先（文献・図・表・式・注）と、位置を聞く図形（PDF を見たときだけ答える図形も）・種類を書ける
     テキストボックスの、ID と
-    先頭の文字（head_of。NFKC にして空白を除くので、ルート2 で全角・半角が補われても変わらない）。回答の ID（B3・F1・s1・x1 など）が
+    先頭の文字（head_of。NFKC にして空白を除くので、route pdf で全角・半角が補われても変わらない）。回答の ID（B3・F1・s1・x1 など）が
     指すものが、依頼文と同じかを決める。"""
     def first(paras):
         return next((h for h in (head_of(p) for p in paras) if h), "")
@@ -2728,6 +2731,8 @@ WIDE_UNSEEN_WHY = ("図形 {fid} は位置を機械的に決めた 2 段にま�
                    "PDF を見たかの確かめが「{seen}」だったので、機械的な位置のままにした")
 WIDE_CUT_WHY = ("図形 {fid} は位置を機械的に決めた 2 段にまたがる図表で、AI の位置は AI が出版版 PDF を見た回答のときだけ使うが、"
                 "途中で切れた回答なので PDF を見たかを確かめられず、機械的な位置のままにした")
+WIDE_NOPAGE_WHY = ("図形 {fid} は位置を機械的に決めた 2 段にまたがる図表で、AI の答えにページがなく、キャプションのある PDF のページ"
+                   "（{found}）と合うか確かめられないので、機械的な位置のままにした")
 WIDE_PAGE_WHY = ("図形 {fid} は位置を機械的に決めた 2 段にまたがる図表で、AI の答えのページ（{page}）が、キャプションのある PDF のページ"
                  "（{found}）と違うので、機械的な位置のままにした")
 
@@ -2751,7 +2756,9 @@ def wide_rejects(placements: dict, outcome: AIOutcome, plan: ArticlePlan = None,
             found = caption_page(float_caption_texts(plan.floats[fid]), squeezed)
             if found and found != placements[fid].get("page", 0):
                 spec = placements.pop(fid)
-                outcome.rejected.append((spec["op"], WIDE_PAGE_WHY.format(fid=fid, page=spec.get("page", 0), found=found)))
+                # page は 0 なら「答えにない」（ページ 0 はない。点検 review14 の残り 2）
+                why = WIDE_PAGE_WHY if spec.get("page", 0) else WIDE_NOPAGE_WHY
+                outcome.rejected.append((spec["op"], why.format(fid=fid, page=spec.get("page", 0), found=found)))
         return []
     for fid in wide:
         why = WIDE_CUT_WHY if outcome.partial else WIDE_UNSEEN_WHY

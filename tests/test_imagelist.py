@@ -116,15 +116,15 @@ def test_heading_follows_added_images(where):
 
 
 def test_report_points_to_the_html(where, journal, meta):
-    """レポートの 9 章の冒頭と 14 章、要確認 image_same の文は、図の確かめ.html を案内する。"""
+    """レポートの 9 章の冒頭、要確認 image_same の文は、図の確かめ.html を案内する。"""
     from jasme_jats.images import SlotImage  # noqa: F401
     from jasme_jats.report import actions
     name = check_name(where)
     text = where.report_path.read_text(encoding="utf-8")
-    assert name in text.split("## 9.")[1].split("## 10.")[0] and name not in text.split("## 14.")[1]      # 14 章は、1 枚でも入れてから
+    assert name in text.split("## 9.")[1].split("## 10.")[0] and name not in text.split("## することの一覧")[1].split("## 1.")[0]      # することの一覧は、1 枚でも入れてから
     same = ("a1.png", __import__("conftest").key_png(1))
     add_images(where, {i.key: same for i in where.images[:2]})
-    after = where.report_path.read_text(encoding="utf-8").split("## 14.")[1]
+    after = where.report_path.read_text(encoding="utf-8").split("## することの一覧")[1].split("## 1.")[0]
     lines = [x for x in after.splitlines() if x.startswith("- [")]
     k = next(n for n, x in enumerate(lines) if "図の画像" in x)
     assert name in lines[k + 1]          # 手順 images の行の直後

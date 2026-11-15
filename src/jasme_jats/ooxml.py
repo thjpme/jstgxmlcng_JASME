@@ -7,7 +7,7 @@
 
 文字ポリシー
   「docx の文字」は、Word で表示される文字（変更履歴をすべて承諾し、隠し文字を隠した状態）とする。読み取り（docx_reader）・
-  検証（canonical_text・canonical_texts。fidelity.source_texts）・ルート2（pdfdocx.paragraph_units・write_fixed_docx）の 3 か所は、
+  検証（canonical_text・canonical_texts。fidelity.source_texts）・route pdf（pdfdocx.paragraph_units・write_fixed_docx）の 3 か所は、
   ここに置く規則（段落のつながり joined_paragraphs と、隠し文字の判定 HiddenRule）を共有し、文字の取り出しはそれぞれ別の実装で行う。
   含める: w:t, m:t（数式中の文字）, w:tab / w:ptab（タブ文字）, 改行 w:br / w:cr（改行文字）,
           w:noBreakHyphen（U+2011）, w:softHyphen（U+00AD）, w:sym（記号フォント〈Symbol・Wingdings 系。SYMBOL_TABLES〉は Unicode に
@@ -106,7 +106,7 @@ def choose_alternate(ac):
     MCE（ECMA-376 Part 3）の規則: Choice の Requires（空白区切りの接頭辞）を名前空間に解決し、すべてが本ツールの読める名前空間
     （UNDERSTOOD_NS）である最初の Choice を採る。なければ Fallback を採る。接頭辞が宣言されていなければ読めない名前空間とみなす。
     Fallback がなく、読める Choice もないときは、最初の Choice を採る（Word は読めても本ツールが知らない名前空間かもしれない。
-    文字を落とさない側に倒す）。読み取り・検証・ルート2 が前処理（preprocess）と _dropped_by_preprocess で共有する。
+    文字を落とさない側に倒す）。読み取り・検証・route pdf が前処理（preprocess）と _dropped_by_preprocess で共有する。
     """
     choices = ac.findall(f"{{{MC_NS}}}Choice")
     for ch in choices:
@@ -315,10 +315,10 @@ def map_symbol_text(font: str, text: str):
 
 
 def w_t_text(t_el, run=None):
-    """w:t の文字（読み取り・検証・ルート2 が共有する規則）。記号フォント（Symbol・Wingdings 系）のランの w:t にある
+    """w:t の文字（読み取り・検証・route pdf が共有する規則）。記号フォント（Symbol・Wingdings 系）のランの w:t にある
     私用領域の文字は、w:sym と同じ表で Unicode にする（map_symbol_text）。戻り値: (文字, [(元の文字, 置き換えた文字)])。
     run: w:t の属するラン。省略すれば w:t の親。前処理（preprocess）をしていない木で mc:AlternateContent の中の w:t を読むとき
-    （ルート2 の pdfdocx.paragraph_units）は、前処理後に w:t がランの子になるので、そのランを渡す。"""
+    （route pdf の pdfdocx.paragraph_units）は、前処理後に w:t がランの子になるので、そのランを渡す。"""
     text = t_el.text or ""
     if not any("\uf020" <= c <= "\uf0ff" for c in text):
         return text, []
@@ -348,7 +348,7 @@ def resultless_field_kind(code: str):
 
 
 class HiddenRule:
-    """隠し文字（w:vanish）の判定。読み取り・検証・ルート2 の 3 か所が同じ規則を使う（どれも word/styles.xml から作る）。
+    """隠し文字（w:vanish）の判定。読み取り・検証・route pdf の 3 か所が同じ規則を使う（どれも word/styles.xml から作る）。
 
     修正計画（docs/FIX_PLAN.md の G）の規則。スタイルと既定の書式の w:vanish は、ECMA-376 の切り替えの性質（toggle property。
     スタイルで真なら、それまでの状態を反転させ、偽なら変えない）として扱い、ランの直接の指定はその値そのものにする。
@@ -464,7 +464,7 @@ def _join_target(p) -> tuple:
 def joined_paragraphs(root) -> dict:
     """段落記号が削除された段落の連鎖 {連鎖の最初の w:p: [w:p, w:p, ...]}（2 段落以上のものだけ。文書の順）。
 
-    読み取り・検証・ルート2 が同じ規則でつなぐ。前処理した木（mc:AlternateContent を mc:Choice に置き換えたもの。
+    読み取り・検証・route pdf が同じ規則でつなぐ。前処理した木（mc:AlternateContent を mc:Choice に置き換えたもの。
     DocxPackage.xml）に対して呼ぶ（前処理しない木では mc:Fallback の中の写しもつないでしまう）。
     """
     link = {}
@@ -500,7 +500,7 @@ def in_deleted_run(p) -> bool:
     """段落 p が、変更履歴で削除された要素（w:del・w:moveFrom）の中にあるか。
 
     段落が削除の中に入るのは、削除されたランの図形（テキストボックス）の中の段落だけ。Word で承諾すると図形ごと消えるので、
-    読み取りは図形を読まない（その段落の ID は欠番になる）。検証・ルート2 も同じ規則で、その段落を数えない。
+    読み取りは図形を読まない（その段落の ID は欠番になる）。検証・route pdf も同じ規則で、その段落を数えない。
     """
     return any(a.tag in (w("del"), w("moveFrom")) for a in p.iterancestors())
 

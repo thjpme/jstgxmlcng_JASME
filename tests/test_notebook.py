@@ -339,7 +339,7 @@ def test_step8_does_not_stop_with_only_checks(monkeypatch, tmp_path):
     meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり"})
     res = convert(PDFCHECK, meta, JournalConfig.load(), Options(out_dir=tmp_path / "output", pdf_path=PDFCHECK_PDF,
                                                                 route="docx"))
-    assert [a.key for a in actions(res)] == ["pdf_diff"] and {a.level for a in actions(res)} == {TO_CHECK}
+    assert [a.key for a in actions(res)] == ["pdf_mismatch"] and {a.level for a in actions(res)} == {TO_CHECK}
     assert not res.needs_action
     downloaded = []
     ns = {"DONE": {1, 2, 3, 4, 5}, "res": res, "files": types.SimpleNamespace(download=downloaded.append),
@@ -349,14 +349,35 @@ def test_step8_does_not_stop_with_only_checks(monkeypatch, tmp_path):
     assert "出版版 PDF と文字が違う箇所" in shown[-1]
 
 
-def test_step2_route_defaults_to_published_pdf():
-    """作り方の初期値は「docx から作り、出版版 PDF で補う」。PDF がないときは「docx から作る」を案内する。"""
+def test_step2_has_no_route_choice():
+    """手順 2 に作り方（ROUTE）の欄はない。PDF があれば表記を PDF に合わせ（ROUTE_KEY は pdf）、なければ docx のまま。PDF を選ばなくても止まらない。"""
+    import sys
+    import types
     src = cell_source("#@title 2.")
-    assert 'ROUTE = "docx から作り、出版版 PDF で補う"  #@param ["docx から作り、出版版 PDF で補う", "docx から作る"]' in src
-    ns = {"DONE": {1}, "ROUTE": "docx から作り、出版版 PDF で補う", "UPLOAD_PDF": False}
-    body = src.split("from google.colab import files\n", 1)[1].split("WORK = ", 1)[0]
-    with pytest.raises(SystemExit, match="「docx から作る」"):
-        exec(body, ns)
+    assert "ROUTE =" not in src and "ROUTE（" not in src and "作り方" not in src
+    assert 'ROUTE_KEY = "pdf" if pdf_path else "docx"' in src
+    uploads = []
+    colab = types.ModuleType("google.colab")
+    colab.files = types.SimpleNamespace(upload=lambda: uploads.pop(0))
+    google = types.ModuleType("google")
+    google.colab = colab
+    old = {k: sys.modules.get(k) for k in ("google", "google.colab")}
+    sys.modules["google"], sys.modules["google.colab"] = google, colab
+    try:
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as d:
+            body = src.replace('Path("/content/jasme_work")', f"Path({d!r})").replace("UPLOAD_PDF = True", "UPLOAD_PDF = False")
+            ns = {"DONE": {1}, "UPLOAD_PDF": False}
+            uploads[:] = [{"B.docx": b"PK"}]
+            exec(body, ns)
+            assert ns["ROUTE_KEY"] == "docx" and ns["pdf_path"] is None and 2 in ns["DONE"]
+    finally:
+        for k, v in old.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
 
 
 def test_steps5_and_6_show_result_boxes():
@@ -432,16 +453,16 @@ def test_step3_reads_full_width_numbers_and_common_dates(capsys):
 
 
 def test_failed_step_drops_later_steps(monkeypatch, tmp_path):
-    """途中で止まった手順の後では、後ろの手順の「済み」が残らない（unmark）。手順 2（PDF を選ばずに止まる）・手順 3（受付日の誤り）・
+    """途中で止まった手順の後では、後ろの手順の「済み」が残らない（unmark）。手順 2（docx を選ばずに止まる）・手順 3（受付日の誤り）・
     手順 6（変換が例外で止まる）で確かめる。"""
     import sys
     import types
 
     from conftest import FULL
 
-    from jasme_jats.colab import report_details, result_boxes, structure_conflict_box, summary_box
+    from jasme_jats.colab import report_details, result_boxes, structure_conflict_box, summary_box, wrong_paper_box
     from jasme_jats.config import ArticleMeta, JournalConfig
-    from jasme_jats.pipeline import Options, StructureConflictError, add_images, convert
+    from jasme_jats.pipeline import Options, StructureConflictError, WrongPaperError, add_images, convert
     uploads = []
     files = types.SimpleNamespace(upload=lambda: uploads.pop(0), download=lambda p: None)
     colab = types.ModuleType("google.colab")
@@ -451,10 +472,10 @@ def test_failed_step_drops_later_steps(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "google", google)
     monkeypatch.setitem(sys.modules, "google.colab", colab)
     work = f"Path({str(tmp_path)!r})"
-    # 手順 2: docx は選んだが、PDF を選ばずに止まる
+    # 手順 2: docx を選ばずに止まる（PDF は選ばなくても止まらない）
     src2 = cell_source("#@title 2.").replace('Path("/content/jasme_work")', work)
     ns = {"DONE": {1, 2, 3, 4, 5}}
-    uploads[:] = [{"B.docx": b"PK"}, {}]
+    uploads[:] = [{}]
     with pytest.raises(SystemExit):
         exec(src2, ns)
     assert ns["DONE"] == {1}
@@ -478,7 +499,8 @@ def test_failed_step_drops_later_steps(monkeypatch, tmp_path):
             "meta": ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり"}),
             "convert": convert, "Options": Options, "add_images": add_images, "result_boxes": result_boxes,
             "summary_box": summary_box, "report_details": report_details, "HTML": lambda x: x, "display": shown.append,
-            "StructureConflictError": StructureConflictError, "structure_conflict_box": structure_conflict_box}
+            "StructureConflictError": StructureConflictError, "structure_conflict_box": structure_conflict_box,
+            "WrongPaperError": WrongPaperError, "wrong_paper_box": wrong_paper_box}
     ns6 = dict(base, DONE={1, 2, 3, 4, 5, 7, 8}, convert=boom)
     with pytest.raises(RuntimeError):
         exec(src6, ns6)
@@ -493,14 +515,17 @@ def test_steps5_and_6_stop_on_structure_conflict(monkeypatch, tmp_path):
     手順 6（守り）も同じ。どちらも `DONE` から 5 を消すので、手順 7〜8 は先に進めない。セル 5・6 に error_box( は書かない。"""
     from test_structure import conflict_doc
 
-    from jasme_jats.colab import prompt_box, report_details, result_boxes, structure_conflict_box, summary_box
+    from jasme_jats.colab import prompt_box, report_details, result_boxes, structure_conflict_box, summary_box, wrong_paper_box
     from jasme_jats.config import ArticleMeta, JournalConfig
-    from jasme_jats.pipeline import Options, StructureConflictError, add_images, convert
+    from jasme_jats.pipeline import Options, StructureConflictError, WrongPaperError, add_images, convert
     for prefix in ("#@title 5.", "AI_RESPONSE = r'''"):
         src = cell_source(prefix)
         assert "except StructureConflictError as e:" in src and "display(HTML(structure_conflict_box(str(e))))" in src
         assert "上の赤い枠のとおり Word で原稿を直して保存し、手順 2 から選び直してやり直してください。" in src
         assert "error_box(" not in src
+        # 別の論文の PDF での中止（W4）。手順 5・6 のどちらも、赤い枠を出して SystemExit で止まる
+        assert "except WrongPaperError as e:" in src and "display(HTML(wrong_paper_box(str(e))))" in src
+        assert "手順 2 から選び直してやり直してください。" in src
     shown = fake_display(monkeypatch)
     path = conflict_doc(tmp_path, "K1_ref_ref")
     base = {"AI": "manual", "PROVIDER": "claude", "API_MODEL": "x", "WORK": tmp_path, "OUT": tmp_path / "output",
@@ -510,6 +535,7 @@ def test_steps5_and_6_stop_on_structure_conflict(monkeypatch, tmp_path):
             "convert": convert, "Options": Options, "add_images": add_images, "result_boxes": result_boxes,
             "summary_box": summary_box, "report_details": report_details, "prompt_box": prompt_box,
             "StructureConflictError": StructureConflictError, "structure_conflict_box": structure_conflict_box,
+            "WrongPaperError": WrongPaperError, "wrong_paper_box": wrong_paper_box,
             "HTML": lambda x: x, "display": shown.append}
     ns5 = dict(base, DONE={1, 2, 3, 4})
     with pytest.raises(SystemExit, match="上の赤い枠のとおり Word で原稿を直して保存し"):
@@ -521,3 +547,30 @@ def test_steps5_and_6_stop_on_structure_conflict(monkeypatch, tmp_path):
     with pytest.raises(SystemExit, match="手順 2 から選び直して"):
         exec(cell_source("AI_RESPONSE = r'''").replace("ここに AI の回答を貼り付ける", "{}", 1), ns6)
     assert 5 not in ns6["DONE"] and ns6["DONE"] == {1, 2, 3, 4}
+
+
+def test_step3_fills_empty_fields_from_pdf_only(monkeypatch, capsys, tmp_path):
+    """手順 3: PDF があれば、空の欄だけ PDF の値で埋めて名前を表示する。入力した欄は変えず、食い違いはここで出さない（変換の後の meta_pdf に任せる）。
+    手順 2 は、PDF から読んだ値を表示する。PDF の文字は架空。"""
+    from jasme_jats import pdfmatch
+    pages = ["数学教育学研究 第 7 巻 第 2 号 2030 pp.11〜24\n2029年6月1日投稿受付\n2029年11月20日採用決定\n本文"]
+    monkeypatch.setattr(pdfmatch, "extract_pages", lambda path: pages)
+    src3 = cell_source("#@title 3.")
+    assert "fill_missing" in src3 and "meta_pdf" in src3 and "PDF をアップロードしたときは" in src3
+    assert "不一致" not in src3 and "mismatches" not in src3          # 食い違いはここで出さない（知らせは report.actions() だけ）
+    s = src3.replace('peer_review = "（選んでください）"  #@param', 'peer_review = "査読あり"  #@param').replace(
+        'volume = ""  #@param', 'volume = "9"  #@param', 1)
+    ns = {"DONE": {1, 2}, "docx_path": Path("a.docx"), "pdf_path": tmp_path / "a.pdf"}
+    exec(s, ns)
+    out = capsys.readouterr().out
+    mi = ns["meta_input"]
+    assert (mi["volume"], mi["issue"], mi["fpage"], mi["lpage"], mi["received"], mi["accepted"]) == (
+        "9", "2", "11", "24", "2029-06-01", "2029-11-20")                   # 入力した巻 9 は、PDF の 7 に変えない
+    assert "※ 号・最初のページ・最後のページ・受付日・受理日は、PDF から読んだ値を使いました" in out and "巻・" not in out.split("※")[1]
+    # PDF なしでは何も埋めない
+    ns = {"DONE": {1, 2}, "docx_path": Path("a.docx")}
+    exec(s, ns)
+    assert ns["meta_input"]["issue"] == "" and "PDF から読んだ値" not in capsys.readouterr().out
+    # 手順 2: 読んだ値を表示する
+    src2 = cell_source("#@title 2.")
+    assert "from jasme_jats.pdfbiblio import biblio_inputs, read_biblio" in src2 and "手順 3 の欄が空のときは、この値を使います" in src2

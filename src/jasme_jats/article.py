@@ -343,7 +343,7 @@ class ArticlePlan:
     # 出版版 PDF との照合では、今までどおり表のセルとして扱う（照合しない・直さない。linker.body_paragraphs の文脈 "cell"）
     cell_paras: set = field(default_factory=set)
     layout: object = None                            # 本文の段組みと行の設定（model.Layout）
-    pdf_numbers: dict = field(default_factory=dict)  # ルート2: Word が付ける番号を PDF に合わせたもの: (種類, ID) -> 文字列（pdfmatch）
+    pdf_numbers: dict = field(default_factory=dict)  # route pdf: Word が付ける番号を PDF に合わせたもの: (種類, ID) -> 文字列（pdfmatch）
     note_of: dict = field(default_factory=dict)      # Word の脚注・文末脚注の段落 ID -> 注の鍵（model.note_key。参照のない注も）
     warnings: list = field(default_factory=list)     # 構造の組み立ての警告（pipeline がレポートの 10 章の警告に加える）
     abstract_ja: list = field(default_factory=list)  # 英文要旨の中の、かな・漢字が 3 割以上の段落 ID（自動では移さない。要確認）

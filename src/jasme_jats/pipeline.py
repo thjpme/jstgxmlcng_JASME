@@ -3,7 +3,7 @@
   1. docx を読み取る（docx_reader）
   2. 段落の役割を決め、論文の構造を組み立てる（structure）。そのまま組み立てると段落の文字が XML にも除外の記録にも入らなくなる
      構造（同じ種類の後付けの見出し・英文要旨の見出しが 2 つ、著者名の付かない所属。K1・K2）は plan.structure_conflicts に記録され、
-     組み立ての直後（AI を呼ぶ前。ルート2 は補った docx を作る前の元の docx で）に StructureConflictError で変換を中止する
+     組み立ての直後（AI を呼ぶ前。route pdf は補った docx を作る前の元の docx で）に StructureConflictError で変換を中止する
   3. 機械的にリンクを付ける（linker, refparse）
   4. （任意。推奨の手順）AI による仕上げ: AI の回答（種類ごとの一覧）を 1 件ずつ検証し、構造の組み直し・リンクの追加として適用する
      （ai_assist。スタイルの提案は記録だけ）。先に、どの依頼文への回答かを依頼の番号で確かめ、別の論文・図表や文献の並びが
@@ -30,14 +30,13 @@
      （package, report）。docx の中の画像は書き出さない（図・表の画像は作業する人が用意し、add_images で入れる。入れるたびに
      XML を apply_images で作り直し、文字・DTD・J-STAGE のチェック・ZIP の確かめをやり直す。修正計画 W1 の 2.6）
 
-作り方は 2 通り（Options.route）:
-  ルート1（docx）: docx から作る。docx の文字は 1 文字も変えない。記事の PDF があれば照合して、違いをレポートに載せるだけ（pdfmatch）
-  ルート2（pdf） : docx から作り、出版版 PDF で補う。Word の文字が正で、著者校正の直し（(B)）と、組版の違い（(A)。全角・半角・
-                   ダッシュ・引用符など）を PDF に合わせた docx（Word の変更履歴つき）を先に作り（pdfdocx）、それをルート1 と同じ処理で
-                   変換する。Word が付ける番号（自動番号・脚注番号）は docx の文字ではないので、変換のときに全角・半角と字形を PDF に
-                   合わせる（照合しない段落〈表のセル・囲み・別行数式〉と、付記・謝辞・注・引用文献・資料・英文要旨の
-                   見出しの番号は Word の形のまま）。最後に、補った docx が元の docx から (A) と報告した (B) 以外に変わっていないことを確かめる
-                   （補完の確かめ。fidelity.verify_supplement）
+表記を出版版 PDF に合わせるか（Options.route）。画面・ノートブックでは、PDF があれば pdf、なければ docx（利用者は選ばない）:
+  docx: docx の文字のまま変換する。記事の PDF があれば照合して、違いをレポートに載せるだけ（pdfmatch。コマンドラインの --route docx）
+  pdf : 表記の違い（(1)。全角・半角・句読点・ダッシュ・引用符など）を PDF に合わせた docx（Word の変更履歴つき。内容の違いは書き込まない。
+        pdfdocx.hold）を先に作り（pdfdocx）、それを docx と同じ処理で変換する。Word の文字が正。Word が付ける番号（自動番号・脚注番号）は
+        docx の文字ではないので、変換のときに全角・半角と字形を PDF に合わせる（照合しない段落〈表のセル・囲み・別行数式〉と、
+        付記・謝辞・注・引用文献・資料・英文要旨の見出しの番号は Word の形のまま）。最後に、補った docx が元の docx から
+        組版の違い（区分 (1)）以外に変わっていないことを確かめる（補完の確かめ。fidelity.verify_supplement）
 """
 from __future__ import annotations
 
@@ -66,10 +65,11 @@ from .linker import cited_refs, link
 from .model import Decision, Decoration, LostImage, LostNumber, PuaChar, TableProblem
 from .package import (XLINK_HREF, apply_images, article_dir, make_zip, unzipped_files, write_package, zip_image_names,
                       zip_problems)
+from .pdfbiblio import PdfBiblio, read_biblio
 from .pdfdocx import DocxFix, make_fixed_docx, same_file
 from .pdfmatch import PdfCheck, check_pdf
 from .report import (actions, blocking, decoration_where, pdf_unseen, render, render_ai_only, slot_where, step,
-                     structure_conflict_text)
+                     structure_conflict_text, wrong_paper_text)
 from .report import pdf_fallback as report_pdf_fallback
 from .structure import FN_IMAGE_EXCLUDED, REF_IMAGE_EXCLUDED, classify, conflict_overrides, float_caption
 from .ooxml import is_pua
@@ -90,6 +90,20 @@ class StructureConflictError(Exception):
         self.plan = plan
         self.conflicts = list(plan.structure_conflicts)
         super().__init__(structure_conflict_text(plan))
+
+
+class WrongPaperError(Exception):
+    """docx と出版版 PDF が別の論文か、大きく違う版のようなので、変換を中止した（pdfmatch.paper_verdict が wrong。題目が PDF の最初の
+    ページに見つからず、段落の半分以上が見つからない）。
+
+    StructureConflictError と同じ形の例外の表示（report.actions の知らせではない）。文の中の画面の操作は目印（report.step）で書き、
+    画面に出すときは colab.step_text で語に置き換える（colab.wrong_paper_box）。XML・ZIP・レポート・補った docx は作らない。
+    テストが判定の内訳を見られるよう、判定した照合の結果（pdf_check）を持つ。
+    """
+
+    def __init__(self, plan, pdf_check, docx_name: str, pdf_name: str, line: str = ""):
+        self.pdf_check = pdf_check
+        super().__init__(wrong_paper_text(plan, pdf_check, docx_name, pdf_name, line))
 
 
 # AI の区切りの指定（boundaries）を、構造の衝突（K1・K2）ができるので使わなかったときの理由（レポートの 2 章の不採用の一覧に出る。_reject_roles）
@@ -170,7 +184,7 @@ class Options:
     ai_api_key: Optional[str] = None
     ai_response: Optional[str] = None         # 手動モード: AI の回答（JSON）
     pdf_path: Optional[Path] = None
-    route: str = "docx"                       # docx（ルート1: docx から作る）/ pdf（ルート2: docx から作り、出版版 PDF で補う）
+    route: str = "docx"                       # docx（docx の文字のまま。PDF とは照合するだけ）/ pdf（表記を出版版 PDF に合わせた docx を作って変換する）
     # 前の変換の AI回答.json（ai_assist.ANSWER_FILE）の中身。API モードで meta（依頼の番号・提供元・モデル・PDF の渡し方）が今回と
     # すべて同じなら、API を呼ばずにその回答を使う（ai_assist.cached_answer。修正計画 W8 の 4.6）。手動モードでは使わない
     ai_cache: Optional[str] = None
@@ -201,10 +215,11 @@ class Result:
     tracked_changes: int = 0
     comments: int = 0
     has_pdf: bool = False
-    pdf_check: Optional[PdfCheck] = None                # 出版版 PDF との照合（PDF がなければ None）。ルート2 では補った docx との照合
+    pdf_check: Optional[PdfCheck] = None                # 出版版 PDF との照合（PDF がなければ None）。route pdf では補った docx との照合
     lost_images: list = field(default_factory=list)     # 画像を入れる場所（置き場所）を作れなかった docx の画像（LostImage。要対応 lost）
     image_problems: list = field(default_factory=list)  # XML の画像の名前が置き場所の一覧と合わない（image_problems の文。要対応 image_names）
     decorations: list = field(default_factory=list)     # 画像の位置に数えなかった飾りの図形（model.Decoration。9 章。知らせない）
+    pdf_biblio: Optional[PdfBiblio] = None              # 出版版 PDF の 1 ページ目から読んだ書誌情報（PDF がなければ None。入力との違いは要対応・要確認 meta_pdf）
     lost_autonums: list = field(default_factory=list)   # Word の自動番号があるのに XML に番号を出さなかった段落（model.LostNumber。要対応）
     pua_chars: list = field(default_factory=list)       # 最終の XML に残った私用領域の文字（model.PuaChar。要対応 pua_left）
     symbols_replaced: list = field(default_factory=list)  # 記号フォントの私用領域の符号を置き換えた記号（model.SymbolReplaced。要確認 symbol_replaced。8 章）
@@ -224,9 +239,9 @@ class Result:
     # 確かめてもらう和文の著者名の分け方 [(段落 ID, builder.EasternSplit)]（BuildInfo.name_splits。要確認 name_split）
     name_splits: list = field(default_factory=list)
     route: str = "docx"
-    docx_fix: Optional[DocxFix] = None                  # ルート2: 出版版 PDF で補った docx と、補った箇所・直さなかった箇所
-    # ルート2 の補完の確かめ（fidelity.SupplementResult。補った docx が元の docx から、組版の違いと報告した校正の直し以外に
-    # 変わっていないか）。ルート1 と、PDF の文字を読めずに補わなかったときは None
+    docx_fix: Optional[DocxFix] = None                  # route pdf: 出版版 PDF で補った docx と、補った箇所・直さなかった箇所
+    # route pdf の補完の確かめ（fidelity.SupplementResult。補った docx が元の docx から、組版の違い（区分 (1)）以外に
+    # 変わっていないか）。route docx と、PDF の文字を読めずに補わなかったときは None
     supplement: Optional[SupplementResult] = None
     xml_base: bytes = b""       # 画像の置き場所をすべて書いた XML（目印を除いた形。名前の拡張子は .png。最終の XML は apply_images で作る）
     images_dropped: list = field(default_factory=list)  # 変換し直す前の画像のうち、入れ直さなかったもの（images.DroppedImage。手順 images と 9 章で知らせる）
@@ -243,7 +258,7 @@ class Result:
 
     @property
     def ok(self) -> bool:
-        """文字の不変性チェック・最終出力の再チェック・DTD 検証と、ルート2 の補完の確かめ（supplement があるとき）がすべて合格
+        """文字の不変性チェック・最終出力の再チェック・DTD 検証と、route pdf の補完の確かめ（supplement があるとき）がすべて合格
         （要対応の有無は needs_action）。"""
         return bool(self.fidelity.ok and self.fidelity.final_ok and self.dtd_valid
                     and (self.supplement is None or self.supplement.ok))
@@ -257,7 +272,7 @@ class Result:
 
     @property
     def pdf_fallback(self) -> bool:
-        """ルート2（docx から作り、出版版 PDF で補う）で PDF の文字を読めず、docx を補わずに変換した（要対応。M4）。"""
+        """route pdf（出版版 PDF に合わせる）で PDF の文字を読めず、docx を補わずに変換した（要対応。M4）。"""
         return report_pdf_fallback(self)
 
 
@@ -560,7 +575,7 @@ def pua_chars(plan, root, doc) -> list:
 def symbols_replaced(plan, root, doc) -> list:
     """記号フォントの私用領域の符号を Unicode の文字に置き換えたもの（model.SymbolReplaced。置き換えたものだけ）のうち、XML に
     出力したもの。箇条書きの記号は、XML に生成文字（jx:gen kind autonum、src が段落）として出し、その中に置き換えた文字があるもの
-    （ルート2 で番号を PDF の字形に合わせたときは、置き換えた文字が残らないので除く）、w:sym・w:t の記号は、段落の文字を XML に出した
+    （route pdf で番号を PDF の字形に合わせたときは、置き換えた文字が残らないので除く）、w:sym・w:t の記号は、段落の文字を XML に出した
     （jx:span がある）もの。文書の順。"""
     spans = {sp.get("src") for sp in root.iter(SPAN)}
     gens = {}
@@ -639,7 +654,7 @@ def _mechanical(docx_path, journal, overrides=None, placements=None):
 
 
 def fixed_docx_path(docx_path, out_dir, article_id: str) -> Path:
-    """ルート2 の、出版版 PDF で補った docx の書き出し先。出力フォルダの「<記事 ID>_PDFで補完した原稿.docx」。
+    """route pdf の、出版版 PDF で補った docx の書き出し先。出力フォルダの「<記事 ID>_PDFで補完した原稿.docx」。
 
     入力の docx がそのファイル（利用者が前回の補った docx を保存して、同じ出力フォルダでかけ直した）なら、入力を読みながら
     上書きして壊してしまうので、末尾に番号を付けた別の名前（「…_PDFで補完した原稿_2.docx」…）にする。別の名前は、入力とも、
@@ -655,9 +670,9 @@ def fixed_docx_path(docx_path, out_dir, article_id: str) -> Path:
 
 
 def _drop_fixed(docx_fix, fixed_path):
-    """ルート2 で、この変換が書いた「出版版 PDF で補った docx」を消す（変換を中止するとき、中止のあとに残さない）。
+    """route pdf で、この変換が書いた「出版版 PDF で補った docx」を消す（変換を中止するとき、中止のあとに残さない）。
 
-    docx_fix が None（ルート1、または PDF の文字を読めず docx を作らなかった）なら何もしない: 前の変換が書いた同じ名前のファイルは、
+    docx_fix が None（route docx、または PDF の文字を読めず docx を作らなかった）なら何もしない: 前の変換が書いた同じ名前のファイルは、
     この変換のものではないので消さない。"""
     if docx_fix is not None and fixed_path is not None:
         Path(fixed_path).unlink(missing_ok=True)
@@ -670,22 +685,24 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     split = journal.split_labels if opts.split_labels is None else opts.split_labels
 
     docx_name = docx_path.name
-    original_docx = docx_path       # 元の docx（ルート2 で docx_path を補った docx に差し替える前。補完の確かめで使う）
+    original_docx = docx_path       # 元の docx（route pdf で docx_path を補った docx に差し替える前。補完の確かめで使う）
     docx_fix = None
     fixed_path = None
     if opts.route == "pdf":
-        # ルート2: 出版版 PDF で補った docx（変更履歴つき）を作り、以降はそれを変換する
+        # route pdf: 出版版 PDF で補った docx（変更履歴つき）を作り、以降はそれを変換する
         if not opts.pdf_path:
-            raise ValueError("docx から作り、出版版 PDF で補う（ルート2）には、記事の PDF が必要です")
+            raise ValueError("表記を PDF に合わせる（route が pdf）には、記事の PDF が必要です")
         fixed = fixed_path = fixed_docx_path(docx_path, out_dir, meta.article_id(journal))
         # 構造の確かめ（K1・K2）は、補う前の docx で行う（補った docx を残さない。O7）。
-        # 校正の直し（(B)）で見出しの重複が消える原稿でも、利用者が直すのは元の docx なので、元の docx の抜粋を見せて中止する。
+        # 補った docx で見出しの重複が消える原稿でも、利用者が直すのは元の docx なので、元の docx の抜粋を見せて中止する。
         # fixed_docx_path は入力と同じパスにならない（入力がその名前なら番号つきの別の名前）ので、入力は消えない。
         # 位置を決められない図表があっても中止しない（AI の仕上げは推奨の手順。修正計画 W8 の決定 4）
         _, plan0, _ = _mechanical(docx_path, journal)
         if plan0.structure_conflicts:
             raise StructureConflictError(plan0)
         docx_fix = make_fixed_docx(docx_path, opts.pdf_path, fixed, journal)
+        if docx_fix.check.verdict == "wrong":      # 別の論文の PDF: 補った docx は書いていない。何も作らずに中止する
+            raise WrongPaperError(plan0, docx_fix.check, docx_name, Path(opts.pdf_path).name, read_biblio(opts.pdf_path, journal).line)
         if docx_fix.check.ok:
             docx_path = fixed
         else:                   # PDF の文字を読めなかった: 元の docx をそのまま変換する（レポートに理由を出す）
@@ -694,7 +711,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     doc, plan, linker = _mechanical(docx_path, journal)
     if plan.structure_conflicts:
         # AI を呼ぶ前に止める（API の費用をかけず、手動モードでも AI依頼文.txt を書かない）。AI が直せる形（2 つ目の「注」に p など）
-        # でも、元の docx で止めて Word で直してもらう。ルート2 で、この run が補った docx を書いていれば消す（(1) をすり抜けたときだけ）。
+        # でも、元の docx で止めて Word で直してもらう。route pdf で、この run が補った docx を書いていれば消す（(1) をすり抜けたときだけ）。
         # 位置を決められない図表は、AI を使わなくても、結び付いた段落の後ろ（本文の外なら本文の最後）に置いて変換を続ける（W8 の決定 4）
         _drop_fixed(docx_fix, fixed_path)
         raise StructureConflictError(plan)
@@ -841,10 +858,14 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     if opts.pdf_path:
         marks = {wid: m for wid, (_, m) in word_note_marks(plan, journal).items()}
         pdf_check = check_pdf(plan, opts.pdf_path, fn_marks=marks)
+        if pdf_check.verdict == "wrong":        # 別の論文の PDF（route pdf は上の補う前の照合で中止している。守り）。XML などは作らない
+            _drop_fixed(docx_fix, fixed_path)
+            raise WrongPaperError(plan, pdf_check, docx_name, Path(opts.pdf_path).name, read_biblio(opts.pdf_path, journal).line)
         if opts.route == "pdf" and pdf_check.number_edits:
-            # ルート2: Word が付ける番号（docx の文字ではない）の全角・半角と字形（「●」→「・」）を PDF に合わせて組み立て直す
+            # route pdf: Word が付ける番号（docx の文字ではない）の全角・半角と字形（「●」→「・」）を PDF に合わせて組み立て直す
             plan.pdf_numbers = pdf_check.number_edits
             root, info = build(plan, meta, journal, split)
+    pdf_biblio = read_biblio(opts.pdf_path, journal) if opts.pdf_path else None
 
     # ---------------------------------------------------------------- 検証（最終段階）
     fid = verify(docx_path, root, plan.exclusions + info.exclusions)
@@ -855,15 +876,15 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     final_check(root, xml_bytes, fid)
     valid, errors = validate(xml_bytes, dtd_places(plan))
 
-    # 補完の確かめ（ルート2 で補った docx を作ったときだけ）: 補った docx が元の docx から、組版の違い（(A)）と 13.1 に報告した
-    # 校正の直し（(B)）以外に変わっていないか。AI の再変換・DTD 検証の作り直しで docx は変わらないので、1 回でよい
+    # 補完の確かめ（route pdf で補った docx を作ったときだけ）: 補った docx が元の docx から、表記の違い（区分 (1)）以外に
+    # 変わっていないか（照合・直しの結果は渡さない）。AI の再変換・DTD 検証の作り直しで docx は変わらないので、1 回でよい
     supplement = None
     if docx_fix is not None:
         # 大文字・小文字を (A) とする段落と番号の元の文字は、照合（pdfmatch）を通さず plan から別に作る（独立の確かめ）
         case_srcs, numbers_original = supplement_targets(
             plan, {wid: m for wid, (_, m) in word_note_marks(plan, journal).items()})
         autonum_srcs = {src for kind, src in numbers_original if kind == "auto"}   # 自動番号のある段落
-        supplement = verify_supplement(original_docx, docx_path, docx_fix.fixes, case_srcs, numbers_original,
+        supplement = verify_supplement(original_docx, docx_path, case_srcs, numbers_original,
                                        plan.pdf_numbers, autonum_srcs)
 
     # 画像の出力漏れ（不変性チェックは文字しか見ない）
@@ -954,7 +975,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         link_counts=linker.count, unresolved_after=unresolved_after, images=images, warnings=warnings, ai=outcome,
         build_notes=build_notes, hidden_text=doc.hidden_text, tracked_changes=doc.tracked_changes,
         comments=doc.comments, has_pdf=has_pdf, xml_path=flat_xml, zip_path=zip_path,
-        prompt_path=prompt_path, pdf_name=Path(opts.pdf_path).name if opts.pdf_path else "", pdf_check=pdf_check, route=opts.route, docx_fix=docx_fix,
+        prompt_path=prompt_path, pdf_name=Path(opts.pdf_path).name if opts.pdf_path else "", pdf_check=pdf_check, pdf_biblio=pdf_biblio, route=opts.route, docx_fix=docx_fix,
         supplement=supplement, lost_images=lost, hidden_images=hidden_images,
         lost_autonums=lost_numbers, unshown_numbers=list(info.unshown_numbers), pua_chars=pua_left, symbols_replaced=symbols,
         table_problems=table_issues, tables_checked=tables_checked, zip_issues=zip_problems(zip_path, journal, meta, images),

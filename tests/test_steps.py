@@ -76,14 +76,14 @@ def test_checklist_order_steps_then_needs_action_then_to_check():
             make(TO_CHECK, "c2"), make(STEP, "req"), make(NEEDS_ACTION, "n2")]
     assert [a.key for a in checklist_order(acts)] == ["req", "rec", "n1", "n2", "c1", "c2"]
     # PDF の項目は、それぞれの区分の中で先
-    acts = [make(TO_CHECK, "c1"), make(TO_CHECK, "pdf_diff")]
-    assert [a.key for a in checklist_order(acts)] == ["pdf_diff", "c1"]
+    acts = [make(TO_CHECK, "c1"), make(TO_CHECK, "pdf_mismatch")]
+    assert [a.key for a in checklist_order(acts)] == ["pdf_mismatch", "c1"]
 
 
 def test_checklist_in_report_puts_step_before_others(journal, meta, tmp_path):
     from conftest import OUTSIDE
     res = convert(OUTSIDE, meta, journal, Options(out_dir=tmp_path, ai_mode="manual"))
-    chapter14 = res.report_path.read_text(encoding="utf-8").split("## 14.")[1]
+    chapter14 = res.report_path.read_text(encoding="utf-8").split("## することの一覧")[1].split("## 1.")[0]
     ai = next(a for a in report.actions(res) if a.key == "ai_finish")
     other = next(a for a in report.actions(res) if a.key == "float_end")        # 要確認
     assert chapter14.index(ai.checklist) < chapter14.index(other.checklist)
@@ -92,7 +92,7 @@ def test_checklist_in_report_puts_step_before_others(journal, meta, tmp_path):
 
 
 def report_head(res):
-    return res.report_path.read_text(encoding="utf-8").split("## 2.")[0]
+    return res.report_path.read_text(encoding="utf-8").split("## 1.")[1].split("## 2.")[0]
 
 
 def test_step_marks_are_replaced_on_three_screens(journal, meta, tmp_path):
@@ -122,7 +122,7 @@ def test_result_boxes_blocking_only(journal, meta, tmp_path):
 # ---------------------------------------------------------------------------- AI の仕上げ（推奨の手順 ai_finish）と float_end（修正計画 W8 の手順 1）
 def test_ai_finish_is_recommended_and_does_not_block(journal, meta, tmp_path):
     """AI を使わずに位置を決められない図形のある原稿（sample_float）を変換すると、推奨の手順 ai_finish（未実行）が出る。図の画像を
-    入れれば needs_action は偽（推奨の手順は止めない）。レポートの冒頭の囲みには出さず、14 章に「（推奨）」の行が出る。"""
+    入れれば needs_action は偽（推奨の手順は止めない）。レポートの冒頭の囲みには出さず、することの一覧に「（推奨）」の行が出る。"""
     from conftest import FLOAT, fill_images
     res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path))
     fill_images(res)
@@ -130,7 +130,7 @@ def test_ai_finish_is_recommended_and_does_not_block(journal, meta, tmp_path):
     assert (fin.level, fin.required, fin.done, fin.failed) == (STEP, False, False, False)
     assert not res.needs_action and blocking(report.actions(res)) == []
     text = res.report_path.read_text(encoding="utf-8")
-    head, ch14 = text.split("## 1.")[0] + text.split("## 1.")[1].split("## 2.")[0], text.split("## 14.")[1]
+    head, ch14 = text.split("## 1.")[1].split("## 2.")[0], text.split("## することの一覧")[1].split("## 1.")[0]
     assert "AI で図・表の位置を合わせる" not in head
     assert "- [ ] （推奨）AI で図・表の位置を合わせる: " in ch14 and "ノートブックは手順 4〜6" in ch14
 
@@ -204,7 +204,7 @@ def test_ai_finish_has_five_states(journal, meta, tmp_path):
     assert report.ai_state(res) == "済み" and report.ai_done(res)
     assert (fin.done, fin.failed, fin.progress, fin.cli) == (True, False, "済み", "")
     assert fin.checklist.startswith("- [x] AI が出版版 PDF を見て、図・表 ") and colab._box(fin) == ""       # 済んだ手順は枠を出さない
-    assert "- [x] AI が出版版 PDF を見て、図・表 " in res.report_path.read_text(encoding="utf-8").split("## 14.")[1]
+    assert "- [x] AI が出版版 PDF を見て、図・表 " in res.report_path.read_text(encoding="utf-8").split("## することの一覧")[1].split("## 1.")[0]
     res, fin = got["一部"]
     assert report.ai_state(res) == "一部" and (fin.done, fin.failed, fin.progress) == (False, False, "一部・残り 3 個")
     assert "AI の回答で位置が決まったのは 3 個のうち 0 個です。" in fin.box_detail and report.step("repaste") in fin.box_detail

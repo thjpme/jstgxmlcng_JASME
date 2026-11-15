@@ -69,7 +69,7 @@ def test_no_ai_does_not_stop_when_a_float_cannot_be_placed(journal, meta, tmp_pa
     rows = [u[3] for u in res.unresolved_after if u[0] == "float"]
     assert len(rows) == 3 and all(r.startswith("結び付いた段落の後ろ（段落「") and "手作業" not in r for r in rows)
     report = res.report_path.read_text(encoding="utf-8")
-    assert "3 件（結び付いた段落の後ろ）" in report and "（推奨）AI で図・表の位置を合わせる" in report.split("## 14.")[1]
+    assert "3 件（結び付いた段落の後ろ）" in report and "（推奨）AI で図・表の位置を合わせる" in report.split("## することの一覧")[1].split("## 1.")[0]
     # コマンドラインは、図の画像を入れれば終了コード 0（推奨の手順は数えない）
     pics = image_folder(tmp_path / "pics", [i.key for i in res.images if i.status == "missing"])
     capsys.readouterr()
@@ -855,7 +855,7 @@ def test_cut_response_applies_only_finished_placements(journal, meta, tmp_path):
     detail = {u[1]: u[3] for u in res.unresolved_after if u[0] == "float"}
     assert detail["d18"].endswith("。AI の回答が途中で切れていて、この図表の位置の指定を読み取れなかった")
     report = res.report_path.read_text(encoding="utf-8")
-    head, ch2, ch14 = report.split("## 2.")[0], report.split("## 2.")[1].split("## 3.")[0], report.split("## 14.")[1]
+    head, ch2, ch14 = report.split("## 1.")[1].split("## 2.")[0], report.split("## 2.")[1].split("## 3.")[0], report.split("## することの一覧")[1].split("## 1.")[0]
     assert "要対応: AI の回答が途中で切れていました" not in head and "AI の回答が途中で切れていました。" in ch2
     assert "AI の回答が途中で切れていた（2 章）" in ch14 and "位置を決められなかった図表" not in head
     from jasme_jats.report import NEEDS_ACTION, actions

@@ -31,12 +31,12 @@ def test_summary_box_and_report_details(journal, meta, tmp_path, monkeypatch):
     html = summary_box(res)
     assert "結果の要約" in html and "文字の不変性チェック: 合格" in html and "DTD 検証: 合格" in html
     assert "J-STAGE のアップロード時チェック: 問題なし" in html and "出版版 PDF との照合: PDF なし" in html
-    assert "#b91c1c" not in html and "PDF で補った docx" not in html
+    assert "#b91c1c" not in html and "表記を PDF に合わせた docx" not in html
     res.dtd_valid = False
     assert "color:#b91c1c !important;font-weight:bold'>DTD 検証: 不合格" in summary_box(res)
     # ルート2 で補った docx の名前。PDF の文字を読めなかったときは、補えなかったことを赤い文字で
     res.docx_fix = SimpleNamespace(path=tmp_path / "31_1_PDFで補完した原稿.docx")
-    assert "PDF で補った docx: 31_1_PDFで補完した原稿.docx（変更履歴つき" in summary_box(res)
+    assert "表記を PDF に合わせた docx: 31_1_PDFで補完した原稿.docx（変更履歴つき" in summary_box(res)
     # 補完の確かめ（ルート2 で行ったときだけ。不合格は赤字）
     assert "補完の確かめ" not in summary_box(res)
     res.supplement = SimpleNamespace(ok=True)
@@ -46,7 +46,7 @@ def test_summary_box_and_report_details(journal, meta, tmp_path, monkeypatch):
     res.supplement = None
     res.docx_fix = None
     monkeypatch.setattr(type(res), "pdf_fallback", property(lambda self: True))
-    assert "font-weight:bold'>PDF で補った docx: 作れませんでした" in summary_box(res)
+    assert "font-weight:bold'>表記を PDF に合わせた docx: 作れませんでした" in summary_box(res)
     md = "# 変換レポート\n\n| 項目 | 結果 |\n|---|---|\n| 不変性 | 合格 |\n\n> **注意** <b>\n"
     html = report_details(md)
     assert html.index("<details") < html.index("<summary") and "変換レポートの全文を見る" in html
@@ -127,25 +127,22 @@ def test_missing_images_box(journal, meta, tmp_path):
     assert missing_images_box(convert(FULL, meta, journal, Options(out_dir=tmp_path / "f"))) != ""
 
 
-def test_pdf_diff_box_shows_formula_and_insert_marks():
-    """ルート2 の赤い枠の直さなかった箇所の docx の文字は、レポートの 13.3 と同じ形にする（docx の数式・画像は「〓」、PDF に
-    だけある文字は、足す位置の前後の docx の文字と「［］」）。同じ記号の 2 つの意味（docx の数式と、PDF で読み取れない部分）を
-    一覧の前に添える（MATH_WHY の行。docx の数式の位置の行と、PDF にだけある文字の行）。"""
-    from pathlib import Path
+def test_pdf_diff_box_shows_formula_mark_and_excerpt():
+    """要確認 pdf_mismatch の枠の docx の文字は、前後 10 文字つきで、違う部分を［ ］で示す。数式などの位置（U+FFFC）は「［数式など］」
+    と表示する（XML・docx の文字は変えない）。PDF にだけある文字は docx の欄の［ ］を空にする。"""
     from types import SimpleNamespace
-    from jasme_jats.colab import pdf_diff_box
-    from jasme_jats.pdfdocx import DocxFix, Fix
-    from jasme_jats.pdfmatch import MATH_WHY, PdfCheck
-    text = "値の組（￼，￼）を順に調べ，その確率を表に記録した。"
+    from jasme_jats.colab import _box
+    from jasme_jats.report import pdf_actions
+    from jasme_jats.pdfmatch import PdfCheck, TextDiff
+    text = "値の組（\ufffc，\ufffc）を順に調べ，その確率を表に記録した。"
     at = text.index("を表")
-    fx = DocxFix(Path("31_1_PDFで補完した原稿.docx"), texts={"d12": text},
-                 fixes=[Fix("d12", 4, 5, "〓，〓", "text", old="￼", reason=MATH_WHY),
-                        Fix("d12", at, at, "（〓，…，〓とおく）", "text", reason=MATH_WHY)])
-    html = pdf_diff_box(SimpleNamespace(pdf_check=PdfCheck(), docx_fix=fx))
-    assert "￼" not in html and "・d12: 「〓」→「〓，〓」" in html
-    assert "・d12: 「…に調べ，その確率［］を表に記録した。」→「（〓，…，〓とおく）」" in html
-    assert "docx の側の「〓」は docx の数式・画像、PDF の側の「〓」は PDF で数式など文字として読み取れない部分です。" in html
-    assert "docx の側の「［］」は、docx に文字がなく PDF にだけ文字がある位置です" in html
+    para = SimpleNamespace(plain=lambda: text)
+    pc = PdfCheck(diffs=[TextDiff("d12", "\ufffc", "式", "", 4, 5), TextDiff("d12", "", "平均", "", at, at)])
+    res = SimpleNamespace(pdf_check=pc, docx_fix=None, plan=SimpleNamespace(paras={"d12": para}, locations={"d12": "本文 1 章"}))
+    html = "".join(_box(a) for a in pdf_actions(res))     # result_boxes は report.actions を通す。ここは PDF の知らせだけの代用の結果
+    assert "\ufffc" not in html and "出版版 PDF と文字が違う箇所が 2 件あります" in html
+    assert "・本文 1 章（d12）: docx「値の組（［［数式など］］，［数式など］）を順に調べ，そ…」→ PDF「式」" in html
+    assert "・本文 1 章（d12）: docx「…を順に調べ，その確率［］を表に記録した。」→ PDF「平均」（docx にはない）" in html
 
 
 def test_abort_display_for_ai_is_gone():
@@ -264,7 +261,10 @@ def test_step_words_cover_every_mark_in_report():
     used = set()
     for module in (report, pipeline, app):    # 目印は report.py・pipeline.py（StructureConflictError の文）・app.py（CRASH_ADVICE）で使う
         used |= set(re.findall(r"step\((?:'|\")(\w+)(?:'|\")\)", Path(module.__file__).read_text(encoding="utf-8")))
-    assert used == set(report.STEP_NAMES)                 # 使っていない目印・表にない目印がない
+    # 使っていない目印・表にない目印がない。route は手順 14 で作り方の欄とともになくした（知らない目印は ValueError）
+    assert used == set(report.STEP_NAMES) and "route" not in report.STEP_NAMES
+    with pytest.raises(ValueError):
+        report.step("route")
     assert step_text(report.step("docx") + "から", "notebook") == "手順 2 から"     # 1ffed92 までの文と同じ（助詞の前の空白）
     assert step_text(report.step("pdf") + "で選んだ", "notebook") == "手順 2 で選んだ"
     assert step_text(report.step("images") + "で、", "notebook") == "手順 7「図の画像を入れる」で、"
@@ -301,7 +301,7 @@ def test_no_mark_left_in_any_screen(journal, meta, tmp_path):
     レポート（.md）と top・checklist・cli の文にも目印は出ない。make_notebook.py が使う box_detail も、置き換えれば目印は残らない。"""
     from conftest import EDGE, FLOAT, FULL, OUTSIDE, PDFCHECK, PDFCHECK_PDF, PLACE, STRUCTURE, TABLEFIG
 
-    from jasme_jats.colab import lost_images_box, missing_images_box, pdf_diff_box, result_boxes, step_text
+    from jasme_jats.colab import lost_images_box, missing_images_box, result_boxes, step_text
     from jasme_jats.pipeline import Options, convert
     from jasme_jats.report import actions
     cases = [(docx, Options(out_dir=tmp_path / f"c{k}{mode}", ai_mode=mode))
@@ -320,8 +320,7 @@ def test_no_mark_left_in_any_screen(journal, meta, tmp_path):
             for screen in ("app", "cli"):
                 assert not re.search(r"手順 ?\d", step_text(a.box_detail, screen) + step_text(a.box_title, screen)), a.key
         for screen in ("notebook", "app"):
-            html = result_boxes(res, screen=screen) + missing_images_box(res, screen) + lost_images_box(res, screen) \
-                + pdf_diff_box(res, screen)
+            html = result_boxes(res, screen=screen) + missing_images_box(res, screen) + lost_images_box(res, screen)
             assert "\x00" not in html, screen
             assert screen == "notebook" or not re.search(r"手順 ?\d", html)      # 青い枠の見出し「手順:」は区分の名前
     assert {"ai_finish", "textbox_undecided"} <= seen      # 目印を使う知らせを実際に通した
@@ -385,7 +384,7 @@ def test_ai_required_message_names_the_modes_of_each_screen(journal, meta, tmp_p
     assert "手動（チャットに貼り付け）" in labels and "API（Claude）" in labels             # 画面の選択肢の名前と同じ
     assert "API で自動実行" not in page and "\x00" not in page
     st = app.AppState(tmp_path / "work")
-    st.set_inputs(route="docx", docx=str(FLOAT), volume="31", issue="1", fpage="1", lpage="12", peer_review="査読あり",
+    st.set_inputs(docx=str(FLOAT), volume="31", issue="1", fpage="1", lpage="12", peer_review="査読あり",
                   manuscript_type=app.type_choices()[0], ai_mode="none")
     st.convert()                                                    # 1 画面版も中止しない
     assert st.res is not None and "ai_finish" in [a.key for a in actions(st.res)]
@@ -406,7 +405,7 @@ def test_notebook_sentences_equal_those_before_marks(journal, meta, tmp_path):
     from jasme_jats.pipeline import Options, convert
     res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "p", pdf_path=PDFCHECK_PDF,
                                                    route="docx"))
-    assert ("校正の直しを補うときは、手順 2 で「docx から作り、出版版 PDF で補う」を選んで変換し直すか、docx を直して"
+    assert ("XML は docx の文字のままです（表記も PDF に合わせていません）。PDF が正しければ、Word で docx を直して"
             "手順 2 からやり直してください。") in result_boxes(res)
     res = convert(OUTSIDE, meta, journal, Options(out_dir=tmp_path / "o", ai_mode="manual"))
     assert "Word で直した docx を手順 2 でアップロードし直し、そこから順にやり直してください" in result_boxes(res)

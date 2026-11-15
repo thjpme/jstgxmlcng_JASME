@@ -158,7 +158,7 @@ def body_paragraphs(plan: ArticlePlan):
     図・表のキャプションの 2 段落目以降（caption_more。出典の行など）も、キャプションと同じ文脈 caption で返す（引用・URL・注番号を
     リンクにし、出版版 PDF との照合にも入れる）。
     囲み（文字だけのテキストボックス。BoxNode）の段落も cell とする（別行数式は formula。リンクは本文と同じく付ける。出版版 PDF
-    との照合では、テキストボックスの段落として照合しない・ルート2 で直さない。0.24.1 と同じ扱い）。
+    との照合では、テキストボックスの段落として照合しない・route pdf で直さない。0.24.1 と同じ扱い）。
     注の節の中の表（FnNode.tables）のキャプションは caption、セルは cell（本文の表と同じ。注番号はリンクしない。Linker.run）。
     """
     cells = plan.cell_paras

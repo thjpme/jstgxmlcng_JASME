@@ -111,18 +111,18 @@ def test_docx_images_are_not_exported(journal, meta, tmp_path):
 
 
 def test_images_step_in_summary_checklist_and_chapter9(journal, meta, tmp_path):
-    """図の画像を入れる手順（必須。修正計画 W1 の 4.1・4.4）: 冒頭の囲みには出さず、1 章の「画像」の行・14 章の先頭の行・9 章の表に出す。
-    全部入れると、14 章は済んだ行（[x]）になり、手順は止めない。"""
+    """図の画像を入れる手順（必須。修正計画 W1 の 4.1・4.4）: 冒頭の囲みには出さず、1 章の「画像」の行・することの一覧の先頭の行・9 章の表に出す。
+    全部入れると、することの一覧は済んだ行（[x]）になり、手順は止めない。"""
     from jasme_jats.report import STEP, actions, render
     res = convert(TEMPLATE, meta, journal, Options(out_dir=tmp_path))
     [act] = [a for a in actions(res) if a.key == "images"]
     assert (act.level, act.required, act.done, act.progress, act.top) == (STEP, True, False, "あと 1 枚／全部で 1 枚", "")
     assert res.needs_action
     report = res.report_path.read_text(encoding="utf-8")
-    top, ch9, ch14 = report.split("## 2.")[0], report.split("## 9.")[1].split("## 10.")[0], report.split("## 14.")[1]
+    top, ch9, ch14 = report.split("## 1.")[1].split("## 2.")[0], report.split("## 9.")[1].split("## 10.")[0], report.split("## することの一覧")[1].split("## 1.")[0]
     assert "| 画像 | 図の画像 0/1 枚を入れた（残り 1 枚。9 章） |" in top and "図の画像を入れてください" not in top
     assert "- [ ] **図の画像を入れる（あと 1 枚／全部で 1 枚）**（9 章）: fig01（図1\u3000三角形ABC）" in ch14
-    assert ch14.index("図の画像を入れる") < ch14.index("著者名")          # 手順は 14 章の先頭（要確認の前）
+    assert ch14.index("図の画像を入れる") < ch14.index("著者名")          # 手順は することの一覧の先頭（要確認の前）
     assert "Word の原稿の中の画像は使いません" in ch9 and "| fig01 | 図1\u3000三角形ABC |" in ch9 and "| 未 |" in ch9
     fill_images(res)
     [act] = [a for a in actions(res) if a.key == "images"]
@@ -649,7 +649,7 @@ def test_files_put_by_hand_are_not_zipped(journal, meta, tmp_path):
     report = res.report_path.read_text(encoding="utf-8")
     tenth = report.split("## 10.")[1].split("## 11.")[0]
     assert "ZIP に入れなかった" in tenth and "`memo.txt`" in tenth and "対応は要りません" in tenth
-    assert "ZIP に入れなかったファイル 1 件（10 章）" in report.split("## 2.")[0]
+    assert "ZIP に入れなかったファイル 1 件（10 章）" in report.split("## 1.")[1].split("## 2.")[0]
 
 
 def test_empty_pdf_is_reported_by_zip_check(journal, meta, tmp_path):
@@ -660,7 +660,7 @@ def test_empty_pdf_is_reported_by_zip_check(journal, meta, tmp_path):
     assert res.has_pdf and "EMSGM059E" in [mid for mid, _ in res.zip_issues]
     assert res.jstage_issues == []                          # XML のチェックとは分けて持つ
     report = res.report_path.read_text(encoding="utf-8")
-    assert "要対応 1 件（12 章）" in report.split("## 2.")[0]
+    assert "要対応 1 件（12 章）" in report.split("## 1.")[1].split("## 2.")[0]
     assert "| EMSGM059E |" in report.split("## 12.")[1].split("## 13.")[0]
 
 
@@ -696,7 +696,7 @@ def test_pdf_of_previous_run_is_not_zipped(journal, meta, tmp_path):
     assert "jasme/31/1/31_1/31_1.pdf" not in _names(r2.zip_path)
     assert not any("31_1.pdf" in w for w in r2.warnings)     # 警告（10 章の箇条）ではなく not_zipped に持つ
     report = r2.report_path.read_text(encoding="utf-8")
-    pdf_line = next(line for line in report.split("## 14.")[1].splitlines() if "PDF（31_1.pdf）" in line)
+    pdf_line = next(line for line in report.split("## することの一覧")[1].split("## 1.")[0].splitlines() if "PDF（31_1.pdf）" in line)
     assert pdf_line.startswith("- [ ]") and "--pdf" in pdf_line and "手順 2" in pdf_line
     tenth = report.split("## 10.")[1].split("## 11.")[0]
     assert "`31_1.pdf`" in tenth and "--pdf" in tenth and "手順 2" in tenth
@@ -797,7 +797,7 @@ def test_dates_accept_common_forms():
 
 # ---------------------------------------------------------------------------- 要対応・要確認の知らせ（修正計画 D の U2）
 def test_upload_issues_are_needs_action(journal, tmp_path):
-    """J-STAGE のアップロード時チェックの問題（受付日が受理日より後など）は要対応: レポートの冒頭と 14 章に出し、
+    """J-STAGE のアップロード時チェックの問題（受付日が受理日より後など）は要対応: レポートの冒頭に出し、
     コマンドラインは 1 を返して、標準エラーにメッセージ ID を出す。"""
     from jasme_jats.config import ArticleMeta
     from jasme_jats.report import NEEDS_ACTION, actions
@@ -808,9 +808,9 @@ def test_upload_issues_are_needs_action(journal, tmp_path):
     act = next(a for a in actions(res) if a.key == "upload")
     assert act.level == NEEDS_ACTION and "EMSGM106E" in act.box_detail and "EMSGM106E" in act.cli
     report = res.report_path.read_text(encoding="utf-8")
-    assert "要対応: J-STAGE のアップロード時チェック" in report.split("## 2.")[0]
-    assert "EMSGM106E" in report.split("## 2.")[0]
-    ch14 = report.split("## 14.")[1]
+    assert "要対応: J-STAGE のアップロード時チェック" in report.split("## 1.")[1].split("## 2.")[0]
+    assert "EMSGM106E" in report.split("## 1.")[1].split("## 2.")[0]
+    ch14 = report.split("## することの一覧")[1].split("## 1.")[0]
     assert any("J-STAGE のアップロード時チェック" in line and "12 章" in line for line in ch14.splitlines())
 
 
@@ -885,16 +885,16 @@ def test_fidelity_failure_is_needs_action(journal, meta, tmp_path):
     assert [a.key for a in others(res)] == ["name_split"] and not res.needs_action
     res.fidelity.ok = False
     assert res.needs_action and not res.ok
-    head = render(res).split("## 2.")[0]
+    head = render(res).split("## 1.")[1].split("## 2.")[0]
     assert ("> **注意: 文字の不変性チェックが不合格です。** 出力された XML の本文が docx と一致していません。"
             "下の 5 章の差分を確認し、この XML は登載に使わないでください（変換ツールの不具合の可能性があります）。") in head
-    assert "文字の不変性チェックが不合格" in render(res).split("## 14.")[1]
+    assert "文字の不変性チェックが不合格" in render(res).split("## することの一覧")[1].split("## 1.")[0]
     res.fidelity.ok = True
     res.dtd_valid, res.dtd_errors = False, ["31_1.xml:3: Element body content does not follow the DTD"]
     assert res.needs_action
     report = render(res)
-    assert "要対応: J-STAGE 指定の DTD による検証が不合格です（1 件、12 章）" in report.split("## 2.")[0]
-    assert "DTD 検証が不合格" in report.split("## 14.")[1]
+    assert "要対応: J-STAGE 指定の DTD による検証が不合格です（1 件、12 章）" in report.split("## 1.")[1].split("## 2.")[0]
+    assert "DTD 検証が不合格" in report.split("## することの一覧")[1].split("## 1.")[0]
 
 
 def test_manual_mode_before_answer_is_recommended_step(journal, meta, tmp_path, capsys):
@@ -910,7 +910,7 @@ def test_manual_mode_before_answer_is_recommended_step(journal, meta, tmp_path, 
     assert "手動モード: 「AI依頼文.txt」をチャット" not in report      # 冒頭の手動モードの説明（Result.output_note）はなくした
     ch2 = report.split("## 2.")[1].split("## 3.")[0]
     assert "AI の回答をまだ反映していません（手動モード）。AI依頼文.txt をチャット" in ch2 and "| 状態 | 回答待ち |" in ch2
-    assert "AI の回答をまだ反映していない" not in report.split("## 14.")[1]
+    assert "AI の回答をまだ反映していない" not in report.split("## することの一覧")[1].split("## 1.")[0]
     from conftest import META_EXAMPLE
     assert main([str(FULL), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "b"), "--ai", "manual",
                  "--images", str(image_folder(tmp_path / "pics", keys))]) == 0
@@ -1040,7 +1040,7 @@ def test_cell_breaks_in_emitter():
 def test_reader_report_and_notices(journal, meta, tmp_path, capsys):
     """sample_reader のレポート: 6 章につないだ段落と読み飛ばした表の行、隠し文字の改行・記号、スタイルで隠した文字、10 章に改行の
     一覧、4 章にスタイルの違う段落をつないだ判断。スタイル・既定の書式で隠した文字（規則が暫定）と、題目・引用文献の改行は要確認
-    （冒頭・14 章・Colab の枠・コマンドライン。終了コード 0）。"""
+    （冒頭・Colab の枠・コマンドライン。終了コード 0）。"""
     from conftest import META_EXAMPLE, READER
 
     from jasme_jats.cli import main
@@ -1070,13 +1070,13 @@ def test_reader_report_and_notices(journal, meta, tmp_path, capsys):
     acts = {a.key: a for a in others(res)}             # 図の画像を入れる手順のほかの知らせ
     assert list(acts) == ["style_hidden", "newline"] and {a.level for a in acts.values()} == {TO_CHECK}
     assert [a.key for a in blocking(actions(res))] == ["images"]
-    head = report.split("## 2.")[0]
+    head = report.split("## 1.")[1].split("## 2.")[0]
     assert ("要確認: Word のスタイル（段落スタイル・文字スタイル）や既定の書式の設定で隠し文字になっている文字が 8 段落あり、XML に"
             "出力していません（6 章）") in head
     assert "「〔文字スタイルで隠す〕」" in head and "〔直接の指定で隠す〕" not in head
     assert "要確認: 題目・著者・所属・引用文献の段落の中に、改行（Shift+Enter）が 2 か所あります（10 章）" in head
     assert "（題目・副題）、" in head and "（引用文献）" in head
-    ch14 = report.split("## 14.")[1]
+    ch14 = report.split("## することの一覧")[1].split("## 1.")[0]
     assert "**スタイルの設定で隠し文字になっているもの**（文字が 8 段落。6 章）" in ch14
     assert "**題目・著者・所属・引用文献の中の改行**（2 か所。10 章）" in ch14
     boxes = result_boxes(res)
@@ -1221,13 +1221,17 @@ def test_structure_conflict_route2_stops_before_fixed_docx(journal, meta, tmp_pa
     assert list(out.iterdir()) == []
 
 
-def test_route2_without_ai_does_not_stop_for_floats(journal, meta, tmp_path):
+def test_route2_without_ai_does_not_stop_for_floats(journal, meta, tmp_path, monkeypatch):
     """ルート2 で AI を使わない設定でも、位置を決められない図表（sample_float）で中止せず（修正計画 W8 の決定 4）、出版版 PDF で
     補った docx が出力フォルダに残る（前は補った docx を作る前に AIRequiredError で中止していた。O7）。"""
-    pytest.importorskip("pypdfium2")
-    from conftest import FLOAT, PDFCHECK_PDF
+    from conftest import FLOAT
+
+    from jasme_jats import pdfmatch
+    # 題目だけが PDF にある（別の論文の PDF と判定して中止しない。段落の半分以上が見つからないので要確認 pdf_suspect）
+    monkeypatch.setattr(pdfmatch, "extract_pages", lambda path: ["浮動配置の図表の検証用文書\n"])
+    (tmp_path / "dummy.pdf").write_bytes(b"%PDF-1.4\n")
     out = tmp_path / "out"
-    res = convert(FLOAT, meta, journal, Options(out_dir=out, pdf_path=PDFCHECK_PDF, route="pdf"))
+    res = convert(FLOAT, meta, journal, Options(out_dir=out, pdf_path=tmp_path / "dummy.pdf", route="pdf"))
     assert res.plan.unplaced_floats == ["s1", "s2", "s3"] and res.xml_path.exists()
     from jasme_jats.report import actions
     assert "ai_finish" in [a.key for a in actions(res)]
@@ -1261,3 +1265,27 @@ def test_cli_structure_conflict_exit_code_2(tmp_path, capsys):
     assert "変換を中止しました" in err and "docx の指定から" in err and "引用文献の見出しが 2 つあります" in err
     assert "\x00" not in err and "step:" not in err
     assert not list(out.rglob("*.xml"))
+
+
+def test_todo_list_is_before_chapter1_and_chapter14_is_gone(journal, meta, tmp_path):
+    """レポートの冒頭（メタ情報の行のすぐ後ろ、1 章の前）に「することの一覧」があり、14 章はない（W3 の手順 15）。
+    並びは 手順 → 要対応・要確認 → PDF の行 → 固定の行。画像を入れると、手順 images の行の直後に図の確かめ.html の行が入る。"""
+    from jasme_jats.report import actions, render, todo_list
+    res = convert(TEMPLATE, meta, journal, Options(out_dir=tmp_path))
+    report = res.report_path.read_text(encoding="utf-8")
+    heads = [ln for ln in report.splitlines() if ln.startswith("## ")]
+    assert heads[0] == "## することの一覧" and heads[1].startswith("## 1.") and heads[-1].startswith("## 13.")
+    assert not any(h.startswith("## 14.") for h in heads) and "14 章" not in report
+    assert report.index("- 出版版 PDF:") < report.index("## することの一覧") < report.index("## 1.")
+    sec = report.split("## することの一覧")[1].split("## 1.")[0]
+    lines = [ln for ln in sec.splitlines() if ln.startswith("- ")]
+    assert lines == todo_list(res, actions(res))                     # 一覧の行は todo_list がそのまま作る
+    pos = {k: next(i for i, ln in enumerate(lines) if k in ln)
+           for k in ("図の画像を入れる", "著者名", "ZIP に入っていない", "11 章の書誌情報", "巻（", "アップロードし")}
+    assert pos["図の画像を入れる"] < pos["著者名"] < pos["ZIP に入っていない"] < pos["11 章の書誌情報"] < pos["巻（"] < pos["アップロードし"]
+    assert not any("図の確かめ.html" in ln for ln in lines)         # 1 枚も入れていないうちは出さない
+    fill_images(res)
+    lines = todo_list(res)
+    i = next(i for i, ln in enumerate(lines) if ln.startswith("- [x] 図の画像 1 枚を入れた"))
+    assert "_図の確かめ.html」で、図番号・キャプションと入れた画像が合っているかを確認する" in lines[i + 1]
+    assert render(res).count("## することの一覧") == 1

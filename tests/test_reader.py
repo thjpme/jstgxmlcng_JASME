@@ -969,7 +969,7 @@ def test_digest_of_shapes_ignores_position_text_and_ids(tmp_path):
 
 
 def test_digest_is_the_same_after_text_edits(tmp_path, journal):
-    """ルート2 の補った docx（本文の文字を変更履歴で直したもの）でも、画像と図形の draw_id・digest・para_src が同じ。"""
+    """ルート2 の補った docx（本文の表記を変更履歴で直したもの）でも、画像と図形の draw_id・digest・para_src が同じ。"""
     from jasme_jats import pdfdocx
 
     def parts(b):
@@ -981,7 +981,7 @@ def test_digest_is_the_same_after_text_edits(tmp_path, journal):
     mf.make_article(src, "補った docx の検証用文書", parts)
     texts, plan = pdfdocx._mechanical(src, journal)
     sid = next(s for s, t in texts.items() if t == "試験の本文です。")
-    fix = pdfdocx.Fix(sid, 5, 7, "でした", "text", "です")
+    fix = pdfdocx.Fix(sid, 7, 8, "．", "glyph", "。")         # 表記の違い（句読点）。内容の違いは書き込まない（W2）
     out = tmp_path / "fixed.docx"
     pdfdocx.write_fixed_docx(src, out, plan, [fix])
     assert fix.applied or not fix.reason

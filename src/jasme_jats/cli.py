@@ -32,8 +32,9 @@ from pathlib import Path
 from .ai_assist import ANSWER_FILE, API_KEY_NAMES, DEFAULT_MODEL
 from .colab import step_text
 from .config import ArticleMeta, JournalConfig
+from .pdfbiblio import LABELS, fill_missing, read_biblio
 from .images import match_names
-from .pipeline import Options, StructureConflictError, add_images, convert
+from .pipeline import Options, StructureConflictError, WrongPaperError, add_images, convert
 from .report import (actions, clash_images_text, image_rows, images_action, pdf_summary, step, unmatched_image_text,
                      upload_issues)
 
@@ -67,10 +68,9 @@ def main(argv=None):
     ap.add_argument("--pdf", type=Path, help="記事の PDF（J-STAGE への登載に必須。指定すると ZIP に入れる。"
                                           "指定しなければ、記事フォルダに前の変換の PDF が残っていても ZIP に入れない）")
     ap.add_argument("--route", choices=["docx", "pdf"],
-                    help="作り方。既定は --pdf があれば pdf、なければ docx。pdf: docx から作り、--pdf の出版版 PDF で補う"
-                         "（著者校正の直しと、全角・半角・ダッシュ・引用符などの組版の違いを PDF から補った docx〈Word の"
-                         "変更履歴つき〉を出力フォルダに作り、それを変換する）。docx: docx から作る（docx の文字は 1 文字も"
-                         "変えない。--pdf があれば照合してレポートに載せるだけ）")
+                    help="表記の扱い。既定は --pdf があれば pdf、なければ docx。pdf: 全角・半角や句読点などの表記を --pdf の出版版 PDF に合わせた"
+                         "docx（Word の変更履歴つき）を出力フォルダに作り、それを変換する（語句などの内容は docx のまま）。"
+                         "docx: 表記を合わせない（docx の文字のまま。--pdf があれば照合してレポートに載せるだけ）")
     ap.add_argument("--images", type=Path,
                     help="図・表の画像を入れたフォルダ（論文ごとに分ける）。ファイル名は fig03.png・図3.png・29_55_fig03.png のどれでもよい"
                          "（PNG・JPEG・GIF）。名前の合う画像を、中身を変えずに Graphics/ に入れる")
@@ -99,18 +99,31 @@ def main(argv=None):
     if a.route is None:
         a.route = "pdf" if a.pdf else "docx"
     if a.route == "pdf" and not a.pdf:
-        ap.error("--route pdf（docx から作り、出版版 PDF で補う）では、--pdf で記事の PDF を指定してください")
+        ap.error("--route pdf（表記を出版版 PDF に合わせる）では、--pdf で記事の PDF を指定してください")
     api_key = next((os.environ[k] for k in API_KEY_NAMES[a.ai_provider] if os.environ.get(k)), None)
     if a.ai == "api" and not api_key:
         ap.error(f"--ai api では API キーが必要です。環境変数 {' または '.join(API_KEY_NAMES[a.ai_provider])} に API キーを"
                  "設定してから実行してください（API キーがなければ --ai manual で依頼文を作れます）")
 
     journal = JournalConfig.load(a.config)
+    # --meta の空の項目は、PDF の 1 ページ目から読んだ値で埋める（--meta がなくても、PDF から巻・号・ページを読めれば記事 ID が決まる）。
+    # 入力済みの項目は変えない（違いは変換の後の知らせ meta_pdf に出す）
+    pdf_bib = read_biblio(a.pdf, journal) if a.pdf else None
+    filled = []
     try:
-        meta = ArticleMeta.load(a.meta) if a.meta else ArticleMeta()
+        if pdf_bib is not None and pdf_bib.any():
+            raw = ArticleMeta.read_dict(a.meta) if a.meta else {}
+            raw, filled = fill_missing(raw, pdf_bib)
+            meta = ArticleMeta.from_dict(raw)
+        else:
+            meta = ArticleMeta.load(a.meta) if a.meta else ArticleMeta()
     except ValueError as e:         # 巻・号・ページに英数字以外がある、日付を読めない、TOML の書き方の誤りなど
-        print(f"書誌情報（{a.meta}）を確認してください: {e}", file=sys.stderr)
+        print(f"書誌情報（{a.meta or 'PDF から読んだ値'}）を確認してください: {e}", file=sys.stderr)
         return 2
+    if filled:
+        back = {v: k for k, v in LABELS.items()}
+        got = "・".join(f"{lab} {getattr(pdf_bib, back[lab])}" for lab in filled)
+        print(f"※ 書誌情報: {'・'.join(filled)}を PDF の 1 ページ目から読んで入れた（{got}）")
     for note in meta.input_notes:   # 全角の数字を半角にしたなど
         print(f"※ 書誌情報: {note}")
     opts = Options(out_dir=a.out, split_labels=None if a.split_labels is None else a.split_labels == "yes",
@@ -121,6 +134,9 @@ def main(argv=None):
         res = convert(a.docx, meta, journal, opts)
     except StructureConflictError as e:
         print(step_text(str(e), "cli"), file=sys.stderr)       # 画面の操作の目印をコマンドラインの指定に置き換える
+        return 2
+    except WrongPaperError as e:        # docx と PDF が別の論文か、大きく違う版（何も作らず中止）
+        print("docx と PDF が別の論文か、大きく違う版のようです（変換を中止しました）。" + step_text(str(e), "cli"), file=sys.stderr)
         return 2
     fid = res.fidelity
     print(f"文字の不変性チェック: {fid.summary()}（段落 {fid.units} 件中 {fid.mapped} 件を出力、{len(fid.excluded)} 件は除外）")
@@ -135,7 +151,7 @@ def main(argv=None):
     if res.pdf_check is not None:
         print(f"出版版 PDF との照合: {pdf_summary(res)}")
     if res.docx_fix is not None:
-        print(f"PDF で補った docx（変更履歴つき）: {res.docx_fix.path}")
+        print(f"表記を PDF に合わせた docx（変更履歴つき）: {res.docx_fix.path}")
     print(f"XML: {res.xml_path}")
     print(f"ZIP: {res.zip_path}")
     print(f"レポート: {res.report_path}")
@@ -166,7 +182,7 @@ def main(argv=None):
     if res.not_zipped:        # add_images の後の値（ZIP を作り直すと計算し直す）
         print(f"※ 記事フォルダにあるが ZIP に入れなかったファイル {len(res.not_zipped)} 件（前の変換の残りか、手で置いたもの。"
               "PDF は --pdf、画像は --images で指定し直すと入る。レポートの 10 章）: " + ", ".join(res.not_zipped))
-    # 要対応・要確認・手順（report.actions。レポートの冒頭・14 章、Colab の枠と同じもの）。画像を入れた後に調べる
+    # 要対応・要確認・手順（report.actions。レポートの冒頭（することの一覧と囲み）、Colab の枠と同じもの）。画像を入れた後に調べる
     for act in actions(res):
         if act.cli:
             print(act.cli, file=sys.stderr)

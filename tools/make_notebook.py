@@ -166,19 +166,13 @@ cells = [
 """),
     code(PREP + "DONE = {1}\n"),
     code("""
-#@title 2. 作り方を選び、論文の docx と PDF をアップロード
-#@markdown **ROUTE**（作り方）: 「docx から作り、出版版 PDF で補う」は、Word の文字を正として、出版版 PDF から著者校正の直しと組版の違い（全角・半角・ダッシュ・引用符など）を補った docx（Word の変更履歴つき）を作ってから変換します（PDF が必要）。「docx から作る」は docx の文字のまま変換します（PDF がまだないときはこちら）。違いは説明書の「出版版 PDF との照合と、2 通りの作り方」。
-ROUTE = "docx から作り、出版版 PDF で補う"  #@param ["docx から作り、出版版 PDF で補う", "docx から作る"]
-#@markdown **UPLOAD_PDF**: J-STAGE に登載する PDF もアップロードします。PDF がまだないときはチェックを外し、作り方を「docx から作る」にします。
+#@title 2. 論文の docx と PDF をアップロード
+#@markdown **UPLOAD_PDF**: J-STAGE に登載する PDF もアップロードします。PDF を入れると、全角・半角や句読点などの表記を PDF に合わせ（Word の変更履歴つきの docx を作ってから変換します。語句などの内容は docx のままです）、巻・号・ページ・受付日・受理日を PDF から読みます。PDF がまだないときはチェックを外します（表記は docx のままになり、巻・号・ページは手順 3 で入力します）。
 UPLOAD_PDF = True  #@param {type:"boolean"}
 """ + guard(1) + unmark(2) + """
 from pathlib import Path
 from google.colab import files
 
-ROUTE_KEY = {"docx から作る": "docx", "docx から作り、出版版 PDF で補う": "pdf", "出版版 PDF に合わせてから作る": "pdf"}[ROUTE]
-if ROUTE_KEY == "pdf" and not UPLOAD_PDF:
-    raise SystemExit("「docx から作り、出版版 PDF で補う」には PDF が必要です。UPLOAD_PDF にチェックを入れるか、PDF がまだないときは"
-                     "作り方（ROUTE）を「docx から作る」にして、もう一度この手順を実行してください。")
 WORK = Path("/content/jasme_work")
 INPUT = WORK / "input"
 INPUT.mkdir(parents=True, exist_ok=True)
@@ -207,17 +201,28 @@ if UPLOAD_PDF:
     print()
     pdf_files = upload("J-STAGE に登載する PDF", ".pdf")
     pdf_path = pdf_files[0] if pdf_files else None
-if ROUTE_KEY == "pdf" and not pdf_path:
-    raise SystemExit("「docx から作り、出版版 PDF で補う」には PDF が必要です。もう一度この手順を実行し、PDF を選んでください"
-                     "（PDF がまだないときは、作り方（ROUTE）を「docx から作る」にしてから実行します）。")
+ROUTE_KEY = "pdf" if pdf_path else "docx"      # PDF があれば、表記を PDF に合わせてから変換する
 print()
-print("作り方:", ROUTE)
 print("論文:", docx_path.name)
 print("PDF :", pdf_path.name if pdf_path else "（なし。J-STAGE への登載には PDF が必要です）")
+if pdf_path:
+    from jasme_jats.config import JournalConfig
+    from jasme_jats.pdfbiblio import biblio_inputs, read_biblio
+    _got = biblio_inputs(read_biblio(pdf_path, JournalConfig.load()))
+    if _got:
+        print()
+        print("PDF から読んだ書誌情報（1 ページ目の誌名の行と、投稿受付・採用決定の日付）:",
+              "・".join(f"{_k} {_v}" for _k, _v in (("巻", _got.get("volume")), ("号", _got.get("issue")), ("最初のページ", _got.get("fpage")),
+                                                   ("最後のページ", _got.get("lpage")), ("受付日", _got.get("received")),
+                                                   ("受理日", _got.get("accepted"))) if _v))
+        print("手順 3 の欄が空のときは、この値を使います。")
+    else:
+        print()
+        print("PDF から巻・号・ページを読めませんでした。手順 3 に入力してください。")
 """ + mark(2)),
     code("""
 #@title 3. 書誌情報を入力
-#@markdown 巻・号・ページは半角の英数字で。日付は 2026-03-31 の形で（2026/3/31 でもかまいません）。分からない項目は空欄にします。
+#@markdown 巻・号・ページは半角の英数字で。日付は 2026-03-31 の形で（2026/3/31 でもかまいません）。分からない項目は空欄にします。PDF をアップロードしたときは、巻・号・ページ・受付日・受理日は空欄のままでかまいません（空の欄は、PDF から読んだ値で埋めます。入力した値は変えません）。
 #@markdown ***
 #@markdown **巻（volume）・号（issue）・最初のページ（first_page）・最後のページ（last_page）**
 volume = ""  #@param {type:"string"}
@@ -264,6 +269,14 @@ meta_input = {"volume": volume, "issue": issue, "fpage": first_page, "lpage": la
               "subject_ja": subject_ja, "subject_en": subject_en,
               "corresp": corresponding_author}
 from jasme_jats.config import ArticleMeta, keyword_language_mismatch, keyword_problem
+_pdf = globals().get("pdf_path")
+if _pdf:
+    # 空の欄だけ PDF の値で埋める（入力の手助け。入力した値は変えず、PDF との食い違いは変換の後の知らせ meta_pdf に任せる）
+    from jasme_jats.config import JournalConfig
+    from jasme_jats.pdfbiblio import fill_missing, read_biblio
+    meta_input, _filled = fill_missing(meta_input, read_biblio(_pdf, JournalConfig.load()))
+    if _filled:
+        print("※ " + "・".join(_filled) + "は、PDF から読んだ値を使いました（欄が空だったため）。違っていれば欄に入力して、もう一度 ▶ を押してください")
 try:
     _meta = ArticleMeta.from_dict(meta_input)   # 日付の書き方などをここで確かめる
 except ValueError as e:
@@ -319,9 +332,10 @@ if PROVIDER == "sakana":
 #@title 5. 変換を実行
 """ + guard(1, 2, 3, 4) + unmark(5) + """import shutil
 from IPython.display import HTML, display
-from jasme_jats.colab import ai_finish_of, prompt_box, report_details, result_boxes, structure_conflict_box, summary_box
+from jasme_jats.colab import (ai_finish_of, prompt_box, report_details, result_boxes, structure_conflict_box, summary_box,
+                              wrong_paper_box)
 from jasme_jats.config import ArticleMeta, JournalConfig
-from jasme_jats.pipeline import Options, StructureConflictError, convert, kept_images, reapply_images
+from jasme_jats.pipeline import Options, StructureConflictError, WrongPaperError, convert, kept_images, reapply_images
 
 api_key = None
 if AI == "api":
@@ -350,6 +364,9 @@ try:
 except StructureConflictError as e:
     display(HTML(structure_conflict_box(str(e))))
     raise SystemExit("上の赤い枠のとおり Word で原稿を直して保存し、手順 2 から選び直してやり直してください。")
+except WrongPaperError as e:
+    display(HTML(wrong_paper_box(str(e))))
+    raise SystemExit("上の赤い枠のとおり、docx と PDF が同じ論文のものかを確かめ、手順 2 から選び直してやり直してください。")
 if AI == "api" and res.ai_answer_path:
     # API の回答の写し（AI回答.json）を覚えておく。出力フォルダは毎回消すので、変数に持ち、同じ依頼・同じモデルで変換し直すときは
     # API を呼ばずに使う（画像を入れただけ・書誌を直しただけのやり直しで料金がかからない）
@@ -393,6 +410,9 @@ try:
 except StructureConflictError as e:     # 手順 5 で確かめ済みなので通常は来ない（守り）
     display(HTML(structure_conflict_box(str(e))))
     raise SystemExit("上の赤い枠のとおり Word で原稿を直して保存し、手順 2 から選び直してやり直してください。")
+except WrongPaperError as e:            # 手順 5 で確かめ済みなので通常は来ない（守り）
+    display(HTML(wrong_paper_box(str(e))))
+    raise SystemExit("上の赤い枠のとおり、docx と PDF が同じ論文のものかを確かめ、手順 2 から選び直してやり直してください。")
 if KEPT:
     _again = reapply_images(res, KEPT)
     if _again:

@@ -1,6 +1,8 @@
 # 記事ごとの書誌情報（docx には書かれていない情報）
 # python -m jasme_jats 論文.docx --meta examples/meta_example.toml --out output
 
+# 出版版 PDF を --pdf で渡すときは、巻・号・開始ページ・終了ページ・受付日・受理日を省けます（PDF の 1 ページ目から読みます。
+# 書いた値は PDF と違うと要確認 meta_pdf で知らせます。XML に出すのは書いた値です）。
 [article]
 volume = "31"            # 巻
 issue = "1"              # 号

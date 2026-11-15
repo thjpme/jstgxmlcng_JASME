@@ -186,7 +186,7 @@ def test_symbol_only_reference_is_listed_in_style_check(journal, meta, tmp_path)
 
 # ---------------------------------------------------------------------------- 点検:利用者向け 3・6 ai_finish の並びと図形の名前
 def test_ai_finish_comes_after_blocking_actions(journal, meta, tmp_path):
-    """推奨の手順 ai_finish は、要対応と必須の手順（図の画像を入れる）の後ろに並ぶ（画面・コマンドラインの順。14 章と同じ考え方）。"""
+    """推奨の手順 ai_finish は、要対応と必須の手順（図の画像を入れる）の後ろに並ぶ（画面・コマンドラインの順。することの一覧と同じ考え方）。"""
     res = convert(FLOAT, meta, journal, Options(out_dir=tmp_path / "a"))
     acts = actions(res)
     keys = [a.key for a in acts]

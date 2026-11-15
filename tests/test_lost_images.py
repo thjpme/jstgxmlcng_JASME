@@ -26,8 +26,8 @@ def load(res):
 
 
 def chapters(report):
-    """レポートの冒頭（1 章まで）・9 章・14 章。"""
-    return report.split("## 2.")[0], report.split("## 9.")[1].split("## 10.")[0], report.split("## 14.")[1]
+    """レポートの冒頭（1 章まで）・9 章。"""
+    return report.split("## 1.")[1].split("## 2.")[0], report.split("## 9.")[1].split("## 10.")[0], report.split("## することの一覧")[1].split("## 1.")[0]
 
 
 def body_citing(b):
@@ -293,7 +293,7 @@ def make_provisional(path, hint=False):
 
 def test_textbox_notices_replace_provisional_ones(journal, meta, tmp_path):
     # 0.24.1 の暫定の知らせ（「テキストボックスの中の文字 N 段落を、XML に出力していません」）は出さない。囲みは boxed-text に
-    # 出し、囲みか図の注記か決められないものだけを要確認で知らせる（レポートの冒頭・14 章。要対応の後ろ）
+    # 出し、囲みか図の注記か決められないものだけを要確認で知らせる（レポートの冒頭。要対応の後ろ）
     res = convert(make_provisional(tmp_path / "prov.docx"), meta, journal,
                   Options(out_dir=tmp_path / "out"))
     assert res.fidelity.ok and res.lost_images == [] and res.dtd_valid
@@ -312,11 +312,11 @@ def test_textbox_notices_replace_provisional_ones(journal, meta, tmp_path):
     # 要確認は、要対応の後ろ（0.23.0 からの並び）
     from jasme_jats.report import render
     res.fidelity.ok = False
-    top = render(res).split("## 2.")[0]
+    top = render(res).split("## 1.")[1].split("## 2.")[0]
     assert top.index("> **注意: 文字の不変性チェックが不合格です。**") < top.index("> **要確認: 囲み（問題文")
     res.fidelity.ok = True
     full = convert(FULL, meta, journal, Options(out_dir=tmp_path / "full")).report_path
-    assert "テキストボックス" not in full.read_text(encoding="utf-8").split("## 2.")[0]
+    assert "テキストボックス" not in full.read_text(encoding="utf-8").split("## 1.")[1].split("## 2.")[0]
 
 
 def test_cli_shows_textbox_notices(journal, tmp_path, capsys):

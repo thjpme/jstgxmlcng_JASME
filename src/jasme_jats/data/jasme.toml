@@ -58,6 +58,18 @@ fn_title_en = "Notes"
 "共同研究" = "Collaborative Research Report"
 "講演記事" = "Oration"
 
+# 出版版 PDF の 1 ページ目から書誌情報を読む形（pdfbiblio.py。誌ごとの形はコードに書かず、ここに置く）。
+# 読むのは NFKC にした文字（全角の数字・「ｐｐ．」は半角になる）。読めない項目は空にして、入力を求める。
+[pdf_biblio]
+# 誌名の行（例: 「数学教育学研究 第 99 巻 第 1 号 2030 pp.11〜24」）。名前付きグループ volume・issue・year・fpage・lpage。空白や改行の揺れは \s* で許す
+issue_line = '数学教育学研究\s*第\s*(?P<volume>\d+)\s*巻\s*第\s*(?P<issue>\d+)\s*号\s*(?P<year>\d{4})\s*pp\.\s*(?P<fpage>\d+)\s*[~〜～\-–—]\s*(?P<lpage>\d+)'
+
+# 日付のラベル（「2029年6月1日投稿受付」の「投稿受付」）。再投稿受付は読むだけで、入力欄には使わない
+[pdf_biblio.date_labels]
+received = "投稿受付"
+revised = "再投稿受付"
+accepted = "採用決定"
+
 # テンプレートのスタイル名 → 役割
 # 役割の意味は docs/STYLE_MAPPING.md を参照
 [styles]

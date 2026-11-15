@@ -606,32 +606,26 @@ def route2_case(tmp_path, variant):
 
 @pytest.mark.parametrize("variant", ["all", "partial", "cell"])
 def test_route2_note_style_change(variant, journal, meta, tmp_path, monkeypatch):
-    """ルート2 で、番号だけの注の docx を「1)」の形の出版版 PDF で補うときの今の振る舞い（修正計画の H の「残る限界」・
-    docs/DESIGN.md の 4.4 と 7 章）。直した docx では注番号が上付きの「1)」の形になり、論文の書き方の判定（note_style）が「1)」の
-    書き方に変わる。注番号のある段落をすべて直せるとき（all）は、すべて直して注のリンクも残る。1 つでも直さない段落（PDF に見つから
-    ない段落・表のセル）があると、その段落の番号だけの注番号のリンクが直した docx で消えるので、pdfdocx の守り（_lost）が
-    すべての直しを止める（注と関係のない誤字の直しも。0.26.0 は直していた）。XML は元の docx のまま（注のリンクも元のまま）で、
-    要確認（pdf_unfixed）が出る。直すなら、pdfdocx が直した docx を読み直すときと最後の変換で、元の docx の書き方の判定を使う
-    （B2.1 の後。修正計画の H）。そのときは、このテストの partial・cell の期待を逆にする。"""
-    from jasme_jats import pdfmatch
-    from jasme_jats.pdfdocx import STRUCTURE_REASON
+    """ルート2 で、番号だけの注の docx を「1)」の形の出版版 PDF で補うときの振る舞い（修正計画の H の「残る限界」・
+    docs/DESIGN.md の 4.4 と 7 章）。PDF の注番号の「)」と誤字の直し（「い」）は内容の違い（kind text）なので、補った docx に
+    書き込まない（W2。pdfdocx.hold）。注番号の形は docx のまま（番号だけの書き方の判定 note_style も変わらない）で、どの形でも
+    注のリンクは元の docx と同じに残る。0.33 までは、すべて直せるとき（all）は直して注番号が「1)」の形になり、1 つでも直さない
+    段落があるとき（partial・cell）は、構造の確かめ（_lost）がすべての直しを止めていた。"""
+    from jasme_jats.pdfdocx import CONTENT_REASON
     path, pages = route2_case(tmp_path, variant)
     assert _mechanical(path, journal)[2].bare_notes is True
+    from jasme_jats import pdfmatch
     monkeypatch.setattr(pdfmatch, "extract_pages", lambda p: pages)
     (tmp_path / "dummy.pdf").write_bytes(b"%PDF-1.4\n")
     res = convert(path, meta, journal, Options(out_dir=tmp_path / "out", pdf_path=tmp_path / "dummy.pdf", route="pdf"))
     assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid
     fixes = [(f.old, f.new, f.applied, f.reason) for f in res.docx_fix.fixes]
     xrefs = [(text(x), x.get("rid")) for x in load(res).iter("xref") if x.get("ref-type") == "fn"]
-    keys = [a.key for a in actions(res)]
-    if variant == "all":
-        assert fixes == [("", ")", True, "")] * 3 + [("", "い", True, "")]
-        assert xrefs == [("1)", "fn1"), ("2)", "fn2"), ("3)", "fn3")] and "pdf_unfixed" not in keys
-        assert res.supplement.ok            # 補完の確かめ（fidelity.verify_supplement）
-    else:
-        assert fixes == [("", ")", False, STRUCTURE_REASON)] * 2 + [("", "い", False, STRUCTURE_REASON)]
-        assert xrefs == [("1", "fn1"), ("2", "fn2"), ("3", "fn3")] and "pdf_unfixed" in keys
-        assert any(R2_P3 + "3。ここは正し表記である。" == text(q) for q in load(res).iter("p"))
+    n = 3 if variant == "all" else 2
+    assert fixes == [("", ")", False, CONTENT_REASON)] * n + [("", "い", False, CONTENT_REASON)]
+    assert xrefs == [("1", "fn1"), ("2", "fn2"), ("3", "fn3")]
+    assert res.supplement.ok            # 補完の確かめ（fidelity.verify_supplement）
+    assert any(R2_P3 + "3。ここは正し表記である。" == text(q) for q in load(res).iter("p"))
 
 
 def test_eq_refs_unchanged():
@@ -748,7 +742,7 @@ def test_branch_figure_numbers_are_not_linked(journal, meta, tmp_path):
     from jasme_jats.colab import report_details
     shown = report_details(act.top + "\n" + act.checklist)
     assert "xref" in shown and "&lt;xref" in shown and "<xref" not in shown.replace("&lt;xref", "")
-    # 変換レポートの全文でも、冒頭・14 章の文のタグは HTML にしても残る
+    # 変換レポートの全文でも、冒頭の文のタグは HTML にしても残る
     page = report_details(res.report_path.read_text(encoding="utf-8"))
     assert "&lt;xref" in page and "&lt;fig id" in page
     assert "float_ref" in [a.key for a in actions(res)]

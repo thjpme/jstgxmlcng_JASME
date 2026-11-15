@@ -13,14 +13,14 @@ docx の各段落の文字列を ooxml.canonical_texts()（段落ごとの ooxml
 
 さらに final_check() で、目印を取り除いた最終出力の文字列が、検証済みの木と一致することを確かめる。
 
-ルート2 では、verify_supplement()（補完の確かめ）で、出版版 PDF で補った docx が、元の docx から「組版の違い（(A)）」と
-「13.1 に報告した校正の直し（(B)。pdfdocx.Fix の kind text）」以外に変わっていないことを確かめる。照合（pdfmatch）と
+route pdf では、verify_supplement()（補完の確かめ）で、出版版 PDF で補った docx が、元の docx から「組版の違い（区分 (1)。
+1 文字ずつの対と、決まった空白の削除）」以外に変わっていないことを確かめる。内容の違い（語句の違いなど）は書き込まないので、
+1 文字でも対でない変更があれば、照合が何を報告していても不合格にする（照合・直しの結果は受け取らない）。照合（pdfmatch）と
 docx の書き込み（pdfdocx）の不具合も見つけられるように、照合・書き込みと共有するのは定数（pdfmatch の FW_FIRST・FW_LAST・
-HYPHENS・DASHES・QUOTE_CLASSES・NUMBER_PAIRS、pdfdocx の AUTHOR・PARTS）だけにする。組版の違いの判定（_pair）と変更の単位の
-取り出しはここで別に実装し（文字の取り出しは ooxml.canonical_text）、大文字・小文字を (A) とする段落と、Word が付ける番号の
+HYPHENS・DASHES・QUOTE_CLASSES・PUNCT_CLASSES・NUMBER_PAIRS、pdfdocx の AUTHOR・PARTS）だけにする。組版の違いの判定（_pair）と変更の単位の
+取り出しはここで別に実装し（文字の取り出しは ooxml.canonical_text）、大文字・小文字を (1) とする段落と、Word が付ける番号の
 元の文字は、補った docx から組み立てた plan から別に作る（supplement_targets。照合の case_paragraphs・PdfCheck.original は
-使わない）。照合から受け取るのは、直した箇所の一覧（pdfdocx.Fix）と、番号を PDF に合わせたもの（plan.pdf_numbers）で、
-どちらも確かめる側。
+使わない）。照合から受け取るのは、番号を PDF に合わせたもの（plan.pdf_numbers）だけで、確かめる側。
 """
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ from .ooxml import (DocxPackage, HiddenRule, canonical_text, canonical_texts, is
                     paragraph_ids, w)
 from .omml import MML_NS, math_plain
 from .pdfdocx import AUTHOR, PARTS
-from .pdfmatch import DASHES, FW_FIRST, FW_LAST, HYPHENS, NUMBER_PAIRS, QUOTE_CLASSES
+from .pdfmatch import DASHES, FW_FIRST, FW_LAST, HYPHENS, NUMBER_PAIRS, PUNCT_CLASSES, QUOTE_CLASSES
 from .tracking import AI, GEN, JX_NS, SPAN
 
 DROP = f"{{{JX_NS}}}drop"
@@ -267,25 +267,23 @@ def final_check(tracked_root, final_bytes: bytes, res: FidelityResult):
     return res.final_ok
 
 
-# ---------------------------------------------------------------------------- 補完の確かめ（ルート2）
+# ---------------------------------------------------------------------------- 補完の確かめ（route pdf）
 # 補った docx のこのツールの変更履歴の中の文字を、canonical_texts の文字の中で見分けるための目印（Unicode の非文字。docx の文字には
 # 出ない）。挿入（w:ins）のランの中の文字を I_OPEN〜I_CLOSE で、削除（w:del）のランの中の文字を D_OPEN〜D_CLOSE で挟む
 I_OPEN, I_CLOSE, D_OPEN, D_CLOSE = "﷐", "﷑", "﷒", "﷓"
 # Word の脚注・文末脚注の参照（本文の番号）と、注の段落の番号（w:footnoteRef・w:endnoteRef）の位置の目印。番号は canonical_text
-# に出ないので、この位置を変更の単位の境目にし、すぐ隣の空白の削除を照合の drops と同じく (A) と認める（却下した文字・承諾した
+# に出ないので、この位置を変更の単位の境目にし、すぐ隣の空白の削除を照合の drops と同じく (1) と認める（却下した文字・承諾した
 # 文字には入れない）
 EDGE = "﷔"
 MARKS = I_OPEN + I_CLOSE + D_OPEN + D_CLOSE + EDGE
 NOTE_MARKS = {w("footnoteReference"), w("endnoteReference"), w("footnoteRef"), w("endnoteRef")}
-SUP_WINDOW = 16          # 1 つの変更の単位に当てる校正の直し（Fix）を探す数（段落の中で、まだ当てていない最初の直しから）
 SUP_CONTEXT = 10         # 問題の箇所の前後に添える文字の数
 # 補完の確かめの不合格の理由
 UNTRACKED_WHY = "変更履歴でない書き換えがある（このツールの変更履歴を却下した文字が、元の docx の文字と違う）"
 PARA_SET_WHY = "段落が増えたか消えた（補った docx と元の docx で、段落の並びが違う）"
 PARA_MARK_WHY = "このツールの変更履歴が、段落記号か書式にかかっている"
 READ_WHY = "補った docx の変更履歴を読み取れない（承諾した文字が、補った docx の文字と合わない）"
-UNIT_WHY = "組版の違い（(A) の対・空白の削除）でも、13.1 の補った箇所でもない変更"
-UNWRITTEN_WHY = "13.1 に報告したのに、補った docx に書き込まれていない"
+UNIT_WHY = "組版の違い（1 文字ずつの表記の対・空白の削除）でない変更"
 NUMBER_WHY = "Word が付ける番号を、組版の違い（全角・半角と、番号の字形の対）でない文字にしている"
 NUMBER_SRC_WHY = "Word が付ける番号の元の文字が分からない"
 
@@ -294,8 +292,7 @@ NUMBER_SRC_WHY = "Word が付ける番号の元の文字が分からない"
 class SupplementResult:
     """補完の確かめ（verify_supplement）の結果。"""
     ok: bool = True
-    typeset: int = 0          # (A) と当たった文字の数（全角・半角などの対と、消した空白。Fix の width・space・glyph の数に当たる）
-    supplied: int = 0         # (B)（13.1 の Fix。kind text）と当たった数
+    typeset: int = 0          # 組版の違い（区分 (1)）と当たった文字の数（表記の対と、消した空白）
     problems: list = field(default_factory=list)   # [(段落 ID, 元の docx の文字, 補った docx の文字, 理由)]
 
 
@@ -318,11 +315,11 @@ def _width(a: str, b: str) -> bool:
 
 
 def _pair(a: str, b: str, case: bool = False, number: bool = False) -> bool:
-    """docx の 1 文字 a と、補った docx の 1 文字 b が組版の違い（(A)）の対か（同じ文字は偽）。pdfmatch.typeset_pair と同じ規則を、
+    """docx の 1 文字 a と、補った docx の 1 文字 b が組版の違い（(1)）の対か（同じ文字は偽）。pdfmatch.typeset_pair と同じ規則を、
     定数だけを共有して別に書いたもの（tests/test_supplement.py で、すべての対で答えが同じことを確かめる）。
 
     全角・半角（_fold が同じで 0x21〜0x7E）、HYPHENS ＋ DASHES の中どうし（向きを問わない）、QUOTE_CLASSES の同じ類の中どうし
-    （全角は _fold の後。向きを問わない）、number なら NUMBER_PAIRS の対（向きがある）、case なら英字の大文字・小文字
+    （全角は _fold の後。向きを問わない）、PUNCT_CLASSES の同じ類の中どうし（向きを問わない）、number なら NUMBER_PAIRS の対（向きがある）、case なら英字の大文字・小文字
     （「ａ」と「A」のように全角・半角と重なるものも。両方が _fold の後に ASCII の英字のときだけ）。
     """
     if a == b:
@@ -335,6 +332,9 @@ def _pair(a: str, b: str, case: bool = False, number: bool = False) -> bool:
         return True
     qa = _quote_class(fa)
     if qa >= 0 and qa == _quote_class(fb):
+        return True
+    pa = next((n for n, cls in enumerate(PUNCT_CLASSES) if a in cls), -1)
+    if pa >= 0 and b in PUNCT_CLASSES[pa]:
         return True
     if number and (a, b) in NUMBER_PAIRS:
         return True
@@ -481,55 +481,36 @@ def _split_marked(text: str):
     return "".join(rej), "".join(acc), units
 
 
-def _unit_ends(d: str, i: str, queue: list, p: int, case: bool, at_start: bool = False, at_end: bool = False) -> dict:
-    """変更の単位（消した文字 d, 足した文字 i）を、組版の違いと、校正の直しの並び queue の p 番目からのいくつか（どれも 1 回ずつ。
-    単位の中の順は問わない）で説明できる、当て終わった後の queue の位置 → (A) の文字の数（最も少ないもの）。
+def _unit_typeset(d: str, i: str, case: bool, at_start: bool = False, at_end: bool = False):
+    """変更の単位（消した文字 d, 足した文字 i）を、組版の違いだけで説明できるときの (1) の文字の数（最も少ないもの）。説明できなければ None。
 
-    d と i を前から 1 文字ずつ、同じ文字か _pair の対として並べるか、d の空白を消す（(A)）か、まだ当てていない直し f の
-    (f.old, f.new) を d・i のその位置に当てて進め、d・i を使い切ったときに、当てた直しが queue[p:p+k] のちょうど k 個の
-    ものだけを答えにする（位置は使わない。数式の後ろでは、Fix の位置と canonical_text の位置が合わないため）。
+    d と i を前から 1 文字ずつ、同じ文字か _pair の対として並べるか、d の空白を消すかの 2 通りで、状態（d の位置, i の位置,
+    直前の扱い）をたどり、d・i を使い切れるかを見る。内容の違い（対でない置き換え・足す・消す）は説明できない。
 
-    空白の削除を (A) とするのは、照合の drops と同じく、半角の空白（U+0020）で、d の中のすぐ前かすぐ後ろ（空白が続けば、その
+    空白の削除を組版の違いとするのは、照合の drops と同じく、半角の空白（U+0020）で、d の中のすぐ前かすぐ後ろ（空白が続けば、その
     並びの前か後ろ）が、全角・半角の対（_width）として並べた文字か、Word が付ける番号のときだけ。番号は canonical_text に
     出ないので、呼び出し側が単位の端で知らせる: at_start は単位の前が番号（自動番号のある段落の先頭か、Word の注の番号の目印
-    EDGE のすぐ後ろ）、at_end は単位の後ろが番号（EDGE のすぐ前）。全角の空白・タブ・改行の削除は (A) にしない。
-
-    限界: 探す直しは、まだ当てていない最初の直しから SUP_WINDOW 個まで。1 つの単位（変わっていない文字をはさまずに続く変更）に
-    校正の直しが SUP_WINDOW を超えてかかると、正しい書き込みでも説明できず、不合格になる（安全側）。
+    EDGE のすぐ後ろ）、at_end は単位の後ろが番号（EDGE のすぐ前）。全角の空白・タブ・改行の削除は組版の違いにしない。
     """
-    window = queue[p:p + SUP_WINDOW]
-    full = (1 << len(window)) - 1
-    best = {}
+    best = None
     seen = {}
     # 直前の d の文字の扱い: 0 ふつう / 1 全角・半角の対（か、その後ろで消した空白）/ 2 隣が決まっていない、消した空白 /
     # 3 番号のすぐ後ろで消した空白（at_start のとき、d の最初から）
-    stack = [(0, 0, 0, 3 if at_start else 0, 0)]   # (d の位置, i の位置, 当てた直しの集合〈window の中のビット〉, 直前, (A) の数)
+    stack = [(0, 0, 3 if at_start else 0, 0)]   # (d の位置, i の位置, 直前, 組版の違いの文字の数)
     while stack:
-        a, b, used, last, n = stack.pop()
-        key = (a, b, used, last)
+        a, b, last, n = stack.pop()
+        key = (a, b, last)
         if key in seen and seen[key] <= n:
             continue
         seen[key] = n
         if a == len(d) and b == len(i) and (last != 2 or at_end):
-            k = 0
-            while k < len(window) and used >> k & 1:
-                k += 1
-            if used == (1 << k) - 1:
-                best[p + k] = min(best.get(p + k, n), n)
+            best = n if best is None else min(best, n)
         if a < len(d) and b < len(i) and (d[a] == i[b] or _pair(d[a], i[b], case)):
             width = _width(d[a], i[b])
             if width or last != 2:
-                stack.append((a + 1, b + 1, used, 1 if width else 0, n + (d[a] != i[b])))
+                stack.append((a + 1, b + 1, 1 if width else 0, n + (d[a] != i[b])))
         if a < len(d) and d[a] == " ":
-            stack.append((a + 1, b, used, last if last in (1, 3) else 2, n + 1))
-        if used != full:
-            for k, f in enumerate(window):
-                if used >> k & 1:
-                    continue
-                if d.startswith(f.old, a) and i.startswith(f.new, b) and (f.old or f.new):
-                    if f.old and last == 2:
-                        continue
-                    stack.append((a + len(f.old), b + len(f.new), used | 1 << k, last if not f.old else 0, n))
+            stack.append((a + 1, b, last if last in (1, 3) else 2, n + 1))
     return best
 
 
@@ -550,7 +531,7 @@ def _diff_excerpt(a: str, b: str):
 
 
 def supplement_targets(plan, note_marks) -> tuple:
-    """補完の確かめに渡す (大文字・小文字を (A) とする段落の ID, Word が付ける番号の元の文字)。照合（pdfmatch の case_paragraphs・
+    """補完の確かめに渡す (大文字・小文字を (1) とする段落の ID, Word が付ける番号の元の文字)。照合（pdfmatch の case_paragraphs・
     PdfCheck.original）を通さず、補った docx から組み立てた plan から別に作る。
 
     大文字・小文字: 英文の題目・副題・著者名・所属の段落（plan.title_en・subtitle_en・authors[].name_en・affs[].en）。
@@ -567,11 +548,10 @@ def supplement_targets(plan, note_marks) -> tuple:
     return case, numbers
 
 
-def verify_supplement(original_docx, fixed_docx, fixes, case_srcs, numbers_original, pdf_numbers,
+def verify_supplement(original_docx, fixed_docx, case_srcs, numbers_original, pdf_numbers,
                       autonum_srcs=None) -> SupplementResult:
-    """補完の確かめ: ルート2 の補った docx（fixed_docx）が、元の docx（original_docx）から、組版の違い（(A)）と 13.1 に報告した
-    校正の直し（fixes のうち applied で kind text のもの）以外に変わっていないか。照合（pdfmatch）・書き込み（pdfdocx）とは別の
-    実装（設計: 定数だけを共有する）。
+    """補完の確かめ: route pdf の補った docx（fixed_docx）が、元の docx（original_docx）から、組版の違い（区分 (1)）以外に
+    変わっていないか。照合（pdfmatch）・書き込み（pdfdocx）の結果は受け取らない。別の実装（設計: 定数だけを共有する）。
 
       1. 補った docx のこのツールの変更履歴（_ours）を却下した文字が、元の docx の文字（canonical_text。fidelity.source_texts と
          同じ並び）と、すべての段落で同じか（報告しない変更・変更履歴でない書き換え・段落の増減がないこと）。承諾した文字が
@@ -579,17 +559,15 @@ def verify_supplement(original_docx, fixed_docx, fixes, case_srcs, numbers_origi
          XML が元の docx と同じ段落は読まない（同じ XML なら同じ文字）
       2. 段落ごと（段落記号の削除でつないだ段落は 1 つ）に、変わっていない文字をはさまずに続く挿入・削除を 1 つの単位にし、
          単位ごとに（消した文字, 足した文字）を作る（位置は変更履歴で決まるので、文字列を並べ直したときのずれは起きない）
-      3. 単位を、1 文字ずつの (A) の対（_pair。大文字・小文字は case_srcs の段落だけ）・空白の削除（全角・半角の対と、Word が
-         付ける番号〈自動番号のある段落の先頭と、Word の注の番号の目印 EDGE〉のすぐ隣の半角の空白だけ。_unit_ends）と、その段落の
-         校正の直しの
-         並びの次のいくつか（old・new が文字列として一致するもの）で説明できるか（_unit_ends）。説明できない単位と、どの単位にも
-         当たらずに残った直しは不合格
+      3. 単位を、1 文字ずつの表記の対（_pair。大文字・小文字は case_srcs の段落だけ）・空白の削除（全角・半角の対と、Word が
+         付ける番号〈自動番号のある段落の先頭と、Word の注の番号の目印 EDGE〉のすぐ隣の半角の空白だけ）だけで説明できるか
+         （_unit_typeset）。説明できない単位は不合格（内容の違いを書き込んでいれば、報告の有無にかかわらずここで不合格になる）
       4. Word が付ける番号（pdf_numbers。docx の文字ではない）が、元の文字（numbers_original）と同じ長さで、1 文字ずつ同じか
          _pair（number）の対か
 
-    case_srcs: 大文字・小文字の違いを (A) とする段落の ID。numbers_original: Word が付ける番号の元の文字。どちらも照合を通さず
+    case_srcs: 大文字・小文字の違いを (1) とする段落の ID。numbers_original: Word が付ける番号の元の文字。どちらも照合を通さず
     plan から作ったもの（supplement_targets）。pdf_numbers: 番号を PDF に合わせたもの（plan.pdf_numbers）。番号の鍵は
-    (種類, ID) -> 文字列。autonum_srcs: 自動番号のある段落の ID（段落の先頭の空白の削除を (A) とする段落。省略すれば
+    (種類, ID) -> 文字列。autonum_srcs: 自動番号のある段落の ID（段落の先頭の空白の削除を (1) とする段落。省略すれば
     numbers_original の ("auto", 段落 ID) の鍵から作る）。
     """
     res = SupplementResult()
@@ -638,43 +616,16 @@ def verify_supplement(original_docx, fixed_docx, fixes, case_srcs, numbers_origi
                 old, new = _diff_excerpt(original, parts[0])
                 problems.append((src, old, new, UNTRACKED_WHY))
 
-    # 2.・3. 変更の単位を (A) と (B) に当てる
-    queues = defaultdict(list)
-    for f in fixes or ():
-        if f.applied and f.kind == "text":
-            queues[f.src].append(f)
-    for src in queues:
-        queues[src].sort(key=lambda f: (f.start, f.end))
+    # 2.・3. 変更の単位が組版の違いだけで説明できるか
     for src, (rej, acc, units) in split.items():
-        queue = queues.get(src, [])
         case = src in case_srcs
-        reach = {0: (0, 0)}            # 当て終わった queue の位置 → ((A) の文字の数, (B) の数)
         for rpos, apos, d, i, left, right in units:
             at_start = left or (rpos == 0 and src in autonum_srcs)
-            nxt = {}
-            for p, (na, nb) in reach.items():
-                for q, n in _unit_ends(d, i, queue, p, case, at_start, right).items():
-                    cand = (na + n, nb + q - p)
-                    if q not in nxt or cand < nxt[q]:
-                        nxt[q] = cand
-            if nxt:
-                reach = nxt
-            else:
+            n = _unit_typeset(d, i, case, at_start, right)
+            if n is None:
                 problems.append((src, _excerpt(rej, rpos, d), _excerpt(acc, apos, i), UNIT_WHY))
-        end = len(queue)
-        if end in reach:
-            na, nb = reach[end]
-        else:
-            p = max(reach)
-            na, nb = reach[p]
-            for f in queue[p:]:
-                problems.append((src, f.old, f.new, UNWRITTEN_WHY))
-        res.typeset += na
-        res.supplied += nb
-    for src, queue in queues.items():
-        if src not in split:
-            for f in queue:
-                problems.append((src, f.old, f.new, UNWRITTEN_WHY))
+            else:
+                res.typeset += n
 
     # 4. Word が付ける番号
     for key, new in (pdf_numbers or {}).items():

@@ -23,13 +23,13 @@
 ```
 入力: 論文の docx（＋ 書誌情報、任意で 出版版 PDF、任意で AI の回答）
 
-  [ルート2 のときだけ] pdfdocx.make_fixed_docx: PDF と照合して、補った docx（変更履歴つき）を作る ── 以降はそれを入力にする
+  [PDF があるとき（route pdf。既定）] pdfdocx.make_fixed_docx: PDF と照合して、表記を PDF に合わせた docx（変更履歴つき）を作る ── 以降はそれを入力にする
         │
   docx_reader.read_docx ──────────▶ model.Document（段落 = アトムの列。表・画像・図形・脚注も）
         │
   structure.classify ─────────────▶ article.ArticlePlan（題目・著者・本文の章節・図表・注・文献・英文要旨・資料。除外した段落と判断の記録）
         │                                 構造の衝突（同じ種類の後付けの見出し・英文要旨の見出しが 2 つ、著者名の付かない所属。K1・K2）があれば
-        │                                 pipeline が StructureConflictError で中止（ルート2 は補う前の元の docx で確かめる）
+        │                                 pipeline が StructureConflictError で中止（PDF に合わせるときは補う前の元の docx で確かめる）
         │
   linker.link（refparse を使う）──▶ アトムに LinkSpec を付ける（図表・数式・注・引用・URL/DOI）。文字は変えない
         │
@@ -37,11 +37,11 @@
         │
   builder.build（emit を使う）────▶ lxml の木（文字はすべて <jx:span src=段落ID> の中。tracking）
         │
-  [PDF があるとき] pdfmatch.check_pdf: docx の段落と PDF の文字を照合（ルート2 では Word が付ける番号を PDF に合わせて build をやり直す）
+  [PDF があるとき] pdfmatch.check_pdf: docx の段落と PDF の文字を照合（route pdf では Word が付ける番号を PDF に合わせて build をやり直す）
         │
   fidelity.verify ────────────────▶ docx の文字（ooxml.canonical_texts の別実装）と XML の文字を 1 文字ずつ照合
   builder.finalize / serialize ───▶ 目印を外した最終 XML → fidelity.final_check で再照合 → validate.validate（DTD）
-  [ルート2] fidelity.verify_supplement: 補った docx が元の docx から (A)(B) 以外に変わっていないか
+  [補った docx があるとき] fidelity.verify_supplement: 補った docx が元の docx から組版の違い（区分 (1)）以外に変わっていないか
   pipeline.lost_images ───────────▶ 画像を入れる場所（置き場所）を作れなかった画像（置き場所をすべて書いた XML〈xml_base〉で調べる）
   pipeline.image_problems ────────▶ XML の画像の名前が置き場所の一覧と合わない所（要対応 image_names）。decorations は飾りの図形の記録（9 章）
   pipeline.table_problems ────────▶ 形の崩れた表（行ごとの列の数・セルの重なり・縦の結合の範囲・セルのない行）
@@ -60,7 +60,7 @@
 
 ```
 画面      cli.py   colab.py（表示部品）   app.py（Gradio）   tools/make_notebook.py（ノートブック生成）
-流れ      pipeline.py（convert / add_images / kept_images / reapply_images / lost_images / image_problems / decorations / table_problems / lost_autonums / pua_chars / symbols_replaced / Result / StructureConflictError）
+流れ      pipeline.py（convert / add_images / kept_images / reapply_images / lost_images / image_problems / decorations / table_problems / lost_autonums / pua_chars / symbols_replaced / Result / StructureConflictError / WrongPaperError）
 出力      report.py（レポート・利用者への知らせ actions）  package.py（ZIP）  images.py（画像）  imagelist.py（図の確かめ.html）  jstage_rules.py
 検証      fidelity.py（不変性チェック・補完の確かめ）  validate.py（DTD）
 組み立て  builder.py → emit.py → omml.py（数式）  tracking.py（目印）
@@ -83,6 +83,7 @@ PDF       pdfmatch.py（照合）  pdfdocx.py（補った docx を書く）
 | `report` | ai_assist, docx_reader, images, linker, model, package, pdfdocx, pdfmatch, structure, validate（`md_tag` が要素名を引く） |
 | `fidelity` | omml, ooxml, pdfdocx（定数 AUTHOR・PARTS だけ）, pdfmatch（定数だけ）, tracking |
 | `pdfdocx` | builder, docx_reader, linker, model, ooxml, pdfmatch, structure |
+| `pdfbiblio` | config（`pdfmatch.extract_pages` は呼ぶときに読み込む）。使う側は `pipeline`（`Result.pdf_biblio`）・`report`（`meta_pdf`・11 章）・`cli`（空の項目を埋める） |
 | `pdfmatch` | linker, model |
 | `ai_assist` | article, builder（`RE_LABEL_SPLIT`）, floats, images, linker, model, omml, structure |
 | `builder` | article, config, docx_reader, emit, model, ooxml, structure（`CAP_BRANCH_SEP`）, tracking |
@@ -120,11 +121,11 @@ PDF       pdfmatch.py（照合）  pdfdocx.py（補った docx を書く）
 | lxml の木 + `builder.BuildInfo` | `builder.build` | fidelity, pipeline, report | `slots`（出力した画像の置き場所〈`article.ImageSlot`〉。XML の順）・`slot_names`（幹 → 名前）、`exclusions`（builder 側の除外）、`drops`、`notes`、`newlines`、`unsplit_names`、`name_splits`（確かめてもらう和文の著者名の分け方〈`builder.EasternSplit`〉。要確認 `name_split`・AI 依頼文）、`warnings`、`tables`（出力した表〈`<table>` の要素・`model.Table`・Word で探す手がかり〉。`table_problems` が使う）、`unshown_numbers`（番号を出さなかった題目・副題・著者名・所属の段落。10 章の警告） |
 | `model.LostImage` / `LostNumber` / `PuaChar` / `TableProblem` | `pipeline.lost_images` / `lost_autonums` / `pua_chars` / `table_problems` | report（9 章・8 章・12 章と要対応） | 画像を入れる場所を作れなかった画像、XML に番号が出なかった自動番号の段落（`src`・`number`・`location`・`where`〈文字を出した要素〉・`text`）、形の崩れた表（`tid`・`where`・`name`・`problems`）、最終の XML に残った私用領域の文字（`PuaChar`: `src`・`code`・`generated`・`font`・`where`・`count`） |
 | `fidelity.FidelityResult` | `fidelity.verify` / `final_check` | pipeline（Result.ok）, report（5 章） | `ok`、`mismatches`、`missing`、`duplicates`、`stray`、`conflicts`、`bad_excluded`、`final_ok`、`final_unreadable`（最終出力が XML として読めない・実体の宣言がある）、`final_differs`（最終出力の文字が検証済みの木と違う） |
-| `pdfmatch.PdfCheck` | `pdfmatch.check_pdf` | pdfdocx, report（13 章）, pipeline | `diffs`（TextDiff）、`unmatched`、`width`/`drops`/`numbers`（(A) の直し）、`drop_basis`（`drops` の空白の根拠の全角・半角の直しまたは番号）、`ignored_lines`、`case_srcs` |
+| `pdfmatch.PdfCheck` | `pdfmatch.check_pdf` | pdfdocx, report（13 章）, pipeline | `diffs`（TextDiff）、`unmatched`、`width`/`drops`/`numbers`（区分 (1) の直し）、`drop_basis`（`drops` の空白の根拠の全角・半角の直しまたは番号）、`ignored_lines`、`case_srcs` |
 | `pdfdocx.DocxFix` | `pdfdocx.make_fixed_docx` | pipeline, fidelity.verify_supplement, report | `path`（補った docx。入力が同名なら `_2` などの別名）、`fixes`（Fix の一覧。applied / reason。`Fix.group`＝1 つの違いを分けた組〈双方向〉、`Fix.needs`＝空白の削除が従う根拠の全角・半角の直し〈片方向〉）、`check`（照合の結果） |
-| `fidelity.SupplementResult` | `fidelity.verify_supplement` | pipeline, report（13.8） | 補完の確かめの合否と問題 |
+| `fidelity.SupplementResult` | `fidelity.verify_supplement` | pipeline, report（13.4） | 補完の確かめの合否と問題 |
 | `pipeline.Result` | `pipeline.convert` | report, cli, colab, app | 上のすべてを束ねたもの。`ok`（3 つの検証の合格）、`needs_action`（要対応があるか。`report.actions` から決まる）、出力ファイルのパス。守りの結果は `lost_images`（画像を入れる場所を作れなかった画像）・`image_problems`（XML の画像の名前の不具合）・`decorations`（飾りの図形。`model.Decoration`）・`table_problems`（形の崩れた表）と `tables_checked`（形を確かめた表の数。12 章）・`lost_autonums`（XML に番号が出なかった自動番号の段落）・`unshown_numbers`（番号を出さなかった題目・著者名・所属の段落。10 章）。ほかに `images`（`images.SlotImage`。画像の置き場所ごとの状態〈missing・user・skipped・unused〉と入れた画像の元のファイル名・形式・大きさ）、`xml_base`（置き場所をすべて書いた XML）、`zip_issues`・`not_zipped`、`supplement`（ルート2）など |
-| `report.Action` | `report.actions(res)` | report（冒頭・14 章）, colab（枠）, cli（標準エラー）, pipeline（終了コード） | `level`（NEEDS_ACTION / TO_CHECK / STEP）、`key`、`top`、`checklist`、`box_title`/`box_detail`、`cli`、手順だけ `required`/`done`/`failed`/`progress`。止める知らせは `report.blocking(acts)` |
+| `report.Action` | `report.actions(res)` | report（冒頭のすることの一覧と囲み）, colab（枠）, cli（標準エラー）, pipeline（終了コード） | `level`（NEEDS_ACTION / TO_CHECK / STEP）、`key`、`top`、`checklist`、`box_title`/`box_detail`、`cli`、手順だけ `required`/`done`/`failed`/`progress`。止める知らせは `report.blocking(acts)` |
 
 ### 段落 ID（`src`）
 
@@ -145,7 +146,7 @@ XML の要素の ID は `structure.Classifier.assign_ids` が付ける: 図 `F1`
 |---|---|---|---|
 | `ooxml.py` | 605 | docx の低水準処理と**文字ポリシー**（何が docx の文字か）。`DocxPackage`（zip を開いて `mc:AlternateContent` を前処理。採る側は `choose_alternate`〈Requires を名前空間に解決。読める一覧は `UNDERSTOOD_NS`。記号の挿入 `w16se:symEx` は Fallback の文字〉）、`HiddenRule`（隠し文字の判定。styles.xml から作る）、`joined_paragraphs`/`unjoined_deleted_marks`（段落記号の削除でつなぐ段落）、`canonical_text`/`canonical_texts`（検証用の文字の取り出し。読み取りとは別実装）、`FIELD_DRAWN`・`resultless_field_kind`（結果を持たないまま終わるフィールドのうち、Word では表示のある種類。読み取りが記録して要確認で知らせる）、`sym_char`・`symbol_char`・`w_t_text`・`map_symbol_text`（記号フォント〈Symbol・Wingdings 系〉。フォントごとの表 `SYMBOL_TABLES`。`w:sym` と、記号フォントのランの `w:t` の私用領域の文字を Unicode にする。読み取り・検証・ルート2 が共有）、`in_deleted_run`（削除の変更履歴の中の図形の段落を欠番にする判定。読み取り・検証・ルート2 が共有） | `DocxPackage`, `HiddenRule`, `choose_alternate`, `canonical_texts`, `joined_paragraphs`, `paragraph_ids`, `in_deleted_run`, `SYMBOL_TABLES`, `symbol_char`, `w_t_text` |
 | `model.py` | 437 | 中間表現の型（上の表）。`note_key`/`note_label`（Word の脚注・文末脚注の鍵「footnote:5」）。守りの結果の `LostImage`・`LostNumber`・`PuaChar`・`TableProblem`、記号フォントの私用領域の符号の扱い `SymbolReplaced`、反映しない Word の画像の加工の名前 `IMAGE_EDITS` | 型 |
-| `config.py` | 245 | `JournalConfig`（`data/jasme.toml`。誌名・ISSN・DOI 形式・スタイル名の対応〈英文要旨は「英文要約見出し」「英文要約」の別名も〉・原稿種別・冒頭の誌名行 `front_lines`〈`structure.front_decoration` が装飾として知らせずに除く〉）と `ArticleMeta`（記事ごとの書誌情報。`from_dict` が巻・号・ページを NFKC にして確かめ、日付を `_date` で読む） | `JournalConfig.load`, `ArticleMeta.from_dict`/`load`, `article_id`, `doi_value` |
+| `config.py` | 260 | `JournalConfig`（`data/jasme.toml`。誌名・ISSN・DOI 形式・スタイル名の対応〈英文要旨は「英文要約見出し」「英文要約」の別名も〉・原稿種別・冒頭の誌名行 `front_lines`〈`structure.front_decoration` が装飾として知らせずに除く〉）と `ArticleMeta`（記事ごとの書誌情報。`from_dict` が巻・号・ページを NFKC にして確かめ、日付を `_date` で読む） | `JournalConfig.load`, `ArticleMeta.from_dict`/`load`, `article_id`, `doi_value` |
 | `tracking.py` | 28 | 変換中の目印の名前空間（`jx:span`、`jx:drop`、`jx:gen`〈kind が autonum なら `src` に番号の段落 ID〉、`jx:implicit`、`jx:o`、`jx:ai`） | 定数 |
 
 ### 読み取り
@@ -169,7 +170,7 @@ XML の要素の ID は `structure.Classifier.assign_ids` が付ける: 図 `F1`
 | ファイル | 行 | 役割 | 入口 |
 |---|---|---|---|
 | `linker.py` | 728 | 機械的リンク。`Linker.run`: 数式のラベル → 段落ごとに Word のハイパーリンク・URL/DOI・図表の参照（`float_refs`）・数式の参照（`eq_refs`）・注の参照（`fn_marks`。上付きの種類分け `_sup_marks`、論文の注番号の書き方 `note_style`）→ 引用（refparse）。`apply_span` がアトムに LinkSpec を付ける唯一の共通関数（リンクが重なる・数式をまたぐときは付けない）。`unresolved` にリンク先のない参照、`held` に判断でリンクしなかった参照を `Unresolved` で記録（段落の中の範囲つき。W8 の手順 15）。図・表の番号が重なる・枝番つきのキャプションの番号は `float_numbers` でリンク先から外し、その参照と枝番つきの参照（`RE_BRANCH_REF`）はリンクせず `_unlinked` が記録する（K4）。`body_paragraphs` は図・表の `caption_more`（2 段落目以降）も文脈 `caption` で返し、注の節の中の表（`FnNode.tables`）も返す（注番号はリンクしない。`Linker.fn_table`） | `link(plan, ref_doi) -> Linker`, `apply_span`, `find_in_para`, `occurrence_at`, `cited_refs`。AI のリンクの text が段落の文字と全角・半角だけ違うときは `find_width_insensitive` が 1 か所に決まるときだけ範囲を返す（C141。W8 の手順 26） |
-| `refparse.py` | 427 | 引用文献の解析（`parse_entry`: 著者・年・題名・誌名・DOI）と、本文の著者・年方式の引用の抽出・照合（`extract_citations`, `match_citation`〈同じ第一著者・同じ年の候補は、いちばんよく当てはまる候補が 1 つのときだけ採り、2 つ以上なら「特定できない」〉, `link_citations`）、番号方式（`link_numeric`）。NFKC で照合して元の位置に戻す。文献の `<year>`・論文名・誌名のタグ（`tag_reference`）は、年の位置を `Mapped`（1 文字ずつ NFKC）の上で探し直して戻し、戻した範囲が年の形でなければ付けない | `link_citations`, `tag_reference`, `link_numeric` |
+| `refparse.py` | 427 | 引用文献の解析（`parse_entry`: 著者・年・題名・誌名・DOI）と、本文の著者・年方式の引用の抽出・照合（`extract_citations`, `match_citation`〈同じ第一著者・同じ年の候補は、いちばんよく当てはまる候補が 1 つのときだけ採り、2 つ以上なら「特定できない」。et al. の引用は著者 1 人の文献を除き、欧文で 3 人以上の文献を先に選ぶ〉, `link_citations`）、番号方式（`link_numeric`）。NFKC で照合して元の位置に戻す。文献の `<year>`・論文名・誌名のタグ（`tag_reference`）は、年の位置を `Mapped`（1 文字ずつ NFKC）の上で探し直して戻し、戻した範囲が年の形でなければ付けない | `link_citations`, `tag_reference`, `link_numeric` |
 
 ### AI 補完
 
@@ -190,14 +191,15 @@ XML の要素の ID は `structure.Classifier.assign_ids` が付ける: 図 `F1`
 
 | ファイル | 行 | 役割 | 入口 |
 |---|---|---|---|
-| `fidelity.py` | 688 | ① `verify(docx_path, root, exclusions)`: `source_texts`（ooxml.canonical_texts）と XML の `jx:span` を段落ごとに比べる（欠落・重複・不一致・目印の外の文字 `stray_text`・落とした空白・出力と除外の矛盾・空白のはずの除外に文字）② `final_check(root, xml_bytes, fid)`: 目印を外した最終 XML を読み直して再照合（実体の宣言があれば解決せず不合格。なければ実体を解決するパーサでも読めることを確かめる。`final_unreadable`・`final_differs`） ③ `verify_supplement(original, fixed, fixes, …)`: ルート2 の補完の確かめ（変更履歴の単位 `_mark_runs`/`_unit_ends` を取り出し、(A) は `_pair`、(B) は報告された Fix と照合。pdfmatch とは定数しか共有しない）。`supplement_targets` | 上のとおり |
+| `fidelity.py` | 688 | ① `verify(docx_path, root, exclusions)`: `source_texts`（ooxml.canonical_texts）と XML の `jx:span` を段落ごとに比べる（欠落・重複・不一致・目印の外の文字 `stray_text`・落とした空白・出力と除外の矛盾・空白のはずの除外に文字）② `final_check(root, xml_bytes, fid)`: 目印を外した最終 XML を読み直して再照合（実体の宣言があれば解決せず不合格。なければ実体を解決するパーサでも読めることを確かめる。`final_unreadable`・`final_differs`） ③ `verify_supplement(original, fixed, case_srcs, …)`: ルート2 の補完の確かめ（変更履歴の単位を取り出し、`_unit_typeset` で 1 文字ずつの `_pair` の対と空白の削除だけで説明できるか。照合の結果は受け取らない。pdfmatch とは定数しか共有しない）。`supplement_targets` | 上のとおり |
 
-### PDF との照合（ルート1 の照合、ルート2 の補完）
+### PDF との照合（照合・表記の合わせ方・書誌情報）
 
 | ファイル | 行 | 役割 | 入口 |
 |---|---|---|---|
-| `pdfmatch.py` | 2901 | `check_pdf(plan, pdf_path, fn_marks) -> PdfCheck`。① `extract_pages`（pypdfium2）② `pdf_stream`（空白・ページ番号を除いた文字の列に、柱の候補 `head`・ページの端 `edge`・行全体でしか一致させない行 `line_only`・受付日 `date`・数式の位置 `formula` の印）③ `compare` → `_joint`（全段落をつないで PDF と単調に対応付け、段落ごとの窓を決める）→ `_align`（difflib で段落ごとに照合）→ `_classify`/`_report_regions`（違いを (A) `typeset_pair`/`width`/`drops`/`numbers`、(B) `kind="text"`、(C) `why` に分ける）。`diff_parts`（1 つの違いを直す単位に分ける）。定数表 `QUOTE_CLASSES`・`DASHES`・`HYPHENS`・`NUMBER_PAIRS`・`FW_FIRST/LAST`、理由の文言 `*_WHY` | `check_pdf`, `extract_pages`, `pdf_stream`, `typeset_pair`, `diff_parts` |
-| `pdfdocx.py` | 860 | `make_fixed_docx(docx, pdf, out, journal) -> DocxFix`。元の docx を読んで照合し（`_mechanical` → `check_pdf`）、`plan_fixes` で段落ごとの Fix（kind width / space / glyph / text）を決め（空白の削除 `space` は `Fix.needs` で根拠の `width` に片方向で従い、`spread_reasons` が「直さない」を不動点まで広げる。1 つの違いを分けた組は `FixGroup`・`link_fixes` で双方向）、`_Writer` が元の XML（前処理しない木）のランを分けて `w:del`/`w:ins` を書き込む（`paragraph_units`/`raw_paragraph_ids` が読み取りと同じ文字ポリシーで段落を特定）。書いた後に `_verify`（読み直した文字が期待どおりか）と `_structure`（役割・領域・リンク・注の区切り〈注の節の表の形も〉・著者数が元と同じか）で確かめ、合わない段落は直さずに作り直す | `make_fixed_docx`, `paragraph_units`, `tracked_counts`, `same_file` |
+| `pdfmatch.py` | 3325 | `check_pdf(plan, pdf_path, fn_marks) -> PdfCheck`。① `extract_pages`（pypdfium2）② `pdf_stream`（空白・ページ番号を除いた文字の列に、柱の候補 `head`・ページの端 `edge`・行全体でしか一致させない行 `line_only`・受付日 `date`・数式の位置 `formula` の印）③ `compare` → `_joint`（全段落をつないで PDF と単調に対応付け、段落ごとの窓を決める）→ `_align`（difflib で段落ごとに照合）→ `_classify`/`_report_regions`（違いを表記の違い〈区分 (1) の元。`typeset_pair`/`width`/`drops`/`numbers`〉、内容の違い〈`kind="text"`〉、決められない違い〈`why`〉に分ける）→ `grade`（違いごとに知らせるかの区分 `TextDiff.level`〈`FIX`・`SILENT`・`CONTENT`・`UNSURE`〉と内訳 `label` を付ける。`level_of` で読む）→ `cell_misses`（表のセル・囲みの行が PDF のどこかにあるかの簡易な確かめ。`PdfCheck.cell_misses`）→ `paper_verdict`（別の論文かの判定。`PdfCheck.verdict`。文字化けなら `pdf_readable` で `ok` を偽にする）。`diff_parts`（1 つの違いを直す単位に分ける）。定数表 `QUOTE_CLASSES`・`PUNCT_CLASSES`・`DASHES`・`HYPHENS`・`NUMBER_PAIRS`・`FW_FIRST/LAST`、理由の文言 `*_WHY` | `check_pdf`, `extract_pages`, `pdf_stream`, `typeset_pair`, `diff_parts` |
+| `pdfdocx.py` | 933 | `make_fixed_docx(docx, pdf, out, journal) -> DocxFix`。元の docx を読んで照合し（`_mechanical` → `check_pdf`）、`plan_fixes` で段落ごとの Fix（kind width / space / glyph / text）を決め、`hold` が書き込まない直しに理由を付け（内容の違い〈kind text〉と、それに間 1 文字以下で続く表記の直し・止めたかっこの組のもう片方。`write_fixed_docx` の入口の `check_held` が、理由のない kind text を `ValueError` にする）（空白の削除 `space` は `Fix.needs` で根拠の `width` に片方向で従い、`spread_reasons` が「直さない」を不動点まで広げる。1 つの違いを分けた組は `FixGroup`・`link_fixes` で双方向。かっこの全角・半角の直しは `Fix.pair` で組のもう片方を見て、混ざる形になるなら書き込みの段階でも止める）、`_Writer` が元の XML（前処理しない木）のランを分けて `w:del`/`w:ins` を書き込む（`paragraph_units`/`raw_paragraph_ids` が読み取りと同じ文字ポリシーで段落を特定）。書いた後に `_verify`（読み直した文字が期待どおりか）と `_structure`（役割・領域・リンク・注の区切り〈注の節の表の形も〉・著者数が元と同じか）で確かめ、合わない段落は直さずに作り直す | `make_fixed_docx`, `hold`, `paragraph_units`, `tracked_counts`, `same_file` |
+| `pdfbiblio.py` | 172 | `read_biblio(pdf_path, journal) -> PdfBiblio`（PDF の 1 ページ目の誌名の行と日付を、設定の正規表現とラベルで読む。読めない項目は空）、`biblio_inputs`・`fill_missing`・`mismatches`・`page_count_ok`。`pipeline`（`Result.pdf_biblio`）・`report`（`meta_pdf`・11 章）・`cli`（`--meta` の空の項目を埋める）から呼ぶ（手順 12。`app` は手順 13） | `config`（`DATE_FIELDS`・`PAGE_FIELDS`）、`pdfmatch.extract_pages`（呼ぶときに読み込む） |
 
 ### 出力
 
@@ -206,17 +208,17 @@ XML の要素の ID は `structure.Classifier.assign_ids` が付ける: 図 `F1`
 | `images.py` | 170 | 作業する人が入れる図・表の画像の受け取り（docx の画像は書き出さない。W1）。`check_user_image`: 入れられた画像の中身を確かめる（PNG・JPEG・GIF だけ。向き・圧縮・透過を変えず、そのままのバイト列を使う。幅と高さは Pillow で読むだけ）。`SlotImage`（置き場所 1 つと入れた画像の状態）・`KeptImage`・`DroppedImage`・`ChangedImage`（変換し直しの持ち越しの記録）。`match_names`: アップロードされたファイル名を、幹・図番号・記事識別子つきの名前で置き場所に合わせる | `check_user_image`, `SlotImage`, `match_names`, `KeptImage`, `DroppedImage`, `ChangedImage` |
 | `imagelist.py` | 175 | 取り違えの確かめの一覧（`{記事識別子}_図の確かめ.html`。出力フォルダの記事フォルダの外に書き、ZIP に入れない）。行のデータは `report.image_rows` で、ここは見せ方だけ。`check_html(res, embed=False)`（`embed` で縮小した画像を埋め込む）・`write_check(res)`（変換・`rebuild_outputs` のたびに書き、`Result.check_path` に持つ） | `check_html`, `write_check`, `check_name` |
 | `package.py` | 224 | J-STAGE のフォルダ構成（`jasme/巻/号/記事識別子/`）と ZIP。`upload_entries` が ZIP に入れるものを決める唯一の場所。`zip_problems`（ZIP を読み直して EMSGM034E/053E/059E/073E/074E など。画像の置き場所を渡すと、置き場所にない名前の画像と、入れたのに ZIP にない画像も）、`unzipped_files`（入れなかったファイル） | `write_package`, `make_zip`, `zip_problems`, `unzipped_files`, `article_dir` |
-| `report.py` | 3804 | 変換レポート（Markdown）`render(res)`: 冒頭の要約 → 1 結果の要約 → 2 AI → 3 解決できなかった箇所 → 4 機械的な推定 → 5 不変性チェック → 6 出力しなかった文字 → 7 落とした空白 → 8 生成文字 → 9 画像 → 10 警告 → 11 書誌情報 → 12 DTD と J-STAGE チェック → 13 PDF との照合（`render_route1`/`render_route2`）→ 14 登載前のチェックリスト。`render_ai_only`（AI 判断一覧）。**`actions(res)`** が利用者への知らせ（要対応・要確認）を `Action` の一覧にする唯一の場所（`_fidelity_action`、`_dtd_action`、`_table_shape_action`〈key `table_shape`〉、`_upload_action`、`_ai_finish_action`〈推奨の手順 `ai_finish`。状態は `ai_state`・`ai_done`〈位置を聞く図形か 2 段にまたがる機械的な図形があれば、AI が PDF を見たこと `pdf_unseen` が偽であることも要る〉・PDF の表示 `ai_pdf`、見ていないときの文 `_ai_pdf_unseen_action`、方法の表示は `ai_method`・`ai_summary`。W8〉、`_float_end_action`〈要確認 `float_end`。W8〉、`_style_check_action`〈要確認 `style_check`。機械が挙げた段落 `plan.style_suspects` と AI の提案 `AIOutcome.style_fixes` を 1 つに。行は `style_check_rows`。W8〉、`_ai_boundary_action`〈要確認 `ai_boundary`。AI の回答で直した注の区切り・資料の始まり `AIOutcome.boundaries`。W8〉、`images_action`、`lost_action`、`lost_autonum_action`〈key `autonum_lost`〉、`_unplaced_action`〈key `excluded_unsure`。理由ごとの直し方 `UNPLACED_GUIDE`〉、`_abstract_missing_action`〈key `abstract_missing`〉、`_style_hidden_action`、`_newline_action`、`pdf_actions`…。並びは 4 章の「利用者への知らせの経路」）。8 章に XML に番号を出せなかった段落の表、12 章に「表の形の確かめ」の節を出す。6 章の理由の列には、位置を決められない除外に「（要確認）」、英文要旨が見つからないときの除外に「（要対応）」を添える。構造の衝突で中止するときの文 `structure_conflict_text`（衝突ごとに段落 ID・抜粋・Word での直し方。`actions` の知らせではなく `StructureConflictError` の文）。`image_rows`, `images_progress`（用意が必要な画像）。画面の操作は目印 `step()`（`STEP_NAMES`）で書く（`colab.step_text` が画面ごとの語に置き換える）。レポートの生のタグは `md_tag()` で囲む。0.29.0 で `_float_ref_action`（key `float_ref`。手で足す方法 `float_ref_manual`。AI の状態で文を分けた `float_ref_ai` は W8 の手順 7 でなくした）と `_fn_guess_action`（key `fn_guess`）を、0.30.0 で `table_shape`・`autonum_lost` を（`image_crop`・`image_edits` は W1 でなくした）、0.31.0 で `excluded_unsure`・`abstract_missing` を足した | `render`, `actions`, `image_rows`, `images_progress`, `upload_issues`, `pdf_summary`, `structure_conflict_text` |
+| `report.py` | 4044 | 変換レポート（Markdown）`render(res)`: 冒頭のすることの一覧（`todo_list`。旧 14 章） → 1 結果の要約（と要対応・要確認の囲み） → 2 AI → 3 解決できなかった箇所 → 4 機械的な推定 → 5 不変性チェック → 6 出力しなかった文字 → 7 落とした空白 → 8 生成文字 → 9 画像 → 10 警告 → 11 書誌情報 → 12 DTD と J-STAGE チェック → 13 PDF との照合（`render_pdf`）。14 章はない。`render_ai_only`（AI 判断一覧）。**`actions(res)`** が利用者への知らせ（要対応・要確認）を `Action` の一覧にする唯一の場所（`_fidelity_action`、`_dtd_action`、`_table_shape_action`〈key `table_shape`〉、`_upload_action`、`_ai_finish_action`〈推奨の手順 `ai_finish`。状態は `ai_state`・`ai_done`〈位置を聞く図形か 2 段にまたがる機械的な図形があれば、AI が PDF を見たこと `pdf_unseen` が偽であることも要る〉・PDF の表示 `ai_pdf`、見ていないときの文 `_ai_pdf_unseen_action`、方法の表示は `ai_method`・`ai_summary`。W8〉、`_float_end_action`〈要確認 `float_end`。W8〉、`_style_check_action`〈要確認 `style_check`。機械が挙げた段落 `plan.style_suspects` と AI の提案 `AIOutcome.style_fixes` を 1 つに。行は `style_check_rows`。W8〉、`_ai_boundary_action`〈要確認 `ai_boundary`。AI の回答で直した注の区切り・資料の始まり `AIOutcome.boundaries`。W8〉、`images_action`、`lost_action`、`lost_autonum_action`〈key `autonum_lost`〉、`_unplaced_action`〈key `excluded_unsure`。理由ごとの直し方 `UNPLACED_GUIDE`〉、`_abstract_missing_action`〈key `abstract_missing`〉、`_style_hidden_action`、`_newline_action`、`pdf_actions`〈PDF の知らせ。`pdf_fallback`・`pdf_unread`・要確認 `pdf_mismatch`〈PDF と文字が違う箇所。内容の違いだけ。`mismatch_diffs`・`mismatch_lines`。W3〉・`pdf_suspect`。照合に使わなかった PDF の文字と表記の違いは知らせにしない〉…。並びは 4 章の「利用者への知らせの経路」）。8 章に XML に番号を出せなかった段落の表、12 章に「表の形の確かめ」の節を出す。6 章の理由の列には、位置を決められない除外に「（要確認）」、英文要旨が見つからないときの除外に「（要対応）」を添える。構造の衝突で中止するときの文 `structure_conflict_text`（衝突ごとに段落 ID・抜粋・Word での直し方。`actions` の知らせではなく `StructureConflictError` の文）。`image_rows`, `images_progress`（用意が必要な画像）。画面の操作は目印 `step()`（`STEP_NAMES`）で書く（`colab.step_text` が画面ごとの語に置き換える）。レポートの生のタグは `md_tag()` で囲む。0.29.0 で `_float_ref_action`（key `float_ref`。手で足す方法 `float_ref_manual`。AI の状態で文を分けた `float_ref_ai` は W8 の手順 7 でなくした）と `_fn_guess_action`（key `fn_guess`）を、0.30.0 で `table_shape`・`autonum_lost` を（`image_crop`・`image_edits` は W1 でなくした）、0.31.0 で `excluded_unsure`・`abstract_missing` を足した | `render`, `todo_list`, `actions`, `image_rows`, `images_progress`, `upload_issues`, `pdf_summary`, `structure_conflict_text` |
 
 ### 流れと画面
 
 | ファイル | 行 | 役割 | 入口 |
 |---|---|---|---|
-| `pipeline.py` | 1292 | `Options`（出力先・AI の方法・PDF・ルート）、`Result`、`convert`（4 章）、`add_images`（利用者の画像を入れて ZIP とレポートを作り直す）、守り `lost_images`（置き場所をすべて書いた `xml_base` の木で、画像の置き場所を作れなかった画像）・`image_problems`（最終の XML の画像の名前）・`decorations`（飾りの図形の記録）・`table_problems`（出力した `<table>` の形を、builder の結合の判断に頼らず、docx の行ごとの列の数と HTML の表の割り当てだけで確かめる）・`lost_autonums`（文字を出したのに番号の `jx:gen` がない自動番号の段落）、`fixed_docx_path`（補った docx の書き出し先。入力が同名なら `_2` などの別名）と `_drop_fixed`（中止のとき、この変換が書いた補った docx を消す）、中止の例外 `StructureConflictError`（K1・K2。`plan`・`conflicts` を持つ。変換を中止する例外はこれだけ。AI を使わない設定でも中止しない〈W8〉）、AI の区切りの指定を構造の衝突などで使わないときの `_reject_roles`・理由 `CONFLICT_ROLE_WHY`・`BOUNDARY_LOST_WHY`、`tool_version` | `convert`, `add_images`, `Options`, `Result`, `lost_images`, `table_problems`, `lost_autonums`, `StructureConflictError` |
-| `cli.py` | 179 | `python -m jasme_jats` の引数と終了コード（0 要対応なし / 1 要対応あり / 2 中止〈`StructureConflictError` は文を標準エラーに出す〉。`--ai-response` は `--ai manual` のときだけ指定でき、それ以外は引数の誤りで 2）。`--ai api` では出力フォルダの `AI回答.json` を `Options.ai_cache` に読む（`--ai-refresh` で読まない。`--ai api` 以外で指定すると 2）。`images_in`（`--images` のフォルダを `images.match_names` で置き場所に合わせる。合わないファイルは標準エラー）・`image_table`（図の画像の表。見出しは手順 `images` の `progress`）。`--no-image`、`--no-metafile-conversion` はなくした | `main` |
-| `colab.py` | 341 | Colab の表示部品（HTML）: 手動モードの案内の枠 `manual_guide`（見出し・説明は `ai_finish` の `Action` の `box_title`・`box_intro`、手順の番号つきの案内、出版版 PDF を添付する案内）と、それにコピーボタンと依頼文を足した依頼文の枠 `prompt_box`（`ai_finish_of(res)` で `Action` を取る。1 画面版は `manual_guide` を結果の枠の並びに出す）、中止の枠 `structure_conflict_box`（赤）、要対応（赤）・要確認（黄）の枠 `result_boxes`（`actions` の順）、要約 `summary_box`（AI による仕上げの行は `report.ai_summary`）、畳んだレポート `report_details`（Markdown → HTML は `markdown_text_only`。生の HTML・実体を無効にして docx の文字の `<`・`&` をそのまま見せる）、続けて変換するときの確認 `same_first_page`/`carried_over`。画面の操作の目印の置き換えは `STEP_WORDS`（`notebook`・`app`・`cli`）と `step_text`（枠を作る関数が `screen` 引数を受ける）。1 画面版の欄・ボタンのラベルは定数 `ANSWER_LABEL`・`APPLY_LABEL`・`CONVERT_LABEL`（`app.py` も使う）。枠は白地に黒の文字に固定し（`LIGHT_STYLE`）、ダークモードでも読める | `result_boxes`, `summary_box`, `report_details`, `prompt_box`, `manual_guide` |
-| `app.py` | 852 | 1 画面版（Gradio）。`AppState`（Gradio に依存しない状態: 入力 → `convert` → `waiting_for_answer`/`apply_answer`（手動モード）→ `image_rows`/`match_images`（「まとめて入れる」の名前合わせ）/`add_images`（`skip` は「入れない」）→ `needs_action`/`download` → `reset`）と `build_app(state, io)`（画面）、`launch()`（share は必ず False。Colab では `colab_embed` で iframe に埋め込む）。`answer_box_open`（手動の欄を見せるか。手動モードで作った結果のときだけ、`waiting_for_answer` に加え、AI による仕上げが済んでいない〈`report.ai_done` が偽。回答待ち・失敗・一部〉あいだ。知らせの key では決めない〈以前の `REPASTE_KEYS` は W8 の手順 7 でなくした〉）。中止（`StructureConflictError`）は `_run` が `InputError` にして `structure_conflict_box` の枠で出し（`res` は None のまま、入力の写し `run` は残る）、想定外の例外は `crash(error, operation)` で赤い枠にする（どちらも `report.actions()` の知らせではなく例外の表示）。変換したときの入力の写し `AppState.run`（`RunInputs`。docx・PDF は作業用の場所に写したもの、比べる値 `compared`〈ファイルは中身の sha256。`fingerprint`・`file_digest`〉、作り方・SPLIT_LABELS・AI の方法・モデル・書誌情報・API キー）を `convert` が作り、`_run`・`apply_answer`・`add_images`・`download` はこの写しだけを使う。入力が写しと違えば、前の結果を残したまま理由の文で断る（`changed_inputs`・`stale_text`。「このままダウンロード」でも断る。AI の方法・モデルは比べず、変えたら `settings_note` で次の変換から使うと言う）。手動かどうか（`waiting_for_answer`・`answer_box_open`）も写しで決める（O3）。`convert` は確かめ（足りない項目・入力の誤り・API キー・ファイルを読めない）が済むまで前の結果と写しを変えず、`_run` は Options を作ってから前の結果を捨てる。別の論文（docx の中身が違う）で変換すると回答の欄を空にし（`paper_changed`）、前の論文の回答は、変換の中の依頼の番号の確かめ（`ai_assist.check_answer`）が使わない（W8 の手順 18 で、前の「前に反映したのと同じ文字の回答を断る」`_last_answer` から置き換えた）。API モードの回答の写し（`AI回答.json` の中身）は `AppState.ai_cache` に持ち、`Options.ai_cache` で渡す（出力フォルダは毎回消す）。変換ボタンの横の文は `ready_text` | `launch`, `AppState`, `build_app` |
-| `tools/make_notebook.py` | 618 | 2 つのノートブック（従来版 9 手順、1 画面版 1 セル）を生成する。手順 5 は中止の例外（`StructureConflictError`）を、手順 6 は `StructureConflictError`（守り）を枠で出して `SystemExit` で止める（「済み」に 5 が残らないので手順 6〜8 は `guard` で止まる）。従来版の各手順は、最初に前の手順の「済み」を確かめ（`guard`）、自分と後ろの手順の「済み」を消し（`unmark`）、最後まで済んだら自分を記録する（`mark`）。`REPO`/`BRANCH`/`DOCS`、手順ごとのセルの文字列、`ai_assist.py` から既定モデルを読む `module_constants` | `python tools/make_notebook.py [--branch]` |
+| `pipeline.py` | 1407 | `Options`（出力先・AI の方法・PDF・`route`〈`pdf`: PDF に合わせる。PDF があるときの既定。`docx`: 合わせない〉）、`Result`、`convert`（4 章）、`add_images`（利用者の画像を入れて ZIP とレポートを作り直す）、守り `lost_images`（置き場所をすべて書いた `xml_base` の木で、画像の置き場所を作れなかった画像）・`image_problems`（最終の XML の画像の名前）・`decorations`（飾りの図形の記録）・`table_problems`（出力した `<table>` の形を、builder の結合の判断に頼らず、docx の行ごとの列の数と HTML の表の割り当てだけで確かめる）・`lost_autonums`（文字を出したのに番号の `jx:gen` がない自動番号の段落）、`fixed_docx_path`（補った docx の書き出し先。入力が同名なら `_2` などの別名）と `_drop_fixed`（中止のとき、この変換が書いた補った docx を消す）、中止の例外 `StructureConflictError`（K1・K2。`plan`・`conflicts` を持つ。AI を使わない設定でも中止しない〈W8〉）と `WrongPaperError`（docx と PDF が別の論文。`pdfmatch.paper_verdict` が `wrong`。終了コード 2）。変換を中止する例外はこの 2 つだけ、AI の区切りの指定を構造の衝突などで使わないときの `_reject_roles`・理由 `CONFLICT_ROLE_WHY`・`BOUNDARY_LOST_WHY`、`tool_version` | `convert`, `add_images`, `Options`, `Result`, `lost_images`, `table_problems`, `lost_autonums`, `StructureConflictError` |
+| `cli.py` | 233 | `python -m jasme_jats` の引数と終了コード（0 要対応なし / 1 要対応あり / 2 中止〈`StructureConflictError`・`WrongPaperError`（別の論文の PDF）は文を標準エラーに出す〉。`--ai-response` は `--ai manual` のときだけ指定でき、それ以外は引数の誤りで 2）。`--ai api` では出力フォルダの `AI回答.json` を `Options.ai_cache` に読む（`--ai-refresh` で読まない。`--ai api` 以外で指定すると 2）。`images_in`（`--images` のフォルダを `images.match_names` で置き場所に合わせる。合わないファイルは標準エラー）・`image_table`（図の画像の表。見出しは手順 `images` の `progress`）。`--no-image`、`--no-metafile-conversion` はなくした | `main` |
+| `colab.py` | 392 | Colab の表示部品（HTML）: 手動モードの案内の枠 `manual_guide`（見出し・説明は `ai_finish` の `Action` の `box_title`・`box_intro`、手順の番号つきの案内、出版版 PDF を添付する案内）と、それにコピーボタンと依頼文を足した依頼文の枠 `prompt_box`（`ai_finish_of(res)` で `Action` を取る。1 画面版は `manual_guide` を結果の枠の並びに出す）、中止の枠 `structure_conflict_box`（赤）、要対応（赤）・要確認（黄）の枠 `result_boxes`（`actions` の順）、要約 `summary_box`（AI による仕上げの行は `report.ai_summary`）、畳んだレポート `report_details`（Markdown → HTML は `markdown_text_only`。生の HTML・実体を無効にして docx の文字の `<`・`&` をそのまま見せる）、続けて変換するときの確認 `same_first_page`/`carried_over`。画面の操作の目印の置き換えは `STEP_WORDS`（`notebook`・`app`・`cli`）と `step_text`（枠を作る関数が `screen` 引数を受ける）。1 画面版の欄・ボタンのラベルは定数 `ANSWER_LABEL`・`APPLY_LABEL`・`CONVERT_LABEL`（`app.py` も使う）。枠は白地に黒の文字に固定し（`LIGHT_STYLE`）、ダークモードでも読める | `result_boxes`, `summary_box`, `report_details`, `prompt_box`, `manual_guide` |
+| `app.py` | 915 | 1 画面版（Gradio）。`AppState`（Gradio に依存しない状態: 入力 → `convert` → `waiting_for_answer`/`apply_answer`（手動モード）→ `image_rows`/`match_images`（「まとめて入れる」の名前合わせ）/`add_images`（`skip` は「入れない」）→ `needs_action`/`download` → `reset`）と `build_app(state, io)`（画面）、`launch()`（share は必ず False。Colab では `colab_embed` で iframe に埋め込む）。`answer_box_open`（手動の欄を見せるか。手動モードで作った結果のときだけ、`waiting_for_answer` に加え、AI による仕上げが済んでいない〈`report.ai_done` が偽。回答待ち・失敗・一部〉あいだ。知らせの key では決めない〈以前の `REPASTE_KEYS` は W8 の手順 7 でなくした〉）。中止（`StructureConflictError`）は `_run` が `InputError` にして `structure_conflict_box` の枠で出し（`res` は None のまま、入力の写し `run` は残る）、想定外の例外は `crash(error, operation)` で赤い枠にする（どちらも `report.actions()` の知らせではなく例外の表示）。変換したときの入力の写し `AppState.run`（`RunInputs`。docx・PDF は作業用の場所に写したもの、比べる値 `compared`〈ファイルは中身の sha256。`fingerprint`・`file_digest`〉、表記の扱い〈PDF があれば `pdf`、なければ `docx`。作り方の欄はない〉・SPLIT_LABELS・AI の方法・モデル・書誌情報・API キー）を `convert` が作り、`_run`・`apply_answer`・`add_images`・`download` はこの写しだけを使う。入力が写しと違えば、前の結果を残したまま理由の文で断る（`changed_inputs`・`stale_text`。「このままダウンロード」でも断る。AI の方法・モデルは比べず、変えたら `settings_note` で次の変換から使うと言う）。手動かどうか（`waiting_for_answer`・`answer_box_open`）も写しで決める（O3）。`convert` は確かめ（足りない項目・入力の誤り・API キー・ファイルを読めない）が済むまで前の結果と写しを変えず、`_run` は Options を作ってから前の結果を捨てる。別の論文（docx の中身が違う）で変換すると回答の欄を空にし（`paper_changed`）、前の論文の回答は、変換の中の依頼の番号の確かめ（`ai_assist.check_answer`）が使わない（W8 の手順 18 で、前の「前に反映したのと同じ文字の回答を断る」`_last_answer` から置き換えた）。API モードの回答の写し（`AI回答.json` の中身）は `AppState.ai_cache` に持ち、`Options.ai_cache` で渡す（出力フォルダは毎回消す）。変換ボタンの横の文は `ready_text`（巻・号・ページが足りず PDF も未選択なら、PDF を選ぶと入ることを添える）。`pdf_selected(path)`（`pdf.change`。`pdfbiblio.read_biblio` で読めた巻・号・ページ・受付日・受理日の欄を PDF の値にして注記を返す。`pdf_got` に入れた値を持つ） | `launch`, `AppState`, `build_app` |
+| `tools/make_notebook.py` | 635 | 2 つのノートブック（従来版 9 手順、1 画面版 1 セル）を生成する。手順 5 は中止の例外（`StructureConflictError`・`WrongPaperError`）を、手順 6 は `StructureConflictError`・`WrongPaperError`（守り）を枠で出して `SystemExit` で止める。手順 2 は PDF から読んだ書誌情報を表示し、手順 3 は空の欄だけ `pdfbiblio.fill_missing` で PDF の値にして埋めた欄の名前を表示する（食い違いは出さない。変換の後の `meta_pdf` に任せる）（「済み」に 5 が残らないので手順 6〜8 は `guard` で止まる）。従来版の各手順は、最初に前の手順の「済み」を確かめ（`guard`）、自分と後ろの手順の「済み」を消し（`unmark`）、最後まで済んだら自分を記録する（`mark`）。`REPO`/`BRANCH`/`DOCS`、手順ごとのセルの文字列、`ai_assist.py` から既定モデルを読む `module_constants` | `python tools/make_notebook.py [--branch]` |
 | `tools/sanitize_docx.py` | 234 | リポジトリに入れる docx から個人情報を取り除く（lxml で部品を書き直す）。取り除くもの: コメント（comments*.xml・people.xml と本文・脚注・文末脚注のコメントの範囲と参照）、`customXml/`・`docProps/custom.xml`・`docProps/thumbnail.*`、`w:attachedTemplate`（テンプレートのパス）とその関係、ヘッダー/フッターの文字（ページ番号のフィールドは残す）。空にするもの: 文書のプロパティの作成者・最終更新者・題目・主題・説明・キーワード・分類、app.xml の Company・Manager・HyperlinkBase・TitlesOfParts、`w:initials`。変更履歴の作成者は「作成者」（`pdfdocx.AUTHOR` は残す）。入力と同じ出力先は断り（`SAME_FILE_MSG`）、一時ファイルに書いて本文の文字（`fidelity.source_texts`）と画像の名前が同じことを確かめてから置き換える（`CHANGED_MSG`）。残った外部のローカルのパスは警告だけ | `sanitize`, `main`（終了コード 0 成功・1 断った・読めない・2 使い方の誤り） |
 
 ---
@@ -226,22 +228,22 @@ XML の要素の ID は `structure.Classifier.assign_ids` が付ける: 図 `F1`
 `convert(docx_path, meta, journal, opts) -> Result`。以下の番号は `pipeline.py` の処理順。中止（終了コード 2。構造の衝突だけ）は 1 と 2 の 2 か所で、どちらも AI を呼ぶ前。
 位置を決められない図表があっても、AI を使わない設定で中止しない（修正計画 W8 の決定 4。結び付いた段落の後ろか本文の最後に置き、推奨の手順 `ai_finish` で知らせる）。
 
-1. **ルート2 の前処理**（`opts.route == "pdf"`）: まず**補う前の元の docx** で `_mechanical` を行い、構造の衝突（`plan.structure_conflicts`。K1・K2）があれば
+1. **PDF に合わせる前処理**（`opts.route == "pdf"`。`--pdf` があるときの既定。`--route docx` は合わせない）: まず**補う前の元の docx** で `_mechanical` を行い、構造の衝突（`plan.structure_conflicts`。K1・K2）があれば
    `StructureConflictError` で中止する（補った docx を作らない。O7）。
    続けて `pdfdocx.make_fixed_docx` で補った docx を `pipeline.fixed_docx_path`（`out_dir/{aid}_PDFで補完した原稿.docx`。入力がそのファイルなら `_2` などの別名）に作り、
    `docx_fix.check.ok` なら以降の入力をそれに差し替える。PDF の文字を読めなければ `docx_fix = None` で元の docx を変換する（要対応 `pdf_fallback`）。
 2. **機械処理** `_mechanical`: `read_docx` → `classify` → `link`。構造の衝突があれば `StructureConflictError`（中止。終了コード 2。AI の方法にかかわらず
    AI を呼ぶ前に止め、手動モードでも `AI依頼文.txt` を書かない）。
-   ルート2 でこの変換が補った docx を書いていれば、中止の前に消す（`_drop_fixed`。1 をすり抜けたときだけ）。
+   PDF に合わせるときにこの変換が補った docx を書いていれば、中止の前に消す（`_drop_fixed`。1 をすり抜けたときだけ）。
 3. **1 回目の組み立て** `build`（AI 依頼文を作るのに BuildInfo の `exclusions`・`unsplit_names`・`name_splits` が要る）。
 4. **AI による仕上げ**（`opts.ai_mode` が api / manual）: `build_request`（`AIRequest`）→ API 呼び出し（system に `system_text()`、利用者の内容に `data`）、または `AI依頼文.txt`（`manual_text()`）の書き出しと `--ai-response` の読み取り。
    回答が読めたら種類ごとに検証し（`link_ops`・`name_ops`・`style_fixes`・`boundary_overrides`・`float_placements`・`box_kinds`。組み直す前の plan と位置の指定で `pdf_seen` を確かめ、機械的に置いた 2 段にまたがる図形〈`FloatInfo.wide`〉への指定は、PDF を見た回答でなければ〈途中で切れた回答・PDF のページと違う指定も〉`wide_rejects` が不採用にする）、**`_mechanical` をやり直して**（docx を読み直し、区切りの指定と配置を渡して組み立て直す）、
    AI の区切りの指定で構造の衝突ができたら、**2 段で組み直す**: 1 段目は衝突の範囲（`structure.conflict_overrides`）の指定だけを、なお残れば 2 段目は区切りの指定をすべて
    不採用（`_reject_roles`。理由 `CONFLICT_ROLE_WHY`。レポート 2 章）にして `_mechanical` をやり直す（中止しない。その後ろの `StructureConflictError` は届かない守り）。
    続けて `retarget_ops` で ID を読み替え、`apply_ops` でリンク等を適用し、**2 回目の `build`**。
-5. **PDF との照合**（`opts.pdf_path` があれば。ルート1 でも）: `check_pdf`。ルート2 で Word が付ける番号の直し（`number_edits`）があれば `plan.pdf_numbers` に入れて **3 回目の `build`**。
+5. **PDF との照合**（`opts.pdf_path` があれば。`--route docx` でも）: `check_pdf`。route pdf で Word が付ける番号の直し（`number_edits`）があれば `plan.pdf_numbers` に入れて **3 回目の `build`**。
 6. **検証**: `verify` → `finalize` → `serialize` → `final_check` → `validate`。`validate` には `pipeline.dtd_places`（引用文献・表・注の id → 段落）を渡し、エラーに原因の場所を付ける（AI の数式の取り消しのやり直しは、W8 の手順 12 で数式の書き起こしごとなくした）。
-7. **補完の確かめ**（ルート2 で補った docx があるとき）: `supplement_targets` → `verify_supplement`。
+7. **補完の確かめ**（補った docx があるとき）: `supplement_targets` → `verify_supplement`。
 8. **守り**（どれも最後の組み立ての木と `BuildInfo` を使い、変換の結果は変えずに要対応として知らせる）: 画像の置き場所を作れなかった画像 `lost_images`（置き場所をすべて書いた `xml_base` の木で調べる）→
    表の形 `table_problems`（`Result.table_problems`・`tables_checked`。要対応 `table_shape`）→ 自動番号の出力漏れ `lost_autonums`（`Result.lost_autonums`。要対応 `autonum_lost`）→ 私用領域の文字 `pua_chars`（`Result.pua_chars`。要対応 `pua_left`）と記号の置き換え `symbols_replaced`（`Result.symbols_replaced`。要確認 `symbol_replaced`）。
 9. **出力**: `slot_images`（置き場所ごとの `images.SlotImage`。変換の直後はすべて missing〈任意は unused〉。docx の画像は書き出さない）→ `jstage_check` → `write_package`（XML・PDF の配置と ZIP。画像はまだない）→ `out_dir/{aid}.xml`。最終の XML は、検証の段階で `package.apply_images(xml_base, images)` が作る（`final_check`・`validate` はその XML で行う）。画像を入れたとき（`add_images`）は `rebuild_outputs` が同じ確かめをやり直す。
@@ -255,7 +257,7 @@ XML の要素の ID は `structure.Classifier.assign_ids` が付ける: 図 `F1`
 
 ```
 pipeline.Result ──▶ report.actions(res) ──▶ [Action(level, key, top, checklist, box_title, box_detail, cli), …]
-                                              ├─ report.render: 冒頭の文（top）と 14 章（checklist）
+                                              ├─ report.render: 冒頭のすることの一覧（checklist。report.todo_list）と、1 章の後ろの囲み（top）
                                               ├─ colab.result_boxes: 赤（要対応）・黄（要確認）の枠 ── 従来のノートブックと app.py の両方
                                               ├─ cli.main: 標準エラー（cli）と終了コード（Result.needs_action = report.blocking）
                                               ├─ app.AppState.needs_action / todo_titles: 「ZIP を保存」の前に一度止める
@@ -276,21 +278,21 @@ AI の失敗・途中で切れた回答・手動の回答待ちは、推奨の�
 
 ---
 
-## 5. ルート2（docx から作り、出版版 PDF で補う）の流れ
+## 5. 出版版 PDF に表記を合わせる流れ（route pdf）
 
 ```
 元の docx ──▶ _mechanical で構造の衝突・位置を決められない図表を確かめる（あれば補った docx を作らずに中止）
           ──▶ pdfdocx.make_fixed_docx
                ├─ _mechanical（read_docx + classify + link。照合に段落の役割・リンク・注の鍵が要る）
-               ├─ pdfmatch.check_pdf（PDF の文字を取り出し、段落ごとに照合して (A)(B)(C) に分ける）
-               ├─ plan_fixes（段落ごとの Fix。直さない理由 reason も記録）
+               ├─ pdfmatch.check_pdf（PDF の文字を取り出し、段落ごとに照合して区分 (1)〜(4) に分ける）
+               ├─ plan_fixes（段落ごとの Fix。内容の違いの Fix も理由なしで返す）→ hold（内容の違いと、それに続く表記の直しに理由を付けて書き込みから外す）
                ├─ _Writer.run（元の XML のランを分けて w:del / w:ins を書く。脚注・文末脚注の XML にも）
                ├─ _verify（読み直した段落の文字が、期待どおりか）・_structure（役割・領域・リンク・注の区切りが元と同じか）
                │    └─ 合わない段落は Fix を外して書き直す
                └─ DocxFix（path, fixes, check）
-補った docx ──▶ convert の 2〜6（ルート1 と同じ）── 5 で Word の番号を PDF に合わせる（plan.pdf_numbers。PDF と照合する段落だけ）
-              ──▶ fidelity.verify_supplement（元の docx と補った docx を比べ、変更履歴の単位が (A) か報告した (B) だけか）
-レポート 13 章: 13.1 補った校正の直し / 13.2 組版の違い / 13.3 直さなかった箇所と理由 / 13.4 Word の番号 / 13.5 残る違い / 13.6 見つからない段落 / 13.7 照合に使わなかった PDF の文字 / 13.8 補完の確かめ
+補った docx ──▶ convert の 2〜6（PDF のないときと同じ）── 5 で Word の番号を PDF に合わせる（plan.pdf_numbers。PDF と照合する段落だけ）
+              ──▶ fidelity.verify_supplement（元の docx と補った docx を比べ、変更履歴の単位が組版の違い（区分 (1)）だけか）
+レポート 13 章（`render_pdf`）: 13.1 PDF と違う箇所（要確認 `pdf_mismatch` の全件） / 13.2 PDF に合わせた表記（件数だけ。`--route docx` は「PDF と表記が違う箇所〈docx のまま〉」） / 13.3 照合できなかった箇所（記録。決められなかった違い・PDF に見つからない段落・照合に使わなかった PDF の文字の行数） / 13.4 補完の確かめ（補った docx があるときだけ）
 ```
 
 ---
@@ -321,17 +323,17 @@ AI の失敗・途中で切れた回答・手動の回答待ちは、推奨の�
 | `test_figure_units.py` | 図形の外の図の決め方（同じ段落・続く画像だけの段落・近くの段落の画像、段落に結び付いた浮動の画像、飾り） |
 | `test_table_images.py` | 画像で貼った表（表キャプションの後ろの画像・図形の中の画像）、表のセルの図キャプションの画像、資料の図キャプション |
 | `test_links.py` / `test_refparse.py` / `test_notes.py` | リンクの規則（注・図表・引用）、注の書き方、Word の脚注・文末脚注、注の節の中の表（`<fn><p><table-wrap>`） |
-| `test_names.py` | 著者名の姓と名の分け方（`builder.split_eastern` の規則、字の間・前後の空白を落とすこと、要確認 `name_split`、AI の `split_name` との関係、ルート2 の `_name_shape`） |
+| `test_names.py` | 著者名の姓と名の分け方（`builder.split_eastern` の規則、字の間・前後の空白を落とすこと、要確認 `name_split`、AI の `split_name` との関係、補った docx の `_name_shape`） |
 | `test_ai.py` | AI の回答の検証と適用、途中で切れた回答、4 社の呼び出し（偽のクライアント）、構造の衝突を作る区切りの指定の不採用（2 段の組み直し） |
 | `test_ai_request.py` | 依頼文（W8 の手順 13）: 節を出す条件と番号、【作業する方へ】、`system_text`、4 社に渡す system とデータ、依頼文を貼った回答の見分け |
 | `test_ai_data.py` | 依頼文のデータの部分（W8 の手順 14）: 「## 本文」の段落と `body_seq`、図形の中の段落・画像の印を載せない、文献と注を 1 回ずつ、⟦番号: …⟧、表のセルの省略、図・表・式の一覧、スタイルの一覧 |
 | `test_ai_unresolved.py` | 依頼文のデータの部分 2（W8 の手順 15）: 未解決の一覧の表記と何回目か（`linker.Unresolved`）、レポートの 3 章が変わらない、スタイルを確かめる段落・除外・和文の氏名の節 |
 | `test_ai_float_data.py` | 依頼文のデータの部分 3（W8 の手順 16）: 位置を決める図・表の中身・仮の位置・docx の配置（日本語）・推定（段が違えばなし・「## 本文」にない段落の読み替え）、位置が決まっている図形は ID だけ、テキストボックスの 3 つの節、`AIRequest.asked` の after |
 | `test_ai_cache.py` | 回答の使い回し（W8 の手順 18）: `AI回答.json` の meta と、1 つでも違えば使わないこと、同じ meta なら偽の API が呼ばれず同じ XML、モデル・提供元・論文が違えば呼ぶ、使えなかった回答は写さない、手動モードでは使わない、コマンドラインの `--ai-refresh`、1 画面版の `ai_cache` と画像の入れ直し、ノートブックの `AI_CACHE` |
-| `test_ai_review13.py` | 点検 review13 の利用者向けの直しと API の形の確かめ（W8）: PDF を渡したのに見ていない API の回答は `AI回答.json` に写さず呼び直すこと・PDF を渡せなかった理由ごとの直し方、Claude の出力の途中の切り替え（text・fallback・text の 3 部をつなぎ、答えたモデルを記録）、費用の文、ノートブックの手順 4 の勧め方と手順 5 の並び、回答待ちの 2 章・14 章の PDF の添付、見出しの「推奨」の二重 |
+| `test_ai_review13.py` | 点検 review13 の利用者向けの直しと API の形の確かめ（W8）: PDF を渡したのに見ていない API の回答は `AI回答.json` に写さず呼び直すこと・PDF を渡せなかった理由ごとの直し方、Claude の出力の途中の切り替え（text・fallback・text の 3 部をつなぎ、答えたモデルを記録）、費用の文、ノートブックの手順 4 の勧め方と手順 5 の並び、回答待ちの 2 章・することの一覧の PDF の添付、見出しの「推奨」の二重 |
 | `test_ai_stamp.py` | 依頼の番号と先頭の文字での回答の確かめ（W8 の手順 17）: 番号の前半・後半の変わり方、(a) 読み替え、(b) 直す前の回答と carried・同じ先頭の段落、(c) 別の構造・別の論文・番号のない回答を使わない |
 | `test_ai_answer.py` | 回答の新しい形（W8 の手順 10）: 先頭の文字の確かめ、boundaries・links・names・style_fixes の採用と不採用、「指定なし」の記録、request_id・pdf の写し |
-| `test_pdfmatch.py` / `test_supplement.py` | PDF との照合、ルート2 の直し、組版で入る文字、補完の確かめ |
+| `test_pdfmatch.py` / `test_supplement.py` | PDF との照合、表記の直し、組版で入る文字、補完の確かめ、別の論文かの判定、書誌情報 |
 | `test_pipeline.py` / `test_lost_images.py` / `test_jstage_rules.py` | 全体の流れ、ZIP の中身、終了コード（構造の衝突の中止は 2）、中止のとき補った docx を残さない（O7）、画像を入れる場所を作れなかった画像、J-STAGE チェック |
 | `test_cli_images.py` | `--images` の名前合わせ・`--no-image`・図の画像の表・終了コード |
 | `test_imagelist.py` | 図の確かめ.html（行が `image_rows` と同じ・エスケープ・相対リンクと埋め込み・作り直し・ZIP に入らない・図形で描いた図と飾り） |
@@ -370,7 +372,7 @@ fixture の docx は `tests/make_fixtures.py` が作る（架空の内容。`mak
 | 除外の理由を足す・変える | `structure.py` の除外の理由の定数。位置を決められずに除くなら `UNPLACED_EXCLUSIONS` に入れ、`report.UNPLACED_GUIDE` に名前と直し方を足す |
 | 利用者への知らせ（要対応・要確認）を足す | `report.py` に `_xxx_action` を作り `actions()` に加える。画面側は触らない。画面の操作は目印 `step()`、レポートの生のタグは `md_tag()` |
 | 画面ごとの操作の語（手順番号・欄の名前）を変える | `colab.STEP_WORDS`（1 か所の表）。目印の名前を足すなら `report.STEP_NAMES` と全画面の語 |
-| レポートの章を変える | `report.render`（章ごとに `L.append`）。13 章は `render_route1`/`render_route2` |
+| レポートの章を変える | `report.render`（章ごとに `L.append`）。13 章は `render_pdf` |
 | ZIP に入れるものを変える | `package.upload_entries`（1 か所）と `zip_problems`（確かめ） |
 | 受け付ける画像の形式を変える | `images.check_user_image`（`_ACCEPTED`・`_REFUSED`）。J-STAGE が受け付けるのは jpg・gif・png |
 | 画像の守り（置き場所を作れなかった画像・名前の不具合・飾り）を変える | `pipeline.lost_images`（`xml_base` の木で調べる）・`image_problems`・`decorations`（図形で描いた図の幹は `_decoration_figure`）、ZIP の画像は `package.zip_problems`、知らせは `report.lost_action`（直し方は `APP_MOVE_HOW` の 1 か所）・`_image_names_action`・`_image_same_action`・`_textbox_figure_text_action`（図形ごとの行は `figure_text_groups`） |
@@ -381,9 +383,9 @@ fixture の docx は `tests/make_fixtures.py` が作る（架空の内容。`mak
 | AI の依頼内容・回答の項目を変える | `ai_assist.request_sections`（出す節）・`request_instructions` と指示の文の定数、`RESPONSE_SCHEMA`（種類ごとのスキーマ `PLACEMENT_SCHEMA` など）と種類ごとの検証（`link_ops` など）、`apply_ops`、`set_role_problem`、テストの回答 `tests/answers.py`、XML に反映する役割の補正 `BOUNDARY_KINDS`・`boundary_problem`（ほかは提案 `style_fixes`） |
 | 既定の AI モデルを変える | `ai_assist.DEFAULT_MODEL`・`DEFAULT_MODEL_INFO` → `python tools/make_notebook.py` |
 | API モードの AI を増やす | `ai_assist.call_xxx` を足し `PROVIDERS`・`API_KEY_NAMES`・`call_provider`、`cli.py` の `--ai-provider`、ノートブック手順 4 |
-| PDF との照合の分類（(A)(B)(C)）を変える | `pdfmatch._classify`/`_report_regions`、`typeset_pair` と定数表。`fidelity._pair` も同じ答えになるように（`test_supplement.py`） |
+| PDF との照合の分類（区分 (1)〜(4)。`pdfmatch.grade`）を変える | `pdfmatch._classify`/`_report_regions`、`typeset_pair` と定数表。`fidelity._pair` も同じ答えになるように（`test_supplement.py`） |
 | 組版で入る文字（柱・受付日）の扱いを変える | `pdfmatch.pdf_stream`、`RE_RECEIVED`、`MIN_CHARS` |
-| ルート2 の docx への書き込みを変える | `pdfdocx._Writer`。書いた後の `_verify`・`_structure` を外さない |
+| PDF に合わせる docx への書き込みを変える | `pdfdocx._Writer`。書いた後の `_verify`・`_structure` を外さない |
 | 書誌情報の入力の確かめを変える | `config.ArticleMeta.from_dict`、`_id_value`、`_date` |
 | ノートブックの文言・セルを変える | `tools/make_notebook.py` → `python tools/make_notebook.py`（ipynb は直接編集しない） |
 | 構造の衝突（K1・K2）の検出・中止の文を変える | 検出は `structure.Classifier.replace_back`・`aff_conflict`、範囲は `conflict_overrides`、中止は `pipeline.convert`、文は `report.structure_conflict_text`。検出は不変性チェックの欠落と一致させる（`tests/test_structure.py`） |
@@ -408,10 +410,10 @@ fixture の docx は `tests/make_fixtures.py` が作る（架空の内容。`mak
 | 文字だけのテキストボックス | 画像・表・キャプションを含まないテキストボックス。囲み（`<boxed-text>`）/ 図の注記（除外）/ 決められない（除外して要確認） |
 | 位置を決められない図表 | 機械的に置けず AI に位置を指定させる図表。回答がなければ仮の位置（アンカー段落の後ろ・本文の最後） |
 | 判断 / Decision | 機械処理・AI の判断の記録（レポート 2・4 章） |
-| 要対応 / 要確認 / 手順 | 利用者への知らせの 3 区分（`report.Action.level`）。要対応は終了コード 1 とダウンロード前の一時停止、要確認は黄色い枠だけ、手順は青い枠と 14 章の行（必須で残っていれば要対応と同じく止める。推奨は止めない） |
-| ルート1 / ルート2 | docx から作る / docx から作り、出版版 PDF で補う（`Options.route` の docx / pdf） |
-| (A)(B)(C) | ルート2 の違いの分類: 組版の違い（PDF に合わせる）/ 校正の直し（変更履歴で補う）/ 決められない違い（直さず 13.3 に理由を出す） |
-| 補完の確かめ | 補った docx が元の docx から (A)(B) 以外に変わっていないことの確認（`fidelity.verify_supplement`） |
+| 要対応 / 要確認 / 手順 | 利用者への知らせの 3 区分（`report.Action.level`）。要対応は終了コード 1 とダウンロード前の一時停止、要確認は黄色い枠だけ、手順は青い枠と することの一覧の行（必須で残っていれば要対応と同じく止める。推奨は止めない） |
+| route pdf / route docx | PDF に表記を合わせてから変換する（PDF があるときの既定）/ 合わせずに照合だけする（コマンドラインの `--route docx` だけ。`Options.route` の pdf / docx）。画面にはルートの選択がない |
+| 区分 (1)〜(4) | 違いの分類（`pdfmatch.TextDiff.level`）: (1) 表記の違いで直す・知らせない / (2) 表記の違いで直さない・知らせない / (3) 内容の違いで直さない・要確認 `pdf_mismatch` / (4) 照合できなかった所（13.3 の記録）。docx を直すのは (1) だけ |
+| 補完の確かめ | 補った docx が元の docx から組版の違い（区分 (1)）以外に変わっていないことの確認（`fidelity.verify_supplement`） |
 | 注の鍵 | Word の脚注・文末脚注の識別子「footnote:5」「endnote:5」（`model.note_key`） |
 | 柱 | PDF の各ページの端にある誌名などの行（照合に使わない） |
 
