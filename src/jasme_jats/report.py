@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .ai_assist import PROVIDERS
-from .config import PAGE_FIELDS
+from .config import DATE_FIELDS, PAGE_FIELDS
 from .docx_reader import table_where
 from .linker import body_paragraphs, linked_ids
 from .model import note_key, note_label
@@ -748,7 +748,7 @@ STEP = "手順"
 # 目印は U+0000 で挟む。U+0000 は XML 1.0 の文字ではなく、docx の文字（w:t）・ファイル名・PDF の文字（pdfmatch が制御文字を除く）の
 # どれにも入らないので、文の中の docx 由来の文字（段落の抜粋など）が目印と読まれることがない。
 STEP_NAMES = ("docx", "pdf", "meta", "ai_choose", "prompt", "paste", "repaste", "convert_again",
-              "answer_field", "apply_button", "images", "pdf_attach")
+              "answer_field", "apply_button", "images", "pdf_attach", "files")
 STEP_MARK = "\x00"
 STEP_MARK_PATTERN = STEP_MARK + "step:([^\x00]*)" + STEP_MARK
 
@@ -879,18 +879,21 @@ def _verdict_title(plan):
     return ""
 
 
+LINE_SHOWN = 60       # 別の論文で止める文に出す PDF の誌名の行の長さ（巻・号・ページの範囲まで見える長さ）
+
+
 def wrong_paper_text(plan, pc, docx_name: str, pdf_name: str, line: str = "") -> str:
     """docx と PDF が別の論文か、大きく違う版のとき（pdfmatch の verdict が wrong）に変換を中止する文（pipeline.WrongPaperError の文）。
 
-    題目が PDF に見つからず、段落の半分以上が見つからないことと、PDF の 1 ページ目の誌名の行（line。pdfbiblio.PdfBiblio.line。
+    題目が PDF の最初の 2 ページに見つからず、段落の半分を超えて見つからないことと、PDF の 1 ページ目の誌名の行（line。pdfbiblio.PdfBiblio.line。
     読めなければ最初の 2 行）を示し、docx と PDF を選び直してやり直すよう案内する。Markdown ではない。画面の操作は目印 step() で書く。docx の文字は shorten_shown を通す。
     """
     title = shorten_shown(_verdict_title(plan))
-    last = "".join(f"「{shorten_shown(x)}」" for x in ([line] if line else pc.first_lines))
+    last = "".join(f"「{shorten_shown(x, LINE_SHOWN)}」" for x in ([line] if line else pc.first_lines))
     label = "PDF の 1 ページ目の誌名の行" if line else "PDF の 1 ページ目"
-    return (f"docx（{docx_name}）の題目「{title}」が PDF（{pdf_name}）の最初のページに見つからず、docx の段落 {pc.verdict_counted} 件のうち "
+    return (f"docx（{docx_name}）の題目「{title}」が PDF（{pdf_name}）の最初の 2 ページに見つからず、docx の段落 {pc.verdict_counted} 件のうち "
             f"{pc.verdict_missing} 件が PDF に見つかりませんでした（XML とレポートは作っていません）。docx と PDF が同じ論文のものか、"
-            f"docx が校正後の版かを確かめ、{step('docx')}と{step('pdf')}を選び直してやり直してください。"
+            f"docx が校正後の版かを確かめ、{step('files')}やり直してください。"
             + (f"\n{label}: {last}" if last else ""))
 
 
@@ -1274,7 +1277,7 @@ def _ai_finish_action(r):
         base = AI_STYLE_TITLE
     else:
         base = AI_ANSWER_TITLE
-    # 見出しに「推奨」を書かない（青い枠は「手順（推奨）: 」を前に付け、一覧の行は「（推奨）」を付けるので、重ねない。点検 review13 利用者向け 10）
+    # 見出しに「推奨」を書かない（青い枠は「手順（推奨）: 」を前に付け、一覧の行は checklist_line が「（推奨）」を付けるので、重ねない。点検 review13 利用者向け 10）
     # 残りの数は位置を聞いた図形だけの数（数え方は変えない）。2 段にまたがる機械的な図形は、数に入れず文で添える（点検 review14 の残り 5）
     title = (f"{base}（残り {n} 個" + (f"。ほかに 2 段にまたがる図形 {len(wide)} 個" if wide else "") + "）") if left else base
     progress = state + (f"・残り {n} 個" if left else "")
@@ -1322,7 +1325,7 @@ def _ai_finish_action(r):
             cli_again = "--ai api でもう一度実行すること（また失敗するときは --ai manual に切り替える）。"
         return Action(
             STEP, "ai_finish", required=False, failed=True, progress=state,
-            checklist=f"- [ ] （推奨）**{AI_FAILED_TITLE}**（2 章）: {todo}",
+            checklist=f"- [ ] **{AI_FAILED_TITLE}**（2 章）: {todo}",
             box_title=AI_FAILED_TITLE, box_detail=f"{reason}。変換の結果は、AI を使わないときと同じです。{again}",
             cli=f"手順（推奨）: {AI_FAILED_TITLE}。{reason}。変換の結果は、AI を使わないときと同じです。{cli_again}")
     if state == "未実行":
@@ -1333,7 +1336,7 @@ def _ai_finish_action(r):
                "このまま登載することもできます。")
         todo = ("AI に出版版 PDF を見せると、PDF と同じ位置に置ける" if (left or wide) and not boxes else f"AI を使うと、{what}を決められる" if what
                 else "AI を使うと、スタイルの直し方の提案を受けられる" if m else "AI を使うと、リンクなどを補える")
-        checklist = f"- [ ] （推奨）{base}: {short}。{todo}{AI_CHOOSE_HOW}"
+        checklist = f"- [ ] {base}: {short}。{todo}{AI_CHOOSE_HOW}"
     elif state == "回答待ち":
         intro = floats + wide_text + (box_text + "AI が種類を判断します。" if boxes else "") + style_text
         # 位置を聞く図形か、2 段にまたがる機械的な図形があるときは、出版版 PDF を同じメッセージに添付して送る
@@ -1345,7 +1348,7 @@ def _ai_finish_action(r):
                "送信し、返ってきた回答をファイルに保存して --ai manual --ai-response 回答のファイル を指定し、変換し直すと、"
                f"{does}。このまま登載することもできます。")
         pdf_with = "を、出版版 PDF を同じメッセージに添付して" if left or wide else "を"
-        checklist = (f"- [ ] （推奨）{base}（AI の回答をまだ反映していない）: {short}。{esc(prompt)} {pdf_with} AI に渡し、返ってきた回答を"
+        checklist = (f"- [ ] {base}（AI の回答をまだ反映していない）: {short}。{esc(prompt)} {pdf_with} AI に渡し、返ってきた回答を"
                      "貼り戻して変換し直す（ノートブックは手順 6 に貼り付ける、1 画面版は回答の欄に貼り付けて「反映」、"
                      "コマンドラインは --ai manual --ai-response 回答のファイル）")
     else:       # 一部
@@ -1383,7 +1386,7 @@ def _ai_finish_action(r):
             todo.append(f"囲みか図の注記か決められないテキストボックス {k} 個が残る")
         if ai.partial:
             todo.append("AI の回答が途中で切れていた（2 章）。AI に出し直してもらい、もう一度変換する")
-        checklist = f"- [ ] （推奨）{base}: " + "。".join(todo)
+        checklist = f"- [ ] {base}: " + "。".join(todo)
     return Action(STEP, "ai_finish", required=False, progress=progress, checklist=checklist,
                   box_title=title, box_detail=detail, box_intro=intro if state == "回答待ち" else "", cli=cli)
 
@@ -1443,7 +1446,7 @@ def _ai_pdf_unseen_action(r):
     also = f"。2 段にまたがる{esc(float_phrase(plan, wide))}は機械的な位置のまま" if wide else ""     # 括弧は 1 つにする（点検 review14 の残り 6）
     return Action(
         STEP, "ai_finish", required=False, progress=f"済み・PDF {seen or '添付なし'}",
-        checklist=(f"- [ ] （推奨）{AI_PDF_TITLE}: {head}、AI が出版版 PDF を見ていない"
+        checklist=(f"- [ ] {AI_PDF_TITLE}: {head}、AI が出版版 PDF を見ていない"
                    f"（{seen or '添付なし'}。2 章{also}）。{todo}"),
         box_title=AI_PDF_TITLE, box_detail=plain + again + "このまま登載することもできます。",
         cli=f"手順（推奨）: {AI_PDF_TITLE}。{plain}{cli_again}このまま登載することもできます。")
@@ -3042,6 +3045,7 @@ def mismatch_lines(r, diffs=None, cells=None) -> list:
 MISMATCH_MARK_NOTE = "各行の docx の［ ］は、PDF と違う部分です。"
 MISMATCH_MANY_NOTE = ("**語句の違いが多いので、受け取った docx が校正後の版でない可能性があります。"
                       "1 か所ずつ直す前に、著者に校正後の docx を確かめてください。**")
+MISMATCH_MANY_SHORT = "語句の違いが多いので、docx が校正後の版かを先に著者に確かめること（校正前の版なら 1 か所ずつ直さない）"
 
 
 def _pdf_mismatch_action(r):
@@ -3065,15 +3069,17 @@ def _pdf_mismatch_action(r):
     return Action(
         TO_CHECK, "pdf_mismatch",
         top="\n".join(top),
-        checklist=(f"- [ ] **出版版 PDF と文字が違う箇所**（{n} 件。{MISMATCH_AT}）を確かめる: PDF が正しければ Word で docx を直して"
-                   "変換し直す。docx が正しければそのまま"),
+        checklist=(f"- [ ] **出版版 PDF と文字が違う箇所**（{n} 件。{MISMATCH_AT}）を確かめる: "
+                   + (MISMATCH_MANY_SHORT + "。その上で、" if many else "")
+                   + "PDF が正しければ Word で docx を直して変換し直す。docx が正しければそのまま"),
         box_title=f"出版版 PDF と文字が違う箇所が {n} 件あります（要確認）",
-        box_detail=(kept + "PDF が正しければ、Word で docx を直して" + step("docx")
+        box_detail=((MISMATCH_MANY_NOTE.replace("**", "") if many else "") + kept + "PDF が正しければ、Word で docx を直して" + step("docx")
                     + f"からやり直してください。docx が正しければ（PDF の誤植など）、そのままでかまいません（全件はレポートの {MISMATCH_AT}）。"
-                    + (MISMATCH_MANY_NOTE.replace("**", "") if many else "") + MISMATCH_MARK_NOTE + "\n"
+                    + MISMATCH_MARK_NOTE + "\n"
                     + "\n".join(f"・{x}" for x in lines) + (f"\n…ほか {more} 件" if more > 0 else "")),
-        cli=(f"要確認: 出版版 PDF と文字が違う箇所 {n} 件（レポートの冒頭と {MISMATCH_AT}）。PDF が正しければ docx を直して変換し直すこと。"
-             "docx が正しければそのままでよい"))
+        cli=(f"要確認: 出版版 PDF と文字が違う箇所 {n} 件（レポートの冒頭と {MISMATCH_AT}）。"
+             + (MISMATCH_MANY_SHORT + "。その上で、" if many else "")
+             + "PDF が正しければ docx を直して変換し直すこと。docx が正しければそのままでよい"))
 
 
 def _pdf_suspect_action(r):
@@ -3099,6 +3105,39 @@ def _pdf_suspect_action(r):
                     "ください（レポートの 13.3）。"),
         cli=f"要確認: docx の段落の半分以上が出版版 PDF に見つかりません（{what}。{known_short}。レポートの 13.3）。--pdf の PDF と docx が"
             "同じ論文のものか確かめること")
+
+
+REQUIRED_DATES = ("pub_date", "received", "accepted")      # 入力で必須の日付（再受付日・J-STAGE 公開日・最終査読日は必須にしない）
+
+
+def missing_dates(meta) -> list:
+    """入力が空の必須の日付の欄の名前（発行日・受付日・受理日の順）。日付は年月日がそろった値か空のどちらか（config._date が一部だけの日付を
+    弾く）ので、「空」は None。発行日は pub_date だけを見る（J-STAGE 公開日 epub_date があっても、ppub の <pub-date> は空になる）。"""
+    return [DATE_FIELDS[k] for k in REQUIRED_DATES if not getattr(meta, k, None)]
+
+
+def _meta_dates_action(r):
+    """発行日・受付日・受理日のどれかが空のまま変換した（所有者の決定: 3 つとも入力で必須）。要対応。変換は止めず、XML は今までどおり作る
+    （発行日が空なら <pub-date> の年が空、受付日・受理日が空ならその <date> がない）。受付日・受理日は PDF から先に入るので、空のまま
+    残るのは PDF を入れなかったか、PDF から読めなかったとき。"""
+    meta = getattr(r, "meta", None)
+    if meta is None:
+        return None
+    miss = missing_dates(meta)
+    if not miss:
+        return None
+    names = "・".join(miss)
+    pdf_note = "受付日・受理日は、出版版 PDF の 1 ページ目（投稿受付・採用決定の日付）を見て入力します。"
+    return Action(
+        NEEDS_ACTION, "meta_dates",
+        top=(f"> **要対応: {names}が空です（11 章）。** 発行日・受付日・受理日は入力が必須です。このままでは J-STAGE に登載する書誌情報が"
+             f"そろいません。{pdf_note}入力して変換し直してください。"),
+        checklist=f"- [ ] **{names}が空**（11 章）: 入力して変換し直す。{pdf_note}",
+        box_title=f"{names}が空です（要対応）",
+        box_detail=(f"発行日・受付日・受理日は入力が必須です。{pdf_note}{step('meta')}に入力して、やり直してください"
+                    "（日付は 2026-03-31 の形。レポートの 11 章）。"),
+        cli=(f"要対応: {names}が空です（レポートの 11 章）。発行日・受付日・受理日は必須なので、--meta の [article] に pub_date・"
+             "received・accepted を 2026-03-31 の形で書いて変換し直すこと（受付日・受理日は --pdf の PDF から読めればそれが入る）"))
 
 
 META_ID_LABELS = tuple(PAGE_FIELDS.values())      # 巻・号・ページ（違えば記事 ID・DOI・ファイル名が変わるので要対応）
@@ -3154,7 +3193,7 @@ def actions(r) -> list:
     記事フォルダにあるのに ZIP に入れなかったファイル（Result.not_zipped）は 10 章の警告のまま。
     """
     head = [f(r) for f in (_fidelity_action, _supplement_action, _dtd_action, _table_shape_action, _image_names_action,
-                           _upload_action, _textbox_undecided_action,
+                           _upload_action, _meta_dates_action, _textbox_undecided_action,
                            _textbox_place_action, _textbox_figure_text_action, _unplaced_action, images_action,
                            lost_action, _image_same_action, _image_changed_action, lost_autonum_action, _pua_left_action, _abstract_missing_action, _style_hidden_action, _resultless_field_action, _symbol_action, _abstract_ja_action, _app_after_refs_action, _float_end_action, _style_check_action, _ai_boundary_action, _ai_carried_action, _note_overlap_action, _float_ref_action,
                            _fn_guess_action, _name_split_action, _newline_action)]
@@ -3175,6 +3214,17 @@ def checklist_order(acts) -> list:
             + [a for a in ordered if a.level == NEEDS_ACTION] + [a for a in ordered if a.level == TO_CHECK])
 
 
+def checklist_line(a) -> str:
+    """することの一覧の 1 行（Action.checklist）。まだ済んでいない行（「- [ ] 」）の頭に、種類の印を 1 か所で付ける:
+    必須の手順は（必須）、推奨の手順は（推奨）、要対応は（要対応）、要確認は（要確認）（Action の level と required で決める）。"""
+    head = "- [ ] "
+    if not a.checklist.startswith(head):
+        return a.checklist
+    mark = (("（必須）" if a.required else "（推奨）") if a.level == STEP else
+            "（要対応）" if a.level == NEEDS_ACTION else "（要確認）" if a.level == TO_CHECK else "")
+    return head + mark + a.checklist[len(head):]
+
+
 def todo_list(r, acts=None) -> list:
     """レポートの冒頭の「することの一覧」の行（Markdown。J-STAGE に登載する前にすること）。
 
@@ -3190,7 +3240,7 @@ def todo_list(r, acts=None) -> list:
                   if any(i.status == "user" for i in r.images) else "")        # 画像を 1 枚でも入れたら、手順 images の行の直後に足す
     for a in checklist_order(acts):
         if a.checklist:
-            L.append(a.checklist)
+            L.append(checklist_line(a))
         if a.key == "images" and check_line:
             L.append(check_line)
             check_line = ""
@@ -3498,7 +3548,7 @@ def render(r) -> str:
     unshown = "（題目・副題・著者名・所属の段落の番号は出していません。10 章）" if getattr(r, "unshown_numbers", None) else ""
     L.append("Word の自動段落番号や脚注番号は docx の文字ではなく Word が表示時に作るものです。表示どおりの文字を XML に出力しました"
              f"{word_marks}{unshown}。"
-             "「docx から作り、出版版 PDF で補う」では、章・節・項の見出し・本文・キャプション・注・付記・謝辞・引用文献・英文要旨の段落の"
+             "表記を PDF に合わせたときは、章・節・項の見出し・本文・キャプション・注・付記・謝辞・引用文献・英文要旨の段落の"
              "自動番号と脚注番号の全角・半角と字形を PDF に合わせています（" + NUMBERS_NOT_MATCHED_BODY + "13 章）。"
              "docx に注の見出しがない場合（Word の脚注機能で書かれた注など）は、見出し（設定 fn_title）を補いました。")
     L.append("")
@@ -3788,7 +3838,8 @@ SILENT_OTHER = "そのほか"
 UNSURE_KIND_JA = {"head": "段落の端", "edge": "段落の端", "long": "PDF にだけある長い文字", "unsure": "どの段落とも一致しない文字が続く",
                   "whole": "どの段落とも一致しない行がまるごとある", "displaced": "図や表の中の文字に挟まれた位置",
                   "math": "数式の隣", "bullet_word": "箇条書きの記号と語句", "unreadable": "PDF の読めない文字",
-                  "object": "数式・画像・注の参照にかかる", "elsewhere": "ほかの位置に同じ文字がある"}
+                  "object": "数式・画像・注の参照にかかる", "elsewhere": "ほかの位置に同じ文字がある",
+                  "punct_near": "直さない違いのすぐ隣の句読点"}
 UNSURE_ROWS = 30         # 13.3 の表に並べる行の数の上限（それを超えた分は件数だけ。レポートを長くしない）
 
 

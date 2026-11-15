@@ -94,7 +94,7 @@ class StructureConflictError(Exception):
 
 class WrongPaperError(Exception):
     """docx と出版版 PDF が別の論文か、大きく違う版のようなので、変換を中止した（pdfmatch.paper_verdict が wrong。題目が PDF の最初の
-    ページに見つからず、段落の半分以上が見つからない）。
+    2 ページに見つからず、段落の半分を超えて見つからない）。
 
     StructureConflictError と同じ形の例外の表示（report.actions の知らせではない）。文の中の画面の操作は目印（report.step）で書き、
     画面に出すときは colab.step_text で語に置き換える（colab.wrong_paper_box）。XML・ZIP・レポート・補った docx は作らない。

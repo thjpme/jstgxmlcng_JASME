@@ -222,7 +222,7 @@ if pdf_path:
 """ + mark(2)),
     code("""
 #@title 3. 書誌情報を入力
-#@markdown 巻・号・ページは半角の英数字で。日付は 2026-03-31 の形で（2026/3/31 でもかまいません）。分からない項目は空欄にします。PDF をアップロードしたときは、巻・号・ページ・受付日・受理日は空欄のままでかまいません（空の欄は、PDF から読んだ値で埋めます。入力した値は変えません）。
+#@markdown 巻・号・ページは半角の英数字で。日付は 2026-03-31 の形で（2026/3/31 でもかまいません）。発行日・受付日・受理日は必須です（空のまま変換すると、要対応で知らせます）。PDF をアップロードしたときは、巻・号・ページ・受付日・受理日は空欄のままでかまいません（空の欄は、PDF から読んだ値で埋めます。入力した値は変えません）。
 #@markdown ***
 #@markdown **巻（volume）・号（issue）・最初のページ（first_page）・最後のページ（last_page）**
 volume = ""  #@param {type:"string"}
@@ -238,7 +238,7 @@ last_review_date = ""  #@param {type:"string"}
 keywords_ja = ""  #@param {type:"string"}
 keywords_en = ""  #@param {type:"string"}
 #@markdown ***
-#@markdown **発行日（pub_date）・J-STAGE 公開日（jstage_release_date）・受付日（received）・受理日（accepted）**
+#@markdown **発行日（pub_date）・受付日（received）・受理日（accepted）**（必須）・**J-STAGE 公開日（jstage_release_date）**（任意）
 pub_date = ""  #@param {type:"string"}
 jstage_release_date = ""  #@param {type:"string"}
 received = ""  #@param {type:"string"}
@@ -493,7 +493,7 @@ if _act is not None:
 """ + mark(7)),
     code("""
 #@title 8. 結果をダウンロード
-#@markdown 「変換結果_巻_開始ページ.zip」（J-STAGE にアップロードする jasme_巻_開始ページ.zip、XML、変換レポート、図の確かめ.html〈ZIP を展開すると、入れた画像も見えます〉。「docx から作り、出版版 PDF で補う」では（PDF の文字を読めたとき）PDF で補った docx も）をダウンロードします。要対応（赤い枠）が残っていると一度止まります（そのままダウンロードするときは、もう一度 ▶）。
+#@markdown 「変換結果_巻_開始ページ.zip」（J-STAGE にアップロードする jasme_巻_開始ページ.zip、XML、変換レポート、図の確かめ.html〈ZIP を展開すると、入れた画像も見えます〉。PDF を入れたときは（PDF の文字を読めたとき）表記を PDF に合わせた docx も）をダウンロードします。要対応（赤い枠）が残っていると一度止まります（そのままダウンロードするときは、もう一度 ▶）。
 """ + guard(1, 2, 3, 4, 5) + unmark(8) + """import shutil
 from IPython.display import HTML, display
 from jasme_jats.colab import result_boxes

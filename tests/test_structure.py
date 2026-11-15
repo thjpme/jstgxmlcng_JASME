@@ -426,7 +426,7 @@ def test_japanese_paragraph_in_abstract_is_reported(journal, meta, tmp_path):
     top, ch14 = report.split("## 1.")[1].split("## 2.")[0], report.split("## することの一覧")[1].split("## 1.")[0]
     assert "> **要確認: 英文要旨に、和文と思われる段落が 1 件あります（10 章）。**" in top
     assert f"対象の段落: {src}「問2\u3000架空の和文の問題文である…」" in top        # 段落の例は 15 文字まで
-    assert "- [ ] **英文要旨の中の和文の段落**（1 件。10 章）" in ch14
+    assert "- [ ] （要確認）**英文要旨の中の和文の段落**（1 件。10 章）" in ch14
     assert ("資料なら、Word で資料の見出しの段落に章・節・項見出しのスタイルを付けて（見出しがなければ、資料の前に「資料1」"
             "「資料（授業プリント）」などの見出しを付けて）、変換し直してください。") in top
     # 境目: かな・漢字がちょうど 3 割の段落は知らせ、2 割の段落は知らせない（空白は数えない）
@@ -512,7 +512,7 @@ def test_appendix_after_references_is_warned(journal, meta, tmp_path):
     assert {a.level for a in actions(res) if a.key == "app_after_refs"} == {TO_CHECK}
     report = res.report_path.read_text(encoding="utf-8")
     assert "> **要確認: 引用文献などの後ろに、資料の見出しと思われる段落があります（10 章）。**" in report.split("## 1.")[1].split("## 2.")[0]
-    assert "- [ ] **引用文献などの後ろの資料の見出し**（3 件。10 章）" in report.split("## することの一覧")[1].split("## 1.")[0]
+    assert "- [ ] （要確認）**引用文献などの後ろの資料の見出し**（3 件。10 章）" in report.split("## することの一覧")[1].split("## 1.")[0]
 
 
 # ----------------------------------------------------------------------------- 文字だけのテキストボックス（修正計画の D1）
@@ -584,14 +584,14 @@ def test_label_and_undecided_textboxes_are_excluded(journal, meta, tmp_path, cap
             "出力していません（3 章・6 章）。**") in top and "AI による補完を使うと" not in top
     assert "| テキストボックスの文字（3 章・4 章・6 章・10 章） | 囲み 3 件（boxed-text。うち位置を推定 1 件・要確認）、図の注記として除外 1 件、" \
            "決められずに除外 3 件（要確認） |" in top
-    assert "- [ ] **囲みか図の注記か決められなかったテキストボックス 3 件**" in ch14
+    assert "- [ ] （要確認）**囲みか図の注記か決められなかったテキストボックス 3 件**" in ch14
     assert "| 囲み・図の注記 |" in ch3 and "テキストボックス" in ch3 and "「（ヒント）」" in ch3
     # 暫定の知らせ（0.19.0〜0.24.1）は出さない
     assert "テキストボックスの中の文字" not in report
     # コマンドライン: 要確認なので終了コード 0、標準エラーに出す
     from jasme_jats.cli import main
     m = tmp_path / "meta.toml"
-    m.write_text('[article]\nvolume = "31"\nissue = "1"\nfpage = "1"\npeer_review = "あり"\n', encoding="utf-8")
+    m.write_text('[article]\nvolume = "31"\nissue = "1"\nfpage = "1"\npub_date = "2026-03-31"\nreceived = "2025-06-01"\naccepted = "2025-11-20"\npeer_review = "あり"\n', encoding="utf-8")
     assert main([str(STRUCTURE), "--meta", str(m), "--out", str(tmp_path / "cli"),
                  "--images", str(image_folder(tmp_path / "pics", keys))]) == 0
     err = capsys.readouterr().err
@@ -787,7 +787,7 @@ def test_text_in_figure_textbox_is_notified(journal, meta, tmp_path):
     assert ("> **要確認: 図の画像に写るものとして、XML の本文に出していない文字があります（図形 1 つ。6 章）。**"
             in top) and "> - 図1（fig01）の図形: 25 字「出典：架空の町の資料（2020）をもとに…」" in top
     assert "本文として読ませたい文字なら、Word でその文字を図形の外（本文の段落）に出して、変換し直してください" in top
-    assert "- [ ] **図の画像に写るものとして XML の本文に出していない文字（図形 1 つ）**（6 章）" in ch14
+    assert "- [ ] （要確認）**図の画像に写るものとして XML の本文に出していない文字（図形 1 つ）**（6 章）" in ch14
     assert "図の画像に写るものとして、XML の本文に出していない文字があります（図形 1 つ。要確認）" == act.box_title
     assert "docx で図形の外（本文の段落）に出して変換し直すこと" in act.cli and "図1（fig01）の図形: 25 字" in act.cli
     # AI のスタイルの提案は記録だけ（XML は変えない）。boxes の種類の対象でもないので、種類の指定は採用しない

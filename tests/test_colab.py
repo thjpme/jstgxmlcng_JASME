@@ -186,7 +186,7 @@ def test_result_boxes_follow_actions(journal, tmp_path, monkeypatch):
     res.dtd_valid, res.dtd_errors = False, ["31_1.xml:3: Element body content does not follow the DTD"]
     html = result_boxes(res)
     assert "J-STAGE 指定の DTD による検証が不合格です（1 件。要対応）" in html and "Element body content" in html
-    good = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり"})
+    good = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "pub_date": "2026-03-31", "received": "2025-06-01", "accepted": "2025-11-20", "peer_review": "あり"})
     res = convert(FULL, good, journal, Options(out_dir=tmp_path / "m", ai_mode="manual", ai_response="読めない回答"))
     html = result_boxes(res)
     # 読めない回答・API の失敗は、推奨の手順 ai_finish の「失敗」（見出しが赤字の青い枠。要対応ではない。修正計画 W8 の 4.3）
@@ -385,7 +385,7 @@ def test_ai_required_message_names_the_modes_of_each_screen(journal, meta, tmp_p
     assert "API で自動実行" not in page and "\x00" not in page
     st = app.AppState(tmp_path / "work")
     st.set_inputs(docx=str(FLOAT), volume="31", issue="1", fpage="1", lpage="12", peer_review="査読あり",
-                  manuscript_type=app.type_choices()[0], ai_mode="none")
+                  manuscript_type=app.type_choices()[0], ai_mode="none", pub_date="2026-03-31", received="2025-06-01", accepted="2025-11-20")
     st.convert()                                                    # 1 画面版も中止しない
     assert st.res is not None and "ai_finish" in [a.key for a in actions(st.res)]
     assert "#dc2626" not in st.result_html()                        # 「使わない」を選んでも赤い枠は出ない（W8 の手順 4）

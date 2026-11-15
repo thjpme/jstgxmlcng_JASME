@@ -209,7 +209,7 @@ def split_names(names_str, known):
             c = re.sub(r"(?:編著?|監修|監訳|編集)$", "", c.strip()) or c
             whole = norm_name(c)
             m = re.search(f"[{NAME_CH}・]+$", c)
-            # ひらがななどをはさむ団体名（「…数理科学分野の参照基準検討分科会」）は、段落の文字の全体が文献の著者名の頭と一致するときだけ全体を使う
+            # ひらがななどをはさむ団体名（「…架空学会数理分野のひな形検討委員会」）は、段落の文字の全体が文献の著者名の頭と一致するときだけ全体を使う
             # （漢字だけを取ると、名前の後ろ側だけになって合わない。全体が一致しなければ今までどおり）
             if m and m.group(0) != c and len(whole) >= 8 and any(itaiji(k).startswith(itaiji(whole)) for k in known):
                 r, ok = whole, True

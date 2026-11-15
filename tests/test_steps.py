@@ -80,13 +80,26 @@ def test_checklist_order_steps_then_needs_action_then_to_check():
     assert [a.key for a in checklist_order(acts)] == ["pdf_mismatch", "c1"]
 
 
+def test_checklist_line_marks_kind():
+    """することの一覧の行の頭に、種類の印を 1 か所（checklist_line）で付ける。済んだ行（[x]）には付けない。"""
+    line = "- [ ] **題**（1 章）: 直す"
+    def mk(level, **kw):
+        return make(level, "k", checklist=line, **kw)
+    assert report.checklist_line(mk(NEEDS_ACTION)) == "- [ ] （要対応）**題**（1 章）: 直す"
+    assert report.checklist_line(mk(TO_CHECK)).startswith("- [ ] （要確認）**題**")
+    assert report.checklist_line(mk(STEP)).startswith("- [ ] （必須）**題**")
+    assert report.checklist_line(mk(STEP, required=False)).startswith("- [ ] （推奨）**題**")
+    done = make(STEP, "k", checklist="- [x] 済んだ", done=True)
+    assert report.checklist_line(done) == "- [x] 済んだ"
+
+
 def test_checklist_in_report_puts_step_before_others(journal, meta, tmp_path):
     from conftest import OUTSIDE
     res = convert(OUTSIDE, meta, journal, Options(out_dir=tmp_path, ai_mode="manual"))
     chapter14 = res.report_path.read_text(encoding="utf-8").split("## することの一覧")[1].split("## 1.")[0]
     ai = next(a for a in report.actions(res) if a.key == "ai_finish")
     other = next(a for a in report.actions(res) if a.key == "float_end")        # 要確認
-    assert chapter14.index(ai.checklist) < chapter14.index(other.checklist)
+    assert chapter14.index(report.checklist_line(ai)) < chapter14.index(report.checklist_line(other))
     # 冒頭の囲みには手順を出さない
     assert "AI の回答をまだ反映していない" not in report_head(res)
 

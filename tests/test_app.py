@@ -12,8 +12,10 @@ from jasme_jats.app import AppState, InputError, type_choices
 def filled(tmp_path, docx=FULL, **extra):
     """必須項目をそろえた状態。"""
     st = AppState(tmp_path / "work")
+    kw = {"pub_date": "2026-03-31", "received": "2025-06-01", "accepted": "2025-11-20"}      # 発行日・受付日・受理日は必須（空だと要対応 meta_dates）
+    kw.update(extra)
     st.set_inputs(docx=str(docx), volume="31", issue="1", fpage="1", lpage="12", peer_review="査読あり",
-                  manuscript_type=type_choices()[0], ai_mode="none", **extra)
+                  manuscript_type=type_choices()[0], ai_mode="none", **kw)
     return st
 
 
@@ -464,7 +466,7 @@ def test_manual_fields_stay_for_repaste(tmp_path):
     from jasme_jats.report import actions, ai_done
     st = AppState(tmp_path / "work")
     st.set_inputs(docx=str(FLOAT), volume="31", issue="1", fpage="1", lpage="12", peer_review="査読あり",
-                  manuscript_type=type_choices()[0], ai_mode="manual")
+                  manuscript_type=type_choices()[0], ai_mode="manual", pub_date="2026-03-31", received="2025-06-01", accepted="2025-11-20")
     demo = app.build_app(st, app.IO())
     fns = {f.fn.__name__: f.fn for f in demo.fns.values()}
     out = fns["on_convert"](*[st.inputs[n] for n in app.INPUT_NAMES])
@@ -886,13 +888,15 @@ def test_pdf_selected_fills_six_fields(tmp_path, monkeypatch):
     from jasme_jats.pdfbiblio import INPUT_KEYS
     monkeypatch.setattr(pdfmatch, "extract_pages", lambda path: pdf_biblio_pages())
     assert app.PDF_FIELDS == INPUT_KEYS
-    st = filled(tmp_path, received="2020-01-01")          # 入力済みでも PDF の値にする（先に入れる。その後の打ち直しが使われる）
+    st = filled(tmp_path, received="2020-01-01", accepted="")          # 入力済みでも PDF の値にする（先に入れる。その後の打ち直しが使われる）
     note = st.pdf_selected(str(tmp_path / "a.pdf"))
     f = st.inputs
     assert (f["volume"], f["issue"], f["fpage"], f["lpage"], f["received"], f["accepted"]) == ("7", "2", "11", "24", "2029-06-01", "2029-11-20")
     assert st.pdf_got == {"volume": "7", "issue": "2", "fpage": "11", "lpage": "24", "received": "2029-06-01", "accepted": "2029-11-20"}
     assert note == ("PDF から読んで入れました: 巻 7・号 2・ページ 11〜24・受付日 2029-06-01・受理日 2029-11-20"
-                    "（1 ページ目の誌名の行と、投稿受付・採用決定の日付）。違っていれば欄を書き換えてください。"
+                    "（1 ページ目の誌名の行と、投稿受付・採用決定の日付）。"
+                    "入れてあった値を書き換えました（巻 31→7・号 1→2・最初のページ 1→11・最後のページ 12→24・受付日 2020-01-01→2029-06-01）。"
+                    "違っていれば欄を書き換えてください。"
                     "査読の有無・原稿種別・発行日は PDF から読めないので入力してください。")
     f["volume"] = "8"                                      # 打ち直した値がそのまま使われる（PDF の値で戻さない）
     assert st.inputs["volume"] == "8"

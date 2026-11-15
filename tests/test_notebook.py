@@ -160,7 +160,7 @@ def _template_result(tmp_path):
     from conftest import TEMPLATE
     from jasme_jats.config import ArticleMeta, JournalConfig
     from jasme_jats.pipeline import Options, convert
-    meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり"})
+    meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "pub_date": "2026-03-31", "received": "2025-06-01", "accepted": "2025-11-20", "peer_review": "あり"})
     # 図・表の画像は作業する人が入れる（修正計画 W1）: 変換の直後は、テンプレートの図 1 の画像はまだない
     return convert(TEMPLATE, meta, JournalConfig.load(), Options(out_dir=tmp_path / "output"))
 
@@ -272,7 +272,7 @@ def test_step8_stops_once_when_action_is_needed(monkeypatch, tmp_path):
     from jasme_jats.config import ArticleMeta, JournalConfig
     from jasme_jats.pipeline import Options, convert
     shown = fake_display(monkeypatch)
-    meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり",
+    meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり", "pub_date": "2026-03-31",
                                   "received": "2026-01-10", "accepted": "2025-11-20"})
     from conftest import fill_images
     res = convert(FULL, meta, JournalConfig.load(), Options(out_dir=tmp_path / "output"))
@@ -289,7 +289,7 @@ def test_step8_stops_once_when_action_is_needed(monkeypatch, tmp_path):
     assert len(downloaded) == 1 and ns["DONE"] == {1, 2, 3, 4, 5, 8}
     assert "EMSGM106E" in shown[-1]                 # ダウンロードの後にも、残っている要対応の枠を出す
     # 同じ docx を書誌情報を直して変換し直し、別の要対応（開始ページがない EMSGM230E）が残ったときは、もう一度止める
-    meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "peer_review": "あり"})
+    meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "pub_date": "2026-03-31", "received": "2025-06-01", "accepted": "2025-11-20", "peer_review": "あり"})
     ns["res"] = res = convert(FULL, meta, JournalConfig.load(), Options(out_dir=tmp_path / "output"))
     fill_images(res)
     assert "EMSGM230E" in [mid for mid, _ in res.jstage_issues] and "EMSGM106E" not in [mid for mid, _ in res.jstage_issues]
@@ -311,7 +311,7 @@ def test_step8_does_not_stop_without_action(monkeypatch, tmp_path):
     from jasme_jats.config import ArticleMeta, JournalConfig
     from jasme_jats.pipeline import Options, convert
     fake_display(monkeypatch)
-    meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり"})
+    meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "pub_date": "2026-03-31", "received": "2025-06-01", "accepted": "2025-11-20", "peer_review": "あり"})
     from conftest import fill_images
     res = convert(FULL, meta, JournalConfig.load(), Options(out_dir=tmp_path / "output"))
     fill_images(res)                                # 図の画像の手順（必須）を済ませる
@@ -336,7 +336,7 @@ def test_step8_does_not_stop_with_only_checks(monkeypatch, tmp_path):
     from jasme_jats.report import TO_CHECK, actions
     pytest.importorskip("pypdfium2")
     shown = fake_display(monkeypatch)
-    meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり"})
+    meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "pub_date": "2026-03-31", "received": "2025-06-01", "accepted": "2025-11-20", "peer_review": "あり"})
     res = convert(PDFCHECK, meta, JournalConfig.load(), Options(out_dir=tmp_path / "output", pdf_path=PDFCHECK_PDF,
                                                                 route="docx"))
     assert [a.key for a in actions(res)] == ["pdf_mismatch"] and {a.level for a in actions(res)} == {TO_CHECK}
@@ -410,7 +410,7 @@ def test_step6_shows_ai_error_box_before_report(monkeypatch, tmp_path):
     src = cell_source("AI_RESPONSE = r'''").replace("ここに AI の回答を貼り付ける", "提案はありません（JSON ではない回答）", 1)
     ns = {"DONE": {1, 2, 3, 4, 5}, "AI": "manual", "docx_path": FULL, "pdf_path": None, "ROUTE_KEY": "docx",
           "SPLIT_LABELS": None, "OUT": tmp_path / "output", "journal": JournalConfig.load(),
-          "meta": ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり"}),
+          "meta": ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "pub_date": "2026-03-31", "received": "2025-06-01", "accepted": "2025-11-20", "peer_review": "あり"}),
           "convert": convert, "Options": Options, "add_images": add_images, "result_boxes": result_boxes,
           "summary_box": summary_box, "report_details": report_details, "HTML": lambda x: x, "display": shown.append}
     exec(src, ns)
@@ -426,7 +426,7 @@ def test_step8_shows_result_boxes():
     src = cell_source("#@title 8.")
     assert "from jasme_jats.colab import result_boxes" in src
     assert src.index("files.download(archive)") < src.index("display(HTML(result_boxes(res)))")
-    assert "（PDF の文字を読めたとき）PDF で補った docx" in src
+    assert "（PDF の文字を読めたとき）表記を PDF に合わせた docx" in src
 
 
 def test_step3_reads_full_width_numbers_and_common_dates(capsys):
@@ -496,7 +496,7 @@ def test_failed_step_drops_later_steps(monkeypatch, tmp_path):
         raise RuntimeError("途中で止まる")
     base = {"AI": "manual", "docx_path": FULL, "pdf_path": None, "ROUTE_KEY": "docx", "SPLIT_LABELS": None,
             "OUT": tmp_path / "output", "journal": JournalConfig.load(),
-            "meta": ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "peer_review": "あり"}),
+            "meta": ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "pub_date": "2026-03-31", "received": "2025-06-01", "accepted": "2025-11-20", "peer_review": "あり"}),
             "convert": convert, "Options": Options, "add_images": add_images, "result_boxes": result_boxes,
             "summary_box": summary_box, "report_details": report_details, "HTML": lambda x: x, "display": shown.append,
             "StructureConflictError": StructureConflictError, "structure_conflict_box": structure_conflict_box,

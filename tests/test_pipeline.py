@@ -121,7 +121,7 @@ def test_images_step_in_summary_checklist_and_chapter9(journal, meta, tmp_path):
     report = res.report_path.read_text(encoding="utf-8")
     top, ch9, ch14 = report.split("## 1.")[1].split("## 2.")[0], report.split("## 9.")[1].split("## 10.")[0], report.split("## することの一覧")[1].split("## 1.")[0]
     assert "| 画像 | 図の画像 0/1 枚を入れた（残り 1 枚。9 章） |" in top and "図の画像を入れてください" not in top
-    assert "- [ ] **図の画像を入れる（あと 1 枚／全部で 1 枚）**（9 章）: fig01（図1\u3000三角形ABC）" in ch14
+    assert "- [ ] （必須）**図の画像を入れる（あと 1 枚／全部で 1 枚）**（9 章）: fig01（図1\u3000三角形ABC）" in ch14
     assert ch14.index("図の画像を入れる") < ch14.index("著者名")          # 手順は することの一覧の先頭（要確認の前）
     assert "Word の原稿の中の画像は使いません" in ch9 and "| fig01 | 図1\u3000三角形ABC |" in ch9 and "| 未 |" in ch9
     fill_images(res)
@@ -193,7 +193,7 @@ def test_add_images_refuses_pdf_and_keeps_nothing(journal, meta, tmp_path):
 def test_cli_images_option(journal, tmp_path, capsys):
     from jasme_jats.cli import main
     meta = tmp_path / "meta.toml"
-    meta.write_text('[article]\nvolume = "31"\nissue = "1"\nfpage = "1"\npeer_review = "あり"\n', encoding="utf-8")
+    meta.write_text('[article]\nvolume = "31"\nissue = "1"\nfpage = "1"\npub_date = "2026-03-31"\nreceived = "2025-06-01"\naccepted = "2025-11-20"\npeer_review = "あり"\n', encoding="utf-8")
     args = [str(TEMPLATE), "--meta", str(meta)]
     assert main(args + ["--out", str(tmp_path / "a")]) == 1           # 図の画像を入れる手順（必須）が残る
     assert "手順: 図の画像があと 1 枚要ります（全部で 1 枚）" in capsys.readouterr().err
@@ -705,7 +705,7 @@ def test_pdf_of_previous_run_is_not_zipped(journal, meta, tmp_path):
 def test_cli_prints_files_not_zipped(journal, tmp_path, capsys):
     from jasme_jats.cli import main
     meta = tmp_path / "meta.toml"
-    meta.write_text('[article]\nvolume = "31"\nissue = "1"\nfpage = "1"\npeer_review = "あり"\n', encoding="utf-8")
+    meta.write_text('[article]\nvolume = "31"\nissue = "1"\nfpage = "1"\npub_date = "2026-03-31"\nreceived = "2025-06-01"\naccepted = "2025-11-20"\npeer_review = "あり"\n', encoding="utf-8")
     args = [str(FULL), "--meta", str(meta), "--out", str(tmp_path / "o"),
             "--images", str(full_pics(tmp_path))]
     assert main(args) == 0
@@ -764,7 +764,7 @@ def test_cli_meta_input_errors_and_notes(tmp_path, capsys):
     assert main(args) == 2                                     # 変換しない（トレースバックで落ちない）
     err = capsys.readouterr().err
     assert "書誌情報" in err and "巻「31巻」" in err and not (tmp_path / "o").exists()
-    meta.write_text('[article]\nvolume = "３１"\nissue = "1"\nfpage = "1"\npeer_review = "あり"\n', encoding="utf-8")
+    meta.write_text('[article]\nvolume = "３１"\nissue = "1"\nfpage = "1"\npub_date = "2026-03-31"\nreceived = "2025-06-01"\naccepted = "2025-11-20"\npeer_review = "あり"\n', encoding="utf-8")
     assert main(args) == 0
     assert "※ 書誌情報: 巻「３１」を「31」として読みました" in capsys.readouterr().out
     meta.write_text('[article]\nreceived = "2026/13/1"\n', encoding="utf-8")
@@ -817,7 +817,7 @@ def test_upload_issues_are_needs_action(journal, tmp_path):
 def test_cli_exits_1_on_upload_issues(tmp_path, capsys):
     from jasme_jats.cli import main
     meta = tmp_path / "meta.toml"
-    meta.write_text('[article]\nvolume = "31"\nissue = "1"\nfpage = "1"\npeer_review = "あり"\n'
+    meta.write_text('[article]\nvolume = "31"\nissue = "1"\nfpage = "1"\npub_date = "2026-03-31"\npeer_review = "あり"\n'
                     'received = "2026-01-10"\naccepted = "2025-11-20"\n', encoding="utf-8")
     assert main([str(FULL), "--meta", str(meta), "--out", str(tmp_path / "out")]) == 1
     err = capsys.readouterr().err

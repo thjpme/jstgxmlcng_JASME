@@ -1057,6 +1057,8 @@ def grade(plan, res: PdfCheck, pages, whole=None) -> None:
     4. 裏取り: CONTENT の違いで、docx の形（前後 ELSEWHERE_SIDE 文字の docx の文字をつけて loose）が ELSEWHERE_MIN 文字以上で、
        PDF の全ページの文字（whole。loose）の中にあり、PDF の形（前後は同じ docx の文字）がないとき → UNSURE（"elsewhere"。
        docx の文字が PDF の別の位置にそのままあり、照合の取り違えの疑いがある）。
+    5. 句読点の足し: CONTENT の違いが、PDF にだけある句読点の類 1 文字で、すぐ隣に同じ類の docx の約物があり、それが why のある違いの
+       範囲にあるとき → UNSURE（"punct_near"。_punct_beside_unsure）。
     whole: loose("".join(pages))（compare が作ったもの。なければ作る）。"""
     whole = loose("".join(pages)) if whole is None else whole
     notes = _note_spans(plan)
@@ -1071,6 +1073,26 @@ def grade(plan, res: PdfCheck, pages, whole=None) -> None:
                                       d.src in subtitles)
         if d.level == CONTENT and _found_in_pdf(p, d, whole):
             d.level, d.label = UNSURE, "elsewhere"
+    for d in res.diffs:
+        p = plan.paras.get(d.src)
+        if p is not None and d.level == CONTENT and _punct_beside_unsure(p.plain(), d, res.diffs):
+            d.level, d.label = UNSURE, "punct_near"
+
+
+def _punct_beside_unsure(text, d: TextDiff, diffs) -> bool:
+    """4. 図などで分かれた段落の句読点: PDF にだけある句読点の類の 1 文字（足す違い。d.start == d.end）で、すぐ隣（足す位置の前か後ろ）に
+    同じ類の docx の約物があり、その約物が why のある違い（区分 UNSURE の 13.3）の範囲にあるとき True。組版の違い（区分 (1)）の
+    句点どうし・読点どうしが、間に挟まった図・表の中の文字のせいで足す違いに見えているだけで、足すと約物が重なる。"""
+    s = d.pdf.strip()
+    if d.start != d.end or len(s) != 1 or d.number or d.docx.strip():
+        return False
+    cls = next((c for c in PUNCT_CLASSES if s in c), None)
+    if cls is None:
+        return False
+    for q in (d.start - 1, d.start):
+        if 0 <= q < len(text) and text[q] in cls and any(e.src == d.src and e.why and e.start <= q < e.end for e in diffs):
+            return True
+    return False
 
 
 def _docx_side(p, d: TextDiff):
@@ -3319,11 +3341,15 @@ def diff_parts(text: str, d: TextDiff, case: bool = False) -> list:
 
 
 def check_pdf(plan, pdf_path, fn_marks=None) -> PdfCheck:
-    """記事の PDF を読み、docx の段落と照合する。PDF を読めなければ ok=False（変換は続ける）。"""
+    """記事の PDF を読み、docx の段落と照合する。PDF を読めなければ、照合の途中で想定外の例外になったときも ok=False（変換は続ける。
+    要対応 pdf_fallback）。"""
     try:
         pages = extract_pages(pdf_path)
     except ImportError:
         return PdfCheck(ok=False, message="PDF の文字を読むための pypdfium2 が入っていない（pip install pypdfium2）")
     except Exception as e:  # noqa: BLE001
         return PdfCheck(ok=False, message=f"PDF を読めなかった: {e}")
-    return compare(plan, pages, fn_marks)
+    try:
+        return compare(plan, pages, fn_marks)
+    except Exception as e:  # noqa: BLE001  ページの順が逆の PDF など、照合の想定外の形でも変換は止めない（PDF を読めなかったときと同じ扱い）
+        return PdfCheck(ok=False, message=f"PDF の文字を読めたが、照合できなかった（{type(e).__name__}）。ページの順や中身を確かめてください")

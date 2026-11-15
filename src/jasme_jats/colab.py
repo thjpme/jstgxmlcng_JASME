@@ -305,6 +305,8 @@ def wrong_paper_box(message: str, screen: str = "notebook") -> str:
 ANSWER_LABEL = "AI の回答（json のコードブロック）を貼り付ける"      # 1 画面版の回答の欄のラベル（app.py の gr.Textbox）
 APPLY_LABEL = "反映"                                             # 回答を反映するボタン
 CONVERT_LABEL = "変換する"                                       # 変換するボタン（回答なしで作り直す）
+LABEL_DOCX = "「docx（論文の Word ファイル）」の欄"
+LABEL_PDF = "「PDF（J-STAGE に登載する PDF）」の欄"
 STEP_WORDS = {
     "notebook": {
         "docx": "手順 2", "pdf": "手順 2", "meta": "手順 3",
@@ -312,9 +314,10 @@ STEP_WORDS = {
         "prompt": "手順 5 の依頼文", "paste": "手順 6 に貼り付けて ▶ を押", "repaste": "手順 6 で貼り付け直し",
         "convert_again": "手順 5 をもう一度実行",
         "answer_field": "手順 6 の貼り付けの欄", "apply_button": "手順 6 の ▶",
-        "images": "手順 7「図の画像を入れる」", "pdf_attach": "出版版 PDF を同じメッセージに添付して"},
+        "images": "手順 7「図の画像を入れる」", "pdf_attach": "出版版 PDF を同じメッセージに添付して",
+        "files": "手順 2 で docx と PDF を選び直して"},
     "app": {
-        "docx": "「docx（論文の Word ファイル）」の欄", "pdf": "「PDF（J-STAGE に登載する PDF）」の欄",
+        "docx": LABEL_DOCX, "pdf": LABEL_PDF,
         "meta": "巻・号・ページなどの入力欄",
         "ai_choose": f"「AI による仕上げの方法」の欄を「手動（チャットに貼り付け）」か「API（Claude）」にして「{CONVERT_LABEL}」を押し、",
         "prompt": "依頼文", "paste": f"「{ANSWER_LABEL}」の欄に貼り付けて「{APPLY_LABEL}」を押",
@@ -322,7 +325,8 @@ STEP_WORDS = {
         "convert_again": f"「{CONVERT_LABEL}」をもう一度押",
         "answer_field": f"「{ANSWER_LABEL}」の欄", "apply_button": f"「{APPLY_LABEL}」",
         # 結果の下の「図の画像」の欄（AppState.images_markdown の見出し。まとめて入れる欄・図ごとの行・「画像を入れる」が並ぶ）
-        "images": "「図の画像」の欄", "pdf_attach": "出版版 PDF を同じメッセージに添付して"},
+        "images": "「図の画像」の欄", "pdf_attach": "出版版 PDF を同じメッセージに添付して",
+        "files": f"{LABEL_DOCX}と{LABEL_PDF}を選び直して"},
     "cli": {
         "docx": "docx の指定", "pdf": "--pdf の指定", "meta": "--meta の指定",
         "ai_choose": "--ai manual か --ai api を指定して",
@@ -330,7 +334,8 @@ STEP_WORDS = {
         "repaste": "ファイルに保存して --ai manual --ai-response 回答のファイル を指定し直し",
         "convert_again": "--ai api でもう一度実行",
         "answer_field": "--ai-response で指定する回答のファイル", "apply_button": "--ai-response の指定",
-        "images": "--images の指定", "pdf_attach": "出版版 PDF を一緒に渡して"},
+        "images": "--images の指定", "pdf_attach": "出版版 PDF を一緒に渡して",
+        "files": "docx と --pdf に別のファイルを指定して"},
 }
 _HIRAGANA = re.compile("[\u3041-\u309f]")
 

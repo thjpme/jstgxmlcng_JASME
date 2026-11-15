@@ -539,7 +539,7 @@ def test_manual_and_word_notes_with_same_numbers_are_reported(journal, meta, tmp
     report = res.report_path.read_text(encoding="utf-8")
     assert ("> **要確認: 手で書いた注と Word の脚注・文末脚注が両方あり、注の番号 1) が重なっています（10 章）。**"
             in report.split("## 1.")[1].split("## 2.")[0])
-    assert "- [ ] **注の番号の重なり**（1)。10 章）" in report.split("## することの一覧")[1].split("## 1.")[0]
+    assert "- [ ] （要確認）**注の番号の重なり**（1)。10 章）" in report.split("## することの一覧")[1].split("## 1.")[0]
     assert "手で書いた注と Word の脚注・文末脚注が両方あり" in report.split("## 10.")[1].split("## 11.")[0]
 
 

@@ -39,7 +39,7 @@ def make(path, figs, text="本文の段落である。", nocaps=(), title="持�
 
 def conv(tmp, docx, journal, fpage="1"):
     meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": fpage, "lpage": "12", "pub_date": "2026-03-31",
-                                  "peer_review": "あり"})
+                                  "received": "2025-06-01", "accepted": "2025-11-20", "peer_review": "あり"})
     return convert(docx, meta, journal, Options(out_dir=tmp / "out"))
 
 

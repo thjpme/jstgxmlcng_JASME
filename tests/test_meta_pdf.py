@@ -121,3 +121,18 @@ def test_wrong_paper_message_shows_issue_line(route, journal, meta, tmp_path, mo
     msg = str(ei.value)
     assert "\nPDF の 1 ページ目の誌名の行: 「数学教育学研究 第 31 巻 第 1 号 2026" in msg and msg.rstrip().endswith("」")
     assert msg.count("PDF の 1 ページ目") == 1
+    assert "pp." in msg.splitlines()[-1] and "…" not in msg.splitlines()[-1]       # ページの範囲まで切らずに出す
+
+
+def test_wrong_paper_text_keeps_page_range_of_long_issue_line():
+    """誌名の行は、巻・号・ページの範囲まで切らずに出す（LINE_SHOWN 字まで）。コマンドラインの言い方は空白つき。"""
+    from types import SimpleNamespace
+
+    from jasme_jats.colab import step_text
+    from jasme_jats.report import LINE_SHOWN, wrong_paper_text
+    plan = SimpleNamespace(title=[SimpleNamespace(plain=lambda: "架空の題目の段落です")], title_en=[], paras={})
+    pc = SimpleNamespace(verdict_counted=10, verdict_missing=8, first_lines=[])
+    line = "数学教育学研究 第 29 巻 第 1 号 2023 pp.131〜146"
+    assert len(line) < LINE_SHOWN
+    text = wrong_paper_text(plan, pc, "a.docx", "b.pdf", line)
+    assert line in text and step_text(text, "cli").count("docx と --pdf に別のファイルを指定してやり直して") == 1

@@ -91,7 +91,7 @@ def test_image_in_reference_is_reported(refs, text, journal, meta, tmp_path):
     assert "資料の図なら、Word で資料（見出しと中身）を英文要旨の後ろ（論文の最後）に移して" in top and "要らない画像なら、Word で消して" in top
     assert "| 画像 | 図の画像 0/1 枚を入れた（残り 1 枚。9 章）。ほかに、画像を入れる場所を作れなかった画像が 1 つあり、要対応（9 章） |" in top
     assert "### 画像を入れる場所を作れなかった画像（要対応）" in ch9 and "| img2 | word/media/" in ch9 and "| fig01 | 図1" in ch9
-    assert "- [ ] **画像を入れる場所を作れなかった画像 1 つ**（9 章）: 資料の図なら Word で資料を英文要旨の後ろに移す" in ch14
+    assert "- [ ] （要対応）**画像を入れる場所を作れなかった画像 1 つ**（9 章）: 資料の図なら Word で資料を英文要旨の後ろに移す" in ch14
     assert "img2（段落" in ch14 and "- [x] 図の画像" not in ch14
     # 直し方は lost の知らせだけに書く（手順 images の行・置き場所の備考には書かない。修正計画 W1 の 4.2）
     from jasme_jats.report import image_rows
@@ -129,7 +129,7 @@ def test_cli_exits_1_and_reports_lost_images(journal, tmp_path, capsys):
     from jasme_jats.cli import main
     path = make_ref_image(tmp_path / "ref.docx", image_only_ref)
     meta = tmp_path / "meta.toml"
-    meta.write_text('[article]\nvolume = "31"\nissue = "1"\nfpage = "1"\npeer_review = "あり"\n', encoding="utf-8")
+    meta.write_text('[article]\nvolume = "31"\nissue = "1"\nfpage = "1"\npub_date = "2026-03-31"\nreceived = "2025-06-01"\naccepted = "2025-11-20"\npeer_review = "あり"\n', encoding="utf-8")
     assert main([str(path), "--meta", str(meta), "--out", str(tmp_path / "out")]) == 1
     err = capsys.readouterr().err
     assert "要対応: 画像を入れる場所を作れなかった画像 1 つ" in err and "資料の図なら docx で資料を英文要旨の後ろに移して" in err
@@ -308,7 +308,7 @@ def test_textbox_notices_replace_provisional_ones(journal, meta, tmp_path):
     top, _, ch14 = chapters(res.report_path.read_text(encoding="utf-8"))
     assert ("**要確認: 囲み（問題文・ヒントなど）か図の注記か決められなかったテキストボックスが 1 件あり、その文字を XML に"
             "出力していません（3 章・6 章）。**") in top and "「（ヒント）」" in top
-    assert "- [ ] **囲みか図の注記か決められなかったテキストボックス 1 件**" in ch14 and not res.needs_action
+    assert "- [ ] （要確認）**囲みか図の注記か決められなかったテキストボックス 1 件**" in ch14 and not res.needs_action
     # 要確認は、要対応の後ろ（0.23.0 からの並び）
     from jasme_jats.report import render
     res.fidelity.ok = False
@@ -324,7 +324,7 @@ def test_cli_shows_textbox_notices(journal, tmp_path, capsys):
     from jasme_jats.cli import main
     path = make_provisional(tmp_path / "hint.docx", hint=True)
     meta = tmp_path / "meta.toml"
-    meta.write_text('[article]\nvolume = "31"\nissue = "1"\nfpage = "1"\npeer_review = "あり"\n', encoding="utf-8")
+    meta.write_text('[article]\nvolume = "31"\nissue = "1"\nfpage = "1"\npub_date = "2026-03-31"\nreceived = "2025-06-01"\naccepted = "2025-11-20"\npeer_review = "あり"\n', encoding="utf-8")
     assert main([str(path), "--meta", str(meta), "--out", str(tmp_path / "out")]) == 0
     err = capsys.readouterr().err
     assert "要確認: 囲みか図の注記か決められなかったテキストボックス 1 件の文字を XML に出力していません" in err

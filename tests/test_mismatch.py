@@ -68,6 +68,17 @@ def test_many_and_shown_limit():
     assert "校正後の版でない可能性があります。1 か所ずつ直す前に" in a.box_detail and "**" not in a.box_detail
 
 
+def test_many_sentence_leads_every_exit():
+    """(c2) 語句が多いとき、校正後の版かを先に確かめる文を、することの一覧・コマンドライン・Colab の枠の先頭に置く（少ないときは入れない）。"""
+    ds = [diff("word", "ふくろう", f"鳥{i}", 6) for i in range(MISMATCH_MANY)]
+    (a,) = pdf_actions(result(ds))
+    assert "先に著者に確かめる" in a.checklist and a.checklist.index("先に著者に確かめる") < a.checklist.index("PDF が正しければ")
+    assert "先に著者に確かめる" in a.cli and a.cli.index("先に著者に確かめる") < a.cli.index("PDF が正しければ")
+    assert a.box_detail.startswith("語句の違いが多いので")
+    (a,) = pdf_actions(result(ds[:1]))
+    assert "先に著者に確かめる" not in a.checklist + a.cli and not a.box_detail.startswith("語句の違いが多い")
+
+
 def test_many_counts_words_and_numbers_only():
     """(d) 約物だけ・大文字・小文字が多くても、語句の違いが 5 件未満なら「校正後の docx でない可能性」の文は入らない（5 件で入る）。"""
     ds = [diff("punct", "2468", "2,468", 2) for _ in range(6)] + [diff("case", "Ab", "AB", 2) for _ in range(3)]

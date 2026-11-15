@@ -4195,6 +4195,28 @@ def graded(plan, src_text, old, new, *, number="", why="", kind="text", fixable=
     return d.level, d.label
 
 
+def test_grade_punct_beside_unsure(grade_plan):
+    """図で分かれた段落の句点: PDF にだけある句読点 1 文字の足しが、すぐ隣の同じ類の docx の約物（why のある違いの範囲）に重なるときは
+    区分 (4)（punct_near）。why がない・類が違う・隣でない・語句つきのときは今までどおり内容の違い。"""
+    from jasme_jats.pdfmatch import DISPLACED_WHY, grade
+    plan, _ = grade_plan
+    src = next(p.src for p in plan.paras.values() if p.plain() == GRADE_BODY)
+    q = GRADE_BODY.index("。", GRADE_BODY.index("調べた"))
+
+    def run(pdf, at, why=DISPLACED_WHY, docx=""):
+        add = TextDiff(src, docx, pdf, "", at, at + len(docx))
+        other = TextDiff(src, "。", "．\n", "", q, q + 1, False, why)
+        grade(plan, PdfCheck(diffs=[add, other], case_srcs=set()), [""])
+        return add.level, add.label
+
+    assert run("。", q) == ("unsure", "punct_near")            # 足す位置のすぐ後ろに、why のある違いの約物
+    assert run("．", q + 1) == ("unsure", "punct_near")        # すぐ前に約物（足す位置の前）
+    assert run("。", q, why="") == ("content", "punct")         # 隣の約物に why がない
+    assert run("、", q) == ("content", "punct")                # 句点と読点は別の類
+    assert run("。", q - 3) == ("content", "punct")            # すぐ隣でない
+    assert run("。ふ", q) == ("content", "word")               # 句読点 1 文字だけの足しではない
+
+
 GRADE_NOTE_TEXT = "ふくろうは眠る(1)。みみずくは起きる。註2の札を配った。"
 
 
@@ -4610,7 +4632,7 @@ def test_wrong_paper_stops_without_outputs(route, journal, meta, tmp_path, monke
     msg = str(ei.value)
     pc = ei.value.pdf_check
     assert pc.verdict == "wrong" and len(pc.first_lines) == 2
-    assert "docx（sample_pdfcheck.docx）の題目「出版版 PDF との照合の検証用文書」が PDF（dummy.pdf）の最初のページに見つからず" in msg
+    assert "docx（sample_pdfcheck.docx）の題目「出版版 PDF との照合の検証用文書」が PDF（dummy.pdf）の最初の 2 ページに見つからず" in msg
     assert f"docx の段落 {pc.verdict_counted} 件のうち {pc.verdict_missing} 件が PDF に見つかりませんでした（XML とレポートは作っていません）" in msg
     assert "\x00" in msg and "docx が校正後の版かを確かめ" in msg and "PDF の 1 ページ目: 「" in msg
     assert pages[0].splitlines()[0][:10] in msg
@@ -4629,7 +4651,7 @@ def test_wrong_paper_cli_exit_code_2(journal, tmp_path, monkeypatch, capsys):
         out = tmp_path / f"cli{n}"
         assert main([str(PDFCHECK), "--meta", str(META_EXAMPLE), "--out", str(out), "--pdf", str(tmp_path / "dummy.pdf"), *extra]) == 2
         err = capsys.readouterr().err
-        assert "別の論文か、大きく違う版のようです（変換を中止しました）" in err and "docx の指定と--pdf の指定を選び直して" in err
+        assert "別の論文か、大きく違う版のようです（変換を中止しました）" in err and "docx と --pdf に別のファイルを指定してやり直して" in err
         assert "\x00" not in err and not any(out.glob("*.xml")) and not any(out.glob("*.zip")) and not any(out.glob("*.md"))
 
 
@@ -4655,8 +4677,8 @@ def test_wrong_paper_box_and_app(journal, tmp_path, monkeypatch):
     assert st.res is None and st.kept is kept and st.run is not None
     msg = ei.value.args[0]
     from jasme_jats.report import step
-    raw = f"確かめ、{step('docx')}と{step('pdf')}を選び直して"
-    for screen, word in (("notebook", "手順 2 と手順 2 を選び直して"), ("app", "「docx（論文の Word ファイル）」の欄と"), ("cli", "docx の指定と--pdf の指定を選び直して")):
+    raw = f"確かめ、{step('files')}やり直して"
+    for screen, word in (("notebook", "手順 2 で docx と PDF を選び直してやり直して"), ("app", "「docx（論文の Word ファイル）」の欄と「PDF（J-STAGE に登載する PDF）」の欄を選び直してやり直して"), ("cli", "docx と --pdf に別のファイルを指定してやり直して")):
         box = wrong_paper_box(raw, screen)
         assert "#dc2626" in box and "\x00" not in box and "step:" not in box
         assert word in box, (screen, box)
@@ -4687,3 +4709,19 @@ def test_suspect_text(journal, meta, tmp_path, monkeypatch):
     assert not pdf_suspect(types.SimpleNamespace(pdf_check=PdfCheck(verdict="")))
     assert not pdf_suspect(types.SimpleNamespace(pdf_check=PdfCheck(verdict="suspect", ok=False)))
     assert not pdf_suspect(types.SimpleNamespace(pdf_check=None))
+
+
+@pytest.mark.parametrize("route", ["pdf", "docx"])
+def test_compare_crash_falls_back_like_unreadable_pdf(route, journal, meta, tmp_path, monkeypatch):
+    """照合の途中で想定外の例外（ページの順が逆の PDF での IndexError など）が出ても、変換は止めず、PDF を読めなかったときと同じ
+    要対応 pdf_fallback にする（表記は PDF に合わせない。XML は作る）。"""
+    from jasme_jats import pdfmatch
+    from jasme_jats.report import actions
+
+    def boom(plan, pages, fn_marks=None):
+        raise IndexError("list index out of range")
+    monkeypatch.setattr(pdfmatch, "compare", boom)
+    res = convert_with_pages(tmp_path, monkeypatch, journal, meta, ["本文"], route)
+    assert res.pdf_check is not None and not res.pdf_check.ok and "照合できなかった" in res.pdf_check.message
+    assert res.docx_fix is None and res.xml_path.exists()
+    assert res.pdf_fallback == (route == "pdf") and ("pdf_fallback" in [a.key for a in actions(res)]) == (route == "pdf")

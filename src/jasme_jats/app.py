@@ -205,7 +205,11 @@ class AppState:
         if not got:
             return ("PDF から巻・号・ページを読めませんでした（1 ページ目に「数学教育学研究 第 n 巻 第 n 号 … pp.n〜n」のような誌名の行が"
                     "見つかりません）。入力してください。")
+        changed = []                # 入れてあった値と違う値に書き換えた欄（元の値を注記に添える）
         for k, v in got.items():
+            old = str(self.inputs.get(k) or "").strip()
+            if old and old != v:
+                changed.append(f"{LABELS[k]} {old}→{v}")
             self.inputs[k] = v
         self.pdf_got = got
         parts = []
@@ -226,7 +230,8 @@ class AppState:
         if got.get("received") or got.get("accepted"):
             src.append("投稿受付・採用決定の日付")
         return ("PDF から読んで入れました: " + "・".join(parts) + "（" + "と、".join(src) + "）。"
-                "違っていれば欄を書き換えてください。査読の有無・原稿種別・発行日は PDF から読めないので入力してください。")
+                + ("入れてあった値を書き換えました（" + "・".join(changed) + "）。" if changed else "")
+                + "違っていれば欄を書き換えてください。査読の有無・原稿種別・発行日は PDF から読めないので入力してください。")
 
     def _article_meta(self) -> ArticleMeta:
         """入力から ArticleMeta を作る。誤りは InputError（ノートブックの手順 3 と同じ確かめ）。"""
@@ -698,14 +703,15 @@ def build_app(state: AppState, io: "IO | None" = None):
         with gr.Row():
             peer_review = gr.Radio(PEER_REVIEWS, label="査読の有無")
             manuscript_type = gr.Dropdown(type_choices(), label="原稿種別")
+        with gr.Row():
+            pub_date = gr.Textbox(label="発行日", info="2026-03-31 の形。必須（空でも変換できますが、要対応で知らせます）")
+            received = gr.Textbox(label="受付日", info="必須（PDF から入ります）")
+            accepted = gr.Textbox(label="受理日", info="必須（PDF から入ります）")
         with gr.Accordion("任意の項目", open=False):
             approved = gr.Textbox(label="最終査読日", info="査読ありで、分かれば。2026-03-31 の形")
             keywords_ja = gr.Textbox(label="キーワード（日本語）", info="「;」で区切る")
             keywords_en = gr.Textbox(label="キーワード（英語）", info="「;」で区切る")
-            pub_date = gr.Textbox(label="発行日")
             epub_date = gr.Textbox(label="J-STAGE 公開日")
-            received = gr.Textbox(label="受付日")
-            accepted = gr.Textbox(label="受理日")
             corresp = gr.Textbox(label="責任著者", info="何番目の著者か。例: 1（複数なら 1,2）")
             doi = gr.Textbox(label="DOI", info="空欄なら 10.24529/jasme.巻.号_開始ページ")
         ai_mode = gr.Radio(AI_MODES, value=DEFAULTS["ai_mode"], label="AI による仕上げの方法",
