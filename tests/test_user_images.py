@@ -73,6 +73,21 @@ def test_refuses_empty_file():
         check_user_image(b"", "空.png")
 
 
+@pytest.mark.parametrize("data", [
+    b"\x89PNG\r\n\x1a\n" + b"x" * 50,              # 先頭のバイトだけ PNG
+    b"\xff\xd8\xff" + b"x" * 50,                   # 先頭のバイトだけ JPEG
+    b"GIF89a" + b"x" * 50,                         # 先頭のバイトだけ GIF
+    image("PNG")[:len(image("PNG")) // 2],         # 途中で切れた PNG（幅と高さは読めても、最後まで読めない）
+    image("JPEG")[:len(image("JPEG")) // 2],
+])
+def test_refuses_images_that_cannot_be_read_to_the_end(data):
+    """先頭のバイトが PNG・JPEG・GIF でも、Pillow で最後まで読めなければ受け付けず、入れ直すように言う（大きさは None にしない）。"""
+    with pytest.raises(ValueError) as e:
+        check_user_image(data, "図2.png")
+    assert str(e.value) == ("「図2.png」は画像として読めません（ファイルが壊れているか、途中で切れています）。"
+                            "図の部分を PNG か JPEG の画像にして、入れ直してください。")
+
+
 # ---------------------------------------------------------------------------- match_names
 def slots(*keys):
     return [SimpleNamespace(key=k, kind="table" if k.startswith("tab") else "fig") for k in keys]

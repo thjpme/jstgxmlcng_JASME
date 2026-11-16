@@ -101,11 +101,13 @@ def image_format(data: bytes) -> str:
 
 
 def check_user_image(data: bytes, name: str = "") -> tuple:
-    """作業する人が入れる画像の確かめ。戻り値: (形式〈png・jpg・gif〉, (幅, 高さ)〈読めなければ None〉)。
+    """作業する人が入れる画像の確かめ。戻り値: (形式〈png・jpg・gif〉, (幅, 高さ)〉。
 
     形式は中身の先頭のバイトで決める（拡張子が違っていてもよい）。PNG・JPEG・GIF でないもの・0 バイトは、理由を言って ValueError
-    （文は修正計画 W1 の 4.2。name は文に出すファイル名）。幅と高さは Pillow で読むだけで、保存し直さない（中身は変えない）。
+    （文は修正計画 W1 の 4.2。name は文に出すファイル名）。先頭のバイトが PNG・JPEG・GIF でも、Pillow で最後まで読めなければ
+    （壊れている・途中で切れている）ValueError。幅と高さは Pillow で読むだけで、保存し直さない（中身は変えない）。
     """
+    from PIL import Image
     label = name or "選んだファイル"
     if not data:
         raise ValueError(f"「{label}」は中身が空（0 バイト）です。")
@@ -116,13 +118,15 @@ def check_user_image(data: bytes, name: str = "") -> tuple:
             what = "WebP"
         raise ValueError(f"「{label}」は PNG・JPEG・GIF の画像ではありません（中身は {what or '分からない形式'} です）。"
                          "図の部分を PNG か JPEG の画像にして入れてください。")
-    size = None
     try:
-        from PIL import Image
         with Image.open(io.BytesIO(data)) as im:
+            im.verify()                           # 壊れた箇所の確かめ（verify の後は使えないので、開き直して読む）
+        with Image.open(io.BytesIO(data)) as im:
+            im.load()                             # 最後まで読めることの確かめ（途中で切れたものはここで失敗する）
             size = tuple(im.size)
     except Exception:  # noqa: BLE001
-        size = None
+        raise ValueError(f"「{label}」は画像として読めません（ファイルが壊れているか、途中で切れています）。"
+                         "図の部分を PNG か JPEG の画像にして、入れ直してください。") from None
     return fmt, size
 
 
