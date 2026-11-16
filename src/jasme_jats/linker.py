@@ -26,10 +26,26 @@ from .article import (ArticlePlan, BoxNode, FigNode, FormulaNode, ListNode, PNod
 from .model import OBJ, Atom, LinkSpec, Para
 from .structure import CAP_BRANCH_NUM, CAP_BRANCH_SEP, RE_FIGCAP, RE_TABCAP, caption_label
 
-# URL（末尾の句読点・閉じ括弧は含めない）
-RE_URL = re.compile(r"(?:https?://|www\.)[^\s<>\"'「」『』、。，（）［］【】〔〕\u3000]+", re.I)
-RE_DOI_PREFIXED = re.compile(r"(?:\bdoi\s*[:：]\s*|DOI\s*[:：]?\s*)(10\.\d{4,9}/[^\s<>\"、。，（）「」]+)", re.I)
-RE_DOI_BARE = re.compile(r"(?<![\w/.])(10\.\d{4,9}/[^\s<>\"、。，（）「」]+)")
+# URL（末尾の句読点・閉じ括弧は含めない）。和文の約物・かっこで止める（すべての非 ASCII では止めない。パーセント符号化していない
+# IRI〈日本語のページ名など〉を途中で切ると、別のページを指す正しく見えるリンクになるため。href に非 ASCII が残ったものは、
+# 推定で切らずに要確認 link_iri で知らせる。href_problems。C089）
+RE_URL = re.compile(r"(?:https?://|www\.)[^\s<>\"'「」『』、。，．（）［］【】〔〕〈〉《》｛｝：；！？\u3000]+", re.I)
+# DOI には非 ASCII の文字が入らないので、空白・「"」「<」「>」と非 ASCII の文字の手前で止める（印字できる ASCII の文字だけ。
+# ASCII の範囲で書き、re.I は使わない〈re.I では、範囲に「i」「k」「s」の大文字・小文字の仲間の U+0130・U+0131・U+212A・U+017F も入る〉。
+# 接頭辞の「doi」の大文字・小文字は [dD][oO][iI] で書く）
+RE_DOI_PREFIXED = re.compile(r"(?:\b[dD][oO][iI]\s*[:：]\s*|[dD][oO][iI]\s*[:：]?\s*)(10\.\d{4,9}/[\x21\x23-\x3b\x3d\x3f-\x7e]+)")
+RE_DOI_BARE = re.compile(r"(?<![\w/.])(10\.\d{4,9}/[\x21\x23-\x3b\x3d\x3f-\x7e]+)")
+# URL の末尾の、閲覧した日などを書いた語（「…/a.pdf(2020年1月1日参照)」「…/a.html参照」）。リンクの範囲に入れない（文字は変えない。_trim）。
+# 外すのは、外した後の URL の最後の文字が ASCII で ACCESS_KEEP_END でないときだけ（「…/wiki/参照」「…/wiki/文献参照」は日本語のページ名の
+# 正しい IRI かもしれないので切らない。非 ASCII が残るので要確認 link_iri で知らせる。点検 review20 原則 1）
+RE_ACCESS_TAIL = re.compile(r"(?:参照|閲覧|アクセス|取得)(?:した|する)?[)）]?$")
+ACCESS_KEEP_END = "/=?#&_-"
+# 組になる閉じかっこのない「(」から後ろを外すのは、後ろが空か、日付の形（2〜4 桁の数字と「年」「.」「/」「-」。4 桁の数字で終わる形〈DOI が
+# 「(2024年」の「年」の手前で止まった残り〉も）・非 ASCII の文字（和文の注記）か、英語の閲覧の語で始まるときだけ（「…/a.pdf(2024.1.9」「…/a(accessed」。「…?q=(a」「…?q=(1」「…/f(1」のような URL の一部の
+# 「(」は切らない。点検 review20 原則 4・2 回目）
+RE_OPEN_NOTE = re.compile(r"(?:$|[0-9]{2,4}[年./\-]|[0-9]{4}$|[^\x00-\x7f]|(?:accessed|retrieved|viewed|visited|access)\b)", re.I)
+# リンク先（href）の形として知らせないスキーム（それ以外〈file:・javascript:・パソコンの中のパスなど〉は要確認 link_iri。C090）
+RE_HREF_SCHEME = re.compile(r"(?:https?://|ftp://|mailto:)", re.I)
 FW = str.maketrans("０１２３４５６７８９", "0123456789")
 NUM = r"[0-9０-９]+"
 RE_FIGREF = re.compile(rf"(図|Figure|Figs?\.)[\s\u3000]?({NUM})((?:[\s\u3000]*(?:[,，、・]|～|〜|-|－|–|と|及び|および|and)[\s\u3000]*(?:図)?{NUM})*)")
@@ -247,6 +263,9 @@ class Linker:
         # （run を通らずに fn_marks を呼んだときは、0.26.0 までと同じく注番号とみなす）
         self.bare_notes = True
         self.fn_table = set()   # 注の節の中の表の段落 ID（run が ArticlePlan.fn_table_paras で作る）
+        # 引用文献の中で urls() に任せた Word のハイパーリンクの範囲（段落の id -> [(始め, 終わり)]。word_hyperlinks）。そこから始まる URL・DOI は
+        # ハイパーリンクの終わりより後ろをリンクに入れない（Word で URL の文字だけにリンクを付ければ、後ろの文字がリンク先に入らない。link_iri の直し方）
+        self.word_spans = {}
 
     def note(self, category, src, msg, applied=True):
         """判断の一覧（レポートの 4 章）に記録する。リンクにしなかった判断は applied=False。"""
@@ -313,6 +332,8 @@ class Linker:
                         and atoms[j + 1].link is None:
                     j += 1
                 if where == "ref" and _same_as_text(a.href, "".join(atoms[k].text for k in range(i, j + 1))):
+                    offs = atom_offsets(p)
+                    self.word_spans.setdefault(id(p), []).append((offs[i][0], offs[j][1]))
                     for k in range(i, j + 1):
                         atoms[k].href = None
                     i = j + 1
@@ -331,20 +352,32 @@ class Linker:
             return LinkSpec(kind="pub-id", attrs={"pub-id-type": "doi", "href": href})
         return LinkSpec(kind=kind, attrs={"href": href})
 
+    def _word_end(self, p: Para, s: int, e: int) -> int:
+        """URL・DOI の範囲 [s, e) の終わりを、s を含む Word のハイパーリンク（word_spans）の終わりまでに縮めた位置。
+
+        縮めるのは、ハイパーリンクの終わりのすぐ後ろ（範囲の中）が非 ASCII の文字のときだけ（URL の直後に空白なしで続いた和文の注記。
+        link_iri の直し方の形）。後ろが ASCII の文字なら縮めない（自動書式で URL の途中〈「…/wiki/Foo_」まで〉にだけ付いたハイパー
+        リンクで、「(bar)」などの URL の残りを外さない。点検 review20 の 2 回目）。"""
+        plain = p.plain()
+        for ws, we in self.word_spans.get(id(p), ()):
+            if ws <= s < we:
+                return we if we < e and not plain[we].isascii() else e
+        return e
+
     def urls(self, p: Para, where: str):
         plain = p.plain()
         kind = "ext-link" if where in ("fn", "back") else "uri"
         # DOI（doi: 付き・裸）
         for m in RE_DOI_PREFIXED.finditer(plain):
             s, e = m.start(1), m.end(1)
-            doi = _trim(plain[s:e])
+            doi = _trim(plain[s:self._word_end(p, s, e)])
             e = s + len(doi)
             spec = self.doi_spec(doi, kind, where)
             if apply_span(p, s, e, spec):
                 self.count["doi"] += 1
         for m in RE_URL.finditer(plain):
             s = m.start()
-            url = _trim(m.group(0))
+            url = _trim(plain[s:self._word_end(p, s, m.end())])
             e = s + len(url)
             href = url if re.match(r"https?://", url, re.I) else "http://" + url
             dm = re.match(r"https?://(?:dx\.)?doi\.org/(10\.\d{4,9}/\S+)", url, re.I)
@@ -361,7 +394,7 @@ class Linker:
         if where == "ref":
             for m in RE_DOI_BARE.finditer(plain):
                 s = m.start(1)
-                doi = _trim(m.group(1))
+                doi = _trim(plain[s:self._word_end(p, s, m.end(1))])
                 e = s + len(doi)
                 spec = self.doi_spec(doi, "uri", where)
                 if apply_span(p, s, e, spec):
@@ -757,12 +790,81 @@ def _same_as_text(href: str, text: str) -> bool:
 
 
 def _trim(url: str) -> str:
-    """URL の末尾から、文の句読点や対応しない閉じ括弧を除く。"""
-    while url and url[-1] in ".,;:!?。、，．)]）」』>":
-        if url[-1] in ")）" and url.count("(") + url.count("（") >= url.count(")") + url.count("）"):
-            break
-        url = url[:-1]
-    return url
+    """URL の末尾から、リンクの範囲に入れない文字を除く（文字は変えない。呼び出し側がリンクの範囲〈LinkSpec〉を短くするだけ）。
+
+    文の句読点と対応しない閉じかっこ、末尾の閲覧した日などの語（RE_ACCESS_TAIL。「(2020年1月1日参照)」のかっこの中なら、かっこごと。
+    外した後の最後の文字が ASCII で ACCESS_KEEP_END でないときだけ）、組になる閉じかっこのない「(」「（」から後ろ（後ろが RE_OPEN_NOTE の
+    形のときだけ。「(2020.1.1」の残り）を、変わらなくなるまで除く。C089。"""
+    while True:
+        prev = url
+        while url and url[-1] in ".,;:!?。、，．)]）」』>":
+            if url[-1] in ")）" and url.count("(") + url.count("（") >= url.count(")") + url.count("）"):
+                break
+            url = url[:-1]
+        m = RE_ACCESS_TAIL.search(url)
+        if m:
+            cut = url[:m.start()]
+            if m.group()[-1] in ")）":          # かっこの中の閲覧した日（「(2020年1月1日参照)」）は、開きかっこから
+                o = _unclosed_open(cut)
+                if o >= 0:
+                    cut = cut[:o]
+            if cut and cut[-1].isascii() and cut[-1] not in ACCESS_KEEP_END:
+                url = cut
+        o = _unclosed_open(url)
+        if o >= 0 and RE_OPEN_NOTE.match(url, o + 1):
+            url = url[:o]
+        if url == prev:
+            return url
+
+
+def _unclosed_open(url: str) -> int:
+    """組になる閉じかっこのない、最初の「(」「（」の位置（なければ -1）。"""
+    stack = []
+    for i, c in enumerate(url):
+        if c in "(（":
+            stack.append(i)
+        elif c in ")）" and stack:
+            stack.pop()
+    return stack[0] if stack else -1
+
+
+class HrefProblem(NamedTuple):
+    """リンク先（href）の形の確かめ（href_problems）の 1 件（1 つのリンク）: 段落 ID・文脈（body_paragraphs）・リンクの文字・リンク先・
+    種類の組（"scheme": http・https・mailto・ftp 以外のリンク先、"iri": 非 ASCII の文字〈日本語など〉が入っている。両方のこともある）・
+    LinkSpec の origin。"""
+    src: str
+    where: str
+    text: str
+    href: str
+    kinds: tuple
+    origin: str
+
+
+def href_problems(plan: ArticlePlan) -> list:
+    """XML に出す外部リンク（uri・ext-link・pub-id）のうち、リンク先の形を確かめたいもの（要確認 link_iri。report._link_iri_action）。
+
+    非 ASCII の文字の入ったリンク先（URL の直後に空白なしで続いた文字がリンク先に入ったか、パーセント符号化していない IRI。C089）と、
+    http・https・mailto・ftp 以外のリンク先（Word のハイパーリンクの file:・javascript:・パソコンの中のパスなど。C090）。
+    リンク先の値は書き換えず、リンクも外さない（知らせるだけ）。1 つのリンク（同じ LinkSpec のアトムの並び）を 1 件と数える。"""
+    out = []
+    for p, where in body_paragraphs(plan):
+        runs = []        # [(LinkSpec, [文字])]。続くアトムが同じ LinkSpec なら 1 つのリンク
+        last = None
+        for a in p.atoms:
+            spec = a.link if a.kind == "text" and a.link is not None and a.link.kind in ("uri", "ext-link", "pub-id") \
+                and "href" in a.link.attrs else None
+            if spec is not None and spec is last:
+                runs[-1][1].append(a.text)
+            elif spec is not None:
+                runs.append((spec, [a.text]))
+            last = spec
+        for spec, text in runs:
+            href = spec.attrs["href"]
+            kinds = tuple(k for k, bad in (("scheme", not RE_HREF_SCHEME.match(href)), ("iri", any(ord(c) > 127 for c in href)))
+                          if bad)
+            if kinds:
+                out.append(HrefProblem(p.src, where, "".join(text), href, kinds, spec.origin))
+    return out
 
 
 def link(plan: ArticlePlan, ref_doi: str = "pub-id") -> Linker:

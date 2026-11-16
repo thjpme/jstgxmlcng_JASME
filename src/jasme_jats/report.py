@@ -700,12 +700,13 @@ def word_note_rows(r) -> list:
     return rows
 
 
-def note_notes(plan):
-    """注（Word の脚注機能を使わずに書かれたもの）の番号と、本文での参照の対応。PDF と照らして確認するためのもの。"""
-    out = []
+def note_problems(plan):
+    """手で書いた注（Word の脚注機能を使わずに書かれたもの）の読み取りの問題: (注の一覧, 本文で初めて参照された順の注の ID,
+    番号を読み取れなかった注 unnum, 本文から参照されない注 unref)。3 章の文（note_notes）と要確認 note_unlinked が同じ判定を使う
+    （件数がずれない）。AI の仕上げ（link_note）でリンクされた注は、plan の本文の参照に入っているので数えない。注がなければ空の組。"""
     fns = [fn for fn in plan.fns if not fn.word_note]
     if not fns:
-        return out
+        return [], [], [], []
     order = []   # 本文で初めて参照された順
     for p, where in body_paragraphs(plan):
         if where in ("ref", "fn"):
@@ -714,8 +715,18 @@ def note_notes(plan):
             if a.link is not None and a.link.kind == "xref" and a.link.attrs.get("ref-type") == "fn":
                 if a.link.attrs.get("rid") not in order:
                     order.append(a.link.attrs.get("rid"))
-    nums = [fn.number for fn in fns]
     unnum = [fn for fn in fns if fn.number is None]
+    unref = [fn for fn in fns if fn.fid not in order]
+    return fns, order, unnum, unref
+
+
+def note_notes(plan):
+    """注（Word の脚注機能を使わずに書かれたもの）の番号と、本文での参照の対応。PDF と照らして確認するためのもの。"""
+    out = []
+    fns, order, unnum, unref = note_problems(plan)
+    if not fns:
+        return out
+    nums = [fn.number for fn in fns]
     if unnum:
         out.append("先頭に番号（「1)」「（注1）」など）を読み取れなかった注: " + "、".join(
             f"{fn.fid}（「{esc(fn.paras[0].plain()[:20])}」"
@@ -724,9 +735,9 @@ def note_notes(plan):
               "AI による仕上げ（注の区切りの指定）を使うか、docx の注の番号をテンプレートの形式（「1)」）にしてから変換し直す")
     elif nums != list(range(1, len(nums) + 1)):
         out.append("注の番号が 1 からの連番になっていない: " + "、".join(str(n) for n in nums))
-    unref = [f"{fn.fid}（{esc(fn.paras[0].plain()[:20])}）" for fn in fns if fn.fid not in order]
     if unref:
-        out.append("本文中のどこからも参照（リンク）されていない注: " + "、".join(unref))
+        out.append("本文中のどこからも参照（リンク）されていない注: " + "、".join(
+            f"{fn.fid}（{esc(fn.paras[0].plain()[:20])}）" for fn in unref))
     by_id = {fn.fid: fn.number for fn in fns}
     seq = [by_id[r] for r in order if by_id.get(r) is not None]
     if seq != sorted(seq):
@@ -1684,7 +1695,8 @@ def _float_end_answer(plan, info) -> str:
 STYLE_SUSPECT_JA = {
     "heading_body": ("見出しのスタイルの段落に本文が続いています",
                      "見出しと本文の間で Enter を押して段落を分け（改行〈Shift+Enter〉があれば、それを消してから）、後ろを本文のスタイルにする"),
-    "heading_level": ("見出しのスタイルの階層と、番号の形が合いません", "番号の形に合う階層の見出しのスタイルにする"),
+    "heading_level": ("見出しのスタイルの階層が、同じ番号の形の見出しと食い違っています",
+                      "同じ番号の形の見出し（兄弟）と同じ階層の見出しのスタイルにする"),
     "quote_like": ("本文のスタイルですが、引用の形をしています", "引用なら、ブロック引用のスタイルにする"),
     "heading_guess": ("見出しのスタイルがなく、文字の形から見出しと推定しました",
                       "見出しなら見出しのスタイル（「章見出し」など）を、本文の番号つきの箇条なら「本文」のスタイルを付ける"),
@@ -1696,6 +1708,8 @@ STYLE_SUSPECT_JA = {
                  "前の文献の続きなら、Word で前の段落の終わりの段落記号を消して 1 つの段落にする"),
 }
 # 機械が挙げても、AI の提案を待たずに直し方が決まっている種類（推奨の手順 ai_finish を出す条件に数えない）
+# （heading_level・heading_guess は、どちらの階層・見出しかを出版版 PDF を見て決められるので、heading_body と同じく AI の提案を待つ種類。
+#  C038・C077。直し方が機械的に決まる ref_symbol・back_heading・ref_cont だけが待たない）
 STYLE_NO_AI_KINDS = ("ref_symbol", "back_heading", "ref_cont")
 STYLE_CHECK_SHOWN = 10      # 要確認 style_check に並べる段落の数（残りは「ほか N か所（2 章）」）
 # AI の回答は段落の役割（謝辞・引用・見出しの階層など）を XML に反映しない（所有者の決定 5）ので、Word での直し方を具体的に書く（点検 review13 回帰 1）
@@ -1779,6 +1793,7 @@ def style_check_rows(r) -> tuple:
             continue
         seen.add(sus.src)
         what, how = STYLE_SUSPECT_JA.get(sus.kind, ("スタイルを確かめてください", ""))
+        how = sus.how or how            # 段落ごとの直し方（StyleSuspect.how）があれば、一般の直し方の代わりに使う
         if sus.kind == "back_heading":
             how = _back_heading_how(r, sus) or how
         f = fixes.get(sus.src)
@@ -3081,6 +3096,148 @@ def _note_overlap_action(r):
              "docx でどちらかの書き方にそろえて変換し直すこと"))
 
 
+NOTE_UNLINKED_SHOWN = 5      # 要確認 note_unlinked に並べる注の数（残りは「ほか N 件」。全部は 3 章）
+NOTE_MARK_SHOWN = 3          # 要確認 note_unlinked に添える、本文の注番号の候補の段落の数
+# 本文の注番号の候補（読むだけで、リンクはしない）: Unicode の上付き文字の「¹⁾」と「[1]」の形（_note_unlinked_action の手がかり）
+# （形の名前・正規表現・Word の［検索］で探す文字）
+RE_NOTE_MARK_FORMS = (("Unicode の上付き文字の「¹⁾」", re.compile("[⁰¹²³⁴-⁹]+⁾"), "⁾"), ("「[1]」", re.compile(r"\[[0-9０-９]{1,3}\]"), "["))
+
+
+def _note_mark_hint(plan) -> str:
+    """本文（注・引用文献の一覧を除く）にある注番号の候補の形と段落 ID（先頭 NOTE_MARK_SHOWN 段落）の文。なければ ""。
+    利用者が Word で本文の注番号の場所を探す手がかり（読むだけ。リンクも XML も変えない。点検 review20 利用者向け 9）。"""
+    out, keys = [], []
+    for label, rx, key in RE_NOTE_MARK_FORMS:
+        srcs = list(dict.fromkeys(q.src for q, where in body_paragraphs(plan) if where not in ("ref", "fn") and rx.search(q.text_only())))
+        if srcs:
+            # 段落 ID（英字）の後ろは空白、「段落」の後ろは空白なし
+            more = f" ほか {len(srcs) - NOTE_MARK_SHOWN} 段落に" if len(srcs) > NOTE_MARK_SHOWN else " に"
+            out.append(f"{label}の形の文字が本文の {'・'.join(srcs[:NOTE_MARK_SHOWN])}{more}あります")
+            keys.append(f"「{key}」")
+    if not out:
+        return ""
+    return "本文の注番号の候補: " + "。".join(out) + f"（Word の［検索］で{'や'.join(keys)}を探すと見つかります）"
+
+
+def _note_unlinked_action(r):
+    """要確認 note_unlinked（C067）: 手で書いた注で、番号が読み取れなかった注（複数の注が 1 件にまとまっていることがある）か、本文から
+    参照（リンク）されていない注があるとき。なければ None。
+
+    判定は 3 章の文（note_notes）と同じ report.note_problems（新しい判定を作らない。件数がずれない）。件数は注の数で数え、各行に当たる
+    印（番号を読み取れない・本文から参照されていない）を全部書く。本文の注番号が Unicode の上付き文字（「¹⁾」）や「[1]」の形だと、注が
+    リンクされず、番号が読めない注は 1 件にまとまる（本文の候補の段落を添える。_note_mark_hint）。AI による仕上げ（link_note・注の区切りの
+    指定）でリンクされた注は数えない。AI の回答が入っているときは「AI でも直せる」と言わず、ai_boundary と同じ Word での直し方にそろえる
+    （点検 review20 利用者向け 4）。XML は変えない（注の読み取りは変えない）。
+    """
+    plan = r.plan
+    fns, order, unnum, unref = note_problems(plan)
+    if not unnum and not unref:
+        return None
+    bad_num, bad_ref = {fn.fid for fn in unnum}, {fn.fid for fn in unref}
+    hit = [fn for fn in fns if fn.fid in bad_num or fn.fid in bad_ref]
+
+    def marks(fn):
+        return "・".join(x for x, on in (("番号を読み取れない", fn.fid in bad_num), ("本文から参照されていない", fn.fid in bad_ref)) if on)
+
+    def line(fn):
+        place = _place_short(plan.locations.get(fn.paras[0].src, ""))
+        head = esc(fn.paras[0].plain().strip(), 15)
+        return (f"{fn.fid}（{fn.paras[0].src}" + (f"。{esc(place)}" if place else "") + (f"。「{head}」" if head else "")
+                + (f"。{len(fn.paras)} 段落を 1 件の注にまとめています" if len(fn.paras) > 1 and fn.number is None else "")
+                + f"）: {marks(fn)}")
+
+    rows = [line(fn) for fn in hit]
+    more = len(rows) - NOTE_UNLINKED_SHOWN
+    shown = rows[:NOTE_UNLINKED_SHOWN] + ([f"ほか {more} 件（3 章）"] if more > 0 else [])
+    hint = _note_mark_hint(plan) if unref else ""
+    if hint:
+        shown.append(hint)
+    parts = "・".join(x for x, on in (("番号を読み取れない", unnum), ("本文から参照されていない", unref)) if on)
+    title = f"注 {len(hit)} 件が正しく読み取れていない可能性があります（{parts}）"
+    word = ("本文の注番号は上付き文字の「1)」（Word の［ホーム］の上付き）、注の一覧の各段落の先頭は「1)」の形にし、注 1 件を 1 つの段落にして")
+    ai = getattr(r, "ai", None)
+    ai_in = ai is not None and ai_state(r) in ("済み", "一部")
+    # 文は印（番号を読み取れない unnum・本文から参照されていない unref）で分ける（番号を読み取れないだけの注に「リンクされていない」と
+    # 言わない。AI の回答が入っているときは、区切りの点〈複数の注が 1 件〉を結果の文に書かない。点検 review20 利用者向けの 2 回目）
+    if unnum and unref:
+        state = "本文からリンクされていないか、番号を読み取れていません"
+    elif unref:
+        state = "本文からリンクされていません"
+    else:
+        state = "番号を読み取れていません"
+    if ai_in:
+        fixed = any(b.kind in NOTE_BOUNDARY_KINDS for b in getattr(ai, "boundaries", None) or [])
+        how = (("AI の回答で注の区切りは直しましたが（2 章）、" if fixed else "AI の回答も入れましたが、") + f"下に挙げた注は{state}。"
+               f"Word で{word}保存し、AI の回答を入れずに変換し直すと、区切りとリンクの両方が直ります（本文の注番号が Unicode の上付き文字や"
+               "「[1]」の形だと、注にリンクされず、注が 1 件にまとまることがあります）")
+    else:
+        how = (f"Word で{word}、変換し直してください（本文の注番号が Unicode の上付き文字や「[1]」の形だと、注にリンクされず、"
+               "注が 1 件にまとまることがあります）。AI による仕上げ（注のリンク・注の区切りの指定）でも直せます")
+    if unref and unnum and not ai_in:
+        result = "本文から注へのリンクがなく、複数の注が 1 件の注にまとまっていることがあります"
+    elif unref:
+        result = "本文から注へのリンクがありません"
+    elif not ai_in:
+        result = "番号を読み取れなかった注には、複数の注が 1 件にまとまっていることがあります"
+    else:
+        result = ""
+    note3 = "3 章の注の確認と同じ注です。ここでは注の場所と Word での直し方を挙げます"
+    how += f"。このまま登載すると、{result}（{note3}）" if result else f"。{note3}"
+    return Action(
+        TO_CHECK, "note_unlinked",
+        top=f"> **要確認: {title}（3 章）。** {how}。" + "".join(f"\n>\n> - {x}" for x in shown),
+        checklist=f"- [ ] **注の読み取り**（注 {len(hit)} 件: {parts}。3 章）: 本文の注番号と注の一覧の番号を「1)」の形にそろえて変換し直す",
+        box_title=title + "（要確認）",
+        box_detail=(f"{how}（直した docx を{step('docx')}でアップロードし直し、そこから順にやり直す）。" + "".join("\n・" + x for x in shown)),
+        cli=f"要確認: {title}（レポートの冒頭と 3 章）。{how}。" + "".join("\n  " + x for x in shown))
+
+
+LINK_IRI_SHOWN = 5       # 要確認 link_iri に並べるリンクの数（残りは「ほか N 件」）
+LINK_IRI_JA = {"iri": "リンク先に日本語などの文字がある", "scheme": "http・https・mailto・ftp 以外のリンク先"}
+
+
+def _link_iri_action(r):
+    """要確認 link_iri（C089・C090）: XML に出す外部リンクのリンク先（xlink:href）に非 ASCII の文字（日本語など）が入っているか、
+    リンク先が http・https・mailto・ftp 以外（Word のハイパーリンクの file:・javascript:・パソコンの中のパスなど）のとき。なければ None。
+
+    判定は linker.href_problems。URL の直後に空白なしで続く文字のうち、閉じていないかっこ・「参照」「閲覧」などの語はリンクの範囲に
+    入れない（linker._trim）が、それ以外は推定で切らない（パーセント符号化していない IRI を途中で切ると、別のページを指す正しく見える
+    リンクになるため）。リンク先の値は書き換えず、リンクも外さない（XML は変えない）。"""
+    from .linker import href_problems
+    plan = r.plan
+    probs = href_problems(plan)
+    if not probs:
+        return None
+
+    def line(x):
+        place = _place_short(plan.locations.get(x.src, ""))
+        return (f"{x.src}（" + (f"{esc(place)}。" if place else "") + f"リンクの文字「{esc(x.text, 40)}」。リンク先「{esc(x.href, 80)}」。"
+                + "・".join(LINK_IRI_JA[k] for k in x.kinds) + "）")
+    rows = [line(x) for x in probs[:LINK_IRI_SHOWN]] + ([f"ほか {len(probs) - LINK_IRI_SHOWN} 件"] if len(probs) > LINK_IRI_SHOWN else [])
+    n = len(probs)
+    kinds = {k for x in probs for k in x.kinds}
+    hows = []
+    if "iri" in kinds:
+        hows.append("リンク先に日本語などの文字があるもの: URL の直後に空白なしで文字が続くと、その文字までリンク先に入ることがあります"
+                    "（閉じていないかっこと、「参照」「閲覧」などで終わる部分はリンクに入れていませんが、それ以外は推定で切っていません）。"
+                    "リンク先が正しければ（日本語のページ名の URL など）そのままでかまいません。違っていれば、Word で URL の文字だけを選び、"
+                    "［挿入］の［リンク］で正しいアドレスを入れて保存し、変換し直してください（文字は変わらず、Word のリンクの範囲とリンク先が"
+                    " XML のリンクになります）")
+    if "scheme" in kinds:
+        hows.append("http・https・mailto・ftp 以外のリンク先（パソコンの中のファイル〈file:〉・javascript: など）: J-STAGE の読者は開けません。"
+                    "Word でそのハイパーリンクを右クリックし、［リンクの編集］で正しい URL にするか、［リンクの削除］をして、変換し直して"
+                    "ください（変換ツールはリンク先の値を変えていません）")
+    how = "。".join(hows)
+    title = f"リンク先（URL）の形を確かめてください（{n} 件）"
+    return Action(
+        TO_CHECK, "link_iri",
+        top=f"> **要確認: {title}。** {how}。" + "".join(f"\n>\n> - {x}" for x in rows),
+        checklist=f"- [ ] **リンク先（URL）の形**（{n} 件）: リンク先が正しいかを確かめ、違っていれば Word でリンクを直して変換し直す",
+        box_title=title + "（要確認）",
+        box_detail=f"{how}（Word で直したときは、直した docx を{step('docx')}でアップロードし直し、そこから順にやり直す）。" + "".join("\n・" + x for x in rows),
+        cli=f"要確認: {title}（レポートの冒頭）。{how}。" + "".join("\n  " + x for x in rows))
+
+
 XREF_TAG = '<xref ref-type="fig" rid="図の id">'
 FIG_ID_TAG, TABLE_ID_TAG = '<fig id="…">', '<table-wrap id="…">'
 
@@ -3627,6 +3784,57 @@ def _meta_dates_action(r):
              "received・accepted を 2026-03-31 の形で書いて変換し直すこと（受付日・受理日は --pdf の PDF から読めればそれが入る）"))
 
 
+AUTHORS_SHOWN = 10       # 要確認 meta_corresp に並べる著者の数（残りは「ほか N 人」）
+
+
+def author_names(plan) -> list:
+    """著者の氏名（plan.authors の順。和文の氏名、なければ英文の氏名。どちらもなければ ""）の一覧。番号は 1 から（XML の contrib の順）。"""
+    out = []
+    for a in plan.authors:
+        p = a.name_ja if a.name_ja is not None else a.name_en
+        out.append(p.plain().strip() if p is not None else "")
+    return out
+
+
+def corresp_cell(meta, plan) -> str:
+    """11 章の表の「責任著者」の値: 入力の番号と、印（corresp="yes"）を付けた著者の氏名。範囲外の番号はそうと書く（点検 review20 の 2 回目）。"""
+    nums = list(dict.fromkeys(getattr(meta, "corresp", None) or []))
+    if not nums:
+        return "（未入力）"
+    names = author_names(plan)
+    n = len(names)
+    return "、".join(f"{k}（{esc(names[k - 1], 20) or '氏名なし'}）" if k <= n else f"{k}（範囲外。著者は {n} 人。印を付けていません）"
+                    for k in nums)
+
+
+def _meta_corresp_action(r):
+    """要確認 meta_corresp（C095）: 入力した責任著者の番号に、著者の人数の範囲外のものがある（1 つでも）。なければ None。
+
+    範囲外の番号は XML の責任著者の印（corresp="yes"）にならず、範囲内の番号だけが印になる。最後の著者に付けるなどの推定はしない。
+    番号が 1 以上の整数かは config.ArticleMeta.from_dict が確かめる。著者が 1 人もいない原稿は、要対応 authors_missing で知らせる。"""
+    meta, plan = getattr(r, "meta", None), r.plan
+    n = len(plan.authors)
+    out = [k for k in dict.fromkeys(getattr(meta, "corresp", None) or []) if k > n]
+    if not out or not n:
+        return None
+    nums = "・".join(str(k) for k in out)
+    rng = "1" if n == 1 else f"1〜{n}"
+    names = author_names(plan)
+    order = "、".join(f"{i}: {esc(x, 20) or '氏名なし'}" for i, x in enumerate(names[:AUTHORS_SHOWN], 1)) \
+        + (f"、ほか {n - AUTHORS_SHOWN} 人" if n > AUTHORS_SHOWN else "")
+    title = f"責任著者の番号 {nums} が、著者の人数（{n} 人）の範囲外です"
+    how = (f"XML の責任著者の印は、範囲内の番号の著者だけに付きます（範囲外の番号は、どの著者にも付けません）。入力の責任著者の番号を、"
+           + ("1 " if n == 1 else f"何番目の著者か（{rng}）") + "に直して変換し直してください"
+           f"（著者の順は docx の和文の著者名の順で、{order}。入力した番号はレポートの 11 章）")
+    return Action(
+        TO_CHECK, "meta_corresp",
+        top=f"> **要確認: {title}。** {how}。",
+        checklist=f"- [ ] **責任著者の番号**（{nums}。著者は {n} 人。11 章）: 何番目の著者かを直して変換し直す",
+        box_title=title + "（要確認）", box_detail=(f"範囲外の番号（{nums}）には責任著者の印を付けていません。{step('meta')}の責任著者の番号を、{rng} の番号に直して、"
+                    f"やり直してください（著者の順は {order}。レポートの 11 章）。"),
+        cli=f"要確認: {title}（レポートの 11 章）。--meta の [article] の corresp を、{rng} の番号に直して変換し直すこと（著者の順は {order}）")
+
+
 META_ID_LABELS = tuple(PAGE_FIELDS.values())      # 巻・号・ページ（違えば記事 ID・DOI・ファイル名が変わるので要対応）
 
 
@@ -3681,9 +3889,9 @@ def actions(r) -> list:
     """
     head = [f(r) for f in (_fidelity_action, _supplement_action, _dtd_action, _table_shape_action, _table_body_action,
                            _table_parts_action, _image_names_action,
-                           _upload_action, _meta_dates_action, _textbox_undecided_action,
+                           _upload_action, _meta_dates_action, _meta_corresp_action, _textbox_undecided_action,
                            _textbox_place_action, _textbox_figure_text_action, _authors_missing_action, _unplaced_action, _front_check_action, images_action,
-                           lost_action, _image_same_action, _image_changed_action, lost_autonum_action, _pua_left_action, _abstract_missing_action, _refs_missing_action, _style_hidden_action, _resultless_field_action, _symbol_action, _abstract_ja_action, _app_after_refs_action, _float_end_action, _style_check_action, _ai_boundary_action, _ai_carried_action, _note_overlap_action, _float_ref_action,
+                           lost_action, _image_same_action, _image_changed_action, lost_autonum_action, _pua_left_action, _abstract_missing_action, _refs_missing_action, _style_hidden_action, _resultless_field_action, _symbol_action, _abstract_ja_action, _app_after_refs_action, _float_end_action, _style_check_action, _ai_boundary_action, _ai_carried_action, _note_overlap_action, _note_unlinked_action, _float_ref_action, _link_iri_action,
                            _fn_guess_action, _name_split_action, _newline_action)]
     acts = [a for a in head if a is not None] + pdf_actions(r)
     fin = _with_reused(_ai_finish_action(r), r)
@@ -3746,6 +3954,15 @@ def todo_list(r, acts=None) -> list:
     return L
 
 
+def pdfium_version() -> str:
+    """入っている pypdfium2 の版（importlib.metadata。入っていない・読めなければ ""。レポートの冒頭の記録だけで、知らせにしない。C057）。"""
+    try:
+        from importlib.metadata import version
+        return version("pypdfium2")
+    except Exception:  # noqa: BLE001  入っていない・版を読めない: 書かない
+        return ""
+
+
 def render(r) -> str:
     plan, fid = r.plan, r.fidelity
     L = []
@@ -3753,6 +3970,9 @@ def render(r) -> str:
     L.append("")
     L.append(f"- 作成日時: {r.created}")
     L.append(f"- ツール: jasme-jats {r.tool_version}")
+    pdfium = pdfium_version()
+    if pdfium:       # PDF の文字の読み方（描かれない文字の除去など）は版で変わりうるので、後から原因を突き止められるよう記録する（C057。知らせにはしない）
+        L.append(f"- PDF を読むライブラリ: pypdfium2 {pdfium}")
     L.append(f"- 図表番号の扱い: {'`<label>` とタイトルに分ける（間の空白のみ落とす）' if r.split_labels else '番号もタイトルと一緒に 1 つの要素に入れる（文字を落とさない）'}")
     ai = r.ai
     api = f"API（{PROVIDERS.get(ai.provider, ai.provider)}: {ai.model}）"
@@ -4198,6 +4418,7 @@ def render(r) -> str:
             ("最終査読日", m.approved or ("（未入力）" if m.peer_review == "yes" else "―")),
             ("原稿種別（日）", j.subjects(m)[0]), ("原稿種別（英）", j.subjects(m)[1] or "（不明）"),
             ("記事種別（article-type）", m.article_type or j.article_type),
+            ("責任著者", corresp_cell(m, r.plan)),
             ("キーワード（日）", "；".join(m.keywords_ja) or "（なし）"),
             ("キーワード（英）", "; ".join(m.keywords_en) or "（なし）"),
             ("抄録の二次利用（specific-use）",
@@ -4329,6 +4550,7 @@ SILENT_KIND_JA = {"script": "上付き・下付きの文字", "glyph": "字形�
                   "numform": "箇条書きの記号・番号の形", "noteform": "注番号の形", "titlecolon": "英文題目の末尾の「:」"}
 SILENT_UNFIXABLE = "直せない位置にあるもの（リンクの中・ルビのある段落・直さない違いの隣など）"
 SILENT_OTHER = "そのほか"
+SILENT_NOSPACE = "英文の文と文の間の全角の「，」「．」（PDF ではすぐ後ろに空白があり docx にはないので、半角にすると文の間が空かなくなるもの）"
 # 13.3 で、照合できなかった違い（区分 UNSURE の TextDiff.label）の理由の名前
 UNSURE_KIND_JA = {"head": "段落の端", "edge": "段落の端", "long": "PDF にだけある長い文字", "unsure": "どの段落とも一致しない文字が続く",
                   "whole": "どの段落とも一致しない行がまるごとある", "displaced": "図や表の中の文字に挟まれた位置",
@@ -4409,8 +4631,12 @@ def render_pdf(L, r, pc, fx):
         L.append(("合わせた表記: " + "、".join(done) + "。変更の全件は、補った docx の変更履歴にあります。") if done
                  else "PDF に合わせた表記はありません。")
         left = silent_counts(c.silent_diffs, False)
-        if fx.skipped_typeset:
-            left.append((SILENT_UNFIXABLE, len(fx.skipped_typeset)))
+        from .pdfdocx import NOSPACE_REASON
+        nospace = [f for f in fx.skipped_typeset if f.reason == NOSPACE_REASON]
+        if len(fx.skipped_typeset) > len(nospace):
+            left.append((SILENT_UNFIXABLE, len(fx.skipped_typeset) - len(nospace)))
+        if nospace:         # 英文の文の間の全角の「，」「．」（全角のまま残す。C111）
+            left.append((SILENT_NOSPACE, len(nospace)))
     else:
         L.append("### 13.2 PDF と表記が違う箇所（docx のまま）")
         L.append("")

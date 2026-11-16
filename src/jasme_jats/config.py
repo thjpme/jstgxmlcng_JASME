@@ -180,6 +180,54 @@ def _peer_review(v) -> str:
     raise ValueError(f"査読の有無「{v}」を読めません（「あり」か「なし」で指定してください）")
 
 
+# 文字列の欄の名前（from_dict が見えない文字を確かめる欄。巻・号・開始ページは _id_value が確かめる）。1 画面版の欄の名前（app.LABELS）に
+# 合わせ、文ではノートブックの欄の変数名（TEXT_FIELD_SHOWN。なければキー。--meta の名前と同じ）を括弧で添える
+TEXT_FIELDS = {"lpage": "最後のページ", "doi": "DOI", "article_type": "記事の種類", "subject_ja": "原稿種別（日本語）",
+               "subject_en": "原稿種別（英語）", "lang": "言語", "keywords": "キーワード",
+               "keywords_ja": "キーワード（日本語）", "keywords_en": "キーワード（英語）"}
+# 見えない文字の誤りの文で、欄の名前の括弧に添える名前のうち、キーと違うもの（ノートブックの欄の変数名に合わせる。点検 review20 利用者向けの
+# 2 回目）。ここにない欄はキーを添える（ノートブックの変数名がキーと同じ欄と、--meta でしか入れない欄）
+TEXT_FIELD_SHOWN = {"lpage": "last_page", "subject_ja": "subject_other", "subject_en": "subject_other_en"}
+KEPT_CONTROLS = "\t\n\r"      # 見えない文字に数えない制御文字（XML 1.0 の文字で、今までも通していた。改行・タブ）
+
+
+def _check_text_fields(d: dict) -> None:
+    """文字列の欄（TEXT_FIELDS）に制御文字・書式文字（Unicode の Cc・Cf。改行・タブは除く）があれば、欄の名前と文字の番号を入れた ValueError。
+
+    XML に書けない制御文字は、貼り付けで入ることがあり、そのままだと lxml の ValueError で変換が途中で落ちる（C095）。直さず、打ち直してもらう
+    （文字を勝手に消さない）。1 画面版・ノートブック・コマンドラインは、どれも from_dict を通るので、ここ 1 か所で確かめる。"""
+    for key, label in TEXT_FIELDS.items():
+        v = d.get(key)
+        for x in (v if isinstance(v, (list, tuple)) else [v]):
+            if not isinstance(x, str):
+                continue
+            bad = list(dict.fromkeys(f"U+{ord(c):04X}" for c in x if c not in KEPT_CONTROLS and unicodedata.category(c) in ("Cc", "Cf")))
+            if bad:
+                sp = " " if label[-1].isascii() else ""        # 「DOI の欄」（英字と和文の間に空白）
+                raise ValueError(f"{label}{sp}の欄（{TEXT_FIELD_SHOWN.get(key, key)}）に、見えない文字（制御文字など。{'・'.join(bad)}）が入っています。貼り付けたときに"
+                                 f"入ることがあるので、{label}{sp}の欄を空にして打ち直してください")
+
+
+def _corresp(v) -> list:
+    """責任著者の番号の入力（整数・「1,2」の文字列・整数の一覧）を、1 以上の整数の一覧にする。読めなければ ValueError。
+    著者の人数の範囲かどうかは、変換のあと（著者が分かってから）要確認 meta_corresp で知らせる（推定で直さない）。"""
+    if v is None:
+        return []
+    items = v if isinstance(v, (list, tuple)) else str(v).replace("，", ",").replace("、", ",").split(",")
+    out = []
+    for x in items:
+        if isinstance(x, bool) or isinstance(x, float):
+            raise ValueError(f"責任著者の番号「{x}」を読めません（1 以上の整数で、複数なら 1,2 のようにカンマで区切ってください）")
+        t = unicodedata.normalize("NFKC", str(x)).strip()
+        if not t:
+            continue
+        if not re.fullmatch(r"[0-9]+", t) or int(t) < 1:
+            raise ValueError(f"責任著者の番号「{x}」を読めません（何番目の著者かを、1 以上の整数で入力してください。"
+                             "複数なら 1,2 のようにカンマで区切ります）")
+        out.append(int(t))
+    return out
+
+
 @dataclass
 class ArticleMeta:
     """記事ごとに利用者が入力する書誌情報（docx には書かれていないもの）。"""
@@ -207,6 +255,7 @@ class ArticleMeta:
     @classmethod
     def from_dict(cls, d: dict) -> "ArticleMeta":
         d = dict(d or {})
+        _check_text_fields(d)
         for k, label in DATE_FIELDS.items():
             d[k] = _date(d.get(k), label)
         d["peer_review"] = _peer_review(d.get("peer_review"))
@@ -226,8 +275,8 @@ class ArticleMeta:
             ja, en = split_keywords(d["keywords"])
             d["keywords_ja"] = list(d.get("keywords_ja") or []) + ja
             d["keywords_en"] = list(d.get("keywords_en") or []) + en
-        if isinstance(d.get("corresp"), (int, str)):
-            d["corresp"] = [int(x) for x in str(d["corresp"]).replace("，", ",").split(",") if str(x).strip()]
+        if "corresp" in d:
+            d["corresp"] = _corresp(d["corresp"])
         known = {f for f in cls.__dataclass_fields__}
         return cls(**{k: v for k, v in d.items() if k in known})
 

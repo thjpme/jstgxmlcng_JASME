@@ -1592,6 +1592,31 @@
     C048 で data22・data25・data28・data10・data26・data6・data14・data24・data12（3 変種とも）の図形のある段落の表記が PDF に合い（止まる直しの理由「組み立てられない」は 0）、C022 で data25・data20・data3 の
     表記の直しが増える（要確認 `pdf_mismatch` の中の件数は data20 が 8 → 20、data25 が 1 → 3。13.3 の照合に使わなかった行は data20 116 → 5、data25 192 → 31、data3 4 → 3）。
     状態・知らせの key・不変性チェック・最終チェック・補完の確かめ・DTD の差は 0。
+- **2026-11-16: 中低 A（C067 の (1)・C038・C077・C095・C057・C105）の実装**（版 0.35.0 の上で。版上げと反映は監督が行う）。設計と実装の記録は
+  `docs/fix_plan_release/units/midlow_A.md`。XML は変えない（知らせと入力の確かめだけ）。
+  - C067 の (1): 要確認 `note_unlinked`。判定は 3 章と同じ `report.note_problems`（`note_notes` が使う。件数がずれない）。注の読み取りは変えない（(2) は later）。
+  - C038: `structure.sibling_level_mismatches` が、同じ番号の系列の見出しの階層の食い違いを `heading_level` にする。C077: `Classifier.bold_single_lists` が `heading_guess` にする。
+    どちらも AI の提案を待つ種類（`STYLE_NO_AI_KINDS` に入れない）。
+  - C095: `config._corresp`・`config._check_text_fields`（`from_dict` の 1 か所）と、要確認 `meta_corresp`。C057・C105: `pyproject.toml` の pypdfium2 を `>=5,<6`、レポートの冒頭に `pypdfium2` の版（知らせにはしない）。
+- **2026-11-16: 中低 B（C089・C090・C111。リンクと PDF 照合）の実装**（版 0.35.0 の上で。版上げと反映は監督が行う）。設計と実装の記録は
+  `docs/fix_plan_release/units/midlow_B.md`。
+  - C089: `linker.RE_URL` を和文の約物・かっこでも止め、`linker._trim` が閲覧した日などの語（`RE_ACCESS_TAIL`。「(…参照)」はかっこごと）と組になる閉じかっこのない「(」「（」から後ろを
+    リンクの範囲から外す（文字は変えない）。DOI は印字できる ASCII の文字だけ。リンク先に非 ASCII が残るものは推定で切らず、要確認 `link_iri`（`linker.href_problems`）。
+  - C090: http・https・mailto・ftp 以外のリンク先も同じ `link_iri` で知らせる（値は書き換えない・リンクは外さない）。
+  - C111: `pdfmatch.PdfCheck.spaced_after`（PDF ではすぐ後ろに英文の単語の間の空白がある全角・半角の文字）と `pdfdocx.hold` の `NOSPACE_REASON`。全角の「，」「．」→「,」「.」の直しで、
+    docx のすぐ後ろが空白でない半角の英数字のものは直さない（一続きの規則の始まりにしない。それを根拠にした空白の削除も直さない）。13.2 に別の行で件数。
+  - 46 docx × 2 ルートの回帰（タグ mB、基準 mA）: 違うのは 20 件で、XML の差だけ。状態・知らせの key・不変性チェック・最終チェック・補完の確かめ・DTD・例外の差は 0。
+    C089 で data21 の両ルートの 8 件の href から「(日付参照)」が外れ（リンクの数は同じ。ほかの URL・DOI のリンク 96 件は変わらない）、ルート2 では外れたかっこが PDF に合わせて全角になる（8 組）。
+    C111 で 10 論文 58 か所の「，」「．」が全角のまま残る（data3 17・data17 10・data9 9・data16 7・data15 4・data25 4・data12 2〈うち 1 か所は前の空白の削除も止まる〉・data2 2・data5 2・data23 1。
+    点検の数えた「小文字＋句読点＋英字」の 17 か所〈data17 6・data9 5・data15 4・data25 2〉を含む。どれも PDF ではすぐ後ろに空白がある）。
+- **2026-11-16: 中低 A・B の点検 review20（1 回目）の指摘の修正**（版 0.35.0 の上で。版上げと反映は監督が行う）。XML は変えない（URL の範囲の規則は狭めただけで、実際の原稿の href は変わらない）。
+  - C089: `linker._trim` は、閲覧した日などの語を、外した後の最後の文字が ASCII で「/」「=」「?」「#」「&」「_」「-」でないときだけ外し（「…/wiki/参照」は切らない）、閉じていない「(」から後ろは、後ろが空・数字・非 ASCII・英語の閲覧の語のときだけ外す。
+    DOI の正規表現は `re.I` をやめた（U+0130 などを通さない）。引用文献の中で URL の文字と同じリンク先の Word のハイパーリンクは、その範囲を URL・DOI の終わりにする（`Linker.word_spans`。すぐ後ろが非 ASCII の文字のときだけ。点検 review20 の 2 回目）。
+    要確認 `link_iri` の直し方は Word だけ（XML を手で直す案を外した）。
+  - C038: 見出しの番号を NFKC の前の文字で読む（`structure._heading_number`。「3.2．２倍…」を 3 段と読まない）。data22 の heading_level が pdf ルートでも出る。行に多数の階層の兄弟の番号と、スタイルの名前 1 つの直し方（`StyleSuspect.how`）。
+  - C077: 1 項目のリストの行の直し方を行だけで言い切る（［段落番号］を外し、中の節の 1 つ下の見出しのスタイル。箇条ならそのまま）。
+  - C067: `note_unlinked` は注の数で数え、行に当たる印を全部書き、本文の注番号の候補の段落を添え、AI の回答があれば Word での直し方にそろえる。Colab の枠に入れ直す所。C095: 欄の名前を 1 画面版に合わせる。
+  - 46 docx × 2 ルートの回帰（タグ mF1、基準 rv5）: 同じ 92 件・違う 0 件（XML・状態・知らせの key・不変性チェック・最終チェック・補完の確かめ・DTD・例外の差 0）。文の変化は data22（pdf_ai の style_check に heading_level の行）・data6・data17・data27。
 - 直したら、版と直し方の要点をここに書く。
 
 ## 確かめていないこと

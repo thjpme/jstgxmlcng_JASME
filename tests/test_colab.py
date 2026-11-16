@@ -181,8 +181,8 @@ def test_result_boxes_follow_actions(journal, tmp_path, monkeypatch):
     assert "#dc2626" in html and "J-STAGE のアップロード時チェックで問題が 1 件あります（要対応）" in html
     assert "EMSGM106E" in html and "手順 3" in html
     # 要確認は、空白のない和文の著者名（d11「研究次郎」）の name_split（C064）と、標準スタイルの章見出し（d46「２．考察」。
-    # 番号の形から推定した見出し。C014）の style_check だけ
-    assert result_boxes(res, level="要確認", skip=("name_split", "style_check")) == ""
+    # 番号の形から推定した見出し。C014）の style_check と、本文から参照されない注 fn2 の note_unlinked（C067）だけ
+    assert result_boxes(res, level="要確認", skip=("name_split", "style_check", "note_unlinked")) == ""
     assert "d46" in result_boxes(res, level="要確認", skip=("name_split",))
     assert "著者名の姓と名の分け方を確かめてください（要確認）" in result_boxes(res, level="要確認")
     res.dtd_valid, res.dtd_errors = False, ["31_1.xml:3: Element body content does not follow the DTD"]

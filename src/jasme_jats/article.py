@@ -28,11 +28,13 @@ class UnlinkedRef(NamedTuple):
     end: int
 
 
-# スタイルを確かめる段落の種類（StyleSuspect.kind）: 見出しのスタイルの段落に本文が続く（C037）・見出しの階層と番号の形が合わない（C038）・
+# スタイルを確かめる段落の種類（StyleSuspect.kind）: 見出しのスタイルの段落に本文が続く（C037）・同じ番号の形の見出しと階層が食い違う（C038）・
 # 本文のスタイルの引用らしい段落（C129）・文字から見出しと推定した段落（C014）・記号だけの引用文献（ref_symbol。「.」だけの段落など。
 # XML の文字は変えず、Word で消してもらう）・後付けの見出しの形の本文の段落（back_heading。C032）・前の文献の続きの疑い（ref_cont。C026）。
-# 検出する所: heading_body・heading_guess・back_heading は structure.Classifier.build_body（back_heading の一部は loose_back_headings）、
-# ref_symbol は structure.Classifier.build_back、ref_cont は refparse.ref_continuations。heading_level・quote_like は入れ物だけで、まだ検出しない
+# 検出する所: heading_body・heading_guess（番号の形から推定した見出しと、C077 の太字だけの 1 項目の番号つきリスト〈bold_single_lists〉）・
+# back_heading は structure.Classifier.build_body（back_heading の一部は loose_back_headings）、heading_level は build_body が nest の後で
+# 呼ぶ structure.sibling_level_mismatches（同じ番号の系列の見出しの階層の食い違い）、ref_symbol は structure.Classifier.build_back、
+# ref_cont は refparse.ref_continuations。quote_like は入れ物だけで、まだ検出しない
 STYLE_SUSPECT_KINDS = ("heading_body", "heading_level", "quote_like", "heading_guess", "ref_symbol", "back_heading", "ref_cont")
 
 
@@ -40,11 +42,13 @@ class StyleSuspect(NamedTuple):
     """機械が挙げた、スタイルを確かめる段落 1 つ（ArticlePlan.style_suspects の要素。要確認 style_check の行。修正計画 W8 の 3.3・4.3）。
 
     kind は STYLE_SUSPECT_KINDS のどれか、src は段落 ID、detail は機械の見立て（「項見出しのスタイルですが、番号の形は節です」など。
-    空なら種類ごとの決まった文）。XML は変えない（直すのは Word のスタイル）。
+    空なら種類ごとの決まった文）、how はこの段落だけの直し方（空なら種類ごとの一般の直し方。report.STYLE_SUSPECT_JA）。
+    XML は変えない（直すのは Word のスタイル）。
     """
     kind: str
     src: str
     detail: str = ""
+    how: str = ""
 
 
 # ----------------------------------------------------------------------------- nodes

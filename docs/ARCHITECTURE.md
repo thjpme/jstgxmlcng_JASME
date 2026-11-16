@@ -146,7 +146,7 @@ XML の要素の ID は `structure.Classifier.assign_ids` が付ける: 図 `F1`
 |---|---|---|---|
 | `ooxml.py` | 605 | docx の低水準処理と**文字ポリシー**（何が docx の文字か）。`DocxPackage`（zip を開いて `mc:AlternateContent` を前処理。採る側は `choose_alternate`〈Requires を名前空間に解決。読める一覧は `UNDERSTOOD_NS`。記号の挿入 `w16se:symEx` は Fallback の文字〉）、`HiddenRule`（隠し文字の判定。styles.xml から作る）、`joined_paragraphs`/`unjoined_deleted_marks`（段落記号の削除でつなぐ段落）、`canonical_text`/`canonical_texts`（検証用の文字の取り出し。読み取りとは別実装）、`FIELD_DRAWN`・`resultless_field_kind`（結果を持たないまま終わるフィールドのうち、Word では表示のある種類。読み取りが記録して要確認で知らせる）、`sym_char`・`symbol_char`・`w_t_text`・`map_symbol_text`（記号フォント〈Symbol・Wingdings 系〉。フォントごとの表 `SYMBOL_TABLES`。`w:sym` と、記号フォントのランの `w:t` の私用領域の文字を Unicode にする。読み取り・検証・ルート2 が共有）、`in_deleted_run`（削除の変更履歴の中の図形の段落を欠番にする判定。読み取り・検証・ルート2 が共有）、`graphic_atoms`・`in_textbox`（図形 1 つが段落に置く画像のアトムの並び。読み取り〈`docx_reader._graphic`〉とルート2〈`pdfdocx.paragraph_units`〉が共有。C048） | `DocxPackage`, `HiddenRule`, `choose_alternate`, `canonical_texts`, `joined_paragraphs`, `paragraph_ids`, `in_deleted_run`, `SYMBOL_TABLES`, `symbol_char`, `w_t_text` |
 | `model.py` | 437 | 中間表現の型（上の表）。`note_key`/`note_label`（Word の脚注・文末脚注の鍵「footnote:5」）。守りの結果の `LostImage`・`LostNumber`・`PuaChar`・`TableProblem`、記号フォントの私用領域の符号の扱い `SymbolReplaced`、反映しない Word の画像の加工の名前 `IMAGE_EDITS` | 型 |
-| `config.py` | 260 | `JournalConfig`（`data/jasme.toml`。誌名・ISSN・DOI 形式・スタイル名の対応〈英文要旨は「英文要約見出し」「英文要約」の別名も〉・原稿種別・冒頭の誌名行 `front_lines`〈`structure.front_decoration` が装飾として知らせずに除く〉）と `ArticleMeta`（記事ごとの書誌情報。`from_dict` が巻・号・ページを NFKC にして確かめ、日付を `_date` で読む） | `JournalConfig.load`, `ArticleMeta.from_dict`/`load`, `article_id`, `doi_value` |
+| `config.py` | 260 | `JournalConfig`（`data/jasme.toml`。誌名・ISSN・DOI 形式・スタイル名の対応〈英文要旨は「英文要約見出し」「英文要約」の別名も〉・原稿種別・冒頭の誌名行 `front_lines`〈`structure.front_decoration` が装飾として知らせずに除く〉）と `ArticleMeta`（記事ごとの書誌情報。`from_dict` が巻・号・ページを NFKC にして確かめ、日付を `_date` で、責任著者の番号を `_corresp` で読み、文字列の欄の制御文字を `_check_text_fields` で断る） | `JournalConfig.load`, `ArticleMeta.from_dict`/`load`, `article_id`, `doi_value` |
 | `tracking.py` | 28 | 変換中の目印の名前空間（`jx:span`、`jx:drop`、`jx:gen`〈kind が autonum なら `src` に番号の段落 ID〉、`jx:implicit`、`jx:o`、`jx:ai`） | 定数 |
 
 ### 読み取り
@@ -170,7 +170,7 @@ XML の要素の ID は `structure.Classifier.assign_ids` が付ける: 図 `F1`
 
 | ファイル | 行 | 役割 | 入口 |
 |---|---|---|---|
-| `linker.py` | 728 | 機械的リンク。`Linker.run`: 数式のラベル → 段落ごとに Word のハイパーリンク・URL/DOI・図表の参照（`float_refs`）・数式の参照（`eq_refs`）・注の参照（`fn_marks`。上付きの種類分け `_sup_marks`、論文の注番号の書き方 `note_style`）→ 引用（refparse）。`apply_span` がアトムに LinkSpec を付ける唯一の共通関数（リンクが重なる・数式をまたぐときは付けない）。`unresolved` にリンク先のない参照、`held` に判断でリンクしなかった参照を `Unresolved` で記録（段落の中の範囲つき。W8 の手順 15）。図・表の番号が重なる・枝番つきのキャプションの番号は `float_numbers` でリンク先から外し、その参照と枝番つきの参照（`RE_BRANCH_REF`）はリンクせず `_unlinked` が記録する（K4）。`body_paragraphs` は図・表の `caption_more`（2 段落目以降）も文脈 `caption` で返し、注の節の中の表（`FnNode.tables`）も返す（注番号はリンクしない。`Linker.fn_table`） | `link(plan, ref_doi) -> Linker`, `apply_span`, `find_in_para`, `occurrence_at`, `cited_refs`。AI のリンクの text が段落の文字と全角・半角だけ違うときは `find_width_insensitive` が 1 か所に決まるときだけ範囲を返す（C141。W8 の手順 26） |
+| `linker.py` | 728 | 機械的リンク。`Linker.run`: 数式のラベル → 段落ごとに Word のハイパーリンク・URL/DOI・図表の参照（`float_refs`）・数式の参照（`eq_refs`）・注の参照（`fn_marks`。上付きの種類分け `_sup_marks`、論文の注番号の書き方 `note_style`）→ 引用（refparse）。`apply_span` がアトムに LinkSpec を付ける唯一の共通関数（リンクが重なる・数式をまたぐときは付けない）。`unresolved` にリンク先のない参照、`held` に判断でリンクしなかった参照を `Unresolved` で記録（段落の中の範囲つき。W8 の手順 15）。図・表の番号が重なる・枝番つきのキャプションの番号は `float_numbers` でリンク先から外し、その参照と枝番つきの参照（`RE_BRANCH_REF`）はリンクせず `_unlinked` が記録する（K4）。`body_paragraphs` は図・表の `caption_more`（2 段落目以降）も文脈 `caption` で返し、注の節の中の表（`FnNode.tables`）も返す（注番号はリンクしない。`Linker.fn_table`）。URL の範囲は `RE_URL`（和文の約物・かっこで止める）と `_trim`（閲覧した日などの語・閉じかっこのない「(」から後ろを外す。日本語のページ名・URL の一部の「(」は切らない。C089）と `word_spans`（引用文献の中の、URL の文字と同じリンク先の Word のハイパーリンクの範囲で URL・DOI を止める。すぐ後ろが非 ASCII の文字のときだけ）、リンク先の形の確かめは `href_problems`（非 ASCII・http などでないスキーム。要確認 `link_iri`。C090） | `link(plan, ref_doi) -> Linker`, `apply_span`, `find_in_para`, `occurrence_at`, `cited_refs`。AI のリンクの text が段落の文字と全角・半角だけ違うときは `find_width_insensitive` が 1 か所に決まるときだけ範囲を返す（C141。W8 の手順 26） |
 | `refparse.py` | 427 | 引用文献の解析（`parse_entry`: 著者・年・題名・誌名・DOI）と、本文の著者・年方式の引用の抽出・照合（`extract_citations`, `match_citation`〈同じ第一著者・同じ年の候補は、いちばんよく当てはまる候補が 1 つのときだけ採り、2 つ以上なら「特定できない」。et al. の引用は著者 1 人の文献を除き、欧文で 3 人以上の文献を先に選ぶ〉, `link_citations`）、番号方式（`link_numeric`）。前の文献の続きの疑い（`ref_continuations`。`StyleSuspect` の ref_cont。年の読めない段落が 3 件続く所から後ろは資料の中身として `plan.ref_yearless_runs`。単位 D）、引用文献の一覧がないときの本文の引用の数（`refs_missing_cites`。要対応 `refs_missing`）。NFKC で照合して元の位置に戻す。文献の `<year>`・論文名・誌名のタグ（`tag_reference`）は、年の位置を `Mapped`（1 文字ずつ NFKC）の上で探し直して戻し、戻した範囲が年の形でなければ付けない | `link_citations`, `tag_reference`, `link_numeric` |
 
 ### AI 補完
@@ -266,8 +266,8 @@ pipeline.Result ──▶ report.actions(res) ──▶ [Action(level, key, top,
 ```
 
 `actions()` の並び（修正計画 W8 の手順 8 の後。レポートの冒頭の順）: fidelity, supplement, dtd, table_shape, table_body, table_parts, image_names, upload,
-textbox_undecided, textbox_place, textbox_figure_text, authors_missing, excluded_unsure, front_check, images, lost, image_same, image_changed, autonum_lost, pua_left, abstract_missing, refs_missing, style_hidden, resultless_field, symbol_replaced, abstract_ja,
-app_after_refs, float_end, style_check, ai_boundary, ai_carried, note_overlap, float_ref, fn_guess, name_split, newline、その後ろに `pdf_actions`（PDF との照合の知らせ）。
+meta_dates, meta_corresp, textbox_undecided, textbox_place, textbox_figure_text, authors_missing, excluded_unsure, front_check, images, lost, image_same, image_changed, autonum_lost, pua_left, abstract_missing, refs_missing, style_hidden, resultless_field, symbol_replaced, abstract_ja,
+app_after_refs, float_end, style_check, ai_boundary, ai_carried, note_overlap, note_unlinked, float_ref, link_iri, fn_guess, name_split, newline、その後ろに `pdf_actions`（PDF との照合の知らせ）。
 推奨の手順 ai_finish は、この並びの中の最後の要対応・必須の手順のすぐ後ろに入れる（W8 の前半の点検 review12 で、先頭から移した）。
 AI の失敗・途中で切れた回答・手動の回答待ちは、推奨の手順 ai_finish の状態（`report.ai_state`。未実行・回答待ち・済み・一部・失敗）で知らせる（W8 の前の要対応 `ai_error`・`partial`、手順 `ai_pending` はなくした）。
 
@@ -286,7 +286,7 @@ AI の失敗・途中で切れた回答・手動の回答待ちは、推奨の�
           ──▶ pdfdocx.make_fixed_docx
                ├─ _mechanical（read_docx + classify + link。照合に段落の役割・リンク・注の鍵が要る）
                ├─ pdfmatch.check_pdf（PDF の文字を取り出し、段落ごとに照合して区分 (1)〜(4) に分ける）
-               ├─ plan_fixes（段落ごとの Fix。内容の違いの Fix も理由なしで返す）→ hold（内容の違いと、それに続く表記の直しに理由を付けて書き込みから外す）
+               ├─ plan_fixes（段落ごとの Fix。内容の違いの Fix も理由なしで返す）→ hold（内容の違いと、それに続く表記の直し、英文の文の間の全角の「，」「．」〈PdfCheck.spaced_after。C111〉に理由を付けて書き込みから外す）
                ├─ _Writer.run（元の XML のランを分けて w:del / w:ins を書く。脚注・文末脚注の XML にも）
                ├─ _verify（読み直した段落の文字が、期待どおりか）・_structure（役割・領域・リンク・注の区切りが元と同じか）
                │    └─ 合わない段落は Fix を外して書き直す

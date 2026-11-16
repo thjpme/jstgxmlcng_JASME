@@ -438,6 +438,10 @@ class PdfCheck:
     # 空白の削除を根拠の全角・半角の直しに従わせる（根拠の直しを直さないときは空白の削除も直さない。
     # 空白の削除が直せなくても根拠の直しは直す。根拠に番号がある空白は、番号だけで消してよい根拠なので従わせない）
     drop_basis: dict = field(default_factory=dict)
+    # 全角・半角を直す文字（width の位置）のうち、PDF ではすぐ後ろに英文の単語の間の空白（_pdf_space）があり、docx ではすぐ後ろに
+    # 空白がないもの: src -> {plain 上の位置}。route pdf の pdfdocx.hold が、英文の文の間の全角の「，」「．」を直さないために使う
+    # （直すと、空白のない「night.They」の形になる。空白は docx にない文字なので足さない。C111）
+    spaced_after: dict = field(default_factory=dict)
     diffs: list = field(default_factory=list)       # TextDiff
     numbers: dict = field(default_factory=dict)     # Word が付ける番号: (種類, 段落 ID または注の鍵) -> {番号の中の位置: PDF の文字}
     original: dict = field(default_factory=dict)    # Word が付ける番号の元の文字列: (種類, ID) -> 文字列
@@ -3170,6 +3174,13 @@ def _classify(p, seq, gens, win, ops, unsure, st: PdfStream, owner, owned_lines,
     _report_regions(p, seq, gens, st, win, regions, mine, used, locked, forced, width, res, case=case)
     if width:
         res.width[p.src] = {seq[i][1]: c for i, c in width.items()}
+        # PDF ではすぐ後ろに英文の単語の間の空白があり、docx では空白なしに次の文字が続く全角・半角の文字（PdfCheck.spaced_after。C111）
+        spaced = {seq[i][1] for i in width if i + 1 < len(seq) and i in d2w and i + 1 in d2w and i + 1 not in gens
+                  and d2w[i + 1] == d2w[i] + 1 and seq[i + 1][1] == seq[i][1] + 1 and _pdf_space(st, d2w[i + 1])}
+        if spaced:
+            res.spaced_after[p.src] = spaced
+        else:
+            res.spaced_after.pop(p.src, None)
     drops = {}        # 落とす空白の位置 -> 根拠（PdfCheck.drop_basis）
     for i in set(width) | numbers:
         for j, k in ((i - 1, i), (i, i + 1)):          # 前の文字との間・後ろの文字との間

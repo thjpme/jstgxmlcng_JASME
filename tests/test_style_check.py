@@ -48,7 +48,7 @@ def test_style_check_from_machine_suspects_without_ai(journal, meta, tmp_path):
     assert act.level == TO_CHECK and act.box_title == "スタイルを確かめてください（2 か所）（要確認）"
     lines = act.box_detail.split("\n")[1:]
     assert [line.split("（")[0] for line in lines] == [f"・{s1}", f"・{s2}"]          # 段落の順
-    assert lines[0].endswith("項見出しのスタイルですが、番号の形は節です。直し方: 番号の形に合う階層の見出しのスタイルにする。")
+    assert lines[0].endswith("項見出しのスタイルですが、番号の形は節です。直し方: 同じ番号の形の見出し（兄弟）と同じ階層の見出しのスタイルにする。")
     assert lines[1].endswith("本文のスタイルですが、引用の形をしています。直し方: 引用なら、ブロック引用のスタイルにする。")
     # AI を使っていない（行に AI の提案がない）ので、「AI の提案は XML に反映していない」とは言わない（点検 review19 の 3 回目の利用者向け 5）
     assert "AI の提案:" not in act.box_detail and "XML には反映していません" not in act.box_detail

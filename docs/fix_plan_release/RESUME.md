@@ -4,7 +4,8 @@
 
 ## いまの状態
 
-- `main` と開発ブランチ `claude/focused-wozniak-tkoi6o` は同じ（0.35.0）。
+- `main` と開発ブランチ `claude/focused-wozniak-tkoi6o` は同じ（0.36.0）。
+  - 0.36.0: 中・低のうち正式版の前に直す 9 件（`units/midlow_A.md`: C067 の知らせ `note_unlinked`・C038 `heading_level`・C077・C095 `meta_corresp` と入力の確かめ・C057・C105。`units/midlow_B.md`: C089・C090 `link_iri`・C111）。点検 review20 は 3 回目で合格（minor だけ）。残りの中・低は 1.0.0 の後。
   - 0.35.0: 残りの修正必須・高の 4 単位（`units/rest_B.md` 表・`rest_C.md` 冒頭部・`rest_D.md` 本文と後付け・`rest_PQ.md` PDF 照合）。点検 review19 は 3 回の修正と再点検で合格（minor だけ）。
   - 0.34.0: W2〜W5（出版版 PDF との照合の見直し。表記だけを PDF に合わせ、内容の違いは要確認 `pdf_mismatch`、別の論文の PDF は中止、書誌を PDF から読む）、
     W8 の残りの小さな指摘と文献リンクの直し、発行日・受付日・受理日の必須化（要対応 `meta_dates`）。
@@ -29,6 +30,7 @@
    ルートの選択がないこと、画像を入れた後に PDF を選んでも持ち越しが残ることを手で確かめる（画面がなくて未実施）、④ 次の号の 1〜2 論文（校正後の docx）で `pdf_mismatch` の件数を測る（`units/W2.md` の 7 章 R8）。
    確かめていないこと: 引用文献の「.」→「。」で `refparse` のタグが変わるか（手順 1 の申し送りの指摘 18）。
 5. （0.35.0 で反映済み）残りの修正必須・高（`docs/FIX_PLAN_RELEASE.md` の一覧。C003 の表の側、C009・C015、C018、C027、C032、W6 など）。
+6. （0.36.0 で反映済み）中・低のうち正式版の前に直すもの。次は 1.0.0 の条件（試験登載、校正後の docx の実物での `pdf_mismatch` の件数、実際の Colab の画面での確かめ）。
 
 ## 所有者の返事を待っていること
 
@@ -64,3 +66,20 @@ W2〜W5 の最終点検（review17）で見つかり、直さないと決めた�
 
 - 推奨の手順 ai_finish は、要確認 style_check の行が heading_body（見出しと本文が 1 段落）だけでも出る。Shift+Enter の形は AI では直せない（段落を分けるのは Word）が、rest_D の設計で heading_body を AI の提案を待つ種類（STYLE_NO_AI_KINDS に入れない）と決めた区分で、全体が見出しの長い段落の形は AI が本文かを見分けられるので、今の版では変えない。次の版で、Shift+Enter の形（heading_body_detail の (a)）だけを AI を待たない種類に分けるかを決める。
 - front_check の PDF と比べる項目は、段落の文字をまるごと（120 文字まで）出すようにしたが、PDF の側の近い行は添えない（frontcheck.pdf_findings が PDF の行を FrontFinding に持たせる形を足すことになる）。次の版で、題目のページ・最後のページの近い行を「PDF では『…』」として添える。
+
+中低 A・B の点検 review20 の 1 回目で見つかったもののうち、直さないと決めたもの・覚えておくこと（1 行ずつ）。
+
+- 閉じていない「(」の後ろが英字の形（「…?q=(a」「…/a(b)c(d」）は、URL の一部かもしれないので切らない（`linker.RE_OPEN_NOTE`）。href は ASCII なので link_iri も出ない（0.35.0 までと同じ）。後ろが日付・和文・英語の閲覧の語のときだけ切る。
+- 閉じたかっこの中で「参照」などが先に来る形（「…/b.html(参照2024.1.1)」）はリンクに入る。href に非 ASCII が残るので要確認 link_iri で知らせる（推定で切らない）。
+- note_unlinked と 3 章の注の文（note_notes）は同じ注を挙げる（判定を 1 つにしたため）。note_unlinked の文に「3 章の注の確認と同じ注。ここでは場所と直し方を挙げる」と書いた。3 章の文は短くしていない。
+- 本文の注番号の候補（note_unlinked の手がかり）の「[1]」の形は、番号つきの引用（「[1]」の文献の参照）とも同じ形なので、候補として段落 ID を挙げるだけにした（リンクはしない）。
+- 回帰の出力は runs・runs_fx4・runs_w8h1・runs_Dbase・runs_fx3 と最新の runs_mF1 だけを残した（runs_mA・runs_mB・runs_rv5 は消した。mF1 は rv5 と XML・状態・知らせの key が同じ）。
+
+中低 A・B の点検 review20 の 2 回目で見つかったもののうち、直さないと決めたもの・所有者に見てもらうもの・覚えておくこと（1 行ずつ）。
+
+- 閉じていない「(」の後ろが数字の形は、日付の形（2〜4 桁の数字と「年」「.」「/」「-」、4 桁の数字で終わる形）のときだけ切るようにした（`linker.RE_OPEN_NOTE`）。「…?q=(1」「…/f(1」「…/f(12」は切らない（0.35.0 までと同じ）。「…/f(2024」の形の URL の一部は切る（4 桁で終わる。実際の原稿に例はない。href は ASCII なので link_iri も出ない）。
+- 引用文献の Word のハイパーリンクで URL・DOI を縮める（`Linker._word_end`）のは、ハイパーリンクの終わりのすぐ後ろが非 ASCII の文字のときだけにした。すぐ後ろが ASCII の文字で、さらに後ろに和文が続く形（「…/a.html(注)参照」の「(」の手前までのリンク）は縮めないので、リンク先に非 ASCII が残れば要確認 link_iri で知らせる。
+- `linker._trim` は末尾の「]」を組を数えずに外す（「https://example.org/[x]」は「…/[x」になる）。0.35.0 からの動作で、今回は直さない。直すときは「)」と同じく「[」「]」の数で組を数える。
+- 推奨の手順 ai_finish は、要確認 style_check の行が heading_guess（C077 の 1 項目の番号つきリスト）1 件だけの原稿（data17）でも出る（heading_guess を AI の提案を待つ種類にした設計どおり。推奨なので終了コードは変わらない）。毎回 AI の手順が出てよいかは所有者に見てもらう（出しすぎなら、C077 の行だけのときは ai_finish を出さない）。
+- 見えない文字の誤りの文の括弧の名前は、ノートブックの欄の変数名（`config.TEXT_FIELD_SHOWN`。last_page・subject_other・subject_other_en）にした。コマンドラインの --meta のキー（lpage・subject_ja・subject_en）とは違うが、欄の和名で分かる。
+- 回帰の出力は runs・runs_fx4・runs_w8h1・runs_Dbase・runs_fx3 と最新の runs_mF2 だけを残した（runs_mF1 は review20 の 2 回目の点検で消し、runs_r2 は mF2 の基準に使った後で消した）。

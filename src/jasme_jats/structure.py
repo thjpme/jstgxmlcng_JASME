@@ -583,6 +583,93 @@ def appendix_sentence(text: str) -> str:
 
 
 LEVEL_JA = {"sec1": "章", "sec2": "節", "sec3": "項"}
+RE_NUM_DIGITS = re.compile(r"[0-9０-９]+")                        # 見出しの番号の数字の並び（NFKC の前の文字で見る）
+RE_NUM_PAREN = re.compile(r"^[(（]([0-9０-９]{1,2})[)）]\s*\S")      # 「(1)」「（１）」
+RE_NUM_CIRC = re.compile(r"^[①-⑳]\s*\S")                            # 「①」
+
+
+def _heading_number(raw: str):
+    """見出しの文字の先頭の「1.」「3.1」「3.1.2」の形の番号: (数の組, 番号の終わりの位置)。その形でなければ None（sibling_level_mismatches）。
+
+    NFKC の前の文字で読む。「.」「．」の後ろの数字が前の数字と全角・半角が違えば、番号ではなく題名の始まりとみなす（PDF に合わせた docx で
+    「3.2． ２倍…」の空白が消えた「3.2．２倍…」を 3 段の「3.2.2」と読まない。点検 review20 利用者向け 1）。1 段の番号は後ろに「.」が要る。
+    3 桁以上の数字が続く・題名がないものは None。"""
+    m = RE_NUM_DIGITS.match(raw)
+    if not m or len(m.group()) > 2:
+        return None
+    wide = m.group()[0] >= "０"
+    parts, pos, dot = [int(nfkc(m.group()))], m.end(), False
+    while pos < len(raw) and raw[pos] in ".．":
+        dot, pos = True, pos + 1
+        n = RE_NUM_DIGITS.match(raw, pos)
+        if not n or (n.group()[0] >= "０") != wide or len(parts) == 3:
+            break                       # 番号の後ろの「.」（題名がすぐ続く・全角と半角の違う数字は題名の始まり）
+        if len(n.group()) > 2:
+            return None
+        parts.append(int(nfkc(n.group())))
+        pos, dot = n.end(), False
+    if len(parts) == 1 and not dot:
+        return None
+    if not raw[pos:].strip():
+        return None
+    return parts, pos
+
+
+def sibling_level_mismatches(body) -> list:
+    """本文の見出し（Sec）のうち、同じ番号の系列の兄弟と見出しのスタイルの階層が食い違うもの（C038。Classifier.build_body が
+    style_suspects の heading_level にする。構造は変えない）。戻り値は [(Sec, 多数の階層, 多数の階層の兄弟の番号の文字の一覧〈2 つまで〉)]。
+
+    系列は番号の形（_heading_number・RE_NUM_PAREN・RE_NUM_CIRC。NFKC の前の文字で読む）で決める: 「3.1」「3.2」は章 3 の下の系列、
+    「3.1.1」「3.1.2」は 3.1 の下の系列、「(1)」「(2)」は直前の章・節〈番号が「3.」「3.1」の形の見出し〉の下の系列、「①」「②」は直前の
+    （①以外の）見出しの下の系列、「1.」「2.」は章の系列。誌の慣習（章の下の「(1)」が節など）は決め打たず、同じ系列の見出しの Sec.level
+    （見出しのスタイルの階層）が揃っていないものだけを挙げる。系列の見出しが 2 つ以上あり、階層が 2 種類以上のとき、多数の階層（同数なら
+    最初の階層）と違うものを挙げる。番号が文字にない見出し（Word の自動番号など）は見ない。"""
+    heads = []
+
+    def walk(nodes):
+        for n in nodes:
+            if isinstance(n, Sec):
+                if n.heading is not None:
+                    heads.append(n)
+                walk(n.children)
+    walk(body)
+    groups, order = {}, []
+    last_num = last_any = None            # 直前の、番号が「1.」「3.1」の形の見出し・「①」でない見出し
+    for k, sec in enumerate(heads):
+        raw = _para_text(sec.heading).strip()
+        key = label = None
+        circ = RE_NUM_CIRC.match(raw)
+        if circ:
+            key, label = ("circ", last_any), raw[0]
+        elif RE_NUM_PAREN.match(raw):
+            m = RE_NUM_PAREN.match(raw)
+            key, label = ("paren", last_num), raw[:m.end(1) + 1]
+        else:
+            num = _heading_number(raw)
+            if num:
+                parts, end = num
+                key = ("chap",) if len(parts) == 1 else ("dot", parts[0]) if len(parts) == 2 else ("dot3", parts[0], parts[1])
+                label, last_num = raw[:end], k
+        if not circ:
+            last_any = k
+        if key is None:
+            continue
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append((sec, label))
+    out = []
+    for key in order:
+        members = groups[key]
+        levels = [s.level for s, _ in members]
+        if len(set(levels)) < 2:
+            continue
+        best = max(dict.fromkeys(levels), key=levels.count)         # 同数なら最初の階層
+        peers = [lab for s, lab in members if s.level == best][:2]
+        out += [(s, best, peers) for s, _ in members if s.level != best]
+    return out
+
+
 HEADING_BODY_MIN = 30       # heading_body: 見出しの段落の改行の後ろの文字（空白を除く）がこの字数以上なら本文とみなす（C037）
 HEADING_BODY_LONG = 60      # heading_body: 改行がなくても、見出しの文字がこの字数を超え、「。」を含むなら本文が続くとみなす
 
@@ -1528,7 +1615,47 @@ class Classifier:
 
         nodes = self.assemble_floats(flat)
         plan.body = self.nest(nodes)
+        for sec, best, peers in sibling_level_mismatches(plan.body):
+            # 構造は変えず知らせるだけ（C038）。同じ番号の系列の兄弟の階層（best）と、この見出しだけ違う
+            style = self.heading_style(best)
+            plan.style_suspects.append(StyleSuspect(
+                "heading_level", sec.heading.src,
+                f"同じ番号の系列の見出し（{''.join('「' + x + '」' for x in peers)}など）は{LEVEL_JA['sec%d' % best]}見出しのスタイルなのに、"
+                f"この見出しは{LEVEL_JA['sec%d' % sec.level]}見出しのスタイルです",
+                f"この見出しのスタイルを「{style}」にする"))
+        for item, level in self.bold_single_lists(plan.body):
+            # 構造は変えず知らせるだけ（C077。リストはリストのまま出力する）
+            plan.style_suspects.append(StyleSuspect(
+                "heading_guess", item.src,
+                "Word の自動番号の付いた、太字だけの短い段落が、1 項目だけの番号つきリストになっています",
+                f"見出しのつもりなら、この段落のスタイルを「{self.heading_style(level)}」にする（Word の段落番号は見出しの番号として出ます。"
+                "番号の形を PDF に合わせたいときだけ、［ホーム］の［段落番号］を外して番号を文字で打つ）。番号つきの箇条なら、そのままでよい"))
         self.compute_locations(plan.body, [])
+
+    BOLD_LIST_MAX = 40      # bold_single_lists: 見出しとみなす段落の文字数の上限（RE_HEAD1 などの見出しの形と同じ長さ）
+
+    def bold_single_lists(self, body) -> list:
+        """本文の、1 項目だけの順序つきリストで、その段落が全部太字で短い（BOLD_LIST_MAX 字以下で「。」を含まない）ものの段落と、
+        見出しにするならその階層（中の Sec の 1 つ下。項〈3〉まで。章の前なら章）の組の一覧（C077）。見出しのつもりで自動番号を付けた
+        段落の疑い。要確認 style_check の heading_guess にする（リストは変えない）。囲み・図表の中は見ない。"""
+        out = []
+
+        def walk(nodes, level):
+            for n in nodes:
+                if isinstance(n, Sec):
+                    walk(n.children, n.level)
+                elif isinstance(n, ListNode) and n.ordered and len(n.items) == 1:
+                    b = n.items[0]
+                    t = _para_text(b).strip()
+                    if t and len(t) <= self.BOLD_LIST_MAX and "。" not in t and self.all_bold(b) and not in_shape(b):
+                        out.append((b, min(level + 1, 3)))
+        walk(body, 0)
+        return out
+
+    def heading_style(self, level: int) -> str:
+        """見出しの階層（1〜3）のスタイルの名前（雑誌の設定の最初の名前。なければ「章見出し」など）。知らせの直し方に書く。"""
+        role = f"sec{level}"
+        return next((name for name, v in self.mapping.items() if v == role), LEVEL_JA.get(role, "") + "見出し")
 
     # ----------------------------------------------------------------- 浮動配置の図表
     def place_floats(self, items):

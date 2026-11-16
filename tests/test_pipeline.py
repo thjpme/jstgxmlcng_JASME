@@ -881,9 +881,9 @@ def test_fidelity_failure_is_needs_action(journal, meta, tmp_path):
     from jasme_jats.report import actions, render
     res = convert(FULL, meta, journal, Options(out_dir=tmp_path))
     fill_images(res)                                       # 図の画像の手順（必須）を済ませる
-    # 要確認の name_split（空白のない和文の著者名 d11「研究次郎」。C064）と、標準スタイルの章見出し d46 の style_check（C014）と、
+    # 要確認の name_split（空白のない和文の著者名 d11「研究次郎」。C064）と、標準スタイルの章見出し d46 の style_check（C014）と、参照されない注 fn2 の note_unlinked（C067）と、
     # その推奨の手順 ai_finish だけ
-    assert [a.key for a in others(res)] == ["ai_finish", "style_check", "name_split"] and not res.needs_action
+    assert [a.key for a in others(res)] == ["ai_finish", "style_check", "note_unlinked", "name_split"] and not res.needs_action
     res.fidelity.ok = False
     assert res.needs_action and not res.ok
     head = render(res).split("## 1.")[1].split("## 2.")[0]
@@ -920,7 +920,7 @@ def test_manual_mode_before_answer_is_recommended_step(journal, meta, tmp_path, 
     assert "手順（推奨）: " not in err
     full = convert(FULL, meta, journal, Options(out_dir=tmp_path / "c", ai_mode="manual"))
     fill_images(full)
-    assert [a.key for a in others(full)] == ["ai_finish", "style_check", "name_split"] and not full.needs_action
+    assert [a.key for a in others(full)] == ["ai_finish", "style_check", "note_unlinked", "name_split"] and not full.needs_action
     assert "AI がスタイルの直し方を提案します" in next(a for a in others(full) if a.key == "ai_finish").cli
 
 

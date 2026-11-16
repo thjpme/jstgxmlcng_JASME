@@ -23,7 +23,9 @@ docx の XML（前処理しないもの）のランを分けて、削除（w:del
     段落の文字列を読み取り（docx_reader）と同じに組み立てられない段落（ルビを含む段落など）、PDF のページ番号・誌名の行・
     柱・投稿受付日などや、docx にない図・表の中の文字とみなした文字（docx に足さない。PDF の側にその文字しかない位置の
     docx の文字も消さない）、照合で直し方を決められなかった違い（pdfmatch.TextDiff.why。段落の最初・最後の、どこまでが
-    段落の文字か決められない文字、文字として取り出せない数式の位置にかかるものなど）。1 つの違いを分けた直す箇所の一部が
+    段落の文字か決められない文字、文字として取り出せない数式の位置にかかるものなど）、英文の文と文の間の全角の「，」「．」（docx の
+    すぐ後ろが空白でない半角の英数字で、PDF ではすぐ後ろに空白があるもの。半角にすると「night.They」の形になり、空白は足さない
+    ので全角のまま残す。NOSPACE_REASON。C111）。1 つの違いを分けた直す箇所の一部が
     ほかの直す箇所と重なるときは、その違いの直す箇所をすべて直さない。
     PDF にない空白の削除（kind space）は、根拠の全角・半角の直し（kind width。PdfCheck.drop_basis）に従わせる（Fix.needs）:
     根拠の直しを直さないことになったら（重なる・内容の違いに続く・構造の確かめ・注の番号を守る・直せない文字にかかるなど、
@@ -269,6 +271,12 @@ def plan_fixes(plan, check) -> list:
 UNFIXABLE_REASON = "数式・Word が付ける番号・リンクの文字にかかる、または足す位置を決められない"
 CONTENT_REASON = "内容の違い（PDF から docx に、内容を足さない・消さない・置き換えない）"
 ADJACENT_REASON = "直さない違いに続く表記の違い（一部だけ直すと、docx にも PDF にもない形になる）"
+NOSPACE_REASON = ("英文の文と文の間の全角の「，」「．」（PDF ではすぐ後ろに空白があり、docx にはない。半角にすると文の間が空かない形"
+                  "〈「night.They」〉になり、空白は docx にない文字なので足さない。全角のまま残す）")
+# NOSPACE_REASON で直さない全角・半角の直し: docx の文字 -> PDF の文字。docx のすぐ後ろが空白でない半角の英数字（RE_NOSPACE_NEXT）で、
+# PDF ではすぐ後ろに英文の単語の間の空白がある（pdfmatch.PdfCheck.spaced_after）ものだけ（C111）
+NOSPACE_PUNCT = {"，": ",", "．": "."}
+RE_NOSPACE_NEXT = re.compile(r"[A-Za-z0-9]")
 # 一続きの規則: 直さない違いとの間の docx の文字がこれ以下なら、続く表記の直しも直さない
 ADJACENT_GAP = 1
 # 一続きの規則の、かっこの組: 片方を直さないなら、組のもう片方も直さない（「（2020)」のような、docx にも PDF にもない形にしない）。
@@ -276,11 +284,15 @@ ADJACENT_GAP = 1
 BRACKETS = {"(": "(", "（": "(", ")": ")", "）": ")", "[": "[", "［": "[", "]": "]", "］": "]"}
 
 
-def hold(fixes, texts=None) -> None:
+def hold(fixes, texts=None, spaced=None) -> None:
     """書き込まない直す箇所に理由を付ける（plan_fixes の後、write_fixed_docx の前。make_fixed_docx）。
 
     (a) 内容の違い（kind text）で理由のないもの → CONTENT_REASON。
     (b) spread_reasons（同じ違いを分けた表記の直しも止まる。FixGroup）。
+    (b2) 英文の文の間の全角の「，」「．」（C111）: 段落の文字 texts と spaced（pdfmatch.PdfCheck.spaced_after）があれば、全角の「，」「．」を
+        半角に直す kind width の直しで、docx のすぐ後ろが空白でない半角の英数字、PDF ではすぐ後ろに空白があるもの → NOSPACE_REASON
+        （全角のまま残す。空白は足さない）。一続きの規則の始まりにはしない。それを根拠にした空白の削除（Fix.needs）は (b2) の後の
+        spread_reasons で直さない（片方向）。
     (c) 一続きの規則: 書き込まない kind text の直す箇所（内容の違いと、理由 why のある決められない違い。UNFIXABLE_REASON の
         ものは始まりにしない）と、その組の直す箇所、またはこの規則で止めた直す箇所から、間の docx の文字が ADJACENT_GAP 以下で
         続く表記の直し（kind width・space・glyph）を、連鎖でたどって書き込まない → ADJACENT_REASON。段落の中だけ。
@@ -296,10 +308,15 @@ def hold(fixes, texts=None) -> None:
         if f.kind == "text" and not f.reason:
             f.reason = CONTENT_REASON
     spread_reasons(fixes)
+    if texts and spaced:
+        for f in fixes:
+            if not f.reason and _nospace(f, texts.get(f.src), spaced.get(f.src, ())):
+                f.reason = NOSPACE_REASON
+        spread_reasons(fixes)
 
     def start(f):
         if f.kind == "text":
-            return bool(f.reason) and f.reason != UNFIXABLE_REASON
+            return bool(f.reason) and f.reason not in (UNFIXABLE_REASON, NOSPACE_REASON)
         return f.reason in (CONTENT_REASON, ADJACENT_REASON)
     for src, fs in by_src.items():
         partner = _bracket_partners(texts[src]) if texts and src in texts else {}
@@ -316,6 +333,13 @@ def hold(fixes, texts=None) -> None:
         if src in (texts or {}):
             _pair_brackets(fs, texts[src])
     spread_reasons(fixes)
+
+
+def _nospace(f: Fix, text, spaced) -> bool:
+    """f が、英文の文の間の全角の「，」「．」を半角にする直し（hold の (b2)。NOSPACE_REASON）か。text は段落の文字（plain）、
+    spaced は PDF ではすぐ後ろに空白がある全角・半角の文字の位置（pdfmatch.PdfCheck.spaced_after の段落の分）。"""
+    return (text is not None and f.kind == "width" and f.end - f.start == 1 and NOSPACE_PUNCT.get(f.old) == f.new
+            and f.start in spaced and bool(RE_NOSPACE_NEXT.fullmatch(text[f.end:f.end + 1])))
 
 
 def _bracket_partners(text: str) -> dict:
@@ -825,7 +849,7 @@ def make_fixed_docx(docx_path, pdf_path, out_path, journal) -> DocxFix:
         return fix
     fix.fixes = plan_fixes(plan, check)
     # 内容の違いと、それに続く表記の直しは書き込まない（理由は 8 回の作り直しでも保つ）
-    hold(fix.fixes, {s: plan.paras[s].plain() for s in {f.src for f in fix.fixes}})
+    hold(fix.fixes, {s: plan.paras[s].plain() for s in {f.src for f in fix.fixes}}, check.spaced_after)
     for s in {f.src for f in fix.fixes} | {d.src for d in check.diffs} | set(fix.unmatched) | {src for src, _ in check.ignored_lines}:
         fix.texts[s] = plan.paras[s].plain()
         fix.locations[s] = plan.locations.get(s, "")

@@ -40,7 +40,13 @@ def test_input_errors_are_reported(tmp_path):
     st.set_inputs(peer_review="査読あり", received="あした")
     with pytest.raises(InputError, match="入力を確認してください"):
         st.convert()
-    st.set_inputs(received="", ai_mode="api")
+    st.set_inputs(received="2025-06-01", corresp="0")           # 責任著者の番号は 1 以上の整数（C095）
+    with pytest.raises(InputError, match="入力を確認してください: 責任著者の番号"):
+        st.convert()
+    st.set_inputs(corresp="", keywords_ja="数学\x01")           # 見えない文字は、変換が途中で落ちる前に知らせる（C095）
+    with pytest.raises(InputError, match="入力を確認してください: キーワード（日本語）の欄（keywords_ja）に、見えない文字"):
+        st.convert()
+    st.set_inputs(keywords_ja="", received="", ai_mode="api")
     with pytest.raises(InputError, match="ANTHROPIC_API_KEY"):
         st.convert(app.IO())                       # 環境変数にキーがない（下のテストで読めることも確かめる）
 

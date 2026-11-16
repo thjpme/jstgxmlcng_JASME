@@ -87,7 +87,7 @@ def test_supplement_detects_content_written_without_guards(journal, meta, tmp_pa
     補った docx に書き込まれる。照合が報告していても、補完の確かめは報告を受け取らず、対でない置き換えとして不合格にする
     （要対応 supplement・終了コード 1）。"""
     pytest.importorskip("pypdfium2")
-    monkeypatch.setattr(pdfdocx, "hold", lambda fixes, texts=None: None)
+    monkeypatch.setattr(pdfdocx, "hold", lambda fixes, texts=None, spaced=None: None)
     monkeypatch.setattr(pdfdocx, "check_held", lambda fixes: None)
     res = route2(tmp_path, meta, journal)
     assert any(f.old == "資料" and f.applied for f in res.docx_fix.fixes)       # 報告した（書き込んだ）のに不合格
