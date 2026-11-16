@@ -38,7 +38,7 @@ def jats_element_names() -> frozenset:
 
 # DTD のエラーの場所に使う、id を持つ要素の呼び方
 PLACE_KINDS = {"ref": "引用文献", "table-wrap": "表", "fig": "図", "fn": "注", "disp-formula": "数式", "app": "資料",
-               "aff": "所属", "sec": "節"}
+               "aff": "所属", "sec": "節", "ack": "謝辞"}
 EXCERPT = 15
 
 

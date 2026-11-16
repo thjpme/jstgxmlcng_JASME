@@ -31,6 +31,7 @@ class Ctx:
     link: Optional[str] = "uri"       # URL の書き方: "uri" / "ext-link" / "ref"（文献内）/ None
     xref: bool = True
     math: str = "inline"              # "inline" / "display" / "none"
+    disp_formula: bool = True         # 別行数式を <disp-formula> で書けるか（False なら <inline-formula>。title・article-title。DTD が disp-formula を認めない文脈のうち題目と見出し。引用文献は REF の注記）
     images: bool = True
     label: bool = False               # LinkSpec(kind="label") を <label> にするか（別行数式）
     ref_tags: bool = False            # year / article-title / source / pub-id を使えるか（文献内）
@@ -39,11 +40,13 @@ class Ctx:
 
 
 BODY = Ctx()
-SECTITLE = Ctx(link=None)
-TITLE = Ctx(fmt=BASIC_FMT, link=None, xref=False, images=False, newline_label="題目・副題")
+SECTITLE = Ctx(link=None, disp_formula=False)
+TITLE = Ctx(fmt=BASIC_FMT, link=None, xref=False, images=False, disp_formula=False, newline_label="題目・副題")
 NAME = Ctx(fmt=frozenset(), link=None, xref=False, math="none", images=False, newline_label="著者名")
 AFF = Ctx(fmt=frozenset({"sup", "sub"}), link=None, xref=False, math="none", images=False, newline_label="所属")
 ABSTRACT = Ctx(link="uri")
+# REF は別行数式を <disp-formula> のまま書く（DTD 不合格で止める）: 引用文献の中の別行数式は、引用文献の後ろの資料が文献になった形
+# （C001。保留）がほとんどで、行内の数式にすると、その取り違えが DTD 検証を通ってしまう（C044・C045）
 REF = Ctx(fmt=BASIC_FMT, link="ref", xref=False, images=False, ref_tags=True, newline_label="引用文献")
 BACKP = Ctx(link="ext-link")
 CELL = Ctx(breaks=True)
@@ -67,6 +70,8 @@ class Emitter:
         self.fn_numbers = fn_numbers or {}      # Word の脚注・文末脚注の鍵（model.note_key）-> (fid, 表示する番号の文字列。本誌は「1)」)
         self.skip_images = set(skip_images)     # 図に移したため段落の中では出力しない画像の ID
         self.math_warnings = []
+        self.inlined_display = []               # 別行数式を置けない文脈（ctx.disp_formula が偽）で行内の数式として書いた段落の src（重複あり）
+        self.cur_src = ""                       # いま span が書いている段落の src
         self.breaks = 0                         # 改行の前に入れた <break/> の数（表のセル）
         self.newlines = []                      # 改行のある段落を書き出した記録（model.Newline。builder がレポートの 10 章に出す）
 
@@ -109,6 +114,7 @@ class Emitter:
         if ctx.images and self.optional_fields is not None:
             atoms = self.with_optionals(para, start, end, atoms, skip_gen)
         before = self.breaks
+        self.cur_src = para.src
         self.write_atoms(sp, atoms, ctx)
         n = sum(a.text.count("\n") for a in atoms if a.kind == "text")
         if n:
@@ -295,6 +301,11 @@ class Emitter:
                 mml = conv.convert(a.math, display=False)
                 from .omml import math_plain
                 _append_text(parent, math_plain(mml))
+            elif a.display and not ctx.disp_formula:
+                # <disp-formula> を置けない文脈（題目・見出し）: 行内の数式として書く（display="block" は付けない）
+                inf = etree.SubElement(parent, "inline-formula")
+                inf.append(conv.convert(a.math, display=False))
+                self.inlined_display.append(self.cur_src)
             elif a.display:
                 df = etree.SubElement(parent, "disp-formula")
                 df.append(conv.convert(a.math, display=True))

@@ -403,6 +403,10 @@ class Builder:
     def em_warnings(self):
         for w in sorted(set(self.em.math_warnings)):
             self.info.warnings.append(f"数式: {w}")
+        if self.em.inlined_display:
+            where = "、".join(dict.fromkeys(self.em.inlined_display))
+            self.info.warnings.append(
+                f"別行数式を、別行数式を置けない場所（題目・見出し）で行内の数式（<inline-formula>）として出した（段落 {where}）")
 
     def newline_warnings(self):
         """段落の中の改行（Word の Shift+Enter。emit の Newline）を段落ごとにまとめて info.newlines に入れ、レポートの 10 章の
