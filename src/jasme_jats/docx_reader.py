@@ -20,7 +20,7 @@ from .model import (Atom, Cell, DeletedRow, Document, Float, ImageRef, JoinInfo,
                     Table, TextBox, note_key)
 from .numbering import Numbering
 from .ooxml import (A_NS, BR_TEXT_TYPES, FONT_DISPLAY, LEGACY_BULLETS, O_NS, PIC_NS, R_NS, SYMBOL_ADDED, V_NS, WP_NS, WPS_NS, DocxPackage, HiddenRule,
-                    canonical_text, is_pua, joined_paragraphs, m, on_off, paragraph_ids, resultless_field_kind, run_font, sym_char, sym_code,
+                    canonical_text, graphic_atoms, in_textbox, is_pua, joined_paragraphs, m, on_off, paragraph_ids, resultless_field_kind, run_font, sym_char, sym_code,
                     symbol_char,
                     unjoined_deleted_marks, w, w_t_text, wval)
 
@@ -274,7 +274,8 @@ class Reader:
         sid = wval(tpr.find(w("tblStyle"))) if tpr is not None else ""
         t = Table(tid=f"t{self._tcount}", style_id=sid or "",
                   style_name=self.styles[sid].name if sid in self.styles else (sid or ""),
-                  float_id=self._float.fid if self._float else "", textbox_id=self._textbox.xid if self._textbox else "")
+                  float_id=self._float.fid if self._float else "", textbox_id=self._textbox.xid if self._textbox else "",
+                  floating=tpr is not None and tpr.find(w("tblpPr")) is not None)
         # 変更履歴で削除された行（w:trPr/w:del）のうち読み飛ばしたもの、文字が残るので出力したもの、変更履歴で削除されたセル
         # （w:tcPr/w:cellDel）のある行（どれも docx の表の何行目か。1 から、読み飛ばした行も数える）
         skipped, kept, cell_del = [], [], []
@@ -637,7 +638,7 @@ class Reader:
         """
         for tx in container.iter(w("txbxContent")):
             # 入れ子のテキストボックスは外側の処理で読む
-            if _in_textbox(tx, container):
+            if in_textbox(tx, container):
                 continue
             outer = self._textbox
             if outer is None and self.part == "word/document.xml":
@@ -735,8 +736,10 @@ class Reader:
             if (not inline and holder is not None and outer is None and self.part == "word/document.xml"
                     and (has_tx or "wordprocessingGroup" in uri or "wordprocessingCanvas" in uri)):
                 self._float = self._new_float(holder, para, "wordprocessingGroup" in uri)
-            # テキストボックスの中の画像は、テキストボックスの段落として読む（ここで拾うと二重になる）
-            pics = [pic for pic in el.iter(f"{{{PIC_NS}}}pic") if not _in_textbox(pic, el)]
+            # 置く画像の並びは ooxml.graphic_atoms（pdfdocx と共有する規則。テキストボックスの中の画像は、テキストボックスの
+            # 段落として読む）。pic:pic がなければ el 自身（図形だけの画像）か、なし（テキストボックスだけ）
+            atoms = graphic_atoms(el)
+            pics = [a for a in atoms if a is not el]
             for pic in pics:
                 blip = pic.find(f".//{{{A_NS}}}blip")
                 rid = blip.get(f"{{{R_NS}}}embed") if blip is not None else None
@@ -755,12 +758,11 @@ class Reader:
                                       **hid)
                 if not hidden:
                     para.atoms.append(Atom(kind="image", image=img))
-            if not pics:
-                if not has_tx or "wordprocessingGroup" in uri or "wordprocessingCanvas" in uri or "chart" in uri:
-                    img = self._new_image(None, "drawing", el=el, cx_emu=cx, cy_emu=cy, inline=inline, descr=descr,
-                                          shape_only=True, decoration=shape_decoration(el), **hid)
-                    if not hidden:
-                        para.atoms.append(Atom(kind="image", image=img))
+            if atoms and not pics:
+                img = self._new_image(None, "drawing", el=el, cx_emu=cx, cy_emu=cy, inline=inline, descr=descr,
+                                      shape_only=True, decoration=shape_decoration(el), **hid)
+                if not hidden:
+                    para.atoms.append(Atom(kind="image", image=img))
             if has_tx:
                 self._textboxes(el, para, holder=holder, inline=inline,
                                 group="wordprocessingGroup" in uri or "wordprocessingCanvas" in uri)
@@ -771,7 +773,8 @@ class Reader:
         ole = el.find(f".//{{{O_NS}}}OLEObject")
         if ole is not None:
             progid = ole.get("ProgID", "")
-        imgdata = [d for d in el.iter(f"{{{V_NS}}}imagedata") if not _in_textbox(d, el)]
+        atoms = graphic_atoms(el)
+        imgdata = [a for a in atoms if a is not el]
         shape = el.find(f".//{{{V_NS}}}shape")
         cx = cy = 0
         if shape is not None:
@@ -787,7 +790,7 @@ class Reader:
             if not hidden:
                 para.atoms.append(Atom(kind="image", image=img))
         has_tx = any(True for _ in el.iter(w("txbxContent")))
-        if not imgdata and not has_tx:
+        if atoms and not imgdata:
             img = self._new_image(None, "vml", el=el, cx_emu=cx, cy_emu=cy, shape_only=True, ole_progid=progid, **hid)
             if not hidden:
                 para.atoms.append(Atom(kind="image", image=img))
@@ -877,13 +880,13 @@ def shape_decoration(el) -> str:
     グループは、画像の位置に数える（迷うものは数える側に倒す）。"""
     gd = el.find(f".//{{{A_NS}}}graphicData")
     uri = gd.get("uri", "") if gd is not None else ""
-    shapes = [x for x in el.iter(f"{{{WPS_NS}}}wsp") if not _in_textbox(x, el)]
+    shapes = [x for x in el.iter(f"{{{WPS_NS}}}wsp") if not in_textbox(x, el)]
     if "wordprocessingShape" in uri:
         kind = _shape_kind(shapes[0]) if len(shapes) == 1 else ""
         return kind if kind in ("frame", "mask", "line") else ""
     if "wordprocessingGroup" in uri or "wordprocessingCanvas" in uri:
         # グループの中に画像・表・グラフがあれば、図形だけの集まりではない
-        if not shapes or any(True for x in el.iter(f"{{{PIC_NS}}}pic", f"{{{WPG_NS}}}graphicFrame") if not _in_textbox(x, el)):
+        if not shapes or any(True for x in el.iter(f"{{{PIC_NS}}}pic", f"{{{WPG_NS}}}graphicFrame") if not in_textbox(x, el)):
             return ""
         kinds = {_shape_kind(x) for x in shapes}
         if kinds <= {"frame", "mask"}:
@@ -991,16 +994,6 @@ def _vml_cm(style, prop):
         return float(mm.group(1)) / 72.0 * 2.54
     except ValueError:
         return None
-
-
-def _in_textbox(el, container) -> bool:
-    """el が container の中のテキストボックス（w:txbxContent）の中にあるか。"""
-    anc = el.getparent()
-    while anc is not None and anc is not container:
-        if anc.tag == w("txbxContent"):
-            return True
-        anc = anc.getparent()
-    return False
 
 
 def _plain(el) -> str:

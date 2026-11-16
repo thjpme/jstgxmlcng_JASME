@@ -421,7 +421,9 @@ class Builder:
         self.info.newlines = list(per.values())
         cells = [x for x in per.values() if x.cell]
         noted = [x for x in per.values() if not x.cell and x.label]
-        other = [x for x in per.values() if not x.cell and not x.label]
+        # 見出しと本文が 1 段落の疑い（要確認 style_check の heading_body。C037）の段落は、ここでは挙げない（直し方は「改行を消して」ではない）
+        split = {x.src for x in self.plan.style_suspects if x.kind == "heading_body"}
+        other = [x for x in per.values() if not x.cell and not x.label and x.src not in split]
         if cells:
             n, b = sum(x.count for x in cells), sum(x.breaks for x in cells)
             link = f"（リンクの中の {n - b} か所は、改行の文字のまま）" if b < n else ""

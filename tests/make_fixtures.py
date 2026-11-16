@@ -36,8 +36,11 @@ tests/fixtures/sample_links.docx : 注・図表へのリンクの規則の境界
 tests/fixtures/sample_links_bare.docx : sample_links と同じ規則の、注番号が番号だけの上付きの論文（「主張である¹」「（試験, 2024）²」と
                                    「4 m²」、上付きの「1-3」「1, 2」、文の括弧を閉じる直前の上付きの「3」＋本文の「）」。注の一覧の番号も上付き）
 
+tests/fixtures/JASME_template_filled.docx : テンプレートそのままの docx の、著者表の見本の行を架空の著者・所属に書き換えたもの（図の画像の手順だけを
+                                   確かめるテストで使う。テンプレートそのままは見本の行が残るので、要対応 front_check が出る）
+
 make_fixtures の部品（テストの中で docx をその場で作るもの）: cell()（セル）・table()（表）・tr()/table_row()/table_of_rows()
-（行を並べた表。table_row は gridBefore・gridAfter・見出し行を書ける）・make_article()（下）など。
+（行を並べた表。table_row は gridBefore・gridAfter・見出し行を書ける）・make_article()（下）・front_variant()（冒頭部〈題目・著者・所属〉の誤りの形を 1 つ作った小さな論文。単位 C）など。
 
 make_article() は小さな論文を作る。テストの中で、境界ケースの docx をその場で作るのにも使う。
 
@@ -312,6 +315,12 @@ def table(rows, style="a5", header_rows=0):
         trpr = "<w:trPr><w:tblHeader/></w:trPr>" if k < header_rows else ""
         out += f"<w:tr>{trpr}{''.join(r)}</w:tr>"
     return out + "</w:tbl>"
+
+
+def floating_table(xml):
+    """表（table() などの XML）を、文字列の折り返しを「する」にした（浮動配置の。w:tblpPr のある）表にする（C027）。"""
+    return xml.replace("<w:tblPr>", '<w:tblPr><w:tblpPr w:leftFromText="142" w:rightFromText="142" w:vertAnchor="page"'
+                       ' w:horzAnchor="margin" w:tblpY="4609"/>', 1)
 
 
 def png_bytes(text, size=(480, 300), font_size=28, bg="white"):
@@ -2065,9 +2074,112 @@ def make_links_bare(path):
     make_links(path, bare=True)
 
 
+# ----------------------------------------------------------------------------- 冒頭部の変種（単位 C。内容は架空）
+FRONT_REF = "試験六郎（2024）．「小さな論文」．『架空誌』，第5巻，pp.9-10．"
+
+
+def _front_tbl(front):
+    return [x for x in front if not isinstance(x, str) and x.tag == f"{{{W}}}tbl"][0]
+
+
+def _front_strip_style(el):
+    for ps in list(el.iter(f"{{{W}}}pStyle")):
+        ps.getparent().remove(ps)
+
+
+def _front_template_row(b, front, white=True):
+    """著者表の最後に、テンプレートの見本の行（所属・氏名の見本の文字。白字か黒字）を足す。"""
+    t = _front_tbl(front)
+    r = copy.deepcopy(t.findall(f"{{{W}}}tr")[0])
+    cells = r.findall(f"{{{W}}}tc")
+    b.set_text(cells[0].find(f".//{{{W}}}p"), "所属２(MS明朝，10pt)")
+    b.set_text(cells[1].find(f".//{{{W}}}p"), "氏名２(MS明朝，11pt)")
+    for rpr in r.iter(f"{{{W}}}rPr") if white else ():
+        rpr.append(etree.fromstring(f'<w:color {NSDECL} w:val="FFFFFF"/>'))
+    t.append(r)
+    return front
+
+
+def _front_to_paragraph(style):
+    def hook(b, front):
+        t = _front_tbl(front)
+        i = front.index(t)
+        front[i] = b.frag(para(style, run("架空大学　試験　六郎")))[0]
+        return front
+    return hook
+
+
+FRONT_HOOKS = {
+    "ok": None,
+    "table_normal": lambda b, f: (_front_strip_style(_front_tbl(f)), f)[1],              # C009 (1) 著者表のセルが標準のスタイル
+    "table_body": lambda b, f: ([ps.set(f"{{{W}}}val", S["body"]) for ps in _front_tbl(f).iter(f"{{{W}}}pStyle")], f)[1],  # (1')
+    "blank_sec1": lambda b, f: (f.insert(f.index(_front_tbl(f)), b.frag(para(S["sec1"], ""))[0]), f)[1],                  # (2)
+    "one_para": _front_to_paragraph(None),                                                  # (3) 「所属　氏名」の 1 段落（標準）
+    "one_para_author": _front_to_paragraph(S["author_ja"]),                                 # (3') 著者名（日）を付けた
+    "no_author": lambda b, f: (f.remove(_front_tbl(f)), f)[1],                              # (b2) 著者表がない
+    "template": _front_template_row,                                                        # C015（白字）
+    "template_black": lambda b, f: _front_template_row(b, f, white=False),                   # C015（黒字の残り）
+}
+
+
+def front_variant(path, kind="ok", authors=(("架空大学", "試験\u3000六郎"),), en=(("Rokuro SHIKEN", "Fictional University"),),
+                  title="氏名の検証用文書", subtitle="―姓と名―", extra_title=None, en_para=False, en_title="Checking Names",
+                  en_subtitle="Surnames", en_title_extra=None, body_title=False):
+    """冒頭部（題目・著者・所属）の誤りの形を 1 つ作った小さな論文（単位 C。C009・C015・C016・C036）。
+
+    kind: FRONT_HOOKS の名前（ok・table_normal・table_body・blank_sec1・one_para・one_para_author・no_author・template）。
+    authors: 和文の著者表の行 [(所属, 氏名)]。en: 英文の著者表 [(氏名, 所属)]。extra_title: 題目（日）のスタイルの段落を足す
+    （C016。副題の後ろの文字）。en_para: 英文の著者・所属をスタイルのない段落にする。body_title: 題目の段落を本文のスタイルにする（C035）。en_title_extra: 題目（英）のスタイルの段落を足す（C016）。
+    """
+    b = Builder()
+    front = front_ja(b, title, subtitle, list(authors))
+    if body_title:
+        for ps in front[2].iter(f"{{{W}}}pStyle"):
+            ps.set(f"{{{W}}}val", S["body"])
+    hook = FRONT_HOOKS[kind]
+    if hook:
+        front = hook(b, front)
+    if extra_title:
+        t = copy.deepcopy(front[2])
+        b.set_text(t, extra_title)
+        front.insert(3, t)
+    body = front + [para(S["sec1"], "１．はじめに"), para(S["body"], "試験（2024）によれば本文である。"),
+                    para(S["ref_head"], "引用および参考文献"), para(S["ref"], FRONT_REF)]
+    fe = front_en(b, en_title, en_subtitle, list(en), ["Name abstract."])
+    if en_title_extra:
+        t = copy.deepcopy(fe[2])
+        b.set_text(t, en_title_extra)
+        fe.insert(3, t)
+    if en_para:
+        t = _front_tbl(fe)
+        i = fe.index(t)
+        fe[i:i + 1] = b.frag(para(None, run(en[0][0])) + para(None, run(en[0][1])))
+    body += fe + tail(b)
+    b.save(path, body)
+    return path
+
+
+def make_template_filled(path):
+    """テンプレートそのままの docx の、著者表の見本の行（所属１・氏名１・所属２・氏名２）を架空の著者・所属に書き換えたもの。
+    テンプレートそのままは見本の行が残っているので、要対応 front_check（テンプレートの見本の行）が出る。図の画像の手順だけを確かめる
+    テストは、これを使う。"""
+    with zipfile.ZipFile(TEMPLATE) as zin, zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "word/document.xml":
+                text = data.decode("utf-8")
+                for old, new in (("所属１", "架空大学"), ("氏名１", "試験六郎"), ("所属２", "架空研究所"), ("氏名２", "検証七郎")):
+                    assert text.count(old) == 1
+                    text = text.replace(old, new)
+                data = text.encode("utf-8")
+            zout.writestr(item, data)
+    return path
+
+
 if __name__ == "__main__":
     out = HERE / "fixtures"
     make_full(out / "sample_full.docx")
+    make_template_filled(out / "JASME_template_filled.docx")
     make_edge(out / "sample_edge.docx")
     make_float(out / "sample_float.docx")
     make_notes(out / "sample_notes.docx")

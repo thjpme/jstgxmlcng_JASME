@@ -10,6 +10,7 @@ META_EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "meta_examp
 FULL = FIXTURES / "sample_full.docx"
 EDGE = FIXTURES / "sample_edge.docx"
 TEMPLATE = FIXTURES / "JASME_template_20261009.docx"
+TEMPLATE_FILLED = FIXTURES / "JASME_template_filled.docx"   # テンプレートの著者表の見本の行を架空の著者・所属に書き換えたもの（make_fixtures.make_template_filled）
 FLOAT = FIXTURES / "sample_float.docx"   # 位置を決めるのに AI 補完が必要（ALL_DOCS には入れない）
 NOTES = FIXTURES / "sample_notes.docx"
 PDFCHECK = FIXTURES / "sample_pdfcheck.docx"

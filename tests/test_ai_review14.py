@@ -167,4 +167,4 @@ def test_manual_guide_is_a_blue_step_box(journal, meta, tmp_path):
 
 def test_style_check_how_covers_joining():
     """利用者向け 8: 要確認 style_check の直し方は、段落記号を消して段落をつなぐ提案にも当てはまる文にする。"""
-    assert "段落記号を消して次の段落とつなぐ" in report.STYLE_CHECK_HOW and "段落をつないで保存" in report.STYLE_CHECK_HOW
+    assert "段落をつなぐ・分けるものなら、その行の直し方のとおりに Word で直して保存" in report.STYLE_CHECK_HOW

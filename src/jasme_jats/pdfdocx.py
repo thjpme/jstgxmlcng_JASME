@@ -20,7 +20,7 @@ docx の XML（前処理しないもの）のランを分けて、削除（w:del
     check_held）
   ・直さないもの: 表のセル・数式・図の中の文字（照合しない）、PDF の中に見つからない段落、数式・Word が付ける番号・
     リンクの文字にかかる違い、フィールドの結果・タブ・記号などの文字、空白だけの違い（PDF の空白は信頼できない）、
-    段落の文字列を読み取り（docx_reader）と同じに組み立てられない段落（図形を含む段落など）、PDF のページ番号・誌名の行・
+    段落の文字列を読み取り（docx_reader）と同じに組み立てられない段落（ルビを含む段落など）、PDF のページ番号・誌名の行・
     柱・投稿受付日などや、docx にない図・表の中の文字とみなした文字（docx に足さない。PDF の側にその文字しかない位置の
     docx の文字も消さない）、照合で直し方を決められなかった違い（pdfmatch.TextDiff.why。段落の最初・最後の、どこまでが
     段落の文字か決められない文字、文字として取り出せない数式の位置にかかるものなど）。1 つの違いを分けた直す箇所の一部が
@@ -58,7 +58,7 @@ from pathlib import Path
 from lxml import etree
 
 from .model import OBJ
-from .ooxml import (BR_TEXT_TYPES, MC_NS, M_NS, NO_RULE, HiddenRule, choose_alternate, joined_paragraphs,
+from .ooxml import (BR_TEXT_TYPES, MC_NS, M_NS, NO_RULE, HiddenRule, choose_alternate, graphic_atoms, joined_paragraphs,
                     paragraph_ids, paragraph_mark_deleted, parse_xml, preprocess, sym_char, w, w_t_text)
 
 XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
@@ -418,7 +418,7 @@ def expected_text(text: str, fixes) -> str:
 
 # ---------------------------------------------------------------------------- 元の docx の段落の文字
 class _Complex(Exception):
-    """段落の文字列を読み取りと同じに組み立てられない（図形を含むなど）。"""
+    """段落の文字列を読み取りと同じに組み立てられない（ルビを含むなど）。"""
 
 
 def raw_paragraph_ids(root, prefix: str) -> dict:
@@ -461,9 +461,10 @@ def paragraph_units(p, hidden=None) -> list:
 
     直せるのは w:t の文字と、Word の改行なしハイフン（w:noBreakHyphen。要素そのものと位置 0。要素ごと変更履歴の削除にして、
     PDF の「-」を足せる）だけ（タブ・改行・記号・フィールドの結果・数式・脚注番号などは None）。
-    図形・ルビを含む段落は _Complex（ランの中の mc:AlternateContent は、前処理が採る側の中身を読む。w:t の文字は直せない単位、
-    図形は読まない〈今までどおり。図形の文字は別の段落〉）。hidden は隠し文字の判定（ooxml.HiddenRule。None なら NO_RULE）。段落記号の削除による
-    つながりは見ない（write_fixed_docx が、連鎖の段落ごとの単位を連結する）。
+    図形（w:drawing・w:pict・w:object）は、読み取りと同じ数の画像のアトム（OBJ。直せない単位）を置き、中は読まない（テキストボックスの
+    文字は別の段落。数の規則は ooxml.graphic_atoms で読み取りと共有する。C048）。ランの中の mc:AlternateContent は、前処理と同じく
+    採る側の中身を読む（w:t の文字は直せない単位、図形は同じく OBJ）。ルビを含む段落と、段落の直下の mc:AlternateContent は _Complex。
+    hidden は隠し文字の判定（ooxml.HiddenRule。None なら NO_RULE）。段落記号の削除によるつながりは見ない（write_fixed_docx が、連鎖の段落ごとの単位を連結する）。
     """
     out = []
     fields = []          # [code_mode]
@@ -536,11 +537,16 @@ def paragraph_units(p, hidden=None) -> list:
             if tag in (w("footnoteRef"), w("endnoteRef")):
                 out.append((OBJ, None, 0))
                 continue
-            if alt and tag in (w("drawing"), w("pict"), w("object"), w("ruby")):
-                continue        # 代替内容の図形（テキストボックスなど）の文字は別の段落。この段落の文字には入らない
-            if tag in (w("drawing"), w("pict"), w("object")) and deleted:
-                continue        # 削除の変更履歴の中の図形は、承諾すると消える（読み取りも読まない）
-            if tag in (w("drawing"), w("pict"), w("object"), w("ruby")):
+            if tag in (w("drawing"), w("pict"), w("object")):
+                # 図形は、読み取り（docx_reader._graphic）と同じ数の画像のアトムを置く（規則は ooxml.graphic_atoms で共有する。
+                # C048）。削除の変更履歴の中・フィールドのコードの中・隠し文字の図形は、読み取りもアトムにしない。中には入らない
+                # （テキストボックスの段落は別の w:p。ランの中の mc:AlternateContent の採る側の図形も同じ）
+                if not (deleted or in_code() or hidden):
+                    out.extend((OBJ, None, 0) for _ in graphic_atoms(ch))
+                continue
+            if alt and tag == w("ruby"):
+                continue        # 代替内容の中のルビ（今までどおり読まない）
+            if tag == w("ruby"):
                 raise _Complex
             if deleted or in_code() or hidden:
                 continue
@@ -765,7 +771,7 @@ def write_fixed_docx(src_path, dst_path, plan, fixes, skip=frozenset(), date=Non
                     units = None
                 if units is None or "".join(c for c, _, _ in units) != plan.paras[src].plain():
                     for f in pf:
-                        f.reason = "段落の文字列を読み取りと同じに組み立てられない（図形を含む段落など）"
+                        f.reason = "段落の文字列を読み取りと同じに組み立てられない（ルビを含む段落など）"
                     continue
                 _apply_paragraph(units, pf, writer)
         with zipfile.ZipFile(dst_path, "w", zipfile.ZIP_DEFLATED) as zout:

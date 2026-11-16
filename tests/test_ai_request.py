@@ -105,6 +105,7 @@ def test_placements_rules_are_written(journal, meta):
 def test_style_section_lists_suspects_only_when_there_are(journal, meta):
     """スタイルを確かめる段落（plan.style_suspects）があるときだけ、「1 つ残らず答える」の項を出し、AIRequest.asked に段落を入れる。"""
     _, plan, linker = _mechanical(FULL, journal)
+    plan.style_suspects = []        # sample_full の機械の検出（標準スタイルの章見出しの heading_guess）を外して、ないときを見る
     assert "「# スタイルを確かめる段落」" not in build_request(plan, linker).instructions
     plan.style_suspects = [StyleSuspect("heading_body", "d18", "架空の説明")]
     req = build_request(plan, linker)

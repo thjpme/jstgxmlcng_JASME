@@ -356,9 +356,11 @@ def match_citation(c, refs):
 
 
 def link_citations(plan, linker, paras):
-    """文献リストを解析し、本文の引用の年をリンクにする。"""
+    """文献リストを解析し、本文の引用の年をリンクにする。文献の一覧がなければ、本文の「著者（年）」の引用を数えるだけ
+    （plan.refs_missing_cites。refs_missing_cites）。文献の一覧があれば、前の文献の続きの疑いの段落を挙げる（ref_continuations）。"""
     refs = plan.refs
     if not refs:
+        plan.refs_missing_cites = refs_missing_cites(paras)
         return
     texts = [r.para.plain() for r in refs]
     numeric = sum(1 for t in texts if RE_NUM_START.match(nfkc(t))) >= max(2, len(texts) * 0.5)
@@ -368,6 +370,7 @@ def link_citations(plan, linker, paras):
         known.update(r.parsed.get("names") or [])
         tag_reference(r)
     plan.citation_mode = "numeric" if numeric else "author-year"
+    ref_continuations(plan, numeric)
     if numeric:
         link_numeric(plan, linker, paras)
         return
@@ -394,6 +397,99 @@ def link_citations(plan, linker, paras):
                 if kind == "variant":
                     plan.decide("mechanical", "citation", p.src, f"「{c['raw']}」の {c['year']} を {r.rid} にリンク。{detail}")
     plan.uncited_refs = [r.rid for r in refs if r.rid not in cited]
+
+
+# 引用文献の見出しらしい段落（refs_missing_cites: ここから後ろの段落は数えない。章番号・括弧・空白を外した文字に「文献」を含む短い段落）
+REF_HEAD_LIKE_MAX = 15
+
+
+def refs_missing_cites(paras) -> int:
+    """引用文献の一覧が 1 件もない原稿で、本文の段落（paras。ref・formula を除く）にある「著者（年）」の形の引用の数（C032 の守り。
+    要対応 refs_missing）。数えるのは、著者名の付いた引用（narrative か parenthetical で names がある）だけで、名前のない「（2020）」は
+    数えない。引用文献の見出しらしい段落（structure.back_heading_key の文字に「文献」を含む REF_HEAD_LIKE_MAX 字以内の段落）から
+    後ろは数えない（文献の行の年を引用と数えない）。番号の形式の引用（［1］）は対象の外。"""
+    from .structure import back_heading_key
+    n = 0
+    for p, where in paras:
+        if where in ("ref", "formula"):
+            continue
+        key = back_heading_key(p.plain())
+        if "文献" in key and len(key) <= REF_HEAD_LIKE_MAX:
+            break
+        n += sum(1 for c in extract_citations(nfkc(p.plain()), set()) if c["form"] != "unresolved" and c["names"])
+    return n
+
+
+# 前の文献の続きの疑い（ref_continuations）: URL・DOI で始まる段落（続きであることがはっきりしている）
+RE_CONT_URL = re.compile(r"^\s*(?:https?[:.]|www\.|doi[:.])", re.I)
+REF_CONT_RUN = 3            # 年のない段落（URL・DOI で始まるものを除く）がこの件数続く所から後ろは、続きの段落でなく資料の中身とみなす
+REF_CONT_SHARE = 0.3        # 年のない段落（URL・DOI を除く）がこの割合を超え、REF_CONT_RUN 件以上なら、1 件ずつ挙げずに 1 行にまとめる
+
+
+def ref_continuations(plan, numeric: bool):
+    """引用文献のうち、前の文献の続きの疑いの段落を挙げる（C026。StyleSuspect の ref_cont。XML は変えない。文献をつながない）。
+
+    疑うのは、作者年の形式では年の読めない文献（parsed の year が None）、番号の形式では番号で始まらず（RE_NUM_START）Word の
+    自動番号もない文献。記号だけの段落（ref_symbol で挙げ済み）と、資料の見出しの疑い（plan.app_after_refs）から後ろは見ない。
+    疑わしい段落（URL・DOI で始まるものは数えない。続きであることがはっきりしているので、いつも挙げる）が REF_CONT_RUN 件続く所から後ろは、
+    引用文献の節の後ろの資料の中身とみなして挙げず、その最初の段落を plan.ref_yearless_runs に入れる（要確認 app_after_refs の 1 行。
+    XML は変えない）。疑わしい段落（URL・DOI を除く）が、打ち切りの前の文献の REF_CONT_SHARE を超え、REF_CONT_RUN 件以上あるときは、
+    1 件ずつ挙げずに 1 行にまとめる（年を括弧で書かない書き方の原稿で行が並ばないように）。挙げた段落は plan.ref_conts にも入れる（3 章の添え書き）。
+    """
+    from .article import StyleSuspect
+    from .structure import symbol_only
+    order = {s: i for i, s in enumerate(plan.paras)}
+    after = min((order.get(s, len(order)) for s in plan.app_after_refs), default=None)
+    refs = [r for r in plan.refs if after is None or order.get(r.para.src, -1) < after]
+    cands, run, cut = [], [], None
+    for k, r in enumerate(refs):
+        text = r.para.plain()
+        if symbol_only(text):
+            continue
+        url = bool(RE_CONT_URL.match(nfkc(text)))
+        if numeric:
+            odd = not RE_NUM_START.match(nfkc(text)) and not r.para.autonum
+        else:
+            odd = r.parsed.get("year") is None
+        if not (url or odd):
+            run = []
+            continue
+        if url:
+            cands.append((k, r, "URL・DOI で始まります"))
+            continue
+        if cut is not None:
+            continue
+        run.append(len(cands))
+        cands.append((k, r, "番号で始まりません" if numeric else "年が読めません"))
+        if len(run) >= REF_CONT_RUN:
+            cut = cands[run[0]][0]
+            head = cands[run[0]][1]
+            plan.ref_yearless_runs.append(head.para.src)
+            plan.warnings.append(
+                f"{head.para.src}: 引用文献の中に、{'番号で始まらない' if numeric else '年の読めない'}段落が {REF_CONT_RUN} 件以上続く所があります"
+                f"（{head.rid}「{head.para.plain().strip()[:20]}」から）。資料の中身かもしれません。今の版では、引用文献の後ろの資料は資料として扱わず、"
+                "引用文献の段落として出力しました")
+    if cut is not None:
+        cands = [c for c in cands if c[0] < cut or c[2].startswith("URL")]
+    total = cut if cut is not None else len(refs)
+    plain = [c for c in cands if not c[2].startswith("URL")]
+    many = len(plain) >= REF_CONT_RUN and len(plain) > REF_CONT_SHARE * max(total, 1)
+    for k, r, why in cands:
+        plan.ref_conts.append(r.para.src)
+        if many and not why.startswith("URL"):
+            continue
+        prev = refs[k - 1] if k > 0 else None
+        head = prev.para.plain().strip()[:15] if prev is not None else ""
+        plan.style_suspects.append(StyleSuspect(
+            "ref_cont", r.para.src,
+            (f"前の文献 {prev.rid}「{head}」の続きの疑いがあります（{why}）。" if prev is not None
+             else f"引用文献の最初の段落ですが、文献の形ではありません（{why}）。") + f"今は別の文献 {r.rid} として出力しています"))
+    if many:
+        first = plain[0][1]
+        plan.style_suspects.append(StyleSuspect(
+            "ref_cont", first.para.src,
+            f"{'番号で始まらない' if numeric else '年の読めない'}文献が {len(plain)} 件あります（{first.rid} ほか。引用文献 {total} 件の 3 割を超えるので、"
+            "1 件ずつは挙げていません。3 章の「どこからもリンクされていない文献」に印を付けています）。前の文献の続きなら、Word で段落をつないでください"))
 
 
 def _apply(p, span, spec):

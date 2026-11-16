@@ -20,7 +20,9 @@ docx の書き込み（pdfdocx）の不具合も見つけられるように、�
 HYPHENS・DASHES・QUOTE_CLASSES・PUNCT_CLASSES・NUMBER_PAIRS、pdfdocx の AUTHOR・PARTS）だけにする。組版の違いの判定（_pair）と変更の単位の
 取り出しはここで別に実装し（文字の取り出しは ooxml.canonical_text）、大文字・小文字を (1) とする段落と、Word が付ける番号の
 元の文字は、補った docx から組み立てた plan から別に作る（supplement_targets。照合の case_paragraphs・PdfCheck.original は
-使わない）。照合から受け取るのは、番号を PDF に合わせたもの（plan.pdf_numbers）だけで、確かめる側。
+使わない）。照合から受け取るのは、番号を PDF に合わせたもの（plan.pdf_numbers）だけで、確かめる側。文字の取り出しが読まない
+図形（w:drawing・w:pict・w:object）は、承諾した状態の図形の並びを別に比べる（_paragraph_graphics・_raw_graphics。ooxml.graphic_atoms
+は使わない）。
 """
 from __future__ import annotations
 
@@ -32,7 +34,7 @@ from dataclasses import dataclass, field
 from lxml import etree
 
 from .ooxml import (DocxPackage, HiddenRule, canonical_text, canonical_texts, is_ws, joined_paragraphs,
-                    paragraph_ids, w)
+                    paragraph_ids, parse_xml, w)
 from .omml import MML_NS, math_plain
 from .pdfdocx import AUTHOR, PARTS
 from .pdfmatch import DASHES, FW_FIRST, FW_LAST, HYPHENS, NUMBER_PAIRS, PUNCT_CLASSES, QUOTE_CLASSES
@@ -286,6 +288,10 @@ READ_WHY = "補った docx の変更履歴を読み取れない（承諾した�
 UNIT_WHY = "組版の違い（1 文字ずつの表記の対・空白の削除）でない変更"
 NUMBER_WHY = "Word が付ける番号を、組版の違い（全角・半角と、番号の字形の対）でない文字にしている"
 NUMBER_SRC_WHY = "Word が付ける番号の元の文字が分からない"
+GRAPHIC_WHY = "図形が変わった（承諾した状態の図形〈画像・テキストボックスなど〉の並びが、元の docx と違う）"
+# 図形の要素（画像・テキストボックス・VML・埋め込みの物）。比べるのは、削除の変更履歴の外のもの（承諾した状態）
+GRAPHIC_TAGS = (w("drawing"), w("pict"), w("object"))
+MC_AC = "{http://schemas.openxmlformats.org/markup-compatibility/2006}AlternateContent"
 
 
 @dataclass
@@ -530,6 +536,64 @@ def _diff_excerpt(a: str, b: str):
     return a, b
 
 
+def _graphic_key(el):
+    """図形の要素 el の直列化（タグ・属性〈名前の順〉・文字・子の並び。名前空間の接頭辞と宣言は見ない）。テキストボックスの中身
+    （w:txbxContent の子）は除く（中の段落は別の段落として、文字と図形を比べる）。"""
+    def ser(e):
+        if not isinstance(e.tag, str):      # コメント・処理命令
+            return ""
+        if e.tag == w("txbxContent"):
+            return f"<{e.tag}/>"
+        attrs = "".join(f" {k}={v!r}" for k, v in sorted(e.attrib.items()))
+        inner = "".join(ser(c) + (c.tail or "") for c in e)
+        return f"<{e.tag}{attrs}>{e.text or ''}{inner}</{e.tag}>"
+    return ser(el)
+
+
+def _outermost(el, tags, stop=None) -> bool:
+    """図形 el が、承諾した状態で見える、いちばん外側の図形か: 削除の変更履歴（w:del・w:moveFrom）の中になく、テキストボックス
+    （w:txbxContent）の外で、ほかの図形（tags の要素。is_graphic が偽のものを除く）の中にない。祖先は stop（その要素を含まない）まで見る。"""
+    for a in el.iterancestors():
+        if a is stop or a.tag == w("txbxContent"):
+            return True
+        if a.tag in (w("del"), w("moveFrom")):
+            return False
+        if a.tag in tags and _is_graphic(a):
+            return False
+    return True
+
+
+def _is_graphic(el) -> bool:
+    """el を図形として数えるか（mc:AlternateContent は、中に図形があるときだけ。記号の挿入などは数えない）。"""
+    return el.tag != MC_AC or next(el.iter(*GRAPHIC_TAGS), None) is not None
+
+
+def _paragraph_graphics(p) -> list:
+    """段落 p の図形の直列化の並び（文書の順。前処理した木）。テキストボックスの中の図形は、その中の段落の図形として数える
+    （いちばん近い w:p が p のものだけ）。ooxml.graphic_atoms・pdfdocx・pdfmatch は使わない（補完の確かめの別の実装）。"""
+    return [_graphic_key(el) for el in p.iter(*GRAPHIC_TAGS)
+            if next(el.iterancestors(w("p")), None) is p and _outermost(el, GRAPHIC_TAGS, p)]
+
+
+def _graphic_count(keys) -> str:
+    """補完の確かめの問題の表に書く、図形の数の文（「図形 2 個」）。"""
+    return f"図形 {len(keys)} 個"
+
+
+def _chain_graphics(chain) -> list:
+    """段落の連鎖 chain の図形の並び（段落ごとの _paragraph_graphics をつないだもの）。"""
+    return [g for q in chain for g in _paragraph_graphics(q)]
+
+
+def _raw_graphics(data) -> list:
+    """前処理していない部品（XML のバイト列）の図形の並び（文書の順）。mc:AlternateContent は、中に図形があれば Choice と Fallback を
+    含めて 1 つの図形として比べる（前処理で採らない側の図形の欠け・重複も見つけるため）。"""
+    if data is None:
+        return []
+    tags = (*GRAPHIC_TAGS, MC_AC)
+    return [_graphic_key(el) for el in parse_xml(data).iter(*tags) if _is_graphic(el) and _outermost(el, tags)]
+
+
 def supplement_targets(plan, note_marks) -> tuple:
     """補完の確かめに渡す (大文字・小文字を (1) とする段落の ID, Word が付ける番号の元の文字)。照合（pdfmatch の case_paragraphs・
     PdfCheck.original）を通さず、補った docx から組み立てた plan から別に作る。
@@ -564,6 +628,11 @@ def verify_supplement(original_docx, fixed_docx, case_srcs, numbers_original, pd
          （_unit_typeset）。説明できない単位は不合格（内容の違いを書き込んでいれば、報告の有無にかかわらずここで不合格になる）
       4. Word が付ける番号（pdf_numbers。docx の文字ではない）が、元の文字（numbers_original）と同じ長さで、1 文字ずつ同じか
          _pair（number）の対か
+      5. 図形（画像・テキストボックス・VML・埋め込みの物。w:drawing・w:pict・w:object）の並びが元の docx と同じか: 段落ごと（承諾した
+         状態。削除の変更履歴の中のものを除き、テキストボックスの中身〈w:txbxContent〉を除いて直列化したもの）と、部品全体（前処理の
+         前の木。mc:AlternateContent は Choice と Fallback を含めて 1 つ）。図形の欠け・重複・入れ替わり・書き換えは不合格。照合・
+         書き込みと共有しない別の実装（ooxml.graphic_atoms・pdfdocx・pdfmatch を使わない）。文字の比べ（1.）が読まない図形を守る
+         （点検 review19 の 3 回目の原則 1）。
 
     case_srcs: 大文字・小文字の違いを (1) とする段落の ID。numbers_original: Word が付ける番号の元の文字。どちらも照合を通さず
     plan から作ったもの（supplement_targets）。pdf_numbers: 番号を PDF に合わせたもの（plan.pdf_numbers）。番号の鍵は
@@ -605,6 +674,9 @@ def verify_supplement(original_docx, fixed_docx, case_srcs, numbers_original, pd
             if (same_styles and [oids[q] for q in ochain] == [fids[q] for q in fchain]
                     and xml_of(ochain) == xml_of(fchain)):
                 continue
+            og, fg = _chain_graphics(ochain), _chain_graphics(fchain)
+            if og != fg:
+                problems.append((src, _graphic_count(og), _graphic_count(fg), GRAPHIC_WHY))
             parts = _split_marked(_marked_text(fchain, frule, old_ids, problems, src))
             accepted = "".join(canonical_text(q, frule) for q in fchain)
             if parts is None or parts[1] != accepted:
@@ -615,6 +687,12 @@ def verify_supplement(original_docx, fixed_docx, case_srcs, numbers_original, pd
             if parts[0] != original:
                 old, new = _diff_excerpt(original, parts[0])
                 problems.append((src, old, new, UNTRACKED_WHY))
+        # 図形の並び（部品全体。前処理の前の木で、mc:AlternateContent の採らない側も含めて）。段落ごとの比べで見つけていなければ足す
+        odata, fdata = opkg.read(part), fpkg.read(part)
+        if odata != fdata and not any(why == GRAPHIC_WHY and str(pid).startswith(prefix) for pid, _, _, why in problems):
+            og, fg = _raw_graphics(odata), _raw_graphics(fdata)
+            if og != fg:
+                problems.append((part, _graphic_count(og), _graphic_count(fg), GRAPHIC_WHY))
 
     # 2.・3. 変更の単位が組版の違いだけで説明できるか
     for src, (rej, acc, units) in split.items():

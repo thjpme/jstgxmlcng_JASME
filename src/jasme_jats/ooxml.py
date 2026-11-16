@@ -598,6 +598,41 @@ def text_of_element(el) -> str:
     return "".join(t.text or "" for t in el.iter(w("t"), m("t")))
 
 
+def in_textbox(el, container) -> bool:
+    """el が container の中のテキストボックス（w:txbxContent）の中にあるか。"""
+    anc = el.getparent()
+    while anc is not None and anc is not container:
+        if anc.tag == w("txbxContent"):
+            return True
+        anc = anc.getparent()
+    return False
+
+
+def graphic_atoms(el) -> list:
+    """図形 el（w:drawing・w:pict・w:object）1 つが、段落に置く画像のアトムの元の並び（読み取り〈docx_reader._graphic〉と、
+    出版版 PDF に合わせる処理〈pdfdocx.paragraph_units〉で共有する規則。C048）。
+
+    w:drawing は、テキストボックスの外の pic:pic の並び。なければ、テキストボックスがない・グループ・描画キャンバス・グラフのとき
+    [el]（図形だけの画像 1 つ）、それ以外（テキストボックスだけ）は []。VML（w:pict・w:object）は、テキストボックスの外の
+    v:imagedata の並び。なければ、テキストボックスがないとき [el]、あれば []。テキストボックスの中の画像は、テキストボックスの
+    段落として読む（ここに入れると二重になる）。
+    """
+    has_tx = any(True for _ in el.iter(w("txbxContent")))
+    if el.tag == w("drawing"):
+        pics = [pic for pic in el.iter(f"{{{PIC_NS}}}pic") if not in_textbox(pic, el)]
+        if pics:
+            return pics
+        gd = el.find(f".//{{{A_NS}}}graphicData")
+        uri = gd.get("uri", "") if gd is not None else ""
+        if not has_tx or "wordprocessingGroup" in uri or "wordprocessingCanvas" in uri or "chart" in uri:
+            return [el]
+        return []
+    imgdata = [d for d in el.iter(f"{{{V_NS}}}imagedata") if not in_textbox(d, el)]
+    if imgdata:
+        return imgdata
+    return [] if has_tx else [el]
+
+
 WS_RE = re.compile(r"^[\s\u3000\u00a0]*$")
 
 

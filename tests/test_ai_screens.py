@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import FLOAT, FULL, META_EXAMPLE
+from conftest import FLOAT, FULL, META_EXAMPLE, NOTES
 from jasme_jats import app, colab, report
 from jasme_jats.cli import main
 from jasme_jats.colab import STEP_WORDS, ai_finish_of, manual_guide, prompt_box
@@ -74,7 +74,8 @@ def test_app_waiting_shows_guide_instead_of_ai_finish(tmp_path):
     assert "出版版 PDF を同じメッセージに添付して" in boxes and boxes.count("AI で図・表の位置を合わせる") == 1
     assert "手順 6" not in boxes
     st2 = app.AppState(tmp_path / "work2")
-    st2.set_inputs(docx=str(FULL), volume="31", issue="1", fpage="1", lpage="12", peer_review="査読あり",
+    # 位置を聞く図形もスタイルを確かめる段落もない原稿（sample_notes。sample_full は標準スタイルの章見出しの heading_guess がある）
+    st2.set_inputs(docx=str(NOTES), volume="31", issue="1", fpage="1", lpage="12", peer_review="査読あり",
                    manuscript_type=app.type_choices()[0], ai_mode="manual")
     st2.convert()
     assert "AI の回答を入れる（任意）" in st2.result_html().split("<details")[0]

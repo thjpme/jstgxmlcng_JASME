@@ -17,6 +17,7 @@ from pathlib import Path
 
 from .ai_assist import PROVIDERS
 from .config import DATE_FIELDS, PAGE_FIELDS
+from . import frontcheck
 from .docx_reader import table_where
 from .linker import body_paragraphs, linked_ids
 from .model import note_key, note_label
@@ -25,6 +26,7 @@ from .package import article_dir
 from .pdfbiblio import mismatches
 from .pdfmatch import (CONTENT, DISPLACED_WHY, EDGE_WHY, FORMULA_MARK, HEAD_WHY, LINE_MARK, LONG_WHY, MATH_WHY,
                        TYPESET_KINDS, UNSURE_WHY, WHOLE_WHY, diff_parts, level_of, typeset_pair)
+from .structure import BACK_KIND_JA, RE_FIGCAP, RE_TABCAP, nfkc
 from .validate import group_errors
 from .structure import (AUTHOR_TABLE_OTHER_EXCLUDED, BACK_OTHER_EXCLUDED, BACK_TABLE_EXCLUDED, EN_AUTHOR_TABLE_OTHER_EXCLUDED,
                         EN_OTHER_EXCLUDED, EN_TABLE_EXCLUDED, FRONT_OTHER_EXCLUDED, FRONT_TABLE_EXCLUDED, NO_LINK_KINDS,
@@ -63,7 +65,8 @@ CAT_JA = {"style": "段落の役割（スタイル）", "citation": "引用文�
           "formula": "数式", "name": "著者名", "figure": "図", "table": "表", "url": "URL", "note": "注",
           "box": "囲み・図の注記（テキストボックス）"}
 UNRES_JA = {"bibr": "引用文献", "fig": "図の参照", "table": "表の参照", "fn": "注の参照", "float": "図表の位置",
-            "box": "囲み・図の注記"}
+            "box": "囲み・図の注記", "table_body": "表の本体",
+            "table_parts": "表の組み立て"}
 
 
 def style_unknown_rows(plan):
@@ -485,9 +488,9 @@ def _box_samples(plan, xids, n=5) -> str:
     return "、".join(out) + ("ほか" if len(xids) > n else "")
 
 
-def _para_samples(rows, n=5) -> str:
-    """段落の例（例: d12「文字の冒頭」、d13「…」）。文字のない段落（画像だけの段落など）は「d14（文字なし）」と書く。"""
-    return ("、".join(f"{src}「{esc(text.strip(), 15)}」" if text.strip() else f"{src}（文字なし）" for src, text in rows[:n])
+def _para_samples(rows, n=5, width=15) -> str:
+    """段落の例（例: d12「文字の冒頭」、d13「…」。先頭 width 文字）。文字のない段落（画像だけの段落など）は「d14（文字なし）」と書く。"""
+    return ("、".join(f"{src}「{esc(text.strip(), width)}」" if text.strip() else f"{src}（文字なし）" for src, text in rows[:n])
             + ("ほか" if len(rows) > n else ""))
 
 
@@ -1008,6 +1011,7 @@ DTD_SHOWN = 5       # 赤い枠とコマンドラインに並べる DTD のエ�
 DTD_PLACES_SHOWN = 3  # 赤い枠とコマンドラインに、同じエラーの場所を並べる数（全件はレポートの 12 章）
 APP_TITLE_TOP = "引用文献などの後ろに、資料の見出しと思われる段落があります"      # 要確認 app_after_refs の見出し（レポートの冒頭）
 APP_TITLE_BOX = "引用文献などの後ろに資料があるかもしれません"                      # 同じ要確認の Colab・1 画面版の枠の見出し
+APP_RUN_TITLE_TOP = "引用文献の後ろに、資料の中身と思われる段落があります"        # 同じ要確認の、資料の見出しがなく年の読めない段落が続くときの見出し
 
 
 def dtd_app_hint(title: str) -> str:
@@ -1098,26 +1102,200 @@ def _table_shape_action(r):
              + "\n".join([f"  {name}: {what}" for name, what in shown] + rest)))
 
 
+TABLE_BODY_WHY = ("キャプションだけの表として XML に出ていて、表として組めていません（中身は、本文の段落やキャプションのない表として、"
+                  "別の所に出ていることがあります）。表ごとの直し方のとおりに Word で直して、変換し直してください。")
+TABLE_BODY_IMAGE = "表の画像をキャプションのすぐ後ろの段落に貼ってもかまいません（変換し直した後、画像はレポートの 9 章の置き場所に入れます）。"
+FLOAT_TABLE_HOW = "Word で表のプロパティの文字列の折り返しを「なし」にし、このキャプションのすぐ後ろに移してください。"
+
+
+def table_body_name(b) -> str:
+    """本体のない表（model.BodylessTable）の知らせの名前: 「T2「表2　…」」（表キャプションの冒頭 20 字）。"""
+    return f"{b.tid or '表'}「{shorten_shown(b.head, 20)}」"
+
+
+def _candidate(c) -> str:
+    tid, first, _ = c
+    return f"{tid}（最初のセル「{shorten_shown(first, 15)}」）"
+
+
+def table_body_why(b) -> str:
+    """本体のない表 1 つの理由と直し方の文（要対応 table_body の 1 表 1 行と、3 章の「表の本体」の行の理由）。"""
+    floats = [c for c in b.candidates if c[2]]
+    if b.why == "caption_style":
+        return ("キャプションが「図」で始まるのに表キャプションのスタイルです。図なら Word でこの段落を図キャプションのスタイルにして"
+                "変換し直してください（図・表のキャプションのスタイルが逆になっていれば、ここに挙がらないキャプションのスタイルも確かめてください）。")
+    if b.why == "same_number":
+        ref = f"{b.why_ref}「{shorten_shown(b.why_ref_head, 20)}」" if b.why_ref_head else b.why_ref
+        return (f"直前の表キャプション（{ref}）と同じ番号です（英文のキャプションなど）。同じ表のキャプションなら、Word で 2 つの"
+                "キャプションを 1 つの段落にして（間の段落記号を消し、Shift+Enter の改行にする）変換し直してください。")
+    if b.why == "next_caption":
+        ref = f"{b.why_ref}「{shorten_shown(b.why_ref_head, 20)}」" if b.why_ref_head else b.why_ref
+        out = (f"すぐ後ろに別の表キャプション（{ref}）があり、その後ろの表はそちらの表にしました。この表の本体がほかの所にあれば、"
+               "Word でこのキャプションのすぐ後ろに移してください。")
+        if floats:
+            out += (f"この docx には、文字列の折り返しを「する」にした（浮動配置の）表があり、キャプションのない表 "
+                    f"{'・'.join(_candidate(c) for c in floats)}として出ています。それがこの表なら、{FLOAT_TABLE_HOW}")
+        return out
+    if b.why == "floating":
+        return (f"この docx には、文字列の折り返しを「する」にした（浮動配置の）表があり、キャプションのない表 "
+                f"{'・'.join(_candidate(c) for c in floats)}として出ています。それがこの表なら、{FLOAT_TABLE_HOW}")
+    out = ("キャプションの後ろに Word の表がありません（本文の段落・タブ・テキストボックスで書いた表は、表として組めません）。"
+           "Word の表に作り直して、キャプションのすぐ後ろに置いてください（間に本文の段落を入れない）。" + TABLE_BODY_IMAGE)
+    if b.candidates:
+        out += (f"キャプションのない表 {'・'.join(_candidate(c) for c in b.candidates)}"
+                f"{'のどれか' if len(b.candidates) > 1 else ''}がこの表かもしれません。")
+    return out
+
+
+def _table_body_action(r):
+    """本体（Word の表・画像で貼った表）のない表（pipeline.bodyless_tables。C003 の表の側・C027）。なければ None。"""
+    found = getattr(r, "bodyless_tables", None) or []
+    if not found:
+        return None
+    n = len(found)
+    lines = [(table_body_name(b), table_body_why(b)) for b in found]
+    names = "、".join(esc(name) for name, _ in lines)
+    return Action(
+        NEEDS_ACTION, "table_body",
+        top="\n".join([f"> **要対応: 表の本体（Word の表）が見つからない表が {n} つあります（3 章）。** {TABLE_BODY_WHY}", ">"]
+                      + [f"> - {esc(name)}: {esc(why)}" for name, why in lines]),
+        checklist=(f"- [ ] **表の本体が見つからない表 {n} つ**（3 章）: 表ごとの直し方のとおりに Word で直して変換し直す: {names}"),
+        box_title=f"表の本体が見つからない表が {n} つあります（要対応）",
+        box_detail=(f"{TABLE_BODY_WHY}変換し直すときは、Word で直した docx を{step('docx')}でアップロードし直し、そこから"
+                    "順にやり直してください（レポートの冒頭と 3 章）。\n"
+                    + "\n".join(f"・{name}: {why}" for name, why in lines)),
+        cli=(f"要対応: 表の本体（Word の表）が見つからない表が {n} つ（キャプションだけの表として出ている。レポートの冒頭と 3 章）。"
+             "表ごとの直し方のとおりに docx を直して変換し直すこと。\n"
+             + "\n".join(f"  {name}: {why}" for name, why in lines)))
+
+
+TABLE_PARTS_SHOWN = 5      # 要確認 table_parts の冒頭・枠・コマンドラインに、種類ごとに並べる行の数（全件はレポートの 3 章）
+TABLE_PART_KINDS = ("split", "cell_table_cap_first", "cell_table_cap_mid", "cell_fig_cap")
+
+
+def _first_cell(node) -> str:
+    return next((shown_text(p.plain()) for p in (node.table.paragraphs() if node.table is not None else [])
+                 if shown_text(p.plain())), "")
+
+
+def table_part_rows(plan) -> list:
+    """表の組み立てを確かめてもらう所（plan.table_parts。要確認 table_parts）を、1 か所 1 行の
+    [(種類, 段落 ID, 本文の表記, 理由と直し方の文), …] にする（分かれた表は、連なりの最初の表ごとに 1 行。3 章の行と Action の行）。"""
+    rows, split = [], {}
+    for part in getattr(plan, "table_parts", []):
+        if part.kind == "split":
+            split.setdefault(id(part.head), (part.head, []))[1].append(part.node)
+    for head, nodes in split.values():
+        cap = shorten_shown(head.caption.plain(), 20) if head.caption is not None else ""
+        tids = "・".join(n.tid for n in nodes)
+        src = next((p.src for p in nodes[0].table.paragraphs()), head.caption.src if head.caption is not None else "")
+        rows.append(("split", src, f"{tids}（最初のセル「{shorten_shown(_first_cell(nodes[0]), 15)}」）",
+                     f"表 {head.tid}「{cap}」のすぐ後ろに、キャプションのない表 {tids} が続いています。1 つの表が分かれているなら、"
+                     "Word で間の空の段落を消して表をつなぎ、変換し直してください（別の表ならそのままでかまいません）。"))
+    slots = {id(s.caption): s for s in getattr(plan, "slots", []) if s.caption is not None}
+    for part in getattr(plan, "table_parts", []):
+        if part.kind == "split":
+            continue
+        text = shorten_shown(part.para.plain(), 20)
+        if part.kind == "cell_fig_cap":
+            m = RE_FIGCAP.match(nfkc(shown_text(part.para.plain())))
+            slot = slots.get(id(part.para))
+            keep = f"（図の画像の置き場所 {slot.key} はそのまま使えます）" if slot is not None and slot.key else ""
+            why = (f"表 {part.node.tid} のセルに図キャプション「{text}」があります。図が表として出て、本文の「図{m.group(1) if m else ''}」に"
+                   f"リンクされません。Word で、画像と図キャプションを表の外の段落に出して変換し直してください{keep}。")
+        else:
+            m = RE_TABCAP.match(nfkc(shown_text(part.para.plain())))
+            if part.kind == "cell_table_cap_first":
+                why = (f"表 {part.node.tid} の 1 行目のセルに表キャプション「{text}」があります。XML では表のキャプションにならず、"
+                       f"本文の「表{m.group(1) if m else ''}」にリンクされません。Word で、その行を表の外（表のすぐ前の段落）に出し、"
+                       "表キャプションのスタイルにして変換し直してください。")
+            else:
+                why = (f"表 {part.node.tid} の {part.row} 行目のセルに表キャプション「{text}」があります。2 つの表が 1 つに"
+                       "つながっています。Word で、その行の前で表を分割し、キャプションの行を表の外に出して変換し直してください。")
+        rows.append((part.kind, part.para.src, text, why))
+    order = {k: i for i, k in enumerate(TABLE_PART_KINDS)}
+    return sorted(rows, key=lambda row: order.get(row[0], len(order)))
+
+
+TABLE_PARTS_REFS = ("セルの中のキャプションを表の外に出すと、本文の参照の「対応する表（図）が見つからない」（3 章）の行も、"
+                    "この直しで消えます。")
+
+
+def _table_parts_action(r):
+    """分かれた表と、表のセルの中の図・表キャプション（plan.table_parts。C027 の (d)・C031。XML は docx の表のまま）。なければ None。"""
+    rows = table_part_rows(r.plan)
+    if not rows:
+        return None
+    n = len(rows)
+    shown, rest = [], 0
+    for kind in TABLE_PART_KINDS:
+        mine = [row for row in rows if row[0] == kind]
+        shown += mine[:TABLE_PARTS_SHOWN]
+        rest += max(0, len(mine) - TABLE_PARTS_SHOWN)
+    more = [f"ほか {rest} 件（3 章）"] if rest else []
+    refs = TABLE_PARTS_REFS if any(row[0] != "split" for row in rows) else ""
+    lines = [why for _, _, _, why in shown] + more
+    # 見出しの種類は、出ている行の種類から作る（分かれた表／セルの中のキャプション／両方）。一覧の行とコマンドラインで共有する
+    kinds = {row[0] for row in rows}
+    cell_kinds = {k for k in kinds if k != "split"}
+    label = "・".join((["分かれた表"] if "split" in kinds else []) + (["セルの中のキャプション"] if cell_kinds else []))
+    became = "・".join((["表のキャプション"] if cell_kinds - {"cell_fig_cap"} else []) + (["図"] if "cell_fig_cap" in cell_kinds else []))
+    how = (f"Word で直すと、{became}になり、本文からリンクされる" if cell_kinds
+           else "1 つの表なら、Word で間の空の段落を消して表をつなぐ")
+    return Action(
+        TO_CHECK, "table_parts",
+        top="\n".join([f"> **要確認: 表の組み立てを確かめてください（{n} か所。3 章）。** XML は docx の表のまま出しています。"
+                       f"{TABLE_PARTS_AS_IS}{refs}", ">"]
+                      + [f"> - {esc(line)}" for line in lines]),
+        checklist=f"- [ ] **表の組み立ての確認 {n} か所**（3 章）: {label}。{how}",
+        box_title="表の組み立てを確かめてください（要確認）",
+        box_detail=(f"XML は docx の表のまま出しています（{n} か所。レポートの冒頭と 3 章）。{TABLE_PARTS_AS_IS}{refs}直すときは、"
+                    f"Word で直した docx を{step('docx')}でアップロードし直し、そこから順にやり直してください。\n"
+                    + "\n".join(f"・{line}" for line in lines)),
+        cli=(f"要確認: 表の組み立てを確かめること（{n} か所。{label}。XML は docx の表のまま。登載はこのままでもできる。"
+             "レポートの冒頭と 3 章）。直すなら docx を直して変換し直すこと。\n" + "\n".join(f"  {line}" for line in lines)))
+
+
+TABLE_PARTS_AS_IS = "登載はこのままでもできます。"
+
+
 def _upload_action(r):
     issues = upload_issues(r)
     if not issues:
         return None
     n = len(issues)
     ids = "、".join(dict.fromkeys(mid for mid, _ in issues))
+    # 冒頭部の確かめと同じ原因の問題には、そちらを直すと消えることを添える（直し方を 2 通りに書かない）
+    title_missing = any(f.kind == frontcheck.TITLE_MISSING for f in front_findings(r))
+    no_authors = frontcheck.authors_missing_applies(r.plan, _front_lang(r))
+    notes = {"EMSGM097E": UPLOAD_TITLE_NOTE if title_missing else "", "EMSGM233E/250E": UPLOAD_AUTHOR_NOTE if no_authors else ""}
+    issues = [(mid, msg + notes.get(mid, "")) for mid, msg in issues]
+    docx_only = all(notes.get(mid) for mid, _ in upload_issues(r))
+    how_top = ("冒頭部の確かめの直し方のとおりに docx を直し、変換し直してください。" if docx_only else
+               "12 章の内容を見て、書誌情報（巻・号・ページ・日付など）か docx を直し、変換し直してください。")
+    how_box = (f"冒頭部の確かめの直し方のとおりに docx を直して{step('docx')}から、やり直してください（レポートの 12 章）。" if docx_only else
+               f"書誌情報（巻・号・ページ・日付など）が原因なら{step('meta')}から、docx が原因なら docx を直して{step('docx')}から、"
+               "やり直してください（レポートの 12 章）。")
     return Action(
         NEEDS_ACTION, "upload",
         top=(f"> **要対応: J-STAGE のアップロード時チェックで問題が {n} 件見つかりました（12 章）。** このままでは、J-STAGE に"
-             "アップロードするときに弾かれます。12 章の内容を見て、書誌情報（巻・号・ページ・日付など）か docx を直し、"
-             "変換し直してください。\n>\n" + "\n".join(f"> - {esc(mid)}: {esc(msg)}" for mid, msg in issues)),
-        checklist=(f"- [ ] **J-STAGE のアップロード時チェックの問題 {n} 件**（12 章）を、書誌情報か docx を直して変換し直す: "
+             f"アップロードするときに弾かれます。{how_top}\n>\n" + "\n".join(f"> - {esc(mid)}: {esc(msg)}" for mid, msg in issues)),
+        checklist=(f"- [ ] **J-STAGE のアップロード時チェックの問題 {n} 件**（12 章）を、"
+                   + ("冒頭部の確かめのとおりに docx を直して変換し直す: " if docx_only else "書誌情報か docx を直して変換し直す: ")
                    + esc(ids)),
         box_title=f"J-STAGE のアップロード時チェックで問題が {n} 件あります（要対応）",
-        box_detail=("このままでは、J-STAGE にアップロードするときに弾かれます。書誌情報（巻・号・ページ・日付など）が原因なら"
-                    f"{step('meta')}から、docx が原因なら docx を直して{step('docx')}から、やり直してください（レポートの 12 章）。\n"
+        box_detail=("このままでは、J-STAGE にアップロードするときに弾かれます。" + how_box + "\n"
                     + "\n".join(f"・{mid}: {msg}" for mid, msg in issues)),
         cli=(f"要対応: J-STAGE のアップロード時チェックで問題が {n} 件あります（レポートの冒頭と 12 章）。このままでは"
-             "アップロードのときに弾かれるので、書誌情報（--meta）か docx を直して変換し直すこと。\n"
+             "アップロードのときに弾かれるので、"
+             + ("冒頭部の確かめの直し方のとおりに docx を直して変換し直すこと。\n" if docx_only else
+                "書誌情報（--meta）か docx を直して変換し直すこと。\n")
              + "\n".join(f"  {mid}: {msg}" for mid, msg in issues)))
+
+
+# アップロード時チェックの問題のうち、冒頭部の確かめと同じ原因のものに添える文（_upload_action）
+UPLOAD_TITLE_NOTE = "（冒頭部の確かめ〈題目の段落がない〉を直すと消えます）"
+UPLOAD_AUTHOR_NOTE = "（和文の著者名が見つからないこと〈要対応「和文の著者名が見つかりません」〉を直すと消えるかもしれません）"
 
 
 FLOAT_NAMES_SHOWN = 4      # float_names に並べる図・表の名前の数（残りは「ほか N 個」）
@@ -1253,7 +1431,7 @@ def _ai_finish_action(r):
     # 2 段にまたがる図形: wide は機械的な位置のままのもの（PDF を見せると移せる）、moved は AI の位置に移したもの（6.5 の 4）
     wide = [f for f in plan.wide_floats if plan.floats[f].mode == "mechanical"]
     moved = [f for f in plan.wide_floats if plan.floats[f].mode == "ai"]
-    skip = set(abstract_missing_srcs(plan))
+    skip = set(abstract_missing_srcs(plan)) | front_reported_srcs(r)
     m = len({x.src for x in plan.style_suspects if x.src not in skip and x.kind not in STYLE_NO_AI_KINDS})
     if not (asked or plan.wide_floats or boxes or _boxes_answered(plan) or m or state in ("失敗", "一部")):
         return None
@@ -1504,21 +1682,30 @@ def _float_end_answer(plan, info) -> str:
 # 機械が挙げたスタイルを確かめる段落（article.StyleSuspect）の種類ごとの、決まった見立てと一般の直し方（AI を使っていないとき、
 # AI の提案がないときに使う。要確認 style_check。修正計画 W8 の 4.3）
 STYLE_SUSPECT_JA = {
-    "heading_body": ("見出しのスタイルの段落に本文が続いています", "見出しと本文の間で Enter を押して段落を分け、後ろを本文のスタイルにする"),
+    "heading_body": ("見出しのスタイルの段落に本文が続いています",
+                     "見出しと本文の間で Enter を押して段落を分け（改行〈Shift+Enter〉があれば、それを消してから）、後ろを本文のスタイルにする"),
     "heading_level": ("見出しのスタイルの階層と、番号の形が合いません", "番号の形に合う階層の見出しのスタイルにする"),
     "quote_like": ("本文のスタイルですが、引用の形をしています", "引用なら、ブロック引用のスタイルにする"),
-    "heading_guess": ("見出しのスタイルがなく、文字の形から見出しと推定しました", "見出しなら、見出しのスタイルを付ける"),
+    "heading_guess": ("見出しのスタイルがなく、文字の形から見出しと推定しました",
+                      "見出しなら見出しのスタイル（「章見出し」など）を、本文の番号つきの箇条なら「本文」のスタイルを付ける"),
     "ref_symbol": ("記号だけの段落が、引用文献の 1 件として XML に出ます", "文献でなければ、Word でこの段落を消す"),
+    "back_heading": ("付記・謝辞・引用文献の見出しの形ですが、本文の段落として出力しています",
+                     "付記・謝辞なら、見出しの段落を「付記見出し」「謝辞見出し」のスタイルにする（見出しと本文が 1 つの段落なら、"
+                     "見出しの後ろで Enter を押して分け、後ろを本文のスタイルにする）"),
+    "ref_cont": ("前の文献の続きの疑いがあります（年が読めず、別の文献として出力しています）",
+                 "前の文献の続きなら、Word で前の段落の終わりの段落記号を消して 1 つの段落にする"),
 }
 # 機械が挙げても、AI の提案を待たずに直し方が決まっている種類（推奨の手順 ai_finish を出す条件に数えない）
-STYLE_NO_AI_KINDS = ("ref_symbol",)
+STYLE_NO_AI_KINDS = ("ref_symbol", "back_heading", "ref_cont")
 STYLE_CHECK_SHOWN = 10      # 要確認 style_check に並べる段落の数（残りは「ほか N か所（2 章）」）
 # AI の回答は段落の役割（謝辞・引用・見出しの階層など）を XML に反映しない（所有者の決定 5）ので、Word での直し方を具体的に書く（点検 review13 回帰 1）
-STYLE_CHECK_HOW = ("見出しや引用・謝辞のスタイルが違うと、J-STAGE の全文で章立てや引用・謝辞の形が変わります。AI の提案は、XML には"
-                   "反映していません（AI の回答を入れても、この段落は今の形のまま出ます）。違っていれば、Word でその段落を選び、［ホーム］の"
+STYLE_CHECK_HOW = ("見出しや引用・謝辞のスタイルが違うと、J-STAGE の全文で章立てや引用・謝辞の形が変わります。違っていれば、Word でその段落を選び、［ホーム］の"
                    "スタイルの一覧から正しいスタイル（「節見出し」「ブロック引用」「謝辞見出し」など。下の行の提案）を選んで保存し、"
-                   "変換し直してください。行の提案が段落記号を消して次の段落とつなぐものなら、Word でそのとおりに段落をつないで保存し、"
+                   "変換し直してください。行の直し方が段落をつなぐ・分けるものなら、その行の直し方のとおりに Word で直して保存し、"
                    "変換し直してください。")
+# 行に AI の提案（AIOutcome.style_fixes）があるときだけ STYLE_CHECK_HOW の前に添える文（AI を使っていない変換では言わない。
+# 点検 review19 の 3 回目の利用者向け 5）
+STYLE_CHECK_AI_NOTE = "AI の提案は、XML には反映していません（AI の回答を入れても、この段落は今の形のまま出ます）。"
 STYLE_KEEP = "このまま"      # StyleFix.verdict の「このままでよい」（もう 1 つは「直す」）
 STYLE_SHOWN_CONFIDENCE = ("高", "中")     # AI だけが見つけた提案のうち、要確認 style_check に載せる確度（低は 2 章だけ）
 
@@ -1548,9 +1735,31 @@ def _ai_style_text(f) -> str:
 
 def _style_ref(plan, src) -> str:
     """要確認 style_check の行の段落の指し方: 段落の ID（場所）「文字の先頭」。文字は 2 章の表と同じ _head（画像・数式の位置の文字を含めない）。"""
-    place = plan.locations.get(src, "")
+    place = _place_short(plan.locations.get(src, ""))
     head = _head(plan.paras.get(src), 15)
     return f"{src}{'（' + esc(place) + '）' if place else ''}" + (f"「{esc(head)}」" if head else "")
+
+
+def _place_short(place) -> str:
+    """場所の見出しの文字のうち、改行（見出しの段落の中の Shift+Enter）から後ろを「…」にする（見出しと本文が 1 段落のとき、場所に本文の
+    書き出しまで入らないように。heading_body）。表示だけで、plan.locations は変えない。"""
+    out = []
+    for seg in place.split(" > "):
+        if "\n" in seg:
+            tail = "（見出し）" if seg.endswith("（見出し）") else ""
+            seg = seg.split("\n")[0].rstrip() + "…" + tail
+        out.append(seg)
+    return " > ".join(out)
+
+
+def _loose_back_note(plan, src) -> str:
+    """要確認 style_check の AI だけの提案の行に添える文: 機械が文字から後付けの見出しと推定した段落（plan.loose_back。C032）なら、
+    XML ではもうそのように出力していること（AI の提案は「XML に反映していない」が、この段落は今の形のまま正しく出る）。"""
+    kind = plan.loose_back.get(src)
+    if not kind:
+        return ""
+    return (f"機械が文字から{BACK_KIND_JA[kind]}の見出しと推定し、XML ではそのように出力しています。"
+            "Word のスタイルだけ直してください。")
 
 
 def style_check_rows(r) -> tuple:
@@ -1561,7 +1770,7 @@ def style_check_rows(r) -> tuple:
     2 つの知らせで言わない）。戻り値は (行の一覧〈(段落 ID, 文)〉, 2 章だけの提案〈StyleFix〉)。修正計画 W8 の 4.3。
     """
     plan = r.plan
-    skip = set(abstract_missing_srcs(plan))
+    skip = set(abstract_missing_srcs(plan)) | front_reported_srcs(r)        # 要対応の側（authors_missing・front_check）で知らせる段落は載せない
     fixes = _style_fix_of(r.ai)
     order = {src: i for i, src in enumerate(plan.paras)}
     rows, seen = [], set()
@@ -1570,6 +1779,8 @@ def style_check_rows(r) -> tuple:
             continue
         seen.add(sus.src)
         what, how = STYLE_SUSPECT_JA.get(sus.kind, ("スタイルを確かめてください", ""))
+        if sus.kind == "back_heading":
+            how = _back_heading_how(r, sus) or how
         f = fixes.get(sus.src)
         tail = _ai_style_text(f) if f is not None else (f"直し方: {how}" if how else "")
         rows.append((sus.src, f"{_style_ref(plan, sus.src)}: {sus.detail or what}。" + (tail + "。" if tail else "")))
@@ -1578,11 +1789,41 @@ def style_check_rows(r) -> tuple:
         if src in seen or src in skip:
             continue
         if f.verdict != STYLE_KEEP and f.confidence in STYLE_SHOWN_CONFIDENCE:
-            rows.append((src, f"{_style_ref(plan, src)}: {_ai_style_text(f)}。"))
+            rows.append((src, f"{_style_ref(plan, src)}: {_ai_style_text(f)}。" + _loose_back_note(plan, src)))
         else:
             only.append(f)
     rows.sort(key=lambda x: order.get(x[0], len(order)))
     return rows, only
+
+
+def _back_heading_how(r, sus) -> str:
+    """要確認 style_check の back_heading の直し方を、見出しの種類（付記・謝辞・引用文献）で出し分ける。同じ種類の見出しの形の段落が
+    ほかにも挙がっていれば（structure.Classifier.loose_back_headings の (g2) で受け入れなかった候補）、どちらか一方だけを見出しの
+    スタイルにする、と添える。見出しと本文が 1 つの段落の形（back_heading_inline）と、種類が読めないときは ""（決まった文を使う）。"""
+    from .structure import back_heading_inline, loose_back_heading
+    plan = r.plan
+    p = plan.paras.get(sus.src)
+    if p is None:
+        return ""
+    text = p.text_only()
+    if back_heading_inline(text):
+        return ""
+    kind = loose_back_heading(text)
+    if kind is None:
+        return ""
+    name = BACK_KIND_JA[kind]
+    style = _first_style(r.journal, kind, BACK_HEADING_STYLE_DEFAULT.get(kind, ""))
+    twins = [x.src for x in plan.style_suspects if x.kind == "back_heading" and x.src != sus.src and x.src in plan.paras
+             and not back_heading_inline(plan.paras[x.src].text_only())
+             and loose_back_heading(plan.paras[x.src].text_only()) == kind]
+    how = f"{name}の見出しなら、見出しの段落を「{style}」のスタイルにする"
+    if twins:
+        how += f"（{name}の見出しの形の段落 {'・'.join(dict.fromkeys(twins))} もあるので、どちらか一方だけを見出しのスタイルにする）"
+    return how
+
+
+# back_heading の直し方に書く、後付けの見出しのスタイルの名前（雑誌の設定にないときの既定）
+BACK_HEADING_STYLE_DEFAULT = {"ref_heading": "参考文献見出し", "ack_heading": "謝辞見出し", "notes_heading": "付記見出し"}
 
 
 def _style_check_action(r):
@@ -1597,15 +1838,21 @@ def _style_check_action(r):
              else f"AI がスタイルの誤りを見つけました（{n} か所）。確かめてください")
     lines = [text for _, text in rows[:STYLE_CHECK_SHOWN]]
     more = f"ほか {n - STYLE_CHECK_SHOWN} か所（2 章）" if n > STYLE_CHECK_SHOWN else ""
+    shown = {src for src, _ in rows}
+    joins = "（段落のつなぎ・分けを含む）" if any(
+        s.kind in ("ref_cont", "heading_body") and s.src in shown for s in r.plan.style_suspects) else ""
+    with_ai = bool(shown & set(_style_fix_of(r.ai)))        # 行に AI の提案がある
+    how = (STYLE_CHECK_AI_NOTE if with_ai else "") + STYLE_CHECK_HOW
     return Action(
         TO_CHECK, "style_check",
-        top=(f"> **要確認: {title}（2 章）。** {STYLE_CHECK_HOW}" + "".join(f"\n>\n> - {esc(x)}" for x in lines)
+        top=(f"> **要確認: {title}（2 章）。** {how}" + "".join(f"\n>\n> - {esc(x)}" for x in lines)
              + (f"\n>\n> - {more}" if more else "")),
-        checklist=f"- [ ] **スタイルを確かめる段落**（{n} か所。2 章）: 違っていれば Word でスタイルを直して変換し直す",
+        checklist=f"- [ ] **スタイルを確かめる段落**（{n} か所。2 章）: 違っていれば Word でスタイル{joins}を直して変換し直す",
         box_title=title + "（要確認）",
-        box_detail=STYLE_CHECK_HOW + "".join("\n・" + x for x in lines) + (f"\n・{more}" if more else ""),
-        cli=(f"要確認: {title}（レポートの冒頭と 2 章）。違っていれば、docx でスタイルを直して変換し直すこと（AI の提案は XML に"
-             "反映していない）。" + "".join("\n  " + x for x in lines) + (f"\n  {more}" if more else "")))
+        box_detail=how + "".join("\n・" + x for x in lines) + (f"\n・{more}" if more else ""),
+        cli=(f"要確認: {title}（レポートの冒頭と 2 章）。違っていれば、docx でスタイル{joins}を直して変換し直すこと"
+             + ("（AI の提案は XML に反映していない）" if with_ai else "") + "。"
+             + "".join("\n  " + x for x in lines) + (f"\n  {more}" if more else "")))
 
 
 NOTE_BOUNDARY_KINDS = ("注の始まり", "注の続き")      # ai_assist.BOUNDARY_KINDS のうち注の区切りの直し（ほかは資料の始まり）
@@ -1868,20 +2115,20 @@ def _textbox_figure_text_action(r):
 def unplaced_exclusions(r) -> list:
     """論文の中の位置を決められずに XML に出力しなかった段落（理由が structure.UNPLACED_EXCLUSIONS。文字のないものと、
     abstract_missing で知らせるものを除く）: [(段落 ID, 理由, 文字)]（docx の順）。"""
-    miss = set(abstract_missing_srcs(r.plan))
+    miss = set(abstract_missing_srcs(r.plan)) | front_reported_srcs(r)      # 要対応 authors_missing・front_check で知らせる段落は重ねて挙げない
     return [(s, why, t) for s, why, t in r.fidelity.excluded if why in UNPLACED_EXCLUSIONS and t.strip() and s not in miss]
 
 
 # 位置を決められない除外の理由ごとの名前と、Word での直し方（_unplaced_action）
 UNPLACED_GUIDE = {
-    FRONT_OTHER_EXCLUDED: ("冒頭部の段落", "題目・副題・著者名・所属なら、Word でその段落に「題目（日）」「著者名（日）」「所属（日）」などのスタイルを付ける。本文なら、最初の章見出しの後ろに移す"),
+    FRONT_OTHER_EXCLUDED: ("冒頭部の段落", "題目・副題・著者名・所属なら、Word でその段落に「題目（日）」「著者名（日）」「所属（日）」などのスタイルを付ける（所属と氏名が 1 つの段落なら、Enter で 2 段落に分けてから付ける）。本文なら、最初の章見出しの後ろに移す"),
     FRONT_TABLE_EXCLUDED: ("冒頭部の表", "本文の表なら、Word で最初の章見出しの後ろに移す"),
     AUTHOR_TABLE_OTHER_EXCLUDED: ("著者表の中の段落", "著者名・所属なら、Word でその段落に「著者名（日）」「所属（日）」スタイルを付ける"),
     BACK_TABLE_EXCLUDED: ("後付けの表", "注・付記・謝辞の表なら、Word で表をその節の中（注なら注の本文の後ろ）に移す。本文の表なら、引用文献・注などの見出しより前に移す"),
     BACK_OTHER_EXCLUDED: ("本文と後付けの間の段落", "前にある見出しのスタイル（「注見出し」「付記見出し」「謝辞見出し」「参考文献見出し」）を確かめる"),
     EN_AUTHOR_TABLE_OTHER_EXCLUDED: ("英文著者表の中の段落", "英文の著者名・所属なら、Word でその段落に「著者名（英）」「所属（英）」スタイルを付ける"),
     EN_TABLE_EXCLUDED: ("英文の部分の表", "資料の表なら、Word で表の前に資料の見出し（「資料1」など）を付ける"),
-    EN_OTHER_EXCLUDED: ("英文の部分の段落", "英文要旨の見出し（Abstract）なら「英文要旨見出し」、英文要旨の段落なら「英文要旨」スタイルを付ける。資料なら、前に資料の見出し（「資料1」など）を付ける"),
+    EN_OTHER_EXCLUDED: ("英文の部分の段落", "英文要旨の見出し（Abstract）なら「英文要旨見出し」、英文要旨の段落なら「英文要旨」スタイルを付ける。英文の著者名・所属なら「著者名（英）」「所属（英）」スタイルを付ける。資料なら、前に資料の見出し（「資料1」など）を付ける"),
 }
 
 
@@ -1920,6 +2167,29 @@ def _unplaced_action(r):
 # 英文要旨がないため資料も落ちていることの説明（_abstract_missing_action）
 ABSTRACT_MISSING_APP = ("英文要旨がないため、英文の部分の資料（「資料1」などの見出しの段落と表）も位置を決められず、出力していません。"
                         "英文要旨を直すと、資料も出力されます。")
+
+
+def _refs_missing_action(r):
+    """引用文献の一覧が 1 件もないのに、本文に「著者（年）」の形の引用があるとき（plan.refs_missing_cites。refparse.refs_missing_cites）。
+    なければ None。要対応（引用文献の一覧のない XML は登載できない。引用文献の見出しの文字を後付けの見出しと見分けられなかった原稿など。
+    C032 の守り）。番号の形式の引用（［1］）だけの原稿は対象の外。"""
+    plan = r.plan
+    n = plan.refs_missing_cites
+    if plan.refs or not n:
+        return None
+    head_style = _first_style(r.journal, "ref_heading", "参考文献見出し")
+    ref_style = _first_style(r.journal, "ref", "参考文献")
+    how = (f"Word で、引用文献の見出しの段落を「{head_style}」のスタイルに、各文献の段落を「{ref_style}」のスタイルにして、"
+           "変換し直してください。")
+    why = f"本文に「著者（年）」の形の引用が少なくとも {n} か所ありますが、引用文献の見出しが見つからず、XML に引用文献の一覧"
+    return Action(
+        NEEDS_ACTION, "refs_missing",
+        top=f"> **要対応: 引用文献の一覧が見つかりません（3 章）。** {why}（{md_tag('<ref-list>')}）がありません。{how}",
+        checklist="- [ ] **引用文献の一覧がない**（3 章）: Word で引用文献の見出しと文献のスタイルを付けて変換し直す",
+        box_title="引用文献の一覧が見つかりません（要対応）",
+        box_detail=f"{why}がありません。{how}（レポートの冒頭と 3 章）",
+        cli=(f"要対応: 引用文献の一覧が見つからない（本文に著者（年）の引用が少なくとも {n} か所ある）。docx で引用文献の見出し・"
+             "文献のスタイルを付けて変換し直すこと"))
 
 
 def _first_style(journal, role, default):
@@ -1973,6 +2243,212 @@ def _abstract_missing_action(r):
         cli=(f"要対応: 英文要旨が見つかりません。英文の部分の{count}を XML に出力していません（レポートの冒頭と 6 章）。{app}"
              f"docx で要旨の段落に「{abs_style}」スタイルを付けて変換し直すこと。"
              f"{ai_line}対象: {samples}"))
+
+
+# ---------------------------------------------------------------------------- 冒頭部（題目・著者名・所属）の確かめ（単位 C。frontcheck.py）
+def _front_lang(r) -> str:
+    return frontcheck.article_lang(r.plan, getattr(r, "meta", None), getattr(r, "journal", None))
+
+
+def _front_pdf(r) -> tuple:
+    """出版版 PDF との照合でわかった冒頭部の項目（frontcheck.pdf_findings。pdfmatch.PdfCheck.front）と、題目のページにあった段落の ID。
+    PDF がない・読めない・照合できないときは、どちらも空。"""
+    pc = getattr(r, "pdf_check", None)
+    if pc is None or not getattr(pc, "ok", False):
+        return [], set()
+    return list(getattr(pc, "front", ()) or ()), set(getattr(pc, "front_on_page", ()) or ())
+
+
+def authors_missing_srcs(r) -> list:
+    """要対応 authors_missing の対象にする（和文の著者名らしい）段落の ID。和文の著者名が 1 人もない記事のときだけ（なければ []）。
+    ない記事でも authors_missing 自体は出るので、候補が空でも出る場合は authors_missing_applies で見る。"""
+    plan = r.plan
+    if not frontcheck.authors_missing_applies(plan, _front_lang(r)):
+        return []
+    skip = {s for f in frontcheck.plan_findings(plan, _front_lang(r)) if f.kind == frontcheck.TITLE_MISSING for s in f.srcs}
+    return frontcheck.author_candidates(plan, skip)
+
+
+def front_findings(r) -> list:
+    """要対応・要確認 front_check の項目（frontcheck.FrontFinding。出版版 PDF の項目を含む）。"""
+    pdf_front, _ = _front_pdf(r)
+    return frontcheck.front_findings(r.plan, _front_lang(r), pdf_front)
+
+
+def front_reported_srcs(r) -> set:
+    """authors_missing・front_check で知らせる段落の ID。同じ段落を要確認 excluded_unsure・name_split・style_check で重ねて挙げない
+    ために、それぞれの一覧から除く（authors_missing は、出ているときの候補だけ。出ないときの冒頭部の段落は、今までどおり
+    excluded_unsure に出る）。"""
+    return set(authors_missing_srcs(r)) | frontcheck.finding_srcs(front_findings(r))
+
+
+def _front_samples(plan, srcs, n=4) -> str:
+    return _para_samples([(s, frontcheck.text_of(plan, s)) for s in srcs], n)
+
+
+def _authors_missing_action(r):
+    """和文の著者名が 1 人もない（C009）。要対応 authors_missing。なければ None。
+
+    著者表のセルにスタイルがない・所属と氏名が 1 つの段落になっている・著者表がない、などで、XML の書誌に和文の著者名・所属が入らなかったとき。
+    文字も構造も変えず、Word でスタイルを付ける直し方を知らせる。著者名・所属らしい段落を添える（出版版 PDF の題目のページに
+    あれば、そのことも書く）。"""
+    plan = r.plan
+    lang = _front_lang(r)
+    if not frontcheck.authors_missing_applies(plan, lang):
+        return None
+    cands = authors_missing_srcs(r)
+    _, on_page = _front_pdf(r)
+    author_style = _first_style(r.journal, "author_ja", "著者名（日）")
+    aff_style = _first_style(r.journal, "aff_ja", "所属（日）")
+    in_table = {q.src for t in plan.tables if t.table is not None for q in t.table.paragraphs()}
+    # 著者表のセルにもうスタイルが付いていて、題目の段落がないために冒頭部の著者表として読めていないときは、スタイルを付ける直し方を
+    # 書かず、冒頭部の確かめ〈題目の段落がない〉を直すと消えると書く（upload の UPLOAD_TITLE_NOTE と同じ扱い。直し方を 2 通りに書かない）
+    title_missing = any(f.kind == frontcheck.TITLE_MISSING for f in front_findings(r))
+    styled = [s for s in cands if s in plan.paras and r.journal.styles.get(plan.paras[s].style_name) in ("author_ja", "aff_ja")]
+    if title_missing and styled:
+        how = AUTHORS_TITLE_NOTE
+        short = "著者表のスタイルは付いています。冒頭部の確かめ〈題目の段落がない〉を直すと消える"
+        cli_how = "著者表のスタイルは付いているので、冒頭部の確かめ〈題目の段落がない〉を直して変換し直すこと（直すと消える）。"
+    else:
+        # 表のセルの候補: 本文の表（plan.tables）か、冒頭部の表のセルとして除外した段落
+        from .structure import AUTHOR_TABLE_OTHER_EXCLUDED, FRONT_TABLE_EXCLUDED
+        cell_excluded = {e.src for e in plan.exclusions if e.reason in (FRONT_TABLE_EXCLUDED, AUTHOR_TABLE_OTHER_EXCLUDED)}
+        if not cands or any(s in in_table or s in cell_excluded for s in cands):
+            how = (f"Word で、著者表の氏名のセルに「{author_style}」、所属のセルに「{aff_style}」のスタイルを付けて（所属と氏名が 1 つの段落なら、"
+                   "Enter で 2 段落に分けてから付けて）、変換し直してください。")
+            short = f"著者表に「{author_style}」「{aff_style}」のスタイルを付けて変換し直す"
+            cli_how = f"docx の著者表に「{author_style}」「{aff_style}」のスタイルを付けて変換し直すこと。"
+        else:
+            # 著者名・所属らしい段落が表の外だけ（著者表がない docx）: 表を作る必要はない（点検 review19 の 3 回目の利用者向け 3）
+            how = (f"Word で、氏名の段落に「{author_style}」、所属の段落に「{aff_style}」のスタイルを付けて（所属と氏名が 1 つの段落なら、"
+                   "Enter で所属と氏名の 2 段落に分けてから付けて）、変換し直してください。著者表を作る必要はありません。")
+            short = f"氏名と所属の段落に「{author_style}」「{aff_style}」のスタイルを付けて変換し直す"
+            cli_how = f"docx の氏名と所属の段落に「{author_style}」「{aff_style}」のスタイルを付けて変換し直すこと。"
+        if styled:
+            how += f"（{'・'.join(styled)} には、もうスタイルが付いています。題目の段落の後ろ・本文の最初の見出しの前にあるかも確かめてください）"
+        elif title_missing:
+            how += "（題目の段落がないことも原因かもしれません。冒頭部の確かめ〈題目の段落がない〉も直してください）"
+    rows = []
+    for s in cands:
+        notes = (["本文の表として出力しています"] if s in in_table and plan.region.get(s) == "body" else []) + (
+            ["PDF の題目のページにあります"] if s in on_page else [])
+        rows.append(_para_samples([(s, frontcheck.text_of(plan, s))], 1) + ("（" + "、".join(notes) + "）" if notes else ""))
+    cand = ("著者名・所属らしい段落: " + "、".join(rows) + "。") if rows else ""
+    body = f"XML の書誌に和文の著者名・所属が入っていません（6 章）。{how}{cand}"
+    return Action(
+        NEEDS_ACTION, "authors_missing",
+        top=f"> **要対応: 和文の著者名が 1 人も見つかりません。** {body}",
+        checklist=f"- [ ] **和文の著者名・所属が見つからない**（6 章）: {short}",
+        box_title="和文の著者名が見つかりません（要対応）",
+        box_detail=body,
+        cli=f"要対応: 和文の著者名が見つからない（XML に和文の著者名・所属が入っていない。レポートの冒頭と 6 章）。{cli_how}{cand}")
+
+
+# 著者表にスタイルは付いているが、題目の段落がないために冒頭部の著者表として読めていないときの直し方（_authors_missing_action）
+AUTHORS_TITLE_NOTE = ("著者表のスタイルは付いていますが、題目の段落がないため冒頭部の著者表として読めていません。"
+                      "冒頭部の確かめ〈題目の段落がない〉を直すと消えます。")
+
+
+FRONT_KIND_SHORT = {
+    frontcheck.TEMPLATE: "テンプレートの見本の行", frontcheck.TITLE_MISSING: "題目の段落がない", frontcheck.TITLE_MULTI: "題目の段落が 2 つ以上",
+    frontcheck.SWAP: "所属と氏名の入れ替わり", frontcheck.JA_MISSING: "和文の著者名の欠け", frontcheck.AFF_MISSING: "和文の所属の欠け",
+    frontcheck.EN_MISSING: "英文の著者名がない", frontcheck.EN_COUNT: "和文と英文の著者数の違い",
+    frontcheck.PDF_MISSING: "PDF に見つからない項目", frontcheck.PDF_NEAR: "PDF と少し違う項目", frontcheck.PDF_EN_MISSING: "PDF に見つからない英文の項目",
+}
+# 題目の段落が 2 つ以上のとき、2 つ目以降を直す「副題」のスタイルの役割
+FRONT_SUBTITLE_ROLE = {"題目（日）": ("subtitle", "副題（日）"), "副題（日）": ("subtitle", "副題（日）"),
+                       "題目（英）": ("subtitle_en", "副題（英）"), "副題（英）": ("subtitle_en", "副題（英）")}
+
+
+FRONT_PDF_WIDTH = 120     # front_check の PDF と比べる項目（pdf_missing・pdf_near・pdf_en_missing）に出す段落の文字の数
+
+
+def _front_item_text(r, f) -> str:
+    """front_check の項目 1 つの文（何が・どの段落か・Word での直し方）。"""
+    plan = r.plan
+    ex = _front_samples(plan, f.srcs)
+    k = f.kind
+    if k == frontcheck.TEMPLATE:
+        return (f"著者表に、テンプレートの見本の行（{ex}）が残っていて、XML に著者・所属として出ています。見本の行なら、Word で著者表のその行を"
+                "消して（白字で見えないことがあります）変換し直してください。")
+    if k == frontcheck.TITLE_MISSING:
+        style = _first_style(r.journal, "title", "題目（日）")
+        cand = f"題目らしい段落: {ex}。" if f.srcs else ""
+        return (f"「{style}」のスタイルの段落がありません（XML に和文の題目がありません）。Word で題目の段落にそのスタイルを付けて"
+                f"変換し直してください。{cand}")
+    if k == frontcheck.TITLE_MULTI:
+        role, sub = FRONT_SUBTITLE_ROLE.get(f.note, ("", "副題"))
+        sub = _first_style(r.journal, role, sub) if role else sub
+        dash = len(f.srcs) > 1 and frontcheck.starts_with_dash(frontcheck.text_of(plan, f.srcs[1]))
+        guess = f"{f.srcs[1]} はダッシュで始まるので副題のようです。" if dash else ""
+        return (f"{f.note}のスタイルの段落が {len(f.srcs)} つあり、XML では 1 つにつないでいます（{ex}）。{guess}副題なら Word でその段落を"
+                f"「{sub}」のスタイルに、題目の続きなら 1 段落にまとめて（改行が要るなら Shift+Enter）、変換し直してください。")
+    if k == frontcheck.SWAP:
+        a, b = _first_style(r.journal, "author_ja", "著者名（日）"), _first_style(r.journal, "aff_ja", "所属（日）")
+        # 例は、所属の語がある著者名（著者名のスタイルの段落）と、氏名らしい所属（所属のスタイルの段落）に分けて書く
+        names = [s for s in f.srcs if frontcheck.label_of(plan, s) != "所属（日）"]
+        affs = [s for s in f.srcs if frontcheck.label_of(plan, s) == "所属（日）"]
+        aff_ex = f"。氏名らしい所属: {_front_samples(plan, affs)}" if affs else ""
+        return (f"著者名に所属の語（「{f.note}」）があります（所属の語がある著者名: {_front_samples(plan, names)}{aff_ex}）。"
+                f"著者表の所属と氏名のセルのスタイル（「{a}」「{b}」）が入れ替わって"
+                "いないか確かめ、入れ替わっていれば Word でスタイルを付け直して変換し直してください。所属と氏名が 1 つの段落なら、"
+                "Enter で 2 段落に分けてください。")
+    if k == frontcheck.JA_MISSING:
+        a = _first_style(r.journal, "author_ja", "著者名（日）")
+        return (f"英文の著者名に対応する和文の著者名がありません（{ex}）。和文の氏名のセルに「{a}」のスタイルが付いているか確かめて、"
+                "変換し直してください。")
+    if k == frontcheck.AFF_MISSING:
+        b = _first_style(r.journal, "aff_ja", "所属（日）")
+        cand = f"所属らしい段落: {ex}。" if f.srcs else ""
+        return f"和文の所属が 1 つもありません（XML の書誌に和文の所属が入っていません）。所属のセルに「{b}」のスタイルを付けて変換し直してください。{cand}"
+    if k == frontcheck.EN_MISSING:
+        a, b = _first_style(r.journal, "author_en", "著者名（英）"), _first_style(r.journal, "aff_en", "所属（英）")
+        cand = f"英文の著者名・所属らしい段落: {ex}。" if f.srcs else ""
+        return (f"英文の題目はありますが、英文の著者名がありません（XML に英文の氏名・所属が入っていません）。英文の著者名・所属の段落に"
+                f"「{a}」「{b}」のスタイルを付けて、変換し直してください。{cand}")
+    if k == frontcheck.EN_COUNT:
+        return (f"和文の著者名のうち、対応する英文の著者名がない人がいます（{ex}）。英文の著者表の行が足りないか、スタイルが付いていないか"
+                "確かめてください。")
+    # PDF と比べる項目は、段落の文字をまるごと（FRONT_PDF_WIDTH 文字まで）出す（違う所が後ろにあっても PDF と見比べられるように。
+    # 冒頭部の段落は短い。点検 review19 の 3 回目の利用者向け 1）
+    labelled = "、".join(f"{frontcheck.label_of(plan, s) or '段落'} "
+                        f"{_para_samples([(s, frontcheck.text_of(plan, s))], 1, FRONT_PDF_WIDTH)}" for s in f.srcs[:4])
+    if k == frontcheck.PDF_MISSING:
+        return (f"出版版 PDF の題目のページに見つからない和文の項目: {labelled}。著者表に余分な行がないか、docx が校正後の版かを確かめ、"
+                "Word で直して変換し直してください。")
+    if k == frontcheck.PDF_NEAR:
+        return (f"出版版 PDF の題目のページの文字と少し違う和文の項目: {labelled}。異体字や校正の直しかもしれません。PDF と見比べて、"
+                "違っていれば Word で直して変換し直してください。")
+    return (f"出版版 PDF に見つからない英文の項目: {labelled}。校正で直ったのかもしれません。PDF が正しければ、Word で直して"
+            "変換し直してください。")
+
+
+def _front_check_action(r):
+    """冒頭部（題目・著者名・所属）の確かめ（修正計画 W6）。要対応か要確認 front_check。なければ None。
+
+    項目（frontcheck.FrontFinding）を 1 つにまとめる。要対応の項目が 1 つでもあれば要対応、なければ要確認（meta_pdf と同じ作り）。
+    XML は変えない（直すのは Word。docx の文字も構造も変えない）。和文の著者名が 1 人もないときは別の要対応 authors_missing で知らせる。"""
+    items = front_findings(r)
+    if not items:
+        return None
+    n = len(items)
+    heavy = any(f.level == frontcheck.MUST for f in items)
+    lead = "要対応" if heavy else "要確認"
+    level = NEEDS_ACTION if heavy else TO_CHECK
+    # 要対応と要確認の項目が混ざるときは、要確認の項目に印を付ける（どれが止める理由か分かるように）
+    mark = lambda f: "（要確認）" if heavy and f.level != frontcheck.MUST else ""
+    lines = [mark(f) + _front_item_text(r, f) for f in items]
+    names = "・".join(dict.fromkeys(FRONT_KIND_SHORT[f.kind] + mark(f) for f in items))
+    bullet, dot = "\n>\n> - ", "\n・"
+    what = "題目・著者名・所属を確かめてください"
+    return Action(
+        level, "front_check",
+        top=f"> **{lead}: {what}（{n} 件。4 章・7 章）。** " + "".join(bullet + x for x in lines),
+        checklist=f"- [ ] **題目・著者名・所属**（{n} 件。4 章・7 章）: 確かめて、Word で直して変換し直す（{names}）",
+        box_title=f"題目・著者名・所属に確かめる所があります（{lead}）",
+        box_detail="Word で直してから変換し直してください（レポートの 4 章・7 章）。" + dot + dot.join(lines),
+        cli=(f"{lead}: 題目・著者名・所属に確かめる所がある（{names}。レポートの冒頭と 4 章・7 章）。docx を直して変換し直すこと。\n"
+             + "\n".join("  ・" + x for x in lines)))
 
 
 NOCAP_SKIP_HINT = "。出版版 PDF で見て、ほかの図に写っている・飾りだけ、のときは「入れない」を選びます"      # 手順 images の、キャプションのない行の末尾
@@ -2554,20 +3030,30 @@ def _app_after_refs_action(r):
     暫定の判断で、引用文献などの後ろの資料は資料（app-group）にせず、知らせるだけにしている（決定事項 8(b) は利用者に未確認）。
     """
     plan = r.plan
-    if not plan.app_after_refs:
+    runs = [s for s in plan.ref_yearless_runs if s not in plan.app_after_refs]
+    if not plan.app_after_refs and not runs:
         return None
-    n = len(plan.app_after_refs)
+    n = len(plan.app_after_refs) + len(runs)
     samples = _para_samples([(s, plan.paras[s].text_only()) for s in plan.app_after_refs])
+    run_samples = _para_samples([(s, plan.paras[s].text_only()) for s in runs])
+    # 資料の見出しは見つからないが、引用文献の中に年の読めない段落が続く所（refparse.ref_continuations。資料の中身の疑い。C001）
+    from .refparse import REF_CONT_RUN
+    run_line = (f"引用文献の中に、年の読めない段落が {REF_CONT_RUN} 件以上続く所があります（資料の中身かもしれません）: {run_samples}"
+                if runs else "")
+    title = APP_TITLE_TOP if plan.app_after_refs else APP_RUN_TITLE_TOP
+    # することの一覧の見出しも、見つけたもの（資料の見出し・年の読めない段落の並び）で変える（点検 review19 の 3 回目の利用者向け 4）
+    label = "資料の見出しか中身" if plan.app_after_refs and runs else ("資料の見出し" if plan.app_after_refs else "資料の中身")
+    found = "、".join(x for x in (f"対象の段落: {samples}" if plan.app_after_refs else "", run_line) if x)
     return Action(
         TO_CHECK, "app_after_refs",
-        top=(f"> **要確認: {APP_TITLE_TOP}（10 章）。** 今の版では、引用文献などの後ろの"
-             f"資料は資料（付録）として扱わず、引用文献などの段落のまま出力しています。資料なら、{APP_MOVE_HOW}対象の段落: {samples}"),
-        checklist=(f"- [ ] **引用文献などの後ろの資料の見出し**（{n} 件。10 章）: 資料なら、Word で英文要旨の後ろに移して"
+        top=(f"> **要確認: {title}（10 章）。** 今の版では、引用文献などの後ろの"
+             f"資料は資料（付録）として扱わず、引用文献などの段落のまま出力しています。資料なら、{APP_MOVE_HOW}{found}"),
+        checklist=(f"- [ ] **引用文献などの後ろの{label}**（{n} 件。10 章）: 資料なら、Word で英文要旨の後ろに移して"
                    "変換し直す"),
         box_title=APP_TITLE_BOX + "（要確認）",
-        box_detail=("引用文献・注・付記・謝辞の中に、資料の見出しと思われる段落があります。今の版では資料として扱わず、引用文献などの"
-                    f"段落のまま出力しています。資料なら、{APP_MOVE_HOW}（レポートの冒頭と 10 章）\n対象の段落: {samples}"),
-        cli=("要確認: 引用文献などの後ろに、資料の見出しと思われる段落があります（レポートの冒頭と 10 章）。資料なら、docx で英文要旨の"
+        box_detail=("引用文献・注・付記・謝辞の中に、資料の見出しと思われる段落か、資料の中身と思われる段落があります。今の版では資料として扱わず、引用文献などの"
+                    f"段落のまま出力しています。資料なら、{APP_MOVE_HOW}（レポートの冒頭と 10 章）\n{found}"),
+        cli=("要確認: 引用文献などの後ろに、資料の見出しか中身と思われる段落があります（レポートの冒頭と 10 章）。資料なら、docx で英文要旨の"
              "後ろに移して変換し直すこと"))
 
 
@@ -2786,7 +3272,8 @@ def name_split_items(r) -> list:
     """要確認 name_split に挙げる和文の著者名 [(段落 ID, builder.EasternSplit)]: 字の間の空白のいちばん長い所で分けたもの・
     境目を推定して分けたもの・AI が分けたもの・空白がなく分けられなかったもの（C010・C064）。空白が 1 か所の氏名と、AI が機械の
     分け方（空白が 1 か所・いちばん長い空白が 1 か所）と同じ位置を指定しただけの氏名は入らない（BuildInfo.name_splits に入れない）。"""
-    return [(s, sp) for s, sp in getattr(r, "name_splits", ()) if sp.how in ("longest", "context", "count", "ai", "none")]
+    dup = {s for f in front_findings(r) if f.kind in (frontcheck.TEMPLATE, frontcheck.SWAP) for s in f.srcs}      # 見本の行・入れ替わりは front_check で知らせる
+    return [(s, sp) for s, sp in getattr(r, "name_splits", ()) if sp.how in ("longest", "context", "count", "ai", "none") and s not in dup]
 
 
 def _ai_name_confidence(r, src) -> str:
@@ -3192,10 +3679,11 @@ def actions(r) -> list:
     PDF に合わせた表記の件数や、照合に使わなかった PDF の文字は知らせにせず、レポートの 13 章に載せるだけ。
     記事フォルダにあるのに ZIP に入れなかったファイル（Result.not_zipped）は 10 章の警告のまま。
     """
-    head = [f(r) for f in (_fidelity_action, _supplement_action, _dtd_action, _table_shape_action, _image_names_action,
+    head = [f(r) for f in (_fidelity_action, _supplement_action, _dtd_action, _table_shape_action, _table_body_action,
+                           _table_parts_action, _image_names_action,
                            _upload_action, _meta_dates_action, _textbox_undecided_action,
-                           _textbox_place_action, _textbox_figure_text_action, _unplaced_action, images_action,
-                           lost_action, _image_same_action, _image_changed_action, lost_autonum_action, _pua_left_action, _abstract_missing_action, _style_hidden_action, _resultless_field_action, _symbol_action, _abstract_ja_action, _app_after_refs_action, _float_end_action, _style_check_action, _ai_boundary_action, _ai_carried_action, _note_overlap_action, _float_ref_action,
+                           _textbox_place_action, _textbox_figure_text_action, _authors_missing_action, _unplaced_action, _front_check_action, images_action,
+                           lost_action, _image_same_action, _image_changed_action, lost_autonum_action, _pua_left_action, _abstract_missing_action, _refs_missing_action, _style_hidden_action, _resultless_field_action, _symbol_action, _abstract_ja_action, _app_after_refs_action, _float_end_action, _style_check_action, _ai_boundary_action, _ai_carried_action, _note_overlap_action, _float_ref_action,
                            _fn_guess_action, _name_split_action, _newline_action)]
     acts = [a for a in head if a is not None] + pdf_actions(r)
     fin = _with_reused(_ai_finish_action(r), r)
@@ -3415,8 +3903,14 @@ def render(r) -> str:
     unc = plan.uncited_refs
     if unc:
         L.append("")
+        conts = set(plan.ref_conts)        # 前の文献の続きの疑い（refparse.ref_continuations。C026）
         L.append("本文中のどこからもリンクされていない文献: " + "、".join(
-            f"{rid}（{esc(next((x.para.plain()[:30] for x in plan.refs if x.rid == rid), ''))}）" for rid in unc))
+            f"{x.rid}（{esc(x.para.plain()[:30])}）" + ("（前の文献の続きの疑い）" if x.para.src in conts else "")
+            for x in plan.refs if x.rid in unc))
+    if not plan.refs and plan.refs_missing_cites:
+        L.append("")
+        L.append(f"引用文献の一覧が見つからないので、本文の「著者（年）」の形の引用（少なくとも {plan.refs_missing_cites} か所）を"
+                 "リンクしていません（要対応。レポートの冒頭）。")
     for line in float_notes(plan) + note_notes(plan):
         L.append("")
         L.append(line)
@@ -3473,8 +3967,9 @@ def render(r) -> str:
     L.append("## 6. XML に出力しなかった docx の文字（全件）")
     L.append("")
     if fid.excluded:
-        miss = set(abstract_missing_srcs(plan))
-        sure = {s for s, _, _ in unplaced_exclusions(r)}
+        ff = front_findings(r)
+        miss = set(abstract_missing_srcs(plan)) | set(authors_missing_srcs(r)) | {s for f in ff if f.level == frontcheck.MUST for s in f.srcs}
+        sure = {s for s, _, _ in unplaced_exclusions(r)} | {s for f in ff if f.level != frontcheck.MUST for s in f.srcs}
         # 理由の列の印: 英文要旨が見つからない（要対応）、位置を決められない（要確認）。docx の文字の列は変えない
         mark = lambda s, reason: reason + ("（要対応）" if s in miss else "（要確認）" if s in sure else "")
         L.append(table(["段落", "理由", "文字"], [(s, mark(s, reason), esc(t, 100)) for s, reason, t in fid.excluded]))
@@ -3832,7 +4327,7 @@ def _mismatch_section(L, r):
 # 13.2 で、合わせなかった（直さず知らせない）表記の違い（TextDiff.label）の名前。なければ「そのほか」。unfixable は直せない位置にあるもの
 SILENT_KIND_JA = {"script": "上付き・下付きの文字", "glyph": "字形だけの違い", "bullet": "箇条書きの記号・番号の形",
                   "numform": "箇条書きの記号・番号の形", "noteform": "注番号の形", "titlecolon": "英文題目の末尾の「:」"}
-SILENT_UNFIXABLE = "直せない位置にあるもの（リンクの中・図形のある段落・直さない違いの隣など）"
+SILENT_UNFIXABLE = "直せない位置にあるもの（リンクの中・ルビのある段落・直さない違いの隣など）"
 SILENT_OTHER = "そのほか"
 # 13.3 で、照合できなかった違い（区分 UNSURE の TextDiff.label）の理由の名前
 UNSURE_KIND_JA = {"head": "段落の端", "edge": "段落の端", "long": "PDF にだけある長い文字", "unsure": "どの段落とも一致しない文字が続く",
@@ -3962,6 +4457,14 @@ def render_pdf(L, r, pc, fx):
     if ign:
         L.append(f"- 照合に使わなかった PDF の文字 {len(ign)} 行（誌名の行・柱・投稿受付日・表や図の中の文字とみなしたもの。一覧は出しません）")
         L.append("")
+    if c.hidden_chars:
+        L.append(f"- 出版版 PDF の、描かれない文字（図の枠の外に隠れた文字など）{c.hidden_chars:,} 字は、照合に使っていません。")
+        L.append("")
+    front_error = getattr(r.pdf_check, "front_error", "")      # 冒頭部の確かめは r.pdf_check の照合で行う（_front_pdf）
+    if front_error:
+        L.append(f"- 冒頭部（題目・著者名・所属）の、出版版 PDF との確かめはできませんでした（{esc(front_error)}）。"
+                 "冒頭部の確かめのうち、PDF と比べる項目は出していません（照合の結果には影響しません）。")
+        L.append("")
     L.append("- 表のセル・囲み・別行の数式・図の中の文字と、4 文字未満の段落は、段落ごとの照合をしていません"
              "（表のセル・囲みは、8 文字以上の行が PDF のどこかにあるかだけ確かめ、見つからない行は 13.1 に載せています。"
              "短い行と、直した後の文字が PDF のほかの場所にたまたまある行は見つけられません）。")
@@ -3975,7 +4478,7 @@ def render_pdf(L, r, pc, fx):
             L.append("実施していません。")
         elif sup.ok:
             L.append(f"合格（表記を合わせた箇所 {sup.typeset} 文字）。補った docx は、元の docx から、13.2 の表記以外に変わっていません"
-                     "（照合・直しとは別の実装で、変更履歴を取り除いた文字を元の docx と比べて確かめています）。")
+                     "（照合・直しとは別の実装で、変更履歴を取り除いた文字と図形の並びを元の docx と比べて確かめています）。")
         else:
             L.append("**不合格**です。補った docx に、表記を合わせたもの以外の変更があります（変換ツールの不具合の"
                      "可能性があります）。この XML は登載に使わないでください。")
@@ -4008,6 +4511,16 @@ def ai_style_section(r) -> list:
         order = {src: i for i, src in enumerate(plan.paras)}
         srcs.sort(key=lambda s: order.get(s, len(order)))
         miss = set(abstract_missing_srcs(plan))
+        front = front_reported_srcs(r)
+        am = set(authors_missing_srcs(r))
+        ff = front_findings(r)
+        fc = frontcheck.finding_srcs(ff)
+        fc_lead = "要対応" if any(f.level == frontcheck.MUST for f in ff) else "要確認"
+
+        def front_note(src):        # 載せた知らせの名前（重さは知らせのとおり）
+            got = (["要対応「和文の著者名が見つかりません」"] if src in am else []) + (
+                [f"{fc_lead}「題目・著者名・所属」"] if src in fc else [])
+            return "（冒頭部の確かめ〈" + "・".join(got) + "〉に載せた）"
         rows = []
         for src in srcs:
             x, f = sus.get(src), fixes.get(src)
@@ -4019,6 +4532,8 @@ def ai_style_section(r) -> list:
                 conf, reason = f.confidence or "—", f.reason or "—"
             if src in miss:
                 proposal += "（要対応「英文要旨が見つかりません」に載せた）"
+            elif src in front:
+                proposal += front_note(src)
             rows.append((src, plan.locations.get(src, ""), esc(_head(plan.paras.get(src), 20)), esc(machine), esc(proposal), conf,
                          md_tag(esc(reason))))
         L += ["", "### スタイルの提案（XML には反映していない）", ""]

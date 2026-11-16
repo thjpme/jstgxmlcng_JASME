@@ -493,7 +493,8 @@ CUT = PUB12.index("基づく")
 FRONT = ["全国数学教育学会誌　数学教育学研究　第31巻　第１号　2026　pp.1～2", "出版版 PDF との照合の検証用文書",
          "―全角と半角の違い―", "架空大学　試験　四郎", "１．はじめに"]
 REST = [PUBLISHED["d13"], PUBLISHED["d14"], "引用および参考文献", PUBLISHED["d17"],
-        "見本花子（2021）．「見本の研究」．『見本誌』，第2巻，pp.11-20．"]
+        "見本花子（2021）．「見本の研究」．『見本誌』，第2巻，pp.11-20．",
+        "Checking against the published PDF", "Width of characters", "Shiro SHIKEN", "Fictional University"]     # 英文の題目・著者・所属（この誌の PDF では最後のページ。冒頭部の確かめ front_check が PDF に見つからないと言わないため）
 
 
 def d12_pages(end1=(), start2=(), top1="（1）", top2="（2）", first=PUB12[:CUT], second=PUB12[CUT:], rest=REST):
@@ -3895,14 +3896,16 @@ def test_route2_chapter13_sections(journal, meta, tmp_path):
     assert "13.5" not in chapters(res2)[1] and "13.8" not in chapters(res2)[1]
 
 
-@pytest.mark.parametrize("space, dropped", [("　", False), (" ", True)], ids=["fullwidth", "halfwidth"])
-def test_fullwidth_space_next_to_width_fix_is_kept(space, dropped, journal, tmp_path):
+@pytest.mark.parametrize("space, pdf_space, dropped", [("　", " ", False), (" ", "", True), (" ", " ", False)],
+                         ids=["fullwidth", "halfwidth", "halfwidth-seen"])
+def test_fullwidth_space_next_to_width_fix_is_kept(space, pdf_space, dropped, journal, tmp_path):
     """全角・半角を直した文字のすぐ隣の、PDF にない空白（drops）として消すのは半角の空白だけ。docx の全角の空白（キャプションの
-    「図1　架空の…」の区切りなど）は消さない（0.27 までは「図１架空の…」にしていた）。"""
+    「図1　架空の…」の区切りなど）は消さない（0.27 までは「図１架空の…」にしていた）。PDF の同じ行に区切りの空白が見えるとき
+    （前後が全角の約物でない半角の空白）は、docx の半角の空白も消さない（C050）。"""
     text = f"本研究では，図1{space}架空の授業の流れに示すとおり，観点ごとに記録を整理した。"
     plan, src = guard_article(tmp_path, journal, [text])
     s = src[text]
-    pc = compare(plan, guard_pages(*cut_lines("　本研究では，図１ 架空の授業の流れに示すとおり，観点ごとに記録を整理した。")))
+    pc = compare(plan, guard_pages(*cut_lines(f"　本研究では，図１{pdf_space}架空の授業の流れに示すとおり，観点ごとに記録を整理した。")))
     fixes = [(f.old, f.new, f.kind) for f in plan_fixes(plan, pc) if f.src == s]
     assert fixes == [("1", "１", "width")] + ([(" ", "", "space")] if dropped else [])
     want = text.replace("図1", "図１").replace("図１ ", "図１") if dropped else text.replace("図1", "図１")
@@ -4725,3 +4728,47 @@ def test_compare_crash_falls_back_like_unreadable_pdf(route, journal, meta, tmp_
     assert res.pdf_check is not None and not res.pdf_check.ok and "照合できなかった" in res.pdf_check.message
     assert res.docx_fix is None and res.xml_path.exists()
     assert res.pdf_fallback == (route == "pdf") and ("pdf_fallback" in [a.key for a in actions(res)]) == (route == "pdf")
+
+
+@pytest.mark.parametrize("docx_text, pdf_text, want", [
+    ("記録は表1 架空の集計にまとめた。", "記録は表１　架空の集計にまとめた。", "記録は表１ 架空の集計にまとめた。"),     # PDF に全角の空白
+    ("教科書『架空読本A 改訂版』を使った。", "教科書『架空読本Ａ 改訂版』を使った。", "教科書『架空読本Ａ 改訂版』を使った。"),  # 半角の空白
+    ("鳥の声は (架空の) 記録である。", "鳥の声は（架空の）記録である。", "鳥の声は（架空の）記録である。"),       # 対照: 全角の約物の隣
+    ("記録は表1 架空の集計にまとめた。", "記録は表１架空の集計にまとめた。", "記録は表１架空の集計にまとめた。"),     # 対照: PDF に空白なし
+], ids=["wide-space", "half-space", "paren", "pdf-nospace"])
+def test_route2_keeps_seen_space(docx_text, pdf_text, want, journal, meta, tmp_path, monkeypatch):
+    """全角・半角の直しの隣の docx の半角の空白は、PDF の同じ行に区切りの空白が見えるとき（全角の空白、または前後が全角の約物で
+    ない所）は消さない（_seen_space。C050）。全角の約物の隣の見かけの空白と、PDF に空白がない所は今までどおり消す。
+    補った docx と XML は同じ文字で、補完の確かめは合格。"""
+    from jasme_jats.fidelity import source_texts
+    res = owl_convert(tmp_path, monkeypatch, journal, meta, docx_text, pdf_text)
+    assert res.fidelity.ok and res.fidelity.final_ok and res.supplement.ok
+    assert para_text(source_texts(res.docx_fix.path), docx_text[:3]) == want
+    assert want in texts(load(res))
+
+
+def test_route2_drops_space_before_pdf_newline(journal, meta, tmp_path, monkeypatch):
+    """PDF の空白が改行だけ（行の折り返し）なら、全角・半角の直しの隣の docx の半角の空白は今までどおり消す（C050 の対照）。"""
+    from jasme_jats.fidelity import source_texts
+    docx_text = "鳴き声の記録は表1 架空の集計にまとめた。"
+    n10_article(tmp_path, journal, [("body", docx_text), ("body", TALK)])
+    pages = n10_pages([*SMALL_FRONT, "　鳴き声の記録は表１", "架空の集計にまとめた。", *body_lines(TALK), *N10_TAIL])
+    res = convert_with_pages(tmp_path, monkeypatch, journal, meta, pages, "pdf", docx=tmp_path / "n10.docx")
+    assert res.fidelity.ok and res.supplement.ok
+    assert para_text(source_texts(res.docx_fix.path), docx_text[:3]) == "鳴き声の記録は表１架空の集計にまとめた。"
+
+
+def test_seen_space():
+    """_seen_space: PDF の同じ行の全角の空白、前後が全角の約物でない半角の空白は真。全角の約物（かっこ・読点・引用符）の隣、
+    改行、空白なしは偽。"""
+    from jasme_jats.pdfmatch import _seen_space, pdf_stream
+    st = pdf_stream(["（1）\n表１　架空 鳥（集計） ，Ａ “語” 終\n次の行\n"])
+    at = {c: i for i, c in enumerate(st.chars)}
+    assert _seen_space(st, at["架"])          # 全角の空白
+    assert _seen_space(st, at["鳥"])          # 半角の空白、前後が和文
+    assert not _seen_space(st, at["（"])      # 全角のかっこの隣
+    assert not _seen_space(st, at["，"])      # 全角の読点の隣（前は「）」）
+    assert not _seen_space(st, at["“"])       # 引用符の隣
+    assert not _seen_space(st, at["終"])      # 前が引用符
+    assert not _seen_space(st, at["次"])      # 改行
+    assert not _seen_space(st, at["空"])      # 空白なし

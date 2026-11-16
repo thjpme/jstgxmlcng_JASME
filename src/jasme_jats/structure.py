@@ -89,6 +89,7 @@ from .article import (
     StructureConflict,
     StyleSuspect,
     TableNode,
+    TablePart,
     _para_text,
 )
 from .floats import NEAR_PARAS, at_anchor, box_lines, spans_columns, textbox_kind, why_not_at_anchor
@@ -581,6 +582,96 @@ def appendix_sentence(text: str) -> str:
     return ""
 
 
+LEVEL_JA = {"sec1": "章", "sec2": "節", "sec3": "項"}
+HEADING_BODY_MIN = 30       # heading_body: 見出しの段落の改行の後ろの文字（空白を除く）がこの字数以上なら本文とみなす（C037）
+HEADING_BODY_LONG = 60      # heading_body: 改行がなくても、見出しの文字がこの字数を超え、「。」を含むなら本文が続くとみなす
+
+
+def heading_body_detail(text: str, level: str) -> str:
+    """見出しのスタイルの段落の文字 text に本文が続いているときの機械の見立て（StyleSuspect.detail）。続いていなければ ""（C037）。
+
+    (a) 改行（Shift+Enter。文字は改行）があり、最初の改行の後ろの文字（空白を除く）が HEADING_BODY_MIN 字以上か「。」を含む。
+    (b) 改行がなくても、見出しの文字（前後の空白を除く）が HEADING_BODY_LONG 字を超え、「。」を含む（見出しと本文を空白だけで続けた形）。
+    見出しの 2 行目の短い副題（「―…―」）は (a) に当たらない。level は「章」「節」「項」。
+    """
+    if "\n" in text:
+        rest = re.sub(r"\s", "", text.split("\n", 1)[1])
+        if len(rest) >= HEADING_BODY_MIN or "。" in rest:
+            return (f"見出しの段落の中の改行（Shift+Enter）の後ろに、本文らしい文（{len(rest)} 字）が続いています。"
+                    f"今は見出しと本文がまとめて{level}の見出しになっています")
+        return ""
+    t = text.strip()
+    if len(t) > HEADING_BODY_LONG and "。" in t:
+        return f"見出しのスタイルの段落に、文（「。」で終わる文）が続いています。今は全体が{level}の見出しになっています"
+    return ""
+
+
+BACK_KEY_BRACKETS = ("【】", "［］", "[]", "〔〕", "()", "（）", "〈〉", "＜＞", "<>")
+RE_BACK_KEY_NUM = re.compile(r"^(?:[0-9]{1,2}|[IVX]{1,4})(?:[.．、]|\s)\s*")      # NFKC の後（「Ⅴ」は「V」になる）
+
+
+def back_heading_key(t: str) -> str:
+    """後付けの見出しの文字の比べ方（判定にだけ使う。出力の文字は変えない。C032）: NFKC・前後の空白を除いた文字から、(i) 先頭の章番号
+    （1〜2 桁の数字か Ⅰ〜Ⅻ と、後ろの「.」「．」「、」か空白）、(ii) 前後で組になる括弧（BACK_KEY_BRACKETS）、(iii) すべての空白を外す。"""
+    t = nfkc(t).strip()
+    t = RE_BACK_KEY_NUM.sub("", t, count=1).strip()
+    for pair in BACK_KEY_BRACKETS:
+        if len(t) >= 2 and t[0] == pair[0] and t[-1] == pair[1]:
+            t = t[1:-1]
+            break
+    return re.sub(r"\s", "", t)
+
+
+BACK_KIND_JA = {"ref_heading": "引用文献", "ack_heading": "謝辞", "notes_heading": "付記", "fn_heading": "注"}
+
+
+def exact_back_heading(text: str) -> Optional[str]:
+    """段落の文字 text（NFKC・前後の空白を除く）が後付けの見出しの語と完全に一致するときの役割（ref_heading・ack_heading・
+    notes_heading・fn_heading）。合わなければ None。"""
+    t = nfkc(text).strip()
+    if RE_REF_HEADING_TEXT.match(t):
+        return "ref_heading"
+    if RE_ACK_TEXT.match(t):
+        return "ack_heading"
+    if RE_NOTES_TEXT.match(t):
+        return "notes_heading"
+    if RE_FN_TEXT.match(t):
+        return "fn_heading"
+    return None
+
+
+def loose_back_heading(text: str) -> Optional[str]:
+    """比べ方を直して（back_heading_key）、引用文献・謝辞・付記の見出しの語と完全に一致するときの役割。注は見ない（完全一致のまま）。
+    完全一致で合う文字にも同じ役割を返す（呼び出し側が完全一致を先に見る）。"""
+    key = back_heading_key(text)
+    if not key:
+        return None
+    if RE_REF_HEADING_TEXT.match(key):
+        return "ref_heading"
+    if RE_ACK_TEXT.match(key):
+        return "ack_heading"
+    if RE_NOTES_TEXT.match(key):
+        return "notes_heading"
+    return None
+
+
+RE_BACK_INLINE = re.compile(r"^\s*([\[［【〔(（〈<＜]?)\s*(付\s*記|謝\s*辞)\s*([\]］】〕)）〉>＞]?)(?:[\s:：]+)(\S.*)$", re.S)
+BACK_INLINE_MIN = 10        # back_heading_inline: 見出しの語の後ろにこの字数以上の文字があれば、見出しと本文が 1 段落とみなす
+
+
+def back_heading_inline(text: str) -> str:
+    """本文の段落の文字 text が「付記」「謝辞」の見出しと本文を 1 つの段落に書いた形（「付記　本研究は…」「【謝　辞】　本研究は…」）なら
+    「付記」か「謝辞」、そうでなければ ""（C032）。見出しの語は back_heading_key と同じく括弧・字間の空白を外して比べ、後ろに空白か
+    「：」「:」と BACK_INLINE_MIN 字以上の文字が続くものだけ。「注」「引用文献」「参考文献」で始まる段落は挙げない（本文の「注：…」・表の注で誤報が多い）。"""
+    m = RE_BACK_INLINE.match(nfkc(text))
+    if not m or len(re.sub(r"\s", "", m.group(4))) < BACK_INLINE_MIN:
+        return ""
+    opened, closed = m.group(1), m.group(3)
+    if bool(opened) != bool(closed):
+        return ""
+    return back_heading_key(m.group(2))
+
+
 def block_id(b) -> str:
     """本文のブロック b（段落・表）の識別子（段落は src、表は tid）。文言に使う。"""
     return b.src if isinstance(b, Para) else b.tid
@@ -749,6 +840,8 @@ class Classifier:
         self.box_members = {}       # テキストボックスの ID -> その最上位の要素 [(段落・表, 役割)]（run。AI の exclude を除く）
         self._top, self._top_index = [], {}     # 図形の外の最上位の段落・表の列と、段落 ID -> その位置（near_image）
         self._heading_by_text = {}      # 後付けの見出しの段落 ID -> 文字から推定した見出しか（back_heading_by_text。replace_back が使う）
+        self._loose_back = {}           # 比べ方を直して初めて合い、受け入れた後付けの見出し: 段落 ID -> 役割（loose_back_headings）
+        self._styled_levels = set()     # 本文のスタイルで決まった見出しの階層（build_body。規則 3 の rule3_blocks）
         self._loose_affs, self._loose_used = [], True   # 和文の所属の段落で、まだ著者名に付いていないもの（build_front_ja）と、付いたか
         # 浮動配置の図形の ID -> float_units が組んだ中身 [(役割, 要素)] と、place_floats が記録した位置の判断（機械的に置いた・
         # 位置を決められない図形）。本文の図キャプションの図に含めた図形（B6。figure_units）の中身を取り除き、判断を書き直すのに使う
@@ -832,6 +925,7 @@ class Classifier:
                 self.box_members.setdefault(b.textbox_id, []).append((b, role))
         self._top = [b for b in self.doc.blocks if not in_shape(b)]
         self._top_index = {b.src: k for k, b in enumerate(self._top) if isinstance(b, Para)}
+        self._loose_back = self.loose_back_headings(flat)
         regions = self.split_regions(flat)
         self.build_front_ja(regions["front_ja"])
         self.build_body(regions["body"])
@@ -977,7 +1071,15 @@ class Classifier:
             elif state == "front_ja":
                 if role in FRONT_JA_ROLES or troles & FRONT_JA_ROLES:
                     seen_title = seen_title or role == "title"
-                elif role in BODY_ROLES and not (role == "p" and b.is_blank):
+                elif role in BODY_ROLES and b.is_blank:
+                    # 空白だけの段落は、本文の役割（章見出しなど）のスタイルでも領域を切り替えず、和文の冒頭のままにする（C009。テンプレートの
+                    # 空行のスタイルが変わったとき、後ろの著者表が本文の表になって和文の著者名・所属が消えるのを防ぐ。C041 と同じ規則）
+                    if role != "p":
+                        self.plan.decide(
+                            "mechanical", "style", b.src,
+                            f"空白だけの段落のスタイル「{b.style_name}」は、本文の始まりを示すが、空白だけの段落なので領域を切り替えなかった"
+                            "（後ろの段落は、和文の冒頭のまま）")
+                elif role in BODY_ROLES:
                     state = "body"
                 elif role in BACK_HEADINGS:
                     state = "back"
@@ -1109,20 +1211,83 @@ class Classifier:
     def back_heading_by_text(self, para: Para, role: str) -> Optional[str]:
         """スタイル違反の後付け見出し（「引用文献」を章見出しスタイルで書いた等）をテキストから推定。
 
-        AI の補完が役割を指定した段落（overrides。ai_assist.boundary_overrides の区切りの指定）は推定しない。
+        AI の補完が役割を指定した段落（overrides。ai_assist.boundary_overrides の区切りの指定）は推定しない。役割 sec1・normal・p の
+        段落の文字（NFKC・前後の空白を除く）が見出しの語と完全に一致するもの（exact_back_heading）か、比べ方を直して初めて合い、
+        前もって受け入れた段落（self._loose_back。loose_back_headings。章番号・括弧・字間の空白を外した引用文献・謝辞・付記の見出し）だけ。
         """
         if role not in ("sec1", "normal", "p") or para.src in self.overrides:
             return None
-        t = nfkc(_para_text(para)).strip()
-        if RE_REF_HEADING_TEXT.match(t):
-            return "ref_heading"
-        if RE_ACK_TEXT.match(t):
-            return "ack_heading"
-        if RE_NOTES_TEXT.match(t):
-            return "notes_heading"
-        if RE_FN_TEXT.match(t):
-            return "fn_heading"
-        return None
+        return exact_back_heading(_para_text(para)) or self._loose_back.get(para.src)
+
+    def loose_back_headings(self, flat) -> dict:
+        """比べ方を直して初めて後付けの見出しと合う段落（「５．引用文献」「【謝　辞】」など。C032）のうち、後付けの見出しとして
+        受け入れるもの: 段落 ID -> 見出しの役割（ref_heading・ack_heading・notes_heading）。run が split_regions の前に 1 回だけ呼ぶ。
+
+        候補は、図形の外の、役割 sec1・normal・p の段落（AI の区切りの指定のある段落を除く）で、完全一致（exact_back_heading）では合わず、
+        back_heading_key の文字が引用文献・謝辞・付記の見出しの語と完全に一致するもの（注は完全一致のまま。「【注】」まで広げると、
+        文字から推定する注の節〈fn_guess〉が本文の中の表の注で動くため）。受け入れる条件（すべて）:
+        (g1) 後ろ（次の後付けの見出し〈スタイルで決まったものか完全一致の文字のもの〉か、英文の部分の役割の段落・表まで）に、スタイルで
+        決まった見出し（sec1〜sec3。資料の見出し〈appendix_heading〉を除く）と、役割 normal で番号の形から見出しと推定する段落がない
+        （役割 ref・fn の段落は数えない）。(g2) 後ろ（英文の部分まで）に、同じ種類の後付けの見出し（スタイルで決まったものか完全一致の文字の
+        もの）がなく、前に同じ種類のスタイルで決まった見出し・完全一致の文字の見出しがなく、同じ種類の候補がほかにない（2 つ以上あれば、
+        どれも受け入れない）（K1 の中止〈replace_back〉に入らないように）。受け入れなかった候補は、要確認 style_check の back_heading で知らせる。
+        """
+        out = {}
+        tops = [(k, b, role) for k, (b, role) in enumerate(flat) if not in_shape(b)]
+
+        def exact(b, role):     # スタイルで決まった後付けの見出しか、完全一致の文字の見出し（役割）
+            if role in BACK_HEADINGS:
+                return role
+            if isinstance(b, Para) and role in ("sec1", "normal", "p") and b.src not in self.overrides:
+                return exact_back_heading(_para_text(b))
+            return None
+
+        def front_en(b, role):
+            return role in FRONT_EN_ROLES or (isinstance(b, Table) and self.table_roles(b) & {"author_en", "aff_en"})
+
+        cands = {}      # 候補: tops の位置 -> 見出しの役割
+        for i, (k, b, role) in enumerate(tops):
+            if (not isinstance(b, Para) or b.is_blank or role not in ("sec1", "normal", "p") or b.src in self.overrides
+                    or exact_back_heading(_para_text(b))):
+                continue
+            kind = loose_back_heading(_para_text(b))
+            if kind is not None:
+                cands[i] = kind
+        for i, kind in cands.items():
+            b = tops[i][1]
+            name = BACK_KIND_JA[kind]
+            why, open_ = "", True
+            twin = next((tops[j][1].src for j, kj in cands.items() if j != i and kj == kind), None)
+            before = next((x.src for _, x, xrole in tops[:i] if isinstance(x, Para) and not x.is_blank and exact(x, xrole) == kind),
+                          None)
+            if twin:
+                why = f"ほかにも{name}の見出しの形の段落 {twin} があるので"
+            elif before:
+                why = f"前に同じ{name}の見出し {before} があるので"
+            for _, x, xrole in ([] if why else tops[i + 1:]):
+                if front_en(x, xrole):
+                    break
+                if not isinstance(x, Para) or x.is_blank:
+                    continue
+                head = exact(x, xrole)
+                if head:
+                    if head == kind:
+                        why = why or f"後ろに同じ{name}の見出し {x.src} があるので"
+                        break
+                    open_ = False           # (g1) は次の後付けの見出しまで。(g2) は英文の部分まで見る
+                    continue
+                if open_ and not why and ((xrole in HEADING_LEVEL and not appendix_heading(_para_text(x)))
+                                          or (xrole == "normal" and self.guess_heading(x, strict=False))):
+                    kind_x = LEVEL_JA.get(xrole) or LEVEL_JA[self.guess_heading(x, strict=False)]
+                    why = (f"後ろに{kind_x}見出しのスタイルの段落 {x.src} があるので" if xrole in HEADING_LEVEL
+                           else f"後ろに{kind_x}見出しと推定する段落 {x.src} があるので")
+            if why:
+                self.plan.style_suspects.append(StyleSuspect(
+                    "back_heading", b.src, f"{name}の見出しの形ですが、{why}、本文の段落のまま出力しました"))
+            else:
+                out[b.src] = kind
+        self.plan.loose_back = dict(out)
+        return out
 
     # ----------------------------------------------------------------- front (ja)
     def build_front_ja(self, items):
@@ -1234,6 +1399,9 @@ class Classifier:
     # ----------------------------------------------------------------- body
     def build_body(self, items):
         plan = self.plan
+        # スタイルで決まった見出しの階層（規則 3。rule3_blocks。C014）: 本文の、空白でない図形の外の段落の役割のうち sec1〜sec3
+        self._styled_levels = {role for b, role in items
+                               if role in HEADING_LEVEL and isinstance(b, Para) and not b.is_blank and not in_shape(b)}
         order = {id(b): k for k, (b, _) in enumerate(items)}
         src_index = {b.src: k for k, (b, _) in enumerate(items) if isinstance(b, Para)}
         boxes_in = list(items)
@@ -1273,25 +1441,40 @@ class Classifier:
                 plan.exclude_blank(b)
                 continue
             if role in ("normal", None) or role not in BODY_ROLES | {"table"}:
-                guessed = self.guess_heading(b, strict=False)
+                guessed = self.body_heading_guess(b, role)
                 if guessed:
                     role = guessed
                     b.role_origin = "heuristic"
                     plan.decide("mechanical", "style", b.src,
                                 f"スタイル「{b.style_name}」の段落「{_para_text(b)[:30]}」を"
-                                f"{ {'sec1': '章', 'sec2': '節', 'sec3': '項'}[role]}見出しと推定（番号の形式から）")
+                                f"{LEVEL_JA[role]}見出しと推定（番号の形式から）")
+                    plan.style_suspects.append(StyleSuspect(
+                        "heading_guess", b.src, f"「{b.style_name or 'スタイルなし'}」スタイルの段落を、番号の形から{LEVEL_JA[role]}見出しにしました"))
                 else:
                     role = "p"
                     b.role_origin = "heuristic"
                     b.note = "style_unknown"
+                    blocked = self.guess_heading(b, strict=False)       # 番号の形だが、規則 3 で見出しにしなかった（rule3_blocks）
+                    if blocked:
+                        kind = LEVEL_JA[blocked]
+                        plan.decide("mechanical", "style", b.src,
+                                    f"スタイル「{b.style_name}」の段落「{_para_text(b)[:30]}」は番号の形だが、{kind}見出しのスタイルの段落が"
+                                    f"ほかにあるので、{kind}見出しと推定せず、本文の段落にした")
+                        plan.style_suspects.append(StyleSuspect(
+                            "heading_guess", b.src,
+                            f"番号の形ですが、{kind}見出しのスタイルの段落がほかにあるので、本文の段落にしました。{kind}見出しなら、"
+                            f"Word でこの段落に{kind}見出しのスタイルを付けてください"))
             elif role == "p":
-                guessed = self.guess_heading(b, strict=True)
+                guessed = self.body_heading_guess(b, role)
                 if guessed:
                     role = guessed
                     b.role_origin = "heuristic"
                     plan.decide("mechanical", "style", b.src,
                                 f"本文スタイルの段落「{_para_text(b)[:30]}」を"
-                                f"{ {'sec1': '章', 'sec2': '節', 'sec3': '項'}[role]}見出しと推定（全体が太字で番号の形式）")
+                                f"{LEVEL_JA[role]}見出しと推定（全体が太字で番号の形式）")
+                    plan.style_suspects.append(StyleSuspect(
+                        "heading_guess", b.src, f"「{b.style_name or '本文'}」スタイルの段落を、全体が太字で番号の形から{LEVEL_JA[role]}見出しにしました"))
+            self.body_suspects(b, role)
             b.role = role
             out.append((role, b))
 
@@ -1708,6 +1891,45 @@ class Classifier:
             return "end", "anchor", "", BODY_END
         return "anchor", "", "", src_index[fl.anchor_src] + 1
 
+    def body_heading_guess(self, b, role) -> Optional[str]:
+        """本文の段落 b（items の役割 role）を、文字の形から見出しと推定するときの階層（sec1〜sec3）。推定しなければ None。
+
+        役割の決まっていない段落（標準スタイルなど。role normal）は番号の形だけで（guess_heading の strict が偽）、本文の段落（role p）は
+        全体が太字のときだけ（strict が真）推定する。役割の決まっていない段落は、規則 3（rule3_blocks）に当たれば推定しない。
+        build_body（役割を決める）と list_or_quote（箇条書きにするか）の両方で使う（同じ判定）。
+        """
+        if role in ("normal", None, "") or role not in BODY_ROLES | {"table"}:
+            guessed = self.guess_heading(b, strict=False)
+            return None if guessed and self.rule3_blocks(b, guessed) else guessed
+        if role == "p":
+            return self.guess_heading(b, strict=True)
+        return None
+
+    def rule3_blocks(self, b, level) -> bool:
+        """規則 3（C014）: 役割の決まっていない段落（標準スタイルなど）を番号の形から階層 level の見出しと推定するとき、同じ階層の見出しの
+        スタイルの段落が本文にほかにあれば（self._styled_levels。build_body）、見出しにしない（本文の番号つきの箇条を偽の章にしない）。
+        全体が太字の段落は見出しのまま（本文スタイルの太字の番号の段落〈guess_heading の strict が真〉と同じく、付け忘れた見出しとみなす）。"""
+        return level in self._styled_levels and not self.all_bold(b)
+
+    def body_suspects(self, b, role):
+        """本文の段落 b（役割 role を決めた後）の、スタイルを確かめる段落の検出（plan.style_suspects。XML は変えない）。
+
+        - heading_body（C037）: 見出し（sec1〜sec3）の段落に本文が続く（heading_body_detail）。
+        - back_heading（C032）: 本文の段落（p）が「付記」「謝辞」の見出しと本文を 1 つの段落に書いた形（back_heading_inline）。
+        図形の中の段落は見ない。
+        """
+        if in_shape(b):
+            return
+        if role in HEADING_LEVEL:
+            detail = heading_body_detail(_para_text(b), LEVEL_JA[role])
+            if detail:
+                self.plan.style_suspects.append(StyleSuspect("heading_body", b.src, detail))
+        elif role == "p":
+            kind = back_heading_inline(_para_text(b))
+            if kind:
+                self.plan.style_suspects.append(StyleSuspect(
+                    "back_heading", b.src, f"{kind}の見出しと本文が 1 つの段落です。今は本文の段落として出力しています"))
+
     def list_or_quote(self, b, role):
         """本文の要素 b（items の役割 role）が、assemble_floats で前後の段落と 1 つにまとめる箇条書きの項目か引用の段落なら、
         その種類（引用は "quote"、箇条書きは ("list", 番号の定義の ID)）。そうでなければ None。
@@ -1723,13 +1945,9 @@ class Classifier:
             return "quote"
         if not (b.numbering and b.autonum) or self.is_image_para(b) or self.formula_node(b) is not None:
             return None
-        if role in ("normal", None, "") or role not in BODY_ROLES | {"table"}:
-            heading = self.guess_heading(b, strict=False)
-        elif role == "p":
-            heading = self.guess_heading(b, strict=True)
-        else:
+        if role not in ("normal", None, "", "p") and role in BODY_ROLES | {"table"}:
             return None
-        return None if heading else ("list", b.numbering[0])
+        return None if self.body_heading_guess(b, role) else ("list", b.numbering[0])
 
     def run_end(self, items, k) -> int:
         """仮に置く位置のすぐ前の要素 items[k]（アンカー段落）が、続いた箇条書きの項目（同じ番号の定義）か引用の段落の途中に
@@ -2300,6 +2518,7 @@ class Classifier:
         self.captions_below = captions_below
         st = SimpleNamespace(flat=flat, out=out, used=used, prev=prev, nxt=nxt, where=where,
                              captions_below=captions_below, last_out=last_out, ahead=ahead)
+        chain, parts = {}, []       # 分かれた表: 続く表の id -> 連なりの最初の表（TableNode）、続く表の一覧（docx の順）
         for k, (role, b) in enumerate(flat):
             if role == "node":          # 組み立て済みの図表（浮動配置の図形）
                 if id(b) not in used:   # 本文の図キャプションの図に含めた図形の図（take_float）は出さない
@@ -2322,8 +2541,12 @@ class Classifier:
                 put(self.figure_units(st, k), k)
                 continue
             if role == "table_caption":
-                tbl = None
-                for j in ahead(k, 2):
+                tbl, stop = None, None
+                last_more = self.caption_more_end(st, k)
+                for n_seen, j in enumerate(ahead(k, 2) if last_more is None else ahead(last_more, 1)):
+                    if self.next_numbered_caption(st, k, j):
+                        stop = j if n_seen == 0 else None   # すぐ後ろの別の表キャプション（本体がないときの理由に使う）
+                        break           # 番号つきの別の表キャプションを飛び越えて表を取らない（C027 の (b)）
                     if flat[j][0] == "table" and id(flat[j][1]) not in used:
                         tbl = flat[j][1]
                         used.add(id(tbl))
@@ -2333,7 +2556,7 @@ class Classifier:
                     continue
                 node = TableNode(table=tbl, caption=b)
                 if tbl is None:
-                    paras = self.table_image_paras(st, k)       # C: 画像で貼った表
+                    paras = self.table_image_paras(st, k if last_more is None else last_more)   # C: 画像で貼った表
                     if paras:
                         node.image_paras = paras
                         node.how = "next" if len(paras) == 1 else "run"
@@ -2343,10 +2566,18 @@ class Classifier:
                                     "（表の画像の置き場所を作る）")
                     else:
                         plan.decide("mechanical", "table", b.src, "表キャプションに対応する表が見つからない")
+                        if stop is not None:
+                            node.why, node.why_ref = "next_caption", flat[stop][1].src
                 put(node, k)
                 continue
             if role == "table":
-                put(TableNode(table=b), k)
+                node = TableNode(table=b)
+                if last and prev[k] is not None and isinstance(out[last[0]], TableNode) \
+                        and out[last[0]].table is not None and flat[prev[k]][1] is out[last[0]].table:
+                    # 表のすぐ後ろ（間は空白だけの段落）に続く、キャプションのない表（分かれた表。C027 の (d)。つながない）
+                    chain[id(node)] = chain.get(id(out[last[0]]), out[last[0]])
+                    parts.append(node)
+                put(node, k)
                 continue
             if role in HEADING_LEVEL:
                 put(Sec(level=HEADING_LEVEL[role], heading=b), k)
@@ -2373,6 +2604,11 @@ class Classifier:
                     put(ListNode(items=[b], ordered=ordered), k)
                 continue
             put(PNode(b), k)
+        # 分かれた表は、連なりの最初の表にキャプションがあるときだけ知らせる（キャプションのない表どうしが続く所は、別の表のことが多い。
+        # キャプションは表の下の表キャプションで後から付くこともあるので、組み立ての後に見る）
+        for node in parts:
+            if chain[id(node)].caption is not None:
+                plan.table_parts.append(TablePart(kind="split", node=node, head=chain[id(node)]))
         # キャプションのない画像段落 → キャプションなしの図
         final = []
         for node in out:
@@ -2504,8 +2740,37 @@ class Classifier:
             plan.decide("mechanical", "figure", b.src, "図キャプションに対応する画像が見つからない（図形・グループ化等の可能性）")
         return fig
 
+    @staticmethod
+    def is_caption_more(st, j) -> bool:
+        """flat[j] が、番号で始まらない表キャプション（直前の表キャプションの続きになる段落。assemble_floats の上の枝と同じ条件）か。"""
+        role, b = st.flat[j]
+        return role == "table_caption" and b is not None and id(b) not in st.used \
+            and not RE_TABCAP.match(nfkc(_para_text(b)).strip())
+
+    def caption_more_end(self, st, k):
+        """表キャプション flat[k] のすぐ後ろ（同じ置き場所）に続く、番号で始まらない表キャプション（続き）の最後の位置。続きがなければ None
+        （C027 の (a)。続きが 2 段落以上でも、続きの直後の表をこのキャプションの表にする）。"""
+        end, j = None, st.nxt[k]
+        while j is not None and self.is_caption_more(st, j):
+            end, j = j, st.nxt[j]
+        return end
+
+    @staticmethod
+    def next_numbered_caption(st, k, j) -> bool:
+        """flat[j] が、表キャプション flat[k] と別の番号で始まる表キャプションか（C027 の (b)。これを飛び越えて後ろの表を取らない）。
+        同じ番号のキャプション（和文の「表1」の後ろの英文の「Table 1」）は、同じ表の 2 つ目のキャプションとして飛び越える（今までどおり）。"""
+        role, b = st.flat[j]
+        if role != "table_caption" or b is None:
+            return False
+        m = RE_TABCAP.match(nfkc(_para_text(b)).strip())
+        if not m:
+            return False
+        mine = RE_TABCAP.match(nfkc(_para_text(st.flat[k][1])).strip())
+        return not (mine and int(mine.group(1)) == int(m.group(1)))
+
     def table_image_paras(self, st, k) -> list:
         """本体の表が見つからない表キャプション flat[k] の、画像で貼った表の画像だけの段落（修正計画 W1 の 2.3 の C の (2)）。
+        キャプションに続き（番号で始まらない表キャプション）があるときは、k に最後の続きの位置を渡す（単位 B の B3）。
 
         キャプションのすぐ後ろ（同じ置き場所の要素。空の段落は飛ばす）が画像だけの段落なら、そこから続く画像だけの段落を含める。
         図キャプションを図の下に置く原稿（captions_below）で、その並びの直後（空の段落を除く）に図キャプションがあるときは、
@@ -3556,6 +3821,27 @@ class Classifier:
         plan.figures, plan.tables, plan.formulas = figs, tabs, forms
         self.assign_slots()
 
+    def cell_captions_in(self, node, t):
+        """出力する表 node（本体 t。入れ子の表も）のセルの中の、番号で始まる表キャプション・図キャプション（cell_caption）を
+        plan.table_parts に足す（要確認 table_parts。C031。XML は表のまま。図の画像の置き場所は cell_figures_in が作る）。
+        表キャプションは、表の 1 行目のセルなら cell_table_cap_first、2 行目以降なら cell_table_cap_mid（2 つの表がつながっている）。
+        入れ子の表の行は、その入れ子の表の中で数える。表で組んだ図（FigNode.tables）の表は呼ばない（意図して表で組んだ図）。"""
+        for r, row in enumerate(t.rows):
+            for c in row.cells:
+                for q in c.blocks:
+                    if isinstance(q, Table):
+                        self.cell_captions_in(node, q)
+                        continue
+                    if not isinstance(q, Para):
+                        continue
+                    role = self.cell_caption(q)
+                    text = nfkc(_para_text(q)).strip()
+                    if role == "table_caption" and RE_TABCAP.match(text):
+                        self.plan.table_parts.append(TablePart(kind="cell_table_cap_first" if r == 0 else "cell_table_cap_mid",
+                                                               node=node, para=q, row=row.number or r + 1))
+                    elif role == "fig_caption" and RE_FIGCAP.match(text):
+                        self.plan.table_parts.append(TablePart(kind="cell_fig_cap", node=node, para=q, row=row.number or r + 1))
+
     def cell_figures_in(self, t) -> list:
         """表 t（入れ子の表も）のセルの中の図キャプションと、その図の画像の置き場所（修正計画 W1 の 2.3 の D の「表のセル」。C031）。
 
@@ -3758,8 +4044,14 @@ class Classifier:
                                       else node.image_paras[0].src, covers=covers, float_id=fl, place="table", how=node.how, note=note)
                 add(node.slot)
 
+        owner = None            # 直前にたどった図・表（grid の表の持ち主。表で組んだ図の本体の表は、セルのキャプションを知らせない）
+        plan.table_parts = [p for p in plan.table_parts if p.kind == "split"]     # セルのキャプションはたどり直すたびに数え直す
         for kind, x in plan_figures(plan):
+            if kind in ("fig", "table"):
+                owner = x
             if kind == "grid":
+                if isinstance(owner, TableNode):
+                    self.cell_captions_in(owner, x)
                 for slot in self.cell_figures_in(x):
                     if not slot.covers:
                         cell_empty[slot.caption.src] = slot

@@ -429,6 +429,7 @@ class PdfCheck:
     ok: bool = True                 # PDF の文字を読めたか
     message: str = ""               # 読めなかった理由など
     checked: int = 0                # 照合した段落の数
+    hidden_chars: int = 0           # 照合に使わなかった、描かれない PDF の文字（クリップの外。空白を除く）の数（extract_pages。C022）
     unmatched: list = field(default_factory=list)   # PDF の中に見つからなかった段落の src
     width: dict = field(default_factory=dict)       # src -> {plain 上の位置: PDF の文字}
     drops: dict = field(default_factory=dict)       # src -> {plain 上の位置（落とす半角の空白）}
@@ -460,6 +461,12 @@ class PdfCheck:
     # 見つからない段落の数。次の 3 つは、判定に進んだとき（見つからない段落が半分を超えたとき）だけ入る:
     # verdict_readable: PDF の文字のうち docx に出てくる文字の割合、has_title: 判定に使う題目の段落があったか（なければ "wrong"
     # にならない）、verdict_title: 題目の一致の割合（いちばん高い窓。has_title が偽なら None）
+    # 冒頭部（題目・著者名・所属）の、PDF と照らした確かめ（frontcheck.pdf_findings。check_pdf が入れる。知らせにだけ使う）:
+    # front: [FrontFinding]、front_on_page: 題目のページに文字がある和文の候補の段落 ID
+    front: list = field(default_factory=list)
+    front_on_page: set = field(default_factory=set)
+    # 冒頭部の確かめ（frontcheck.pdf_findings）が想定外の例外で失敗したときの例外の型の名前（13 章の記録に 1 行。知らせにはしない）
+    front_error: str = ""
     verdict: str = ""
     verdict_counted: int = 0
     verdict_missing: int = 0
@@ -522,14 +529,131 @@ class PdfCheck:
 
 
 # ---------------------------------------------------------------------------- PDF の文字
-def extract_pages(pdf_path) -> list:
-    """PDF の各ページの文字（pypdfium2）。"""
+class PdfPages(list):
+    """PDF の各ページの文字（extract_pages）。hidden: 描かれない文字（クリップの外の文字）として除いた、空白でない文字の数。"""
+    hidden = 0
+
+
+CLIP_SLACK = 0.5        # 文字枠がクリップの外接矩形（これ〈pt〉だけ広げたもの）と少しも重ならなければ、描かれない文字とみなす
+
+
+def extract_pages(pdf_path) -> PdfPages:
+    """PDF の各ページの文字（pypdfium2）。描かれない文字（クリップの外の文字。C022）は除く。
+
+    組版で Word の PDF のページを図として置き、枠で切り抜いたページでは、枠の外の文字（元の Word の文字の層）が、描かれないまま
+    文字として残っている。ページの物を Form XObject の中まで再帰的にたどり、各物のクリップの外接矩形をページの座標に直して（親の
+    Form の行列を掛け合わせ、親のクリップとの共通部分を子に引き継ぐ）、文字枠（left・right・bottom・top）がその矩形（CLIP_SLACK の余裕）と
+    少しも重ならない文字を除く（クリップの境目にかかって一部が描かれる文字は残す。見えている文字を除かない向きに倒す）。クリップは
+    外接矩形で近似する: 1 つの物のクリップが複数のパスからなるとき（pdfium では各パスの共通部分）も、すべてのパスの点の外接矩形（和）を
+    取るので、描かれない文字を残すことはあっても（残す向き）、描かれる文字を除くことはない。
+    物のない文字（pdfium が足す空白・改行）と、クリップのない物の文字は残す。描画モード 3（透明な文字）は除かない。
+    空白を含めて 1 文字も除かないページは、今までどおり get_text_range() をそのまま返す（描かれない文字のない PDF では、
+    抽出は 1 バイトも変わらない）。除いたページは、残る文字を連続した範囲ごとに get_text_range でつなぐ。
+    pypdfium2 に、物とクリップをたどる関数がない版では、今までどおりページの文字をすべて返す。
+    """
     import pypdfium2 as pdfium
     doc = pdfium.PdfDocument(str(pdf_path))
+    out = PdfPages()
     try:
-        return [doc[i].get_textpage().get_text_range() for i in range(len(doc))]
+        raw = _clip_api()
+        for i in range(len(doc)):
+            page = doc[i]
+            tp = page.get_textpage()
+            keep = _visible_chars(page, tp, raw) if raw is not None else None
+            if keep is None or all(keep):
+                out.append(tp.get_text_range())
+                continue
+            out.hidden += sum(1 for k, ok in enumerate(keep) if not ok and not chr(raw.FPDFText_GetUnicode(tp.raw, k)).isspace())
+            parts, k, n = [], 0, len(keep)
+            while k < n:
+                if not keep[k]:
+                    k += 1
+                    continue
+                j = k
+                while j < n and keep[j]:
+                    j += 1
+                parts.append(tp.get_text_range(k, j - k))
+                k = j
+            out.append("".join(parts))
+        return out
     finally:
         doc.close()
+
+
+def _clip_api():
+    """描かれない文字を見分けるのに使う pypdfium2 の生の関数（pypdfium2.raw）。足りない版では None。"""
+    try:
+        import pypdfium2.raw as raw
+    except ImportError:
+        return None
+    need = ("FPDFPage_CountObjects", "FPDFPage_GetObject", "FPDFPageObj_GetType", "FPDFPageObj_GetClipPath",
+            "FPDFPageObj_GetMatrix", "FPDFClipPath_CountPaths", "FPDFClipPath_CountPathSegments",
+            "FPDFClipPath_GetPathSegment", "FPDFPathSegment_GetPoint", "FPDFFormObj_CountObjects", "FPDFFormObj_GetObject",
+            "FPDFText_CountChars", "FPDFText_GetTextObject", "FPDFText_GetCharBox", "FPDFText_GetUnicode", "FS_MATRIX")
+    return raw if all(hasattr(raw, x) for x in need) else None
+
+
+def _visible_chars(page, tp, raw) -> list:
+    """ページの文字（textpage tp の位置の順）ごとに、描かれる（クリップの中、またはクリップのない）文字か。"""
+    import ctypes
+    clips = {}          # 文字の物 -> ページの座標のクリップの外接矩形（None ならクリップなし）
+    _walk_clips(raw, [raw.FPDFPage_GetObject(page.raw, k) for k in range(raw.FPDFPage_CountObjects(page.raw))],
+                (1.0, 0.0, 0.0, 1.0, 0.0, 0.0), None, clips)
+    keep = []
+    box = [ctypes.c_double() for _ in range(4)]
+    for k in range(raw.FPDFText_CountChars(tp.raw)):
+        o = raw.FPDFText_GetTextObject(tp.raw, k)
+        c = clips.get(ctypes.cast(o, ctypes.c_void_p).value) if o else None
+        if c is None:
+            keep.append(True)
+            continue
+        raw.FPDFText_GetCharBox(tp.raw, k, *box)
+        left, right, bottom, top = (b.value for b in box)
+        # 文字枠が矩形と少しでも重なれば残す（境目にかかって一部が描かれる文字。点検 review19 の 2 回目）
+        keep.append(right >= c[0] - CLIP_SLACK and left <= c[2] + CLIP_SLACK and top >= c[1] - CLIP_SLACK
+                    and bottom <= c[3] + CLIP_SLACK)
+    return keep
+
+
+def _mat_mul(a, b):
+    """行列 a の後に b を掛けたもの（どちらも PDF の (a, b, c, d, e, f)。点は (x, y) に a を当ててから b を当てる）。"""
+    return (a[0] * b[0] + a[1] * b[2], a[0] * b[1] + a[1] * b[3], a[2] * b[0] + a[3] * b[2], a[2] * b[1] + a[3] * b[3],
+            a[4] * b[0] + a[5] * b[2] + b[4], a[4] * b[1] + a[5] * b[3] + b[5])
+
+
+def _clip_box(raw, obj, m):
+    """物 obj のクリップの外接矩形を、行列 m でページの座標に直したもの。クリップがなければ None。"""
+    import ctypes
+    cp = raw.FPDFPageObj_GetClipPath(obj)
+    if not cp:
+        return None
+    xs, ys = [], []
+    x, y = ctypes.c_float(), ctypes.c_float()
+    for i in range(raw.FPDFClipPath_CountPaths(cp)):
+        for j in range(raw.FPDFClipPath_CountPathSegments(cp, i)):
+            seg = raw.FPDFClipPath_GetPathSegment(cp, i, j)
+            raw.FPDFPathSegment_GetPoint(seg, x, y)
+            xs.append(m[0] * x.value + m[2] * y.value + m[4])
+            ys.append(m[1] * x.value + m[3] * y.value + m[5])
+    return (min(xs), min(ys), max(xs), max(ys)) if xs else None
+
+
+def _walk_clips(raw, objs, m, clip, out):
+    """物の並び objs（行列 m の座標。親から引き継いだクリップ clip）をたどり、文字の物ごとのクリップを out に入れる。"""
+    import ctypes
+    for o in objs:
+        c = clip
+        b = _clip_box(raw, o, m)
+        if b is not None:
+            c = b if c is None else (max(c[0], b[0]), max(c[1], b[1]), min(c[2], b[2]), min(c[3], b[3]))
+        kind = raw.FPDFPageObj_GetType(o)
+        if kind == raw.FPDF_PAGEOBJ_FORM:
+            fm = raw.FS_MATRIX()
+            raw.FPDFPageObj_GetMatrix(o, fm)
+            kids = [raw.FPDFFormObj_GetObject(o, k) for k in range(raw.FPDFFormObj_CountObjects(o))]
+            _walk_clips(raw, kids, _mat_mul((fm.a, fm.b, fm.c, fm.d, fm.e, fm.f), m), c, out)
+        elif kind == raw.FPDF_PAGEOBJ_TEXT:
+            out[ctypes.cast(o, ctypes.c_void_p).value] = c
 
 
 @dataclass
@@ -3062,8 +3186,12 @@ def _classify(p, seq, gens, win, ops, unsure, st: PdfStream, owner, owned_lines,
             # みなさないため、消すと「図１架空の…」になっていた。0.28.0 から）
             if not gap or not all(text[x] == " " for x in gap):
                 continue
+            # PDF の同じ行に区切りの空白が見える所（全角の空白、または前後がどちらも字形の中に空きのある全角の約物でない所。
+            # _seen_space）も消さない。表の番号と題の間・見出しの番号と題の間などの本物の区切りで、消すと docx にも PDF にもない
+            # 「表１架空の…」の形になる（C050）。全角の約物の隣に見える空白は、約物の字形の中の空きを pdfium が空白として
+            # 出したもの（見かけの空白）なので、今までどおり消す（残すと「語 （Owl」の二重の空きになる）
             pk = d2w[k]
-            if not _pdf_space(st, pk):
+            if not _pdf_space(st, pk) and not _seen_space(st, pk):
                 basis = ("width", seq[i][1]) if i in width else ("number", *gens[i][:2])
                 for x in gap:
                     if x not in locked:
@@ -3167,6 +3295,22 @@ def _pdf_space(st: PdfStream, k: int, prev: int = None) -> bool:
     if prev < 0 or not (st.space_before[k] or st.newline_before[k]):
         return False
     return _latin(st.chars[prev]) and _latin(st.chars[k])
+
+
+# 字形の中に空きのある全角の約物（かっこ・句読点・中点など。和文のフォントの引用符も）。この隣に PDF で見える空白は、
+# 約物の字形の中の空きを pdfium が空白として出したもの（見かけの空白）とみなす（_seen_space）
+SPACED_PUNCT = frozenset("（）［］｛｝〈〉《》「」『』【】〔〕，．、。：；・！？“”‘’〝〟")
+
+
+def _seen_space(st: PdfStream, k: int) -> bool:
+    """PDF の k 番目の文字の前の同じ行に、区切りとして見える空白があるか（_pdf_space が見かけの空白とみなす、和文・全角の
+    文字の隣の空白のうち、残すもの。_classify の drops。C050）。
+
+    同じ行の中の空白（改行でない）で、全角の空白（wide_space）か、前後の文字がどちらも SPACED_PUNCT にないとき真。
+    """
+    if k <= 0 or st.newline_before[k] or not st.space_before[k]:
+        return False
+    return bool(st.wide_space[k]) or (st.chars[k - 1] not in SPACED_PUNCT and st.chars[k] not in SPACED_PUNCT)
 
 
 def _latin(c: str) -> bool:
@@ -3350,6 +3494,14 @@ def check_pdf(plan, pdf_path, fn_marks=None) -> PdfCheck:
     except Exception as e:  # noqa: BLE001
         return PdfCheck(ok=False, message=f"PDF を読めなかった: {e}")
     try:
-        return compare(plan, pages, fn_marks)
+        res = compare(plan, pages, fn_marks)
+        res.hidden_chars = getattr(pages, "hidden", 0)
     except Exception as e:  # noqa: BLE001  ページの順が逆の PDF など、照合の想定外の形でも変換は止めない（PDF を読めなかったときと同じ扱い）
         return PdfCheck(ok=False, message=f"PDF の文字を読めたが、照合できなかった（{type(e).__name__}）。ページの順や中身を確かめてください")
+    try:
+        from . import frontcheck           # 遅れて import する（frontcheck が pdfmatch の core などを使うため）
+        res.front, res.front_on_page = frontcheck.pdf_findings(plan, pages, res)
+    except Exception as e:  # noqa: BLE001  冒頭部の確かめの失敗は、PDF との照合の結果（res）を損なわない（13 章に記録するだけ）
+        res.front, res.front_on_page = [], set()
+        res.front_error = type(e).__name__
+    return res

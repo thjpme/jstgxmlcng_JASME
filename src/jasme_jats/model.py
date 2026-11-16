@@ -186,6 +186,8 @@ class Table:
     in_textbox: bool = False    # テキストボックスの中の表（浮動配置でない VML・行内の図形の中の表は、float_id が空でも True）
     textbox_id: str = ""        # テキストボックスの中の表なら、そのテキストボックス（TextBox）の ID
     skipped_rows: int = 0       # 変更履歴で削除された、文字のない行のうち、読み飛ばした行の数（docx_reader。rows に入れていない）
+    floating: bool = False      # 文字列の折り返しを「する」にした（浮動配置の。w:tblPr/w:tblpPr のある）表。docx の流れの位置と
+                                # ページの位置が違うことがある（C027。pipeline.bodyless_tables の候補の順に使う。文字の読み取りは変えない）
 
     def paragraphs(self):
         for r in self.rows:
@@ -348,6 +350,24 @@ class LostNumber:
     location: str      # 段落の場所（plan.locations。なければ領域の名前・Word の脚注など）
     where: str         # 段落の文字を出した XML の要素（td・p など。最初の jx:span の親の要素名）
     text: str = ""     # 段落の文字の冒頭 20 字（Word で探す手がかり）
+
+
+@dataclass
+class BodylessTable:
+    """本体（Word の表・画像で貼った表の置き場所）のない表（<table-wrap> に <table>・<graphic>・<alternatives> のどれもない。
+    pipeline.bodyless_tables が置き場所をすべて書いた XML で調べる。要対応 table_body。C003 の表の側・C027）。
+
+    キャプションだけの表として XML に出ていて、表として組めていない（中身は本文の段落やキャプションのない表として別に出ていることがある）。"""
+    tid: str            # 表の ID（T1 など。XML の id がない・組み立ての記録に戻せないときは空）
+    caption_src: str    # 表キャプションの段落の ID（戻せないときは空）
+    head: str           # 表キャプションの文字（Word で探す手がかり。知らせでは冒頭だけを出す）
+    # 理由の種類: next_caption（すぐ後ろが別の表キャプション）・floating（浮動配置の表がこの表かもしれない）・caption_style（「図」で始まる
+    # キャプションに表キャプションのスタイル）・same_number（直前の表キャプションと同じ番号。英文のキャプションなど）・""（その他）
+    why: str = ""
+    why_ref: str = ""   # next_caption: すぐ後ろの表キャプションの段落 ID。same_number: 直前の表キャプションの段落 ID
+    why_ref_head: str = ""   # next_caption・same_number: why_ref の表キャプションの文字
+    # この表かもしれない、キャプションのない表 [(表の ID, 最初のセルの文字, 浮動配置の表か), …]（浮動配置の表が先、同じ章が次。最大 3 つ）
+    candidates: list = field(default_factory=list)
 
 
 @dataclass

@@ -3,7 +3,7 @@ report.actions() の 1 か所のまま。止める知らせは report.blocking()
 import re
 
 import answers
-from conftest import FULL, META_EXAMPLE
+from conftest import FULL, META_EXAMPLE, NOTES
 
 from jasme_jats import colab, report
 from jasme_jats.pipeline import Options, convert
@@ -149,10 +149,10 @@ def test_ai_finish_is_recommended_and_does_not_block(journal, meta, tmp_path):
 
 
 def test_no_ai_finish_without_floats_to_ask(journal, meta, tmp_path):
-    """位置を聞く図形のない原稿（sample_full）では、AI を使わなくても、手動の回答待ちでも、ai_finish は出ない（W8 の手順 1。
-    回答待ちは今の ai_pending のまま）。"""
+    """位置を聞く図形もスタイルを確かめる段落もない原稿（sample_notes）では、AI を使わなくても、手動の回答待ちでも、ai_finish は出ない
+    （W8 の手順 1。回答待ちは今の ai_pending のまま。sample_full は標準スタイルの章見出しの heading_guess で出る）。"""
     for mode in ("none", "manual"):
-        res = convert(FULL, meta, journal, Options(out_dir=tmp_path / mode, ai_mode=mode))
+        res = convert(NOTES, meta, journal, Options(out_dir=tmp_path / mode, ai_mode=mode))
         assert res.plan.asked_floats == []
         assert "ai_finish" not in [a.key for a in report.actions(res)]
 
@@ -251,7 +251,7 @@ def test_api_failure_is_recommended_step_and_exit_code_0(journal, meta, tmp_path
     assert fin is not None and fin.failed and not fin.done and not res.needs_action and blocking(report.actions(res)) == []
     assert fin.box_title == "AI の回答を反映できませんでした" and report.step("convert_again") in fin.box_detail
     assert "（また失敗するときは、手動に切り替えます）" in fin.box_detail
-    assert _finish(convert(FULL, meta, journal, Options(out_dir=tmp_path / "w", ai_mode="manual"))) is None
+    assert _finish(convert(NOTES, meta, journal, Options(out_dir=tmp_path / "w", ai_mode="manual"))) is None
     pics = tmp_path / "pics"
     pics.mkdir()
     for key in keys:

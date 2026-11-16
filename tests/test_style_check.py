@@ -1,6 +1,6 @@
 """要確認 style_check（スタイルを確かめる段落）と ai_boundary（AI の回答で直した注の区切り・資料の始まり）。修正計画 W8 の手順 8。
 
-機械の検出（plan.style_suspects。検出そのものは修正計画の単位 D が足す）は、ここでは変換の後の plan に手で入れて確かめる。
+機械の検出（plan.style_suspects）は、ここでは変換の後の plan に手で入れて確かめる（検出そのもの〈修正計画の単位 D〉は tests/test_body_back_suspects.py）。
 AI の提案（AIOutcome.style_fixes）は、今の形の回答の set_role（区切りの 5 つ以外）から作られる（W8 の手順 5）。実際の API は呼ばない。
 """
 import answers
@@ -50,7 +50,9 @@ def test_style_check_from_machine_suspects_without_ai(journal, meta, tmp_path):
     assert [line.split("（")[0] for line in lines] == [f"・{s1}", f"・{s2}"]          # 段落の順
     assert lines[0].endswith("項見出しのスタイルですが、番号の形は節です。直し方: 番号の形に合う階層の見出しのスタイルにする。")
     assert lines[1].endswith("本文のスタイルですが、引用の形をしています。直し方: 引用なら、ブロック引用のスタイルにする。")
-    assert "AI の提案:" not in act.box_detail and "XML には反映していません" in act.box_detail
+    # AI を使っていない（行に AI の提案がない）ので、「AI の提案は XML に反映していない」とは言わない（点検 review19 の 3 回目の利用者向け 5）
+    assert "AI の提案:" not in act.box_detail and "XML には反映していません" not in act.box_detail
+    assert "AI の提案" not in act.top and "AI の提案" not in act.cli
     assert s1 in act.top and s1 in act.cli and "2 か所" in act.checklist
     fin = _act(res, "ai_finish")
     assert fin.level == STEP and not fin.required and fin.box_title == "AI にスタイルの直し方を提案させる"
@@ -76,6 +78,9 @@ def test_ai_proposal_joins_machine_line_and_keep_does_not_remove_it(journal, met
     assert "直し方:" not in lines[0]
     assert lines[1].endswith("AI の見立て: このままでよい（本文の文の形）。")
     assert act.box_title.startswith("スタイルを確かめてください（2 か所）")
+    # 行に AI の提案があるときだけ、「AI の提案は XML に反映していない」と添える（点検 review19 の 3 回目の利用者向け 5）
+    assert act.box_detail.startswith(report.STYLE_CHECK_AI_NOTE) and report.STYLE_CHECK_AI_NOTE in act.top
+    assert "（AI の提案は XML に反映していない）" in act.cli
 
 
 def test_ai_only_proposals_show_high_and_middle_only(journal, meta, tmp_path):

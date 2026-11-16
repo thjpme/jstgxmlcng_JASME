@@ -157,12 +157,12 @@ def _png(size=(120, 80)):
 
 
 def _template_result(tmp_path):
-    from conftest import TEMPLATE
+    from conftest import TEMPLATE_FILLED
     from jasme_jats.config import ArticleMeta, JournalConfig
     from jasme_jats.pipeline import Options, convert
     meta = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "pub_date": "2026-03-31", "received": "2025-06-01", "accepted": "2025-11-20", "peer_review": "あり"})
     # 図・表の画像は作業する人が入れる（修正計画 W1）: 変換の直後は、テンプレートの図 1 の画像はまだない
-    return convert(TEMPLATE, meta, JournalConfig.load(), Options(out_dir=tmp_path / "output"))
+    return convert(TEMPLATE_FILLED, meta, JournalConfig.load(), Options(out_dir=tmp_path / "output"))
 
 
 def _step7_ns(res, uploads):

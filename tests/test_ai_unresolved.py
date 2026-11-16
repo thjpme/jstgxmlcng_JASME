@@ -119,6 +119,7 @@ def test_style_suspects_and_names_sections(journal):
     # スタイルを確かめる段落は、段落 ID・スタイル名（本文のスタイルなら書かない）・先頭の文字・機械の見立て。和文の氏名だけを
     # 「# 姓と名の区切りを確かめる氏名」に載せる。どちらも、なければ節を出さない
     _, plan, linker = _mechanical(FULL, journal)
+    plan.style_suspects = []        # sample_full の機械の検出（標準スタイルの章見出しの heading_guess）を外して、ないときを見る
     assert SUSPECTS_HEADING not in build_request(plan, linker).data
     head = next(s for s, p in plan.paras.items() if p.role == "sec1")
     body = next(s for s in plan.body_seq if plan.paras[s].role == "p" and plan.paras[s].plain().strip())

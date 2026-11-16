@@ -62,16 +62,17 @@ from .imagelist import write_check
 from .images import ChangedImage, DroppedImage, KeptImage, SlotImage, check_user_image
 from .jstage_rules import check as jstage_check
 from .linker import cited_refs, link
-from .model import Decision, Decoration, LostImage, LostNumber, PuaChar, TableProblem
+from .model import BodylessTable, Decision, Decoration, LostImage, LostNumber, PuaChar, TableProblem
 from .package import (XLINK_HREF, apply_images, article_dir, make_zip, unzipped_files, write_package, zip_image_names,
                       zip_problems)
 from .pdfbiblio import PdfBiblio, read_biblio
 from .pdfdocx import DocxFix, make_fixed_docx, same_file
 from .pdfmatch import PdfCheck, check_pdf
-from .report import (actions, blocking, decoration_where, pdf_unseen, render, render_ai_only, slot_where, step,
-                     structure_conflict_text, wrong_paper_text)
+from .report import (actions, blocking, decoration_where, pdf_unseen, render, render_ai_only, shorten_shown, shown_text, slot_where,
+                     step, structure_conflict_text, table_body_why, table_part_rows, wrong_paper_text)
 from .report import pdf_fallback as report_pdf_fallback
-from .structure import FN_IMAGE_EXCLUDED, REF_IMAGE_EXCLUDED, classify, conflict_overrides, float_caption
+from .structure import (FN_IMAGE_EXCLUDED, RE_FIGCAP, RE_TABCAP, REF_IMAGE_EXCLUDED, classify, conflict_overrides, float_caption,
+                        nfkc)
 from .ooxml import is_pua
 from .tracking import GEN, SPAN
 from .validate import validate
@@ -226,6 +227,7 @@ class Result:
     unshown_numbers: list = field(default_factory=list)  # 番号を出さなかった題目・副題・著者名・所属の段落（BuildInfo.unshown_numbers。10 章）
     table_problems: list = field(default_factory=list)  # 出力した XML の表の形の崩れ（TableProblem。要対応 table_shape）
     tables_checked: int = 0                             # 形を確かめた表の数（12 章。すべての行が削除された空の表は数えない）
+    bodyless_tables: list = field(default_factory=list)  # 本体のない表（BodylessTable。キャプションだけの表。要対応 table_body・3 章）
     zip_issues: list = field(default_factory=list)      # アップロード用の ZIP を読み直して見つけた問題（package.zip_problems。jstage_issues とは別）
     not_zipped: list = field(default_factory=list)      # 記事フォルダにあるのに ZIP に入れなかったファイル（package.unzipped_files。10 章）
     hidden_images: list = field(default_factory=list)   # 隠し文字の中の画像の ID（Word で表示されないので出力しない）
@@ -585,6 +587,96 @@ def symbols_replaced(plan, root, doc) -> list:
     return [s for s in doc.symbols if s.to and (s.to in gens.get(s.src, "") if s.kind == "bullet" else s.src in spans)]
 
 
+BODY_TAGS = ("table", "graphic", "alternatives")     # <table-wrap> の本体になる子の要素
+BODYLESS_CANDIDATES = 3                             # 本体のない表に添える、キャプションのない表の候補の数
+
+
+def _table_src(t) -> str:
+    """表（TableNode）の段落 ID: キャプションがあればキャプション、なければ表の最初の段落（なければ空）。"""
+    if t.caption is not None:
+        return t.caption.src
+    return next((p.src for p in (t.table.paragraphs() if t.table is not None else [])), "")
+
+
+def _src_order(src) -> int:
+    """本文の段落 ID（d123）の docx の順。本文の段落でなければ大きな値。"""
+    return int(src[1:]) if src[:1] == "d" and src[1:].isdigit() else 1 << 30
+
+
+def _chapter(plan, src) -> str:
+    """段落の場所（plan.locations）の章（最初の「 > 」・「 / 」の前）。"""
+    return plan.locations.get(src, "").split(" / ")[0].split(" > ")[0]
+
+
+def _cap_key(text) -> str:
+    """キャプションの番号を見る文字（表示用の文字〈先頭の数式・画像の位置の印を除く〉を NFKC にし、前後の空白を除く）。"""
+    return nfkc(shown_text(text)).strip()
+
+
+def _cap_num(text) -> Optional[int]:
+    """表キャプションの番号（「表1」「Table 1」の 1）。番号で始まらなければ None。"""
+    m = RE_TABCAP.match(_cap_key(text))
+    return int(nfkc(m.group(1))) if m else None
+
+
+def bodyless_tables(plan, xml_base: bytes) -> list:
+    """本体のない表（<table-wrap> に <table>・<graphic>・<alternatives> のどれもない。BodylessTable の一覧。要対応 table_body）。
+
+    置き場所をすべて書いた XML（Result.xml_base）の木で数える（作業する人が「入れない」とした画像で貼った表は <graphic> があるので
+    数えない。AI の配置の後の XML なので、図形の中・注の節の表も拾う）。id で組み立ての記録（plan.tables）に戻し、理由と候補を添える。
+    候補は、同じ文書のキャプションのない表（本体のある表）を、浮動配置の表（Table.floating）を先に、同じ章を次に、最大 3 つ。
+    理由が空の表のうち、浮動配置の表ごとに、docx の順でその表に最も近い前の 1 つを理由 floating にする（浮動配置の表 1 つに、
+    本体のない表を 1 つだけ結び付ける）。理由が next_caption の表も、浮動配置の候補があれば、Action が浮動配置の案内を添える。
+    キャプションが図番号（RE_FIGCAP）で始まる表は理由 caption_style（図のキャプションに表キャプションのスタイル）、組み立ての理由が空で
+    docx の順で直前の表キャプションと同じ番号の表は理由 same_number（英文のキャプションなど）にし、どちらも候補を添えない。
+    """
+    nodes = {t.tid: t for t in plan.tables if t.tid}
+    captioned = sorted((t for t in plan.tables if t.caption is not None), key=lambda t: _src_order(t.caption.src))
+    found = []
+    for tw in _parse(xml_base).iter("table-wrap"):
+        if any(ch.tag in BODY_TAGS for ch in tw):
+            continue
+        t = nodes.get(tw.get("id") or "")
+        if t is None or t.caption is None:
+            cap = tw.find("caption")
+            found.append(BodylessTable(tid=tw.get("id") or "", caption_src="",
+                                       head="".join(cap.itertext()).strip() if cap is not None else ""))
+            continue
+        why, why_ref = t.why, t.why_ref
+        head = _para_text(t.caption).strip()
+        if RE_FIGCAP.match(_cap_key(head)):
+            why, why_ref = "caption_style", ""      # 図のキャプションに表キャプションのスタイル
+        elif not why:
+            prev = [u for u in captioned if _src_order(u.caption.src) < _src_order(t.caption.src)]
+            num = _cap_num(head)
+            if prev and num is not None and _cap_num(_para_text(prev[-1].caption)) == num:
+                why, why_ref = "same_number", prev[-1].caption.src  # 直前の表キャプションと同じ番号（英文のキャプションなど）
+        ref = plan.paras.get(why_ref) if why_ref else None
+        found.append(BodylessTable(tid=t.tid, caption_src=t.caption.src, head=head, why=why, why_ref=why_ref,
+                                   why_ref_head=_para_text(ref).strip() if ref is not None else ""))
+    if not found:
+        return found
+    loose = [t for t in plan.tables if t.caption is None and t.table is not None and t.tid]
+    for b in found:
+        if b.why in ("caption_style", "same_number"):   # 表の本体を探す話ではないので、候補を添えない
+            continue
+        here = _chapter(plan, b.caption_src) if b.caption_src else ""
+        ranked = sorted(loose, key=lambda t: (not t.table.floating, not (here and _chapter(plan, _table_src(t)) == here),
+                                              _src_order(_table_src(t))))
+        for t in ranked[:BODYLESS_CANDIDATES]:
+            first = next((_para_text(p).strip() for p in t.table.paragraphs() if _para_text(p).strip()), "")
+            b.candidates.append((t.tid, first, t.table.floating))
+    # 浮動配置の表ごとに、docx の順でその表に最も近い前の、理由が空の本体のない表を floating にする
+    for t in loose:
+        if not t.table.floating:
+            continue
+        at = _src_order(_table_src(t))
+        before = [b for b in found if not b.why and b.caption_src and _src_order(b.caption_src) < at]
+        if before:
+            max(before, key=lambda b: _src_order(b.caption_src)).why = "floating"
+    return found
+
+
 def table_problems(root, info) -> tuple:
     """出力した表の形の確かめ（不変性チェックは文字しか、DTD 検証は要素の並びしか見ないため）。
 
@@ -889,8 +981,9 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
 
     # 画像の出力漏れ（不変性チェックは文字しか見ない）
     lost, hidden_images = lost_images(doc, plan, root, info, plan.exclusions + info.exclusions, xml_base)
-    # 表の形の崩れ（不変性チェックは文字しか、DTD 検証は要素の並びしか見ない）
+    # 表の形の崩れ（不変性チェックは文字しか、DTD 検証は要素の並びしか見ない）と、本体のない表（キャプションだけの表）
     table_issues, tables_checked = table_problems(root, info)
+    bodyless = bodyless_tables(plan, xml_base)
     # 自動番号の出力漏れ（番号は docx の文字ではないので、不変性チェックは見ない）
     lost_numbers = lost_autonums(plan, root, info)
     # 私用領域の文字の守り（最終の XML に読めない文字が残っていないか）と、記号フォントの符号の置き換えの記録
@@ -965,6 +1058,13 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
                       "違えば XML の中で boxed-text を正しい位置に移す")
         # 場所の欄はアンカー段落の場所（空の段落なら、その前の段落の場所。本文の外なら「引用文献 3件目」など）
         unresolved_after.append(("box", _located(plan, bi.box.anchor_src), f"テキストボックス {xid}「{head}」", detail))
+    # 本体のない表（キャプションだけの表。要対応 table_body と同じ理由の文）。場所の欄はキャプションの段落の場所
+    for b in bodyless:
+        unresolved_after.append(("table_body", _located(plan, b.caption_src) if b.caption_src else (b.tid or "-"),
+                                 shorten_shown(b.head, 20), table_body_why(b)))
+    # 表の組み立てを確かめてもらう所（分かれた表・表のセルの中のキャプション。要確認 table_parts と同じ文）
+    for kind, src, text, why in table_part_rows(plan):
+        unresolved_after.append(("table_parts", _located(plan, src), text, why))
     warnings = list(dict.fromkeys(doc.warnings + plan.warnings + info.warnings))
     build_notes = [Decision(did=f"M-B{i}", stage="mechanical", category=c, src=s, message=m,
                             location=plan.locations.get(s, "")) for i, (c, s, m) in enumerate(info.notes, 1)]
@@ -978,7 +1078,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         prompt_path=prompt_path, pdf_name=Path(opts.pdf_path).name if opts.pdf_path else "", pdf_check=pdf_check, pdf_biblio=pdf_biblio, route=opts.route, docx_fix=docx_fix,
         supplement=supplement, lost_images=lost, hidden_images=hidden_images,
         lost_autonums=lost_numbers, unshown_numbers=list(info.unshown_numbers), pua_chars=pua_left, symbols_replaced=symbols,
-        table_problems=table_issues, tables_checked=tables_checked, zip_issues=zip_problems(zip_path, journal, meta, images),
+        table_problems=table_issues, tables_checked=tables_checked, bodyless_tables=bodyless, zip_issues=zip_problems(zip_path, journal, meta, images),
         image_problems=image_problems(xml_bytes, images),
         not_zipped=unzipped_files(out_dir, journal, meta, zip_path), joined=doc.joined, deleted_rows=doc.deleted_rows,
         newlines=info.newlines, name_splits=list(info.name_splits), style_hidden=doc.style_hidden, resultless_fields=doc.resultless_fields,

@@ -29,9 +29,11 @@ class UnlinkedRef(NamedTuple):
 
 
 # スタイルを確かめる段落の種類（StyleSuspect.kind）: 見出しのスタイルの段落に本文が続く（C037）・見出しの階層と番号の形が合わない（C038）・
-# 本文のスタイルの引用らしい段落（C129）・文字から見出しと推定した段落（C014）。検出は修正計画の単位 D が足す（W8 は入れ物と表示だけ）。
-# 記号だけの引用文献（ref_symbol。「.」だけの段落など。structure.Classifier.build_back が挙げる。XML の文字は変えず、Word で消してもらう）
-STYLE_SUSPECT_KINDS = ("heading_body", "heading_level", "quote_like", "heading_guess", "ref_symbol")
+# 本文のスタイルの引用らしい段落（C129）・文字から見出しと推定した段落（C014）・記号だけの引用文献（ref_symbol。「.」だけの段落など。
+# XML の文字は変えず、Word で消してもらう）・後付けの見出しの形の本文の段落（back_heading。C032）・前の文献の続きの疑い（ref_cont。C026）。
+# 検出する所: heading_body・heading_guess・back_heading は structure.Classifier.build_body（back_heading の一部は loose_back_headings）、
+# ref_symbol は structure.Classifier.build_back、ref_cont は refparse.ref_continuations。heading_level・quote_like は入れ物だけで、まだ検出しない
+STYLE_SUSPECT_KINDS = ("heading_body", "heading_level", "quote_like", "heading_guess", "ref_symbol", "back_heading", "ref_cont")
 
 
 class StyleSuspect(NamedTuple):
@@ -156,6 +158,26 @@ class TableNode:
     extra_images: list = field(default_factory=list)
     how: str = ""
     note: str = ""
+    # 本体（Word の表・画像で貼った表）が見つからなかった表キャプションの表の、理由の種類（単位 B。pipeline.bodyless_tables・
+    # 要対応 table_body）: "next_caption"（すぐ後ろが番号で始まる別の表キャプションで、後ろの表はそちらの表にした。why_ref に
+    # その段落 ID）、""（その他。キャプションの後ろに Word の表がない）。浮動配置の表の候補による "floating" は pipeline が決める
+    why: str = ""
+    why_ref: str = ""
+
+
+@dataclass(eq=False)
+class TablePart:
+    """表の組み立てを確かめてもらう所（要確認 table_parts。単位 B の C027 の (d)・C031。XML は docx の表のまま出す）。
+
+    kind: "split"（キャプション付きの表のすぐ後ろ〈間は空白だけの段落〉に続く、キャプションのない表。head に連なりの最初の表）、
+    "cell_table_cap_first"（表の 1 行目のセルの表キャプション）、"cell_table_cap_mid"（2 行目以降のセルの表キャプション。row に
+    docx の表の何行目か）、"cell_fig_cap"（セルの図キャプション）。node はその表（TableNode。TID は組み立ての後に決まるので、
+    知らせで node.tid を引く）。para はセルのキャプションの段落。"""
+    kind: str
+    node: object
+    head: object = None
+    para: Optional[Para] = None
+    row: int = 0
 
 
 @dataclass(eq=False)
@@ -348,6 +370,15 @@ class ArticlePlan:
     warnings: list = field(default_factory=list)     # 構造の組み立ての警告（pipeline がレポートの 10 章の警告に加える）
     abstract_ja: list = field(default_factory=list)  # 英文要旨の中の、かな・漢字が 3 割以上の段落 ID（自動では移さない。要確認）
     app_after_refs: list = field(default_factory=list)   # 引用文献などの後ろの、資料の見出しと思われる段落 ID（暫定で警告だけ）
+    # 引用文献の中の、年の読めない段落が続く所の最初の段落 ID（refparse.ref_continuations。資料の中身の疑い。要確認 app_after_refs の 1 行。C001）
+    ref_yearless_runs: list = field(default_factory=list)
+    # 前の文献の続きの疑いの文献の段落 ID（refparse.ref_continuations。3 章の「どこからもリンクされていない文献」の添え書き。C026）
+    ref_conts: list = field(default_factory=list)
+    # 引用文献の一覧が 1 件もないときの、本文の「著者（年）」の引用の数（refparse.refs_missing_cites。要対応 refs_missing。C032 の守り）
+    refs_missing_cites: int = 0
+    # 比べ方を直して初めて後付けの見出しと合い、後付けの見出しにした段落: 段落 ID -> 役割（structure.Classifier.loose_back_headings。C032。
+    # 要確認 style_check の AI だけの提案の行に、XML ではもう後付けの見出しとして出していることを添える）
+    loose_back: dict = field(default_factory=dict)
     # 文字から推定した注の見出し（本文スタイルの「注」だけの段落）の扱いの記録: (「注」の段落 ID, "returned"（本文に戻した）か "kept"
     # （注の番号で始まらない段落が続いたまま注の節として扱った）, 説明)。要確認で知らせる（Classifier.split_regions。report._fn_guess_action）
     fn_guess_checks: list = field(default_factory=list)
@@ -374,9 +405,12 @@ class ArticlePlan:
     # 画像の置き場所（ImageSlot。Classifier.assign_slots が、要素の木を XML とおおむね同じ順にたどって作る）と、画像の ID -> 置き場所
     slots: list = field(default_factory=list)
     slot_of: dict = field(default_factory=dict)
-    # 機械が挙げた、スタイルを確かめる段落（StyleSuspect。段落の順。要確認 style_check と推奨の手順 ai_finish の出す条件 3。
-    # 検出は修正計画の単位 D が足す。W8 は入れ物と表示だけ）
+    # 機械が挙げた、スタイルを確かめる段落（StyleSuspect。要確認 style_check と推奨の手順 ai_finish の出す条件 3。
+    # 検出する所は STYLE_SUSPECT_KINDS の注記）
     style_suspects: list = field(default_factory=list)
+    # 表の組み立てを確かめてもらう所（TablePart。分かれた表〈assemble_floats〉と、表のセルの中のキャプション〈assign_slots〉。
+    # 要確認 table_parts）
+    table_parts: list = field(default_factory=list)
 
     @property
     def unplaced_floats(self) -> list:
