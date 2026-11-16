@@ -27,6 +27,16 @@ LINKS_BARE = FIXTURES / "sample_links_bare.docx"   # 同じ規則の、注番号
 ALL_DOCS = [FULL, EDGE, TEMPLATE, NOTES, PDFCHECK, READER, STRUCTURE, CELLS, TABLEFIG, LINKS, LINKS_BARE]
 
 
+def write_blank_pdf(path):
+    """PDF として開ける白紙の 1 ページの PDF を書く（文字は読めない。画像だけの PDF の代わり）。"""
+    import pypdfium2 as pdfium
+    doc = pdfium.PdfDocument.new()
+    doc.new_page(200, 200)
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
 @pytest.fixture(autouse=True)
 def _this_request(monkeypatch):
     """テストの回答（tests/answers.py）の request_id の目印 THIS_REQUEST を、変換のときにその変換の依頼の番号に置き換える

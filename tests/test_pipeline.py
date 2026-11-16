@@ -598,8 +598,8 @@ def test_zip_image_names_by_status():
 
 def test_pdf_stays_in_zip_after_add_images(journal, meta, tmp_path):
     from jasme_jats.pipeline import add_images
-    pdf = tmp_path / "dummy.pdf"
-    pdf.write_bytes(b"%PDF-1.4 dummy\n")                    # 写すだけ（ルート1。照合では読めず、変換は続ける）
+    from conftest import write_blank_pdf
+    pdf = write_blank_pdf(tmp_path / "dummy.pdf")           # 写すだけ（ルート1。文字は読めず、照合できないが、変換は続ける）
     res = convert(TEMPLATE_FILLED, meta, journal, Options(out_dir=tmp_path / "out", pdf_path=pdf))
     assert res.has_pdf and "jasme/31/1/31_1/31_1.pdf" in _names(res.zip_path)
     res.zip_issues = [("-", "変換のときの値")]               # add_images が計算し直すことを確かめる
@@ -611,9 +611,8 @@ def test_pdf_stays_in_zip_after_add_images(journal, meta, tmp_path):
 
 
 def test_pdf_left_in_article_folder_can_be_given_again(journal, meta, tmp_path):
-    from conftest import PDFCHECK
-    pdf = tmp_path / "dummy.pdf"
-    pdf.write_bytes(b"%PDF-1.4 dummy\n")
+    from conftest import PDFCHECK, write_blank_pdf
+    pdf = write_blank_pdf(tmp_path / "dummy.pdf")
     out = tmp_path / "out"
     convert(PDFCHECK, meta, journal, Options(out_dir=out, pdf_path=pdf))
     # 記事フォルダに残っている PDF をそのまま指定しても（--pdf out/jasme/31/1/31_1/31_1.pdf）、同じファイルなので写さずに使う
@@ -652,8 +651,10 @@ def test_files_put_by_hand_are_not_zipped(journal, meta, tmp_path):
     assert "ZIP に入れなかったファイル 1 件（10 章）" in report.split("## 1.")[1].split("## 2.")[0]
 
 
-def test_empty_pdf_is_reported_by_zip_check(journal, meta, tmp_path):
+def test_empty_pdf_is_reported_by_zip_check(journal, meta, tmp_path, monkeypatch):
     from conftest import PDFCHECK
+    # 0 バイトの PDF は pdf_opens で ZIP に入れないが、ZIP の確かめ（zip_problems）が見つけることを、開けるものとして確かめる
+    monkeypatch.setattr("jasme_jats.pipeline.pdf_opens", lambda path: True)
     empty = tmp_path / "empty.pdf"
     empty.write_bytes(b"")
     res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "out", pdf_path=empty))
@@ -662,6 +663,52 @@ def test_empty_pdf_is_reported_by_zip_check(journal, meta, tmp_path):
     report = res.report_path.read_text(encoding="utf-8")
     assert "要対応 1 件（12 章）" in report.split("## 1.")[1].split("## 2.")[0]
     assert "| EMSGM059E |" in report.split("## 12.")[1].split("## 13.")[0]
+
+
+def test_unopenable_pdf_is_not_zipped(journal, meta, tmp_path, capsys):
+    """C098: PDF として開けないファイルは ZIP に入れず（記事フォルダにも置かず）、PDF の行を済みにしない。"""
+    from conftest import META_EXAMPLE, PDFCHECK
+    from jasme_jats.cli import main
+    fake = tmp_path / "fake.pdf"
+    fake.write_text("this is not a PDF file\n")
+    for route in ("pdf", "docx"):
+        out = tmp_path / route
+        res = convert(PDFCHECK, meta, journal, Options(out_dir=out, pdf_path=fake, route=route))
+        assert not res.has_pdf and "jasme/31/1/31_1/31_1.pdf" not in _names(res.zip_path)
+        assert not (out / "jasme/31/1/31_1/31_1.pdf").exists() and res.not_zipped == []
+        assert res.zip_issues == []
+        report = res.report_path.read_text(encoding="utf-8")
+        pdf_line = next(line for line in report.split("## することの一覧")[1].split("## 1.")[0].splitlines()
+                        if "PDF（31_1.pdf）" in line)
+        assert pdf_line.startswith("- [ ]") and "- [x] PDF（31_1.pdf）" not in report
+        assert "ZIP に入れていません" in report.split("## 1.")[1].split("## 2.")[0]
+    assert main([str(PDFCHECK), "--meta", str(META_EXAMPLE), "--out", str(tmp_path / "cli"), "--pdf", str(fake)]) == 1
+    assert "ZIP に入れていない" in capsys.readouterr().err
+
+
+def test_pdf_without_text_is_still_zipped(journal, meta, tmp_path):
+    """PDF として開ける PDF（画像だけの PDF など）は、文字を読めなくても今までどおり ZIP に入れる。"""
+    from conftest import PDFCHECK, write_blank_pdf
+    pdf = write_blank_pdf(tmp_path / "blank.pdf")
+    res = convert(PDFCHECK, meta, journal, Options(out_dir=tmp_path / "out", pdf_path=pdf, route="pdf"))
+    assert res.pdf_fallback and res.has_pdf and "jasme/31/1/31_1/31_1.pdf" in _names(res.zip_path)
+    assert "ZIP に入れていません" not in res.report_path.read_text(encoding="utf-8").split("## 1.")[1].split("## 2.")[0]
+
+
+def test_pdf_opens_without_pypdfium2_is_unchanged(tmp_path, monkeypatch):
+    """pypdfium2 が入っていない環境では、PDF として開けるかを確かめられないので、今までどおり開けるものとして扱う。"""
+    import builtins
+    from jasme_jats.pdfmatch import pdf_opens
+    real = builtins.__import__
+
+    def fake_import(name, *a, **k):
+        if name == "pypdfium2":
+            raise ImportError(name)
+        return real(name, *a, **k)
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    bad = tmp_path / "x.pdf"
+    bad.write_bytes(b"not a pdf")
+    assert pdf_opens(bad)
 
 
 def test_zip_of_second_article_in_same_out_dir(journal, tmp_path):
@@ -684,9 +731,8 @@ def test_zip_of_second_article_in_same_out_dir(journal, tmp_path):
 
 
 def test_pdf_of_previous_run_is_not_zipped(journal, meta, tmp_path):
-    from conftest import PDFCHECK
-    pdf = tmp_path / "dummy.pdf"
-    pdf.write_bytes(b"%PDF-1.4 dummy\n")                    # 写すだけ（照合では読めず、変換は続ける）
+    from conftest import PDFCHECK, write_blank_pdf
+    pdf = write_blank_pdf(tmp_path / "dummy.pdf")           # 写すだけ（文字は読めず、変換は続ける）
     out = tmp_path / "out"
     r1 = convert(PDFCHECK, meta, journal, Options(out_dir=out, pdf_path=pdf))
     assert r1.has_pdf and "jasme/31/1/31_1/31_1.pdf" in _names(r1.zip_path)

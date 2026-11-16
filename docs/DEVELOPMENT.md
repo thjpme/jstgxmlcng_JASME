@@ -122,7 +122,7 @@ python -m pytest
 7. アップロード用 ZIP に入れるものは `package.upload_entries()` だけで決め（`{aid}.xml`・今回置いた `{aid}.pdf`・作業する人が入れた画像
    〈`images.SlotImage` の状態が user〉）、できた ZIP は `package.zip_problems()` で読み直して確かめる（画像は、置き場所にない名前の画像と、入れたのに
    ZIP にない画像を見る。まだ入れていない画像は、手順 `images` が伝えるので数えない）。記事フォルダにあるのに入れなかったファイルは `Result.not_zipped` に持ち、
-   レポート 10 章で知らせる（`res.warnings` には入れない）。
+   レポート 10 章で知らせる（`res.warnings` には入れない）。指定された PDF が PDF として開けない（ページを 1 つも読めない。`pdfmatch.pdf_opens`）ときは、ZIP に入れず記事フォルダにも置かず、`pdf_fallback`・`pdf_unread` の文で「ZIP に入れていない」と知らせる（`report.pdf_not_zipped`。文字を読めないだけの PDF は入れる）。
 8. 利用者に知らせること（要対応・要確認・手順）は `report.actions()` に `report.Action` を 1 つ足す（冒頭の文・することの一覧の行・Colab の枠の
    見出しと本文・コマンドラインの文）。レポートの冒頭（することの一覧と囲み）、Colab の手順 5・6・8、コマンドラインに個別の表示を足さない。
    要対応はコマンドラインの終了コード 1 と Colab の手順 8 で一度止めること、要確認は黄色い枠と冒頭（することの一覧と囲み）だけ（終了コード 0）。

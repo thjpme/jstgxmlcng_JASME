@@ -66,7 +66,7 @@ def main(argv=None):
                     help="API モード（--ai api と一緒に指定する）: --pdf の出版版 PDF を AI に渡さない（既定では、選んだ AI に依頼のデータの"
                          "前に PDF を付けて送る。送ると図・表の位置の答えが正確になる）")
     ap.add_argument("--pdf", type=Path, help="記事の PDF（J-STAGE への登載に必須。指定すると ZIP に入れる。"
-                                          "指定しなければ、記事フォルダに前の変換の PDF が残っていても ZIP に入れない）")
+                                          "指定しなければ、記事フォルダに前の変換の PDF が残っていても ZIP に入れない。PDF として開けないファイルも入れない）")
     ap.add_argument("--route", choices=["docx", "pdf"],
                     help="表記の扱い。既定は --pdf があれば pdf、なければ docx。pdf: 全角・半角や句読点などの表記を --pdf の出版版 PDF に合わせた"
                          "docx（Word の変更履歴つき）を出力フォルダに作り、それを変換する（語句などの内容は docx のまま）。"

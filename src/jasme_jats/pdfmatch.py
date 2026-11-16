@@ -541,6 +541,25 @@ class PdfPages(list):
 CLIP_SLACK = 0.5        # 文字枠がクリップの外接矩形（これ〈pt〉だけ広げたもの）と少しも重ならなければ、描かれない文字とみなす
 
 
+def pdf_opens(pdf_path) -> bool:
+    """PDF として開けるか（ページが 1 つ以上読めるか）。文字を読めるかは見ない（画像だけの PDF は開ける）。
+
+    pypdfium2 が入っていないときは確かめられないので、開けるものとして扱う（check_pdf も同じ環境では照合できない）。
+    """
+    try:
+        import pypdfium2 as pdfium
+    except ImportError:
+        return True
+    try:
+        doc = pdfium.PdfDocument(str(pdf_path))
+    except Exception:  # noqa: BLE001
+        return False
+    try:
+        return len(doc) > 0
+    finally:
+        doc.close()
+
+
 def extract_pages(pdf_path) -> PdfPages:
     """PDF の各ページの文字（pypdfium2）。描かれない文字（クリップの外の文字。C022）は除く。
 

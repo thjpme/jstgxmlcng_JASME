@@ -3581,6 +3581,20 @@ def pdf_fallback(r) -> bool:
     return r.route == "pdf" and r.docx_fix is None and r.pdf_check is not None
 
 
+def pdf_not_zipped(r) -> bool:
+    """指定した PDF が PDF として開けず、ZIP に入れなかった（pipeline が has_pdf を立てなかった。C098）。
+
+    pypdfium2 が入っていないときは開けるかを確かめず、ZIP に入れるので、当てはまらない。
+    """
+    pc = r.pdf_check
+    return pc is not None and not pc.ok and not r.has_pdf
+
+
+NOT_ZIPPED_PDF = ("この PDF は PDF として開けないので、アップロード用の ZIP に入れていません"
+                  "（J-STAGE では PDF が必須です。PDF を選び直して変換し直してください）。")
+NOT_ZIPPED_PDF_CLI = "。この PDF は PDF として開けないので、ZIP に入れていない"
+
+
 def pdf_suspect(r) -> bool:
     """docx の段落の半分以上が PDF に見つからないが、題目は PDF にある（別の版の疑い。要確認。pdfmatch の verdict が suspect）。
     題目が PDF にないときは変換を中止する（pipeline.WrongPaperError）ので、ここには来ない。"""
@@ -3593,19 +3607,20 @@ def _pdf_fallback_action(r):
     if pc is None or pc.ok or not pdf_fallback(r):
         return None
     msg = pc.message
+    zip_note = NOT_ZIPPED_PDF if pdf_not_zipped(r) else ""
     return Action(
         NEEDS_ACTION, "pdf_fallback",
         top=(f"> **要対応: 出版版 PDF を読めませんでした（13 章）。** PDF の文字を読めなかったため（{esc(msg)}）、表記を PDF に"
              "合わせず、PDF との照合もしていません。XML は docx の文字のままです。文字を読める出版版 PDF を選んで変換し直してください"
-             "（画像だけの PDF〈スキャンした PDF など〉では、文字を読めません）。"),
+             f"（画像だけの PDF〈スキャンした PDF など〉では、文字を読めません）。{zip_note}"),
         checklist=("- [ ] **出版版 PDF を読めなかった**（13 章）: 文字を読める出版版 PDF を選んで変換し直す"
                    "（このままなら、表記を PDF に合わせず、照合もしていない。XML は docx の文字のまま）"),
         box_title="出版版 PDF を読めませんでした（要対応）",
         box_detail=(f"PDF の文字を読めなかったため（{msg}）、表記を PDF に合わせず、PDF との照合もしていません。XML は docx の文字の"
                     f"ままです。文字を読める出版版 PDF を{step('pdf')}で選び直して変換し直してください（画像だけの PDF〈スキャンした PDF "
-                    "など〉では、文字を読めません。レポートの冒頭と 13 章）。"),
+                    f"など〉では、文字を読めません。レポートの冒頭と 13 章）。{zip_note}"),
         cli=(f"要対応: 出版版 PDF を読めませんでした。PDF の文字を読めなかったため（{msg}）、表記を PDF に合わせず、照合もしていない"
-             "（XML は docx の文字のまま。レポートの冒頭と 13 章）。文字を読める出版版 PDF を --pdf で指定して変換し直すこと"))
+             "（XML は docx の文字のまま。レポートの冒頭と 13 章）。文字を読める出版版 PDF を --pdf で指定して変換し直すこと" + (NOT_ZIPPED_PDF_CLI if zip_note else "")))
 
 
 def _pdf_unread_action(r):
@@ -3613,15 +3628,17 @@ def _pdf_unread_action(r):
     if pc is None or pc.ok or pdf_fallback(r):
         return None
     msg = pc.message
+    zip_note = NOT_ZIPPED_PDF if pdf_not_zipped(r) else ""
     return Action(
         TO_CHECK, "pdf_unread",
         top=(f"> **要確認: 出版版 PDF と照合できませんでした（13 章）。** {esc(msg)}。XML は docx の文字のままです。"
-             "画像だけの PDF（スキャンした PDF など）では、文字を読めません。PDF がこの記事の出版版 PDF かを確かめてください。"),
+             f"画像だけの PDF（スキャンした PDF など）では、文字を読めません。PDF がこの記事の出版版 PDF かを確かめてください。{zip_note}"),
         checklist="- [ ] 出版版 PDF と照合できなかった（13 章）: PDF がこの記事の出版版 PDF か（画像だけの PDF でないか）を確かめる",
         box_title="出版版 PDF と照合できませんでした（要確認）",
         box_detail=(f"{msg}。XML は docx の文字のままです（レポートの 13 章）。画像だけの PDF（スキャンした PDF など）では、"
-                    f"文字を読めません。{step('pdf')}で選んだ PDF が、この記事の出版版 PDF かを確かめてください。"),
-        cli=f"要確認: 出版版 PDF と照合できませんでした（{msg}。レポートの 13 章）。XML は docx の文字のまま")
+                    f"文字を読めません。{step('pdf')}で選んだ PDF が、この記事の出版版 PDF かを確かめてください。{zip_note}"),
+        cli=(f"要確認: 出版版 PDF と照合できませんでした（{msg}。レポートの 13 章）。XML は docx の文字のまま"
+             + (NOT_ZIPPED_PDF_CLI if zip_note else "")))
 
 
 MISMATCH_SHOWN = 10       # 要確認 pdf_mismatch の一覧（冒頭・枠）に並べる件数（全件はレポートの 13.1）

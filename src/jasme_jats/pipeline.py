@@ -67,7 +67,7 @@ from .package import (XLINK_HREF, apply_images, article_dir, make_zip, unzipped_
                       zip_problems)
 from .pdfbiblio import PdfBiblio, read_biblio
 from .pdfdocx import DocxFix, make_fixed_docx, same_file
-from .pdfmatch import PdfCheck, check_pdf
+from .pdfmatch import PdfCheck, check_pdf, pdf_opens
 from .report import (actions, blocking, decoration_where, pdf_unseen, render, render_ai_only, shorten_shown, shown_text, slot_where,
                      step, structure_conflict_text, table_body_why, table_part_rows, wrong_paper_text)
 from .report import pdf_fallback as report_pdf_fallback
@@ -996,7 +996,10 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     jstage_issues = jstage_check(_parse(xml_bytes), aid, [i.name for i in images if i.name])     # 置き場所の名前（画像がまだないものも）
     # ZIP に入れるのは、今回の XML・今回指定した PDF・作業する人が入れた画像だけ（変換の直後は画像はない。記事フォルダに残っている
     # 前回の変換の残りなどは入れない）
-    zip_path, adir, has_pdf = write_package(out_dir, journal, meta, xml_bytes, opts.pdf_path, zip_image_names(images))
+    # PDF として開けない（ページを 1 つも読めない）ファイルは ZIP に入れず、記事フォルダにも置かない（C098。レポートで知らせる）。
+    # 文字を読めないだけの PDF（画像だけの PDF など）は、出版版 PDF でありうるので入れる
+    zip_pdf = opts.pdf_path if opts.pdf_path and pdf_opens(opts.pdf_path) else None
+    zip_path, adir, has_pdf = write_package(out_dir, journal, meta, xml_bytes, zip_pdf, zip_image_names(images))
     flat_xml = out_dir / f"{aid}.xml"
     flat_xml.write_bytes(xml_bytes)
 
