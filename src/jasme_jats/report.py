@@ -1709,12 +1709,14 @@ STYLE_SUSPECT_JA = {
     "caption_kind": ("図・表のキャプションのスタイルと、キャプションの番号の頭（図・表）が食い違っています",
                      "キャプションの番号の頭に合わせて、Word でこの段落を図キャプション（「図」「Figure」の頭）か表キャプション"
                      "（「表」「Table」の頭）のスタイルにする"),
+    "en_in_body": ("本文の途中に、英文の部分のスタイルの段落があります。本文として出しました",
+                   "本文なら Word で本文のスタイルに直す。英文要旨などなら、引用文献より後ろに移して（英文の部分は論文の最後）"),
 }
 # 機械が挙げても、AI の提案を待たずに直し方が決まっている種類（推奨の手順 ai_finish を出す条件に数えない）
 # （heading_level・heading_guess は、どちらの階層・見出しかを出版版 PDF を見て決められるので、heading_body と同じく AI の提案を待つ種類。
 #  C038・C077。直し方が機械的に決まる ref_symbol・back_heading・ref_cont・caption_kind だけが待たない。caption_kind は番号の頭の文字で
 #  図か表かが決まり〈docx の文字は変えない〉、PDF を見ても直し方は変わらない。C034）
-STYLE_NO_AI_KINDS = ("ref_symbol", "back_heading", "ref_cont", "caption_kind")
+STYLE_NO_AI_KINDS = ("ref_symbol", "back_heading", "ref_cont", "caption_kind", "en_in_body")
 STYLE_CHECK_SHOWN = 10      # 要確認 style_check に並べる段落の数（残りは「ほか N か所（2 章）」）
 # AI の回答は段落の役割（謝辞・引用・見出しの階層など）を XML に反映しない（所有者の決定 5）ので、Word での直し方を具体的に書く（点検 review13 回帰 1）
 STYLE_CHECK_HOW = ("見出しや引用・謝辞のスタイルが違うと、J-STAGE の全文で章立てや引用・謝辞の形が変わります。違っていれば、Word でその段落を選び、［ホーム］の"

@@ -1153,6 +1153,19 @@ class Classifier:
                         "mechanical", "style", b.src,
                         f"空白だけの段落のスタイル「{b.style_name}」は、{'英文の部分' if role in FRONT_EN_ROLES else '後付け'}の"
                         "始まりを示すが、空白だけの段落なので領域を切り替えなかった（後ろの段落は、今の領域のまま）")
+            elif (state == "body" and isinstance(b, Para) and role in FRONT_EN_ROLES and not b.is_blank
+                  and self.refs_follow(flat[k + 1:])):
+                # 本文の途中の、英文の部分の役割のスタイルの段落（C083）。後ろに引用文献の節のしるしがある（本物の英文の部分は引用文献より
+                # 後ろにある）ので取り違えとして、領域を切り替えず本文の段落（p）として出し、Word でスタイルを直す知らせ（en_in_body）を出す
+                self.plan.decide(
+                    "mechanical", "style", b.src,
+                    f"本文の途中の段落「{_para_text(b).strip()[:20]}」のスタイル「{b.style_name}」は英文の部分の始まりを示すが、後ろに引用文献の節が"
+                    "あるので領域を切り替えず、本文の段落として出した")
+                self.plan.style_suspects.append(StyleSuspect(
+                    "en_in_body", b.src,
+                    f"本文の途中に、英文の部分のスタイル「{b.style_name or 'スタイルなし'}」の段落があります。本文として出しました"))
+                role = "p"
+                b.role_origin = "heuristic"
             elif role in FRONT_EN_ROLES or troles & {"author_en", "aff_en"}:
                 state = "front_en"
             elif state == "front_ja":
@@ -1192,6 +1205,17 @@ class Classifier:
         if fn_guess is not None and state == "back":
             self.check_fn_guess(regions["back"][fn_guess:], "文書の終わり")       # 後付けの見出しが続かないまま文書が終わった
         return regions
+
+    def refs_follow(self, rest) -> bool:
+        """後ろ rest（[(段落・表, 役割)]）に、引用文献の節のしるし（図形の外の、空白だけでない、引用文献の見出しの役割か文献の役割〈ref〉の段落。
+        本文スタイルなどの段落の文字から引用文献の見出しと推定されるもの〈back_heading_by_text〉も）があるか。split_regions が本文から後付けの
+        引用文献へ切り替える判定と同じ見方（C083）。"""
+        for b, r in rest:
+            if in_shape(b) or not isinstance(b, Para) or b.is_blank:
+                continue
+            if r in ("ref_heading", "ref") or self.back_heading_by_text(b, r) == "ref_heading":
+                return True
+        return False
 
     def blank_heading_leads(self, role, rest, in_back) -> bool:
         """空白だけの段落（役割 role。後付けの見出し・英文の部分の役割）の後ろ rest（[(段落・表, 役割)]）が、その見出しの中身で始まるか。

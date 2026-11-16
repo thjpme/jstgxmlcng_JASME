@@ -31,12 +31,14 @@ class UnlinkedRef(NamedTuple):
 # スタイルを確かめる段落の種類（StyleSuspect.kind）: 見出しのスタイルの段落に本文が続く（C037）・同じ番号の形の見出しと階層が食い違う（C038）・
 # 本文のスタイルの引用らしい段落（C129）・文字から見出しと推定した段落（C014）・記号だけの引用文献（ref_symbol。「.」だけの段落など。
 # XML の文字は変えず、Word で消してもらう）・後付けの見出しの形の本文の段落（back_heading。C032）・前の文献の続きの疑い（ref_cont。C026）・
-# 図・表のキャプションの番号の頭（図・表）とスタイル（図キャプション・表キャプション）の食い違い（caption_kind。C034。本体の有無に関係なく挙げる）。
+# 図・表のキャプションの番号の頭（図・表）とスタイル（図キャプション・表キャプション）の食い違い（caption_kind。C034。本体の有無に関係なく挙げる）・
+# 本文の途中の、英文の部分の役割のスタイルの段落（en_in_body。C083。後ろに引用文献の節のしるしがあるとき、領域を切り替えず本文の段落として出す。
+# 検出は structure.Classifier.split_regions）。
 # 検出する所: heading_body・heading_guess（番号の形から推定した見出しと、C077 の太字だけの 1 項目の番号つきリスト〈bold_single_lists〉）・
 # back_heading は structure.Classifier.build_body（back_heading の一部は loose_back_headings）、heading_level は build_body が nest の後で
 # 呼ぶ structure.sibling_level_mismatches（同じ番号の系列の見出しの階層の食い違い）、ref_symbol は structure.Classifier.build_back、
 # ref_cont は refparse.ref_continuations、caption_kind は structure.Classifier.caption_kind_suspects（assign_ids から）。quote_like は入れ物だけで、まだ検出しない
-STYLE_SUSPECT_KINDS = ("heading_body", "heading_level", "quote_like", "heading_guess", "ref_symbol", "back_heading", "ref_cont", "caption_kind")
+STYLE_SUSPECT_KINDS = ("heading_body", "heading_level", "quote_like", "heading_guess", "ref_symbol", "back_heading", "ref_cont", "caption_kind", "en_in_body")
 
 
 class StyleSuspect(NamedTuple):

@@ -67,7 +67,7 @@ def test_style_suspect_kinds_and_texts_agree():
     """種類ごとの決まった文（STYLE_SUSPECT_JA）と種類（STYLE_SUSPECT_KINDS）は同じ。AI を待たない種類も種類のうち。"""
     assert set(report.STYLE_SUSPECT_JA) == set(STYLE_SUSPECT_KINDS)
     assert set(report.STYLE_NO_AI_KINDS) <= set(STYLE_SUSPECT_KINDS)
-    assert {"ref_symbol", "back_heading", "ref_cont", "caption_kind"} == set(report.STYLE_NO_AI_KINDS)
+    assert {"ref_symbol", "back_heading", "ref_cont", "caption_kind", "en_in_body"} == set(report.STYLE_NO_AI_KINDS)
     assert all(what and how for what, how in report.STYLE_SUSPECT_JA.values())
 
 

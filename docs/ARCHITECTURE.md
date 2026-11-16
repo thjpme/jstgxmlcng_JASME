@@ -366,7 +366,7 @@ fixture の docx は `tests/make_fixtures.py` が作る（架空の内容。`mak
 |---|---|
 | 新しいスタイル名を役割に対応させる | `data/jasme.toml` の `[styles]`（コードは変えない） |
 | 役割の推定の規則（番号の形・見出しの推定）を変える | `structure.py` の `RE_*`、`guess_heading`、`body_heading_guess`（`build_body` と `list_or_quote` が共用。規則 3 の `rule3_blocks`。単位 D）、`role_of`。判断は `plan.decide` に記録。見出しと推定した段落は `plan.style_suspects`（heading_guess）にも入れる |
-| 領域（本文 / 後付け / 英文の部分）の切り替えを変える | `structure.Classifier.split_regions`（空白だけの段落〈図形の外〉では切り替えない。文字から推定した「注」の本文への戻しは `fn_guess`・`check_fn_guess`）、`back_heading_by_text`（完全一致 `exact_back_heading` と、章番号・括弧・空白を外した緩い一致 `back_heading_key`・`loose_back_headings`〈g1・g2。単位 D〉）、`outside_key` |
+| 領域（本文 / 後付け / 英文の部分）の切り替えを変える | `structure.Classifier.split_regions`（空白だけの段落〈図形の外〉では切り替えない。本文の途中の英文の部分のスタイルの段落は、後ろに引用文献のしるしがあれば切り替えず本文の段落にする〈`refs_follow`・`en_in_body`。C083〉。文字から推定した「注」の本文への戻しは `fn_guess`・`check_fn_guess`）、`back_heading_by_text`（完全一致 `exact_back_heading` と、章番号・括弧・空白を外した緩い一致 `back_heading_key`・`loose_back_headings`〈g1・g2。単位 D〉）、`outside_key` |
 | 図表の配置（浮動配置）の規則を変える | `floats.at_anchor`（機械的に置ける条件）、`structure.place_floats`、`provisional_target`。中身の組み方は `structure.float_units`（B1〜B5）、組み立て済みの節を前後に数えない置き場所は `NODE_PLACE`（`same_place`） |
 | 囲み / 図の注記のしきい値を変える | `floats.textbox_kind` の定数（`BOX_CHARS` など）、`structure.place_boxes` |
 | リンクの規則（図表・注・引用）を変える | `linker.py`（`float_refs`、`float_numbers`〈重なる番号・枝番〉、`_sup_marks`、`note_style`）、`refparse.py`（引用）。枝番の定義は `structure.CAP_BRANCH_SEP`・`CAP_BRANCH_NUM`（builder の `RE_LABEL_SPLIT` と共有） |
