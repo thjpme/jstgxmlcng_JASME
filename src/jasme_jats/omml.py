@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from lxml import etree
 
-from .ooxml import BR_TEXT_TYPES, M_NS, W_NS, m, sym_char, text_of_element, w
+from .ooxml import BR_TEXT_TYPES, M_NS, W_NS, m, math_run_deleted, sym_char, text_of_element, w
 from .tracking import IMPLICIT, ORDER
 
 MML_NS = "http://www.w3.org/1998/Math/MathML"
@@ -183,6 +183,8 @@ class OmmlConverter:
         return [self.tok("mtext", text)] if text else []
 
     def h_r(self, r):
+        if math_run_deleted(r):
+            return []       # 変更履歴で削除された数式の文字は、承諾した状態では存在しない
         text = self.run_text(r)
         if not text:
             return []

@@ -235,6 +235,7 @@ class Result:
     style_hidden: list = field(default_factory=list)
     resultless_fields: list = field(default_factory=list)   # 結果を持たないフィールドで、Word では表示のあるもの（model.ResultlessField。要確認 resultless_field。6 章）
     style_hidden_images: list = field(default_factory=list)
+    emphasis: list = field(default_factory=list)        # 傍点（w:em）のかかった文字 [(src, text)]（XML には出せない。要確認 emphasis_mark）
     joined: list = field(default_factory=list)          # 段落記号の削除でつないだ段落 [(最初の段落の ID, [段落の ID, …])]（6 章）
     deleted_rows: list = field(default_factory=list)    # 変更履歴で削除された、文字のない表の行（model.DeletedRow。読み飛ばした。6 章）
     newlines: list = field(default_factory=list)        # 段落の中の改行（model.Newline。段落ごと。10 章と、題目などは要確認）
@@ -1082,7 +1083,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
         image_problems=image_problems(xml_bytes, images),
         not_zipped=unzipped_files(out_dir, journal, meta, zip_path), joined=doc.joined, deleted_rows=doc.deleted_rows,
         newlines=info.newlines, name_splits=list(info.name_splits), style_hidden=doc.style_hidden, resultless_fields=doc.resultless_fields,
-        style_hidden_images=[img.image_id for img in doc.images if img.hidden_style], xml_base=xml_base)
+        style_hidden_images=[img.image_id for img in doc.images if img.hidden_style], emphasis=doc.emphasis, xml_base=xml_base)
     slots = {slot.key: slot for slot in info.slots}
     for im in res.images:
         im.location = slot_where(res, slots[im.key])

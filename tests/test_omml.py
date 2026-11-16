@@ -72,3 +72,20 @@ def test_root_with_deg_hide_keeps_degree_text():
     assert canonical_text(p) == math_plain(mml)
     mml, _ = omml_to_mathml(om(f"<m:rad>{pr}<m:deg/><m:e>{r('x')}</m:e></m:rad>"))
     assert "msqrt" in tags(mml) and math_plain(mml) == "x"
+
+
+def test_deleted_math_run_is_dropped():
+    """変更履歴で削除された数式のラン（m:r の w:rPr の w:del・w:moveFrom。C161）は、MathML にも検証の文字にも出さない。
+    w:ins・w:moveTo のランは残す。読み取り（omml）と検証（ooxml.canonical_text）は同じ判定（ooxml.math_run_deleted）を使う。"""
+    from jasme_jats.ooxml import M_NS, W_NS, canonical_text, math_run_deleted
+
+    def mark(tag):
+        return f'<m:r><w:rPr><w:{tag} w:id="7" w:author="x"/></w:rPr><m:t>削</m:t></m:r>'
+    inner = r("a") + mark("del") + mark("moveFrom") + mark("ins") + mark("moveTo") + r("b")
+    el = om(inner.replace("<w:rPr>", f'<w:rPr xmlns:w="{W_NS}">'))
+    mml, _ = omml_to_mathml(el)
+    assert math_plain(mml) == "a削削b"
+    runs = el.findall(f"{{{M_NS}}}r")
+    assert [math_run_deleted(x) for x in runs] == [False, True, True, False, False, False]
+    p = etree.fromstring(f'<w:p xmlns:w="{W_NS}" xmlns:m="{M}"><m:oMath>{inner}</m:oMath></w:p>')
+    assert canonical_text(p) == "a削削b"

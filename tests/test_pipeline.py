@@ -1295,3 +1295,55 @@ def test_todo_list_is_before_chapter1_and_chapter14_is_gone(journal, meta, tmp_p
     i = next(i for i, ln in enumerate(lines) if ln.startswith("- [x] 図の画像 1 枚を入れた"))
     assert "_図の確かめ.html」で、図番号・キャプションと入れた画像が合っているかを確認する" in lines[i + 1]
     assert render(res).count("## することの一覧") == 1
+
+
+
+def _math_emphasis_docx(tmp_path, with_marks=True):
+    """数式のランを変更履歴で削除した段落（C161）と、傍点のある段落（C074）を入れた docx。with_marks が偽なら、どちらもない同じ docx。"""
+    S = mf.S
+    b = mf.Builder()
+    b.styles_extra.append('<w:style w:type="character" w:styleId="Boten"><w:name w:val="boten"/><w:rPr><w:em w:val="dot"/></w:rPr></w:style>')
+    deleted = '<m:r><w:rPr><w:del w:id="931" w:author="x" w:date="2026-01-01T00:00:00Z"/></w:rPr><m:t>削除した式</m:t></m:r>'
+    emp = '<w:r><w:rPr><w:em w:val="dot"/></w:rPr><w:t>直接の傍点</w:t></w:r>' if with_marks else mf.run("直接の傍点")
+    emp_style = ('<w:r><w:rPr><w:rStyle w:val="Boten"/></w:rPr><w:t>スタイルの傍点</w:t></w:r>' if with_marks
+                 else mf.run("スタイルの傍点"))
+    none = '<w:r><w:rPr><w:em w:val="none"/></w:rPr><w:t>傍点なし</w:t></w:r>'
+    front = mf.front_ja(b, "傍点と数式の試験", "―副題―", [("架空大学", "試験　七郎")])
+    body = front + [mf.para(S["sec1"], "１．はじめに"),
+                    mf.para(S["body"], "式", mf.omath(mf.mr("x=") + (deleted if with_marks else "") + mf.mr("1")), "である。"),
+                    mf.para(S["body"], "前", emp, "後", none, "。"),
+                    mf.para(S["body"], emp_style, "。"),
+                    mf.para(S["ref_head"], "引用および参考文献"),
+                    mf.para(S["ref"], "試験七郎（2024）．「小さな論文」．『架空誌』，第5巻，pp.9-10．")]
+    english = mf.front_en(b, "A Small Article", "For Checking", [("Shichiro SHIKEN", "Fictional University")],
+                          ["Small article abstract."])
+    path = tmp_path / ("marks.docx" if with_marks else "plain.docx")
+    b.save(path, body + english + mf.tail(b))
+    return path
+
+
+def test_deleted_math_run_and_emphasis_mark(journal, meta, tmp_path):
+    """C161: 変更履歴で削除した数式のランは、XML にも検証の文字にも出ず、不変性チェックは合格する。
+    C074: 傍点のある段落は要確認 emphasis_mark で知らせ（直接の指定と文字スタイル。w:val="none" は数えない）、XML の文字は
+    傍点のない同じ docx と変わらない。"""
+    from jasme_jats.report import TO_CHECK, actions
+    res = convert(_math_emphasis_docx(tmp_path), meta, journal, Options(out_dir=tmp_path / "a"))
+    fid = res.fidelity
+    assert fid.ok and fid.final_ok and res.dtd_valid, (fid.missing, fid.bad_excluded)
+    assert "削除した式" not in res.xml_path.read_text(encoding="utf-8")
+    act = {a.key: a for a in actions(res)}["emphasis_mark"]
+    assert act.level == TO_CHECK
+    assert "傍点（圏点）のかかった文字が 2 段落にあります" in act.top and "直接の傍点" in act.top and "スタイルの傍点" in act.top
+    assert "傍点なし" not in act.top
+    assert not res.needs_action
+    report = res.report_path.read_text(encoding="utf-8")
+    assert "傍点（圏点）のかかった文字が 2 段落にあります" in report.split("## 2.")[0]
+    plain = convert(_math_emphasis_docx(tmp_path, with_marks=False), meta, journal,
+                    Options(out_dir=tmp_path / "b"))
+    assert "emphasis_mark" not in {a.key for a in actions(plain)} and plain.emphasis == []
+    assert plain.fidelity.ok and plain.fidelity.final_ok
+
+    def body_text(r):
+        root = etree.fromstring(r.xml_path.read_bytes().split(b"\n", 2)[2])
+        return "".join(root.find("body").itertext())
+    assert body_text(res) == body_text(plain)

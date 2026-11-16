@@ -435,6 +435,7 @@ class Document:
     hidden_text: list = field(default_factory=list)   # [(src, text)]
     # hidden_text のうち、スタイル・既定の書式の設定で隠したもの [(src, text)]（ooxml.HiddenRule.run_hidden_by が "style"。要確認）
     style_hidden: list = field(default_factory=list)
+    emphasis: list = field(default_factory=list)       # 傍点（w:em）のかかった文字 [(src, text)]（要確認 emphasis_mark）
     resultless_fields: list = field(default_factory=list)   # ResultlessField（結果を持たないフィールドで、Word では表示のあるもの。docx_reader）
     symbols: list = field(default_factory=list)        # SymbolReplaced（記号フォントの私用領域の符号の扱い。出力しない段落のものも含む。docx_reader）
     deleted_note_refs: set = field(default_factory=set)   # 変更履歴で削除された脚注・文末脚注の参照の note_key（docx_reader）

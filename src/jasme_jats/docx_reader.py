@@ -13,6 +13,7 @@ import copy
 import hashlib
 import re
 from dataclasses import dataclass, field
+from typing import Optional
 
 from lxml import etree
 
@@ -56,6 +57,7 @@ class StyleInfo:
     name: str
     based_on: str = ""
     fmt: dict = field(default_factory=dict)   # bold/italic/... -> bool
+    em: Optional[bool] = None                  # 傍点（w:em）の指定（なければ None。atom の書式には入れない。Reader.emphasis）
     num: tuple = None                          # (numId, ilvl)
     default: bool = False
 
@@ -81,6 +83,12 @@ def _rpr_fmt(rpr) -> dict:
     return out
 
 
+def _rpr_emphasis(rpr) -> bool:
+    """w:rPr に傍点（圏点。w:em の val が none 以外）の指定があるか。w:val を省いた w:em は傍点なし（既定値 none）。"""
+    em = rpr.find(w("em")) if rpr is not None else None
+    return em is not None and (em.get(w("val")) or "none") != "none"
+
+
 def read_styles(pkg: DocxPackage) -> dict:
     root = pkg.xml("word/styles.xml")
     styles = {}
@@ -95,6 +103,7 @@ def read_styles(pkg: DocxPackage) -> dict:
             name=wval(name_el, sid) if name_el is not None else sid,
             based_on=wval(s.find(w("basedOn")), "") or "",
             fmt=_rpr_fmt(s.find(w("rPr"))),
+            em=_rpr_emphasis(s.find(w("rPr"))) if s.find(f"{w('rPr')}/{w('em')}") is not None else None,
             default=s.get(w("default")) in ("1", "true"),
         )
         ppr = s.find(w("pPr"))
@@ -138,6 +147,9 @@ class Reader:
         # 隠し文字のうち、スタイル・既定の書式の設定で隠したもの（ooxml.HiddenRule.run_hidden_by が "style"。規則が暫定なので
         # 要確認で知らせる。report._style_hidden_action）。self.hidden の一部
         self.style_hidden = []
+        # 傍点（w:em）のかかった文字 [(段落 ID, 文字)]。JATS に対応する要素がないので XML は変えず、要確認で知らせるだけ
+        # （report._emphasis_action）。ランの直接の指定と、文字スタイル（w:basedOn をたどる）の指定を見る。段落スタイルは見ない
+        self.emphasis = []
         # 記号フォントの私用領域の符号を、普通の Unicode の文字に置き換えたもの（model.SymbolReplaced。箇条書きの記号・w:sym・
         # 記号フォントのランの w:t。要確認で知らせる。report._symbol_action）
         self.symbols = []
@@ -199,6 +211,7 @@ class Reader:
         comments = sum(1 for _ in root.iter(w("commentRangeStart")))
         doc = Document(blocks=blocks, footnotes=footnotes, endnotes=endnotes, media=self.media,
                        styles=self.styles, warnings=self.warnings, hidden_text=self.hidden, style_hidden=self.style_hidden,
+                       emphasis=self.emphasis,
                        symbols=self.symbols, resultless_fields=self.resultless,
                        tracked_changes=tracked, comments=comments,
                        images=self.images, floats=self.floats, textboxes=self.textboxes, layout=read_layout(root, self.pkg),
@@ -482,6 +495,18 @@ class Reader:
             if len(ch):
                 self._walk(ch, para, fmt, href, hidden, deleted)
 
+    def _run_emphasis(self, rpr) -> bool:
+        """ランに傍点がかかっているか。直接の指定が優先で、なければ文字スタイル（w:basedOn の元をたどる）の指定。"""
+        if rpr is None:
+            return False
+        if rpr.find(w("em")) is not None:
+            return _rpr_emphasis(rpr)
+        rs = wval(rpr.find(w("rStyle")))
+        for sid in self.style_chain(rs) if rs else []:
+            if self.styles[sid].em is not None:
+                return self.styles[sid].em
+        return False
+
     def _run(self, r, para, base_fmt, href, hidden, deleted):
         rpr = r.find(w("rPr"))
         fmt = dict(base_fmt)
@@ -548,6 +573,8 @@ class Reader:
                 continue
             if tag == w("t"):
                 text, replaced = w_t_text(ch)
+                if text and self._run_emphasis(rpr):
+                    self.emphasis.append((para.src, text))
                 if replaced or any(is_pua(c) for c in text):
                     font = run_font(ch.getparent(), keep_case=True)
                     self._note_symbols(para.src, "text", font, [(FONT_DISPLAY.get(font.lower(), font), o, n) for o, n in replaced],

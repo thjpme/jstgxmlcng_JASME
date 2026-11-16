@@ -3017,6 +3017,35 @@ def _resultless_field_action(r):
         cli=(f"要確認: {what}（{n} か所。レポートの冒頭と 6 章）。{how}。\n{mark}\n" + "\n".join(f"  {x}" for x in lines)))
 
 
+EMPHASIS_SAMPLES = 5     # 傍点の要確認に並べる段落の数
+
+
+def _emphasis_action(r):
+    """傍点（圏点。w:em）のかかった文字がある段落（docx_reader が記録する。Result.emphasis）。なければ None。
+
+    JATS に傍点に対応する要素がないので、XML は変えず（文字だけを出力する）、傍点が消えることを知らせるだけ（終了コードは 0）。
+    空白だけの傍点は数えない。
+    """
+    per = {}
+    for src, text in r.emphasis:
+        per[src] = per.get(src, "") + text
+    paras = [(s, t) for s, t in per.items() if t.strip()]
+    if not paras:
+        return None
+    n = len(paras)
+    samples = _para_samples(paras, EMPHASIS_SAMPLES)
+    how = ("XML には傍点を出せないので、文字だけが出力されています（傍点は消えます）。傍点が必要なら、"
+           "J-STAGE に出す前に、表し方を学会で決めてください（docx の文字は変えないでください）")
+    head = f"傍点（圏点）のかかった文字が {n} 段落にあります"
+    return Action(
+        TO_CHECK, "emphasis_mark",
+        top=f"> **要確認: {head}。** {how}。対象: {samples}",
+        checklist=f"- [ ] **傍点（圏点）のかかった文字**（{n} 段落）: XML では傍点が消えることを確かめる",
+        box_title="傍点（圏点）を XML に出力していません（要確認）",
+        box_detail=f"{head}。{how}。\n対象: {samples}",
+        cli=f"要確認: {head}。XML には傍点を出せず、文字だけが出力されています。対象: {samples}")
+
+
 def _abstract_ja_action(r):
     """英文要旨の中の、かな・漢字が 3 割以上の段落（structure.Classifier.check_abstract_ja。自動では移さない）。なければ None。"""
     plan = r.plan
@@ -3891,7 +3920,7 @@ def actions(r) -> list:
                            _table_parts_action, _image_names_action,
                            _upload_action, _meta_dates_action, _meta_corresp_action, _textbox_undecided_action,
                            _textbox_place_action, _textbox_figure_text_action, _authors_missing_action, _unplaced_action, _front_check_action, images_action,
-                           lost_action, _image_same_action, _image_changed_action, lost_autonum_action, _pua_left_action, _abstract_missing_action, _refs_missing_action, _style_hidden_action, _resultless_field_action, _symbol_action, _abstract_ja_action, _app_after_refs_action, _float_end_action, _style_check_action, _ai_boundary_action, _ai_carried_action, _note_overlap_action, _note_unlinked_action, _float_ref_action, _link_iri_action,
+                           lost_action, _image_same_action, _image_changed_action, lost_autonum_action, _pua_left_action, _abstract_missing_action, _refs_missing_action, _style_hidden_action, _emphasis_action, _resultless_field_action, _symbol_action, _abstract_ja_action, _app_after_refs_action, _float_end_action, _style_check_action, _ai_boundary_action, _ai_carried_action, _note_overlap_action, _note_unlinked_action, _float_ref_action, _link_iri_action,
                            _fn_guess_action, _name_split_action, _newline_action)]
     acts = [a for a in head if a is not None] + pdf_actions(r)
     fin = _with_reused(_ai_finish_action(r), r)

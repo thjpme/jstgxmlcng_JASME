@@ -24,6 +24,8 @@
           次が段落でない（表・コンテンツコントロール・カスタム XML など）か、親の最後の段落（本文・表のセル・テキストボックス・
           注の最後など）なら、つながない（unjoined_deleted_marks。読み取りがレポートの 10 章で知らせる）。段落記号の w:vanish
           （スタイル区切り）は削除ではないので、つながない。
+  数式のラン（m:r）: ランの w:rPr の w:del・w:moveFrom（Word が数式の文字を変更履歴で削除した記録。math_run_deleted）は削除された文字として
+          含めない（読み取りと検証が同じ判定を使う）。w:ins・w:moveTo は残す。
   隠し文字で扱わないもの: 数式の中のラン（m:r）の w:vanish（数式は全体を出す）、表スタイル（w:tblStylePr など）・番号の書式
           （w:lvl/w:rPr）の w:vanish、段落記号の w:vanish、リンクスタイル（w:link）の特別な扱い、テーマ・互換性の設定。
           つないだ段落の後ろの段落の隠し文字は、その段落自身の段落スタイルで決める。隠し文字のランの中のテキストボックス
@@ -496,6 +498,16 @@ def unjoined_deleted_marks(root) -> list:
     return out
 
 
+def math_run_deleted(r) -> bool:
+    """数式のラン（m:r）が変更履歴で削除（ランの w:rPr の w:del か w:moveFrom）されているか。
+
+    Word は数式の中の文字を削除すると、包む w:del ではなく、m:r の直下の w:rPr に w:del（移動元は w:moveFrom）を置く。
+    読み取り（omml.OmmlConverter.h_r）と検証（canonical_text）が共有する。w:ins・w:moveTo は削除ではない。
+    """
+    rpr = r.find(w("rPr"))
+    return rpr is not None and (rpr.find(w("del")) is not None or rpr.find(w("moveFrom")) is not None)
+
+
 def in_deleted_run(p) -> bool:
     """段落 p が、変更履歴で削除された要素（w:del・w:moveFrom）の中にあるか。
 
@@ -562,6 +574,8 @@ def canonical_text(p, hidden=None) -> str:
                 continue
             if tag in (w("rPr"), w("pPr"), m("rPr"), w("instrText"), w("delText"),
                        w("footnoteReference"), w("endnoteReference"), m("ctrlPr")):
+                continue
+            if tag == m("r") and math_run_deleted(ch):
                 continue
             if deleted or hid or in_code():
                 if tag == m("r"):
