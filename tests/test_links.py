@@ -1067,3 +1067,25 @@ def test_cli_ai_response_needs_ai_manual(journal, meta, tmp_path, capsys):
     assert (tmp_path / "ok").exists()
     assert main(base + ["--out", str(tmp_path / "dflt")]) in (0, 1)         # --ai の指定なし（既定は manual）でも、回答のファイルを指定してエラーにならない
     assert (tmp_path / "dflt" / "AI依頼文.txt").exists()
+
+
+@pytest.mark.parametrize("url, want", [
+    ("https://example.org/path/[id]", "https://example.org/path/[id]"),       # 対応する「]」は URL の一部
+    ("https://example.org/path/[id].", "https://example.org/path/[id]"),      # 文の句点は外し、「]」は残す
+    ("https://example.org/a]", "https://example.org/a"),                     # 開きの「[」が URL の外（[ … ] で囲んだ）
+    ("https://example.org/a)", "https://example.org/a"),
+    ("https://example.org/(a)", "https://example.org/(a)"),
+])
+def test_trim_keeps_balanced_closing_brackets(url, want):
+    """URL の末尾の「]」は、「)」と同じく開きの数で判断する（開きが URL の中にあれば外さない）。"""
+    from jasme_jats.linker import _trim
+    assert _trim(url) == want
+
+
+def test_url_with_bracket_id_is_linked_whole():
+    """本文の URL の末尾が「[id]」の形でも、「]」を外さずにリンクする。"""
+    lk = Linker(ArticlePlan())
+    p = Para(src="d1", atoms=[Atom(kind="text", text="詳しくは https://example.org/path/[id] を見る。")])
+    lk.urls(p, "body")
+    assert [(a.text, a.link.attrs["href"]) for a in p.atoms if a.link is not None] == [
+        ("https://example.org/path/[id]", "https://example.org/path/[id]")]

@@ -794,11 +794,15 @@ def _trim(url: str) -> str:
 
     文の句読点と対応しない閉じかっこ、末尾の閲覧した日などの語（RE_ACCESS_TAIL。「(2020年1月1日参照)」のかっこの中なら、かっこごと。
     外した後の最後の文字が ASCII で ACCESS_KEEP_END でないときだけ）、組になる閉じかっこのない「(」「（」から後ろ（後ろが RE_OPEN_NOTE の
-    形のときだけ。「(2020.1.1」の残り）を、変わらなくなるまで除く。C089。"""
+    形のときだけ。「(2020.1.1」の残り）を、変わらなくなるまで除く。C089。
+
+    末尾の「]」は、「)」と同じく開きの「[」の数と比べ、開きが URL の中にあれば（対応していれば）外さない（「…/[id]」）。"""
     while True:
         prev = url
         while url and url[-1] in ".,;:!?。、，．)]）」』>":
             if url[-1] in ")）" and url.count("(") + url.count("（") >= url.count(")") + url.count("）"):
+                break
+            if url[-1] == "]" and url.count("[") >= url.count("]"):     # 「)」と同じく、開きの「[」が URL の中にあれば外さない
                 break
             url = url[:-1]
         m = RE_ACCESS_TAIL.search(url)
