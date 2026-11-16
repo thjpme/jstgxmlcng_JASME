@@ -745,6 +745,19 @@ def test_volume_issue_pages_are_normalized(journal):
     assert ArticleMeta.from_dict({"volume": 31, "fpage": 1}).article_id(journal) == "31_1"    # TOML の数
 
 
+def test_first_page_after_last_page_is_rejected():
+    """最初のページ > 最後のページは誤り。両方が数字だけのときだけ確かめ、英数字・空のときは確かめない。"""
+    from jasme_jats.config import ArticleMeta
+    with pytest.raises(ValueError, match="最初のページ「100」が最後のページ「20」より大きくなっています"):
+        ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "100", "lpage": "20"})
+    with pytest.raises(ValueError, match="最初のページ「100」が最後のページ「20」より大きく"):    # 全角は正規化してから比べる
+        ArticleMeta.from_dict({"fpage": "１００", "lpage": "２０"})
+    assert ArticleMeta.from_dict({"fpage": "20", "lpage": "100"}).lpage == "100"
+    assert ArticleMeta.from_dict({"fpage": "100", "lpage": "100"}).lpage == "100"
+    assert ArticleMeta.from_dict({"fpage": "e5", "lpage": "1"}).fpage == "e5"
+    assert ArticleMeta.from_dict({"fpage": "100", "lpage": ""}).fpage == "100"
+    assert ArticleMeta.from_dict({"fpage": "100"}).fpage == "100"
+
 def test_full_width_volume_gives_ascii_zip(journal, tmp_path):
     from jasme_jats.config import ArticleMeta
     meta = ArticleMeta.from_dict({"volume": "３１", "issue": "１", "fpage": "１", "peer_review": "あり"})

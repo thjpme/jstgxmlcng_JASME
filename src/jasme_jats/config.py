@@ -100,6 +100,7 @@ DATE_FIELDS = {"pub_date": "発行日", "epub_date": "J-STAGE 公開日", "recei
 PAGE_FIELDS = {"volume": "巻", "issue": "号", "fpage": "最初のページ", "lpage": "最後のページ"}
 ID_FIELDS = ("volume", "issue", "fpage")
 RE_ALNUM = re.compile(r"[A-Za-z0-9]+")
+RE_DIGITS = re.compile(r"[0-9]+")
 
 
 def _shown_char(c: str) -> str:
@@ -263,6 +264,9 @@ class ArticleMeta:
         for k in PAGE_FIELDS:
             if k in d and d[k] is not None:
                 d[k] = _id_value(k, d[k], notes)
+        fp, lp = d.get("fpage") or "", d.get("lpage") or ""
+        if RE_DIGITS.fullmatch(fp) and RE_DIGITS.fullmatch(lp) and int(fp) > int(lp):
+            raise ValueError(f"最初のページ「{fp}」が最後のページ「{lp}」より大きくなっています（ページを確かめてください）")
         if d.get("doi") is not None:
             d["doi"] = str(d["doi"]).strip()
         d["input_notes"] = notes
