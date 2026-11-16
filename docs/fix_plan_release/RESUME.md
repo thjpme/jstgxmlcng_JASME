@@ -14,7 +14,6 @@
     ダウンロード用の書庫の名前に号（`package.download_stem`。J-STAGE にアップロードする ZIP の名前は変えない。所有者の決定）。
     見送ったもの: C001（保留のまま）、C052・C100（前提が古い・対応済み）、C114、C058・C061・C063・C088、C145・C146、C144、モジュールの分割。
     確かめていないこと: 実際の原稿（`tests/private/`）での回帰（この作業環境になかった。fixture とテストだけ）、Word が実際に作る削除済みの数式の docx、1 画面版の「図の画像」の欄（`gr.HTML` に変えた）の見た目。
-    作業のときに見つけたこと: このクローンの `main`・`origin/main` は 0.31.1 を指していた（0.36.0 は開発ブランチにあった）。`main` に反映する前に確かめる。
   - 0.36.0: 中・低のうち正式版の前に直す 9 件（`units/midlow_A.md`: C067 の知らせ `note_unlinked`・C038 `heading_level`・C077・C095 `meta_corresp` と入力の確かめ・C057・C105。`units/midlow_B.md`: C089・C090 `link_iri`・C111）。点検 review20 は 3 回目で合格（minor だけ）。残りの中・低は 1.0.0 の後。
   - 0.35.0: 残りの修正必須・高の 4 単位（`units/rest_B.md` 表・`rest_C.md` 冒頭部・`rest_D.md` 本文と後付け・`rest_PQ.md` PDF 照合）。点検 review19 は 3 回の修正と再点検で合格（minor だけ）。
   - 0.34.0: W2〜W5（出版版 PDF との照合の見直し。表記だけを PDF に合わせ、内容の違いは要確認 `pdf_mismatch`、別の論文の PDF は中止、書誌を PDF から読む）、
