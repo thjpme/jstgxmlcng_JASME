@@ -159,7 +159,8 @@ python -m pytest
     HTML のタグとして扱い、文字が消えて見える。文の中の JATS のタグは `report.md_tag()` でバッククォートで囲む（名前が JATS の要素名
     〈`validate.jats_element_names`〉のタグの形だけに掛ける。docx の文字の抜粋の「x<y かつ z>w」は変えない）。画面の枠（HTML をエスケープして
     出す）とコマンドラインの文には使わない。docx の抜粋の「x<y>z」「<y かつ z>」「a&amp;b」のような並びは、`colab.report_details` が
-    Markdown の生の HTML・自動リンク・実体を無効にして HTML にする（`colab.markdown_text_only`。0.29.0）ので消えない。レポート自身は
+    Markdown の生の HTML・自動リンク・実体と、画像・リンク（インライン・参照。`![x](http://…)` で外部の URL へ取得が起きないように。C099）を無効にして HTML にする（`colab.markdown_text_only`。0.29.0）ので消えない。
+    原稿の文字を含む文を `gr.Markdown` に渡さず、`colab.markdown_html` で HTML にして `gr.HTML` に出す（1 画面版の「図の画像」の欄）。レポート自身は
     生の HTML を使わない（全 fixture のレポートで、無効にしてもしなくても同じ HTML になることを `tests/test_colab.py` が確かめる）。
     生の HTML を使う必要が出たら、`markdown_text_only` で許す要素を限ってから使う。
 11. **AI による仕上げは必須にしない**（AI を条件に変換を中止しない。推奨の手順 `ai_finish`）。AI の回答で変えてよいのは、図・表の位置、

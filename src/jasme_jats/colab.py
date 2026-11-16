@@ -209,7 +209,9 @@ def markdown_text_only(markdown_text: str) -> str:
     タグ・実体参照に見える並びがあっても、HTML のタグ・実体として読まれて文字が消えない（または別の文字に変わらない）ように、
     Markdown の生の HTML（ブロック・インライン）と自動リンクの `<…>` を無効にし、`&` は先に別の文字に置き換えて、HTML にした後で
     `&amp;` に戻す（markdown ライブラリは `&amp;` のような実体の形をそのまま通すため）。コードの書式（バッククォート・``` で囲んだ
-    範囲）の中は、もともと文字として出る。レポート自身は生の HTML・実体を使わない（`report.md_tag` はタグをコードで囲む。
+    範囲）の中は、もともと文字として出る。画像・リンク（インライン・参照）の記法も無効にし、`![x](http://…)`・`[x](http://…)`・
+    `[x][r]` が画像の取得やリンクにならず、`[r]: http://…` の行が消えずに、書かれた文字のまま出る（レポートは未公開の原稿の文字を
+    引用するので、外部の URL への取得を起こさない。C099）。レポート自身は画像・リンクの記法も使わない。レポート自身は生の HTML・実体を使わない（`report.md_tag` はタグをコードで囲む。
     tests/test_colab.py の test_report_details_shows_angle_brackets が全 fixture のレポートで確かめる）。
     """
     import markdown
@@ -218,11 +220,24 @@ def markdown_text_only(markdown_text: str) -> str:
     class TextOnly(Extension):
         def extendMarkdown(self, md):
             md.preprocessors.deregister("html_block", strict=False)
-            for name in ("html", "autolink", "automail"):
+            for name in ("html", "autolink", "automail", "link", "reference", "short_reference", "image_link",
+                         "image_reference", "short_image_ref"):
                 md.inlinePatterns.deregister(name, strict=False)
+            md.parser.blockprocessors.deregister("reference", strict=False)       # 「[r]: http://…」の定義の行が消えない
     amp = next(c for c in map(chr, range(0xE000, 0xF8FF)) if c not in markdown_text)       # 文章にない私用領域の文字
     body = markdown.markdown(markdown_text.replace("&", amp), extensions=["tables", "fenced_code", TextOnly()])
     return body.replace(amp, "&amp;")
+
+
+def markdown_html(markdown_text: str) -> str:
+    """Markdown の文を、markdown_text_only で HTML にする（原稿の文字を含む文を画面に出すとき。1 画面版の「図の画像」の欄など）。
+    markdown ライブラリが入っていなければ、そのままの文字で出す。"""
+    if not markdown_text:
+        return ""
+    try:
+        return markdown_text_only(markdown_text)
+    except ImportError:
+        return f"<pre style='white-space:pre-wrap'>{html.escape(markdown_text)}</pre>"
 
 
 def report_details(markdown_text: str, title: str = "変換レポートの全文を見る（クリックで開きます）") -> str:
@@ -230,10 +245,7 @@ def report_details(markdown_text: str, title: str = "変換レポートの全文
 
     Markdown → HTML の変換には markdown ライブラリ（pyproject の colab の extra）を使う。入っていなければ、そのままの文字で出す。
     """
-    try:
-        body = markdown_text_only(markdown_text)
-    except ImportError:
-        body = f"<pre style='white-space:pre-wrap'>{html.escape(markdown_text)}</pre>"
+    body = markdown_html(markdown_text)
     # 「全文を見る」の行も暗い背景の上に出ないよう、details ごと白地の枠にする
     return (f"{LIGHT_STYLE}<details class='jasme-light' style=\"margin:12px 0;{_REPORT_CSS}\">"
             f"<summary style='cursor:pointer;font-weight:bold;font-size:15px'>"

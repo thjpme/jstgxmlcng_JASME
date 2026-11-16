@@ -216,6 +216,10 @@ def test_image_slots_in_view(tmp_path):
     n = app.MAX_IMAGE_SLOTS
     out = fns["on_images"](None, *[None] * n, *[False] * n)               # 何も選ばないとエラー（画面の更新の数は変わらない）
     assert len(out) == app.FIXED_VIEWS + 2 * n and "選ばれていません" in out[0] and out[9] == "<i>check</i>"
+    assert out[5] == "<p>md</p>"                                           # 「図の画像」の欄（images_md）は HTML にして出す
+    st.images_markdown = lambda: "1. ![図](http://example.org/a.png) と [題](http://example.org/b)"      # キャプションは原稿の文字（C099）
+    shown = fns["on_images"](None, *[None] * n, *[False] * n)[5]
+    assert "<img" not in shown and "<a " not in shown and "![図](http://example.org/a.png)" in shown
     files = out[app.FIXED_VIEWS:app.FIXED_VIEWS + n]
     checks = out[app.FIXED_VIEWS + n:]
     assert files[0]["visible"] and files[0]["label"] == "図1 架空の図（fig01）— 未" and files[0]["value"] is None and all(u["visible"] for u in files)
@@ -236,11 +240,11 @@ def test_on_images_bulk_skip_and_notes(tmp_path):
     n = app.MAX_IMAGE_SLOTS
     F = app.FIXED_VIEWS
     key = st.missing_images()[0].key
-    assert out[4]["visible"] and out[5].startswith("### 図の画像（あと 1 枚") and "図の画像" in out[1] and "図の画像を入れてください" not in out[1]
+    assert out[4]["visible"] and out[5].startswith("<h3>図の画像（あと 1 枚") and "図の画像" in out[1] and "図の画像を入れてください" not in out[1]
     pic = png_file(tmp_path / f"{key}.png")
     stray = png_file(tmp_path / "stray.png", 1)
     out = fns["on_images"]([str(pic), str(stray)], *[None] * n, *[False] * n)
-    assert st.missing_images() == [] and out[5].startswith("### 図の画像（1 枚をすべて入れました）")
+    assert st.missing_images() == [] and out[5].startswith("<h3>図の画像（1 枚をすべて入れました）")
     assert "「stray.png」に合う図がありません（この論文の画像の名前: " in out[0] and "<iframe" in out[9]
     assert out[F]["label"].endswith("— 入れた: " + pic.name) and out[8] is None
     # 行で選んだ画像と、まとめて入れた画像が同じ図に合うときは、行の画像を使い、まとめての方は入れなかったと知らせる

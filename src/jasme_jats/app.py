@@ -24,7 +24,7 @@ from typing import Optional
 from . import __version__
 from . import report as rp
 from .ai_assist import API_KEY_NAMES, DEFAULT_MODEL, cost_note
-from .colab import (ANSWER_LABEL, APPLY_LABEL, CONVERT_LABEL, ai_finish_of, check_box, error_box, manual_guide, report_details,
+from .colab import (ANSWER_LABEL, APPLY_LABEL, CONVERT_LABEL, ai_finish_of, check_box, error_box, manual_guide, markdown_html, report_details,
                     result_boxes, step_text, structure_conflict_box, summary_box, wrong_paper_box)
 from .config import ArticleMeta, JournalConfig, keyword_language_mismatch, keyword_problem
 from .images import match_names
@@ -734,7 +734,7 @@ def build_app(state: AppState, io: "IO | None" = None):
             answer = gr.Textbox(label=ANSWER_LABEL, lines=6)
             apply_btn = gr.Button(APPLY_LABEL)
         with gr.Column(visible=False) as images_col:
-            images_md = gr.Markdown()
+            images_md = gr.HTML()                      # 図のキャプション（原稿の文字）を含むので gr.Markdown にしない（C099。colab.markdown_html）
             bulk_files = gr.File(label="まとめて入れる（複数選べます。fig03.png・図3.png のような名前で図に合わせます）", file_count="multiple",
                                  file_types=["image"])
             image_files = [gr.File(label=f"図の画像 {k}", file_count="single", file_types=["image"], visible=False)
@@ -771,7 +771,7 @@ def build_app(state: AppState, io: "IO | None" = None):
                     gr.update(visible=manual),
                     state.prompt_text() if manual else "",
                     gr.update(visible=state.images_visible()),
-                    state.images_markdown(),
+                    markdown_html(state.images_markdown()),
                     gr.update(visible=state.needs_action, value=False),
                     download,
                     None,

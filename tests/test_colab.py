@@ -476,6 +476,20 @@ def test_report_details_shows_angle_brackets(journal, meta, tmp_path):
     assert checked >= 15
 
 
+def test_report_details_has_no_images_or_links():
+    """C099: 原稿の文字に Markdown の画像・リンク・参照リンクの並びがあっても、画像の取得もリンクも起きず、書かれた文字のまま見える
+    （レポート自身は画像・リンクの記法を使わないので、全 fixture のレポートが変わらないことは上のテストが確かめる）。"""
+    from jasme_jats.colab import markdown_text_only, report_details
+    md = ("- 引用: ![図](http://example.org/a.png) と [題](http://example.org/b) と [参照][r] と ![参照画像][r] と [r] と ![r]\n"
+          "- 引用: [x]: http://example.org/c\n\n[r]: http://example.org/r\n\n- [x] チェックリストの行\n")
+    for html_text in (markdown_text_only(md), report_details(md)):
+        text, tags = _html_text_and_tags(html_text)
+        assert "img" not in tags and "a" not in tags, tags
+        for s in ("![図](http://example.org/a.png)", "[題](http://example.org/b)", "[参照][r]", "![参照画像][r]", "[x]: http://example.org/c",
+                  "[r]: http://example.org/r", "[x] チェックリストの行"):
+            assert s in text, s
+
+
 def test_structure_conflict_box_and_text(journal, tmp_path):
     """原稿の構造の衝突（K1・K2）で変換を中止するときの枠（赤）と文: 3 つの画面（ノートブック・1 画面版・コマンドライン）で画面の操作の
     目印が語に置き換わって残らない。すべての衝突の段落 ID と抜粋が文にあり、種類ごとの直し方（注見出し・注本文、所属の欄、
