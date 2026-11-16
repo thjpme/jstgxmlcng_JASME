@@ -493,10 +493,11 @@ if _act is not None:
 """ + mark(7)),
     code("""
 #@title 8. 結果をダウンロード
-#@markdown 「変換結果_巻_開始ページ.zip」（J-STAGE にアップロードする jasme_巻_開始ページ.zip、XML、変換レポート、図の確かめ.html〈ZIP を展開すると、入れた画像も見えます〉。PDF を入れたときは（PDF の文字を読めたとき）表記を PDF に合わせた docx も）をダウンロードします。要対応（赤い枠）が残っていると一度止まります（そのままダウンロードするときは、もう一度 ▶）。
+#@markdown 「変換結果_○巻○号_開始ページ.zip」（J-STAGE にアップロードする jasme_巻_開始ページ.zip、XML、変換レポート、図の確かめ.html〈ZIP を展開すると、入れた画像も見えます〉。PDF を入れたときは（PDF の文字を読めたとき）表記を PDF に合わせた docx も）をダウンロードします。要対応（赤い枠）が残っていると一度止まります（そのままダウンロードするときは、もう一度 ▶）。
 """ + guard(1, 2, 3, 4, 5) + unmark(8) + """import shutil
 from IPython.display import HTML, display
 from jasme_jats.colab import result_boxes
+from jasme_jats.package import download_stem
 from jasme_jats.report import actions, blocking
 
 _todo = blocking(actions(res))      # 止める知らせ（要対応と、残っている必須の手順。推奨の手順は止めない）
@@ -509,7 +510,7 @@ if _todo and globals().get("_NEEDS_ACTION_OK") != _key:
                      + ("図の画像は、手順 7 で入れてから、もう一度この ▶ を押してください。" if any(a.key == "images" for a in _todo) else "")
                      + "枠の説明に従って直してから変換し直すか、このままダウンロードするときは（結果を確かめるときなど）、"
                        "もう一度この ▶ を押します。")
-archive = shutil.make_archive(str(WORK / f"変換結果_{res.xml_path.stem}"), "zip", OUT)
+archive = shutil.make_archive(str(WORK / download_stem(res.meta)), "zip", OUT)
 files.download(archive)
 CONVERTED = {**globals().get("CONVERTED", {}), Path(archive).name: docx_path.name}
 print("ダウンロードしました:", Path(archive).name, "（" + docx_path.name + "）")

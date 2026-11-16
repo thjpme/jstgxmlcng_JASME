@@ -72,6 +72,13 @@ def zip_path(out_dir: Path, journal, meta) -> Path:
     return out_dir / f"{journal.journal_id}_{meta.article_id(journal)}.zip"
 
 
+def download_stem(meta) -> str:
+    """Colab・1 画面版でダウンロードする書庫（変換結果一式）の名前（拡張子なし）。巻・号・最初のページが分かる形にする
+    （記事識別子は {巻}_{最初のページ} で号が入らないので、号ごとにページを振り直す誌面では別の号の論文と名前が重なる）。
+    J-STAGE にアップロードする ZIP の名前（zip_path）とは別で、そちらは変えない。号がなければ 0（article_dir と同じ）。"""
+    return f"変換結果_{meta.volume or '0'}巻{meta.issue or '0'}号_{meta.fpage}"
+
+
 def make_zip(out_dir: Path, journal, meta, image_names=(), has_pdf=False) -> Path:
     """upload_entries の項目だけを ZIP にする。利用者が後から画像を入れたとき（pipeline.add_images）にも作り直す。"""
     zpath = zip_path(out_dir, journal, meta)

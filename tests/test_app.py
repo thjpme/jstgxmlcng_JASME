@@ -1,5 +1,6 @@
 """Gradio の操作画面（app.py。1 画面版）: AppState の遷移と、build_app が画面を組めること。ブラウザは使わない。"""
 import zipfile
+from pathlib import Path
 
 import answers
 import pytest
@@ -63,8 +64,23 @@ def test_convert_shows_summary_and_download(tmp_path):
     fill_images(st.res)
     path, note = st.download()
     assert not st.needs_action and note == ""
-    assert path.endswith("変換結果_" + res.xml_path.stem + ".zip")
+    m = res.meta
+    assert path.endswith(f"変換結果_{m.volume}巻{m.issue}号_{m.fpage}.zip")        # ダウンロード用の名前は号も入れる（号ごとにページを振り直す誌面）
+    assert path.rsplit("/", 1)[-1] != res.zip_path.name and res.zip_path.name.startswith("jasme_")      # J-STAGE にアップロードする ZIP の名前は変えない
     assert any(n.endswith(".xml") for n in zipfile.ZipFile(path).namelist())
+
+
+def test_download_name_has_volume_issue_and_first_page(journal):
+    """ダウンロード用の ZIP の名前は、巻・号・最初のページが分かる形（記事識別子は号を含まないので、号の違う論文で名前が重ならない）。
+    J-STAGE にアップロードする ZIP の名前（package.zip_path）とは別。"""
+    from jasme_jats.config import ArticleMeta
+    from jasme_jats.package import download_stem, zip_path
+    one = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "100", "peer_review": "あり"})
+    two = ArticleMeta.from_dict({"volume": "31", "issue": "2", "fpage": "100", "peer_review": "あり"})
+    assert download_stem(one) == "変換結果_31巻1号_100" and download_stem(two) == "変換結果_31巻2号_100"
+    assert one.article_id(journal) == two.article_id(journal)
+    assert zip_path(Path("o"), journal, two).name == "jasme_31_100.zip"
+    assert download_stem(ArticleMeta.from_dict({"volume": "31", "fpage": "5", "peer_review": "あり"})) == "変換結果_31巻0号_5"
 
 
 def test_manual_mode_waits_for_answer(tmp_path):

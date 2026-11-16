@@ -30,6 +30,7 @@ from .config import ArticleMeta, JournalConfig, keyword_language_mismatch, keywo
 from .images import match_names
 from .pdfbiblio import biblio_inputs, read_biblio
 from .imagelist import check_frame
+from .package import download_stem
 from .pipeline import Options, StructureConflictError, WrongPaperError, add_images, convert, kept_images, reapply_images
 from .report import (actions, ai_done, ai_state, blocking, clash_images_text, image_rows, images_action, shorten_shown, shown_text,
                      unmatched_image_text)
@@ -635,7 +636,7 @@ class AppState:
         if not self.out_dir.is_dir():
             # Python 3.10 の shutil.make_archive は、フォルダがなくても例外を出さずに空の ZIP を作る。空の ZIP を渡さない
             raise FileNotFoundError(f"出力フォルダがありません: {self.out_dir}")
-        archive = shutil.make_archive(str(self.work / f"変換結果_{self.res.xml_path.stem}"), "zip", self.out_dir)
+        archive = shutil.make_archive(str(self.work / download_stem(self.res.meta)), "zip", self.out_dir)
         return archive, ""
 
     # ---- 次の論文
