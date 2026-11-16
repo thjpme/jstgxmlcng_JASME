@@ -1134,7 +1134,7 @@ def table_body_why(b) -> str:
     floats = [c for c in b.candidates if c[2]]
     if b.why == "caption_style":
         return ("キャプションが「図」で始まるのに表キャプションのスタイルです。図なら Word でこの段落を図キャプションのスタイルにして"
-                "変換し直してください（図・表のキャプションのスタイルが逆になっていれば、ここに挙がらないキャプションのスタイルも確かめてください）。")
+                "変換し直してください（図・表のキャプションのスタイルの取り違えは、要確認「スタイルを確かめてください」にも、本体の有無に関係なくすべて挙げています）。")
     if b.why == "same_number":
         ref = f"{b.why_ref}「{shorten_shown(b.why_ref_head, 20)}」" if b.why_ref_head else b.why_ref
         return (f"直前の表キャプション（{ref}）と同じ番号です（英文のキャプションなど）。同じ表のキャプションなら、Word で 2 つの"
@@ -1706,11 +1706,15 @@ STYLE_SUSPECT_JA = {
                      "見出しの後ろで Enter を押して分け、後ろを本文のスタイルにする）"),
     "ref_cont": ("前の文献の続きの疑いがあります（年が読めず、別の文献として出力しています）",
                  "前の文献の続きなら、Word で前の段落の終わりの段落記号を消して 1 つの段落にする"),
+    "caption_kind": ("図・表のキャプションのスタイルと、キャプションの番号の頭（図・表）が食い違っています",
+                     "キャプションの番号の頭に合わせて、Word でこの段落を図キャプション（「図」「Figure」の頭）か表キャプション"
+                     "（「表」「Table」の頭）のスタイルにする"),
 }
 # 機械が挙げても、AI の提案を待たずに直し方が決まっている種類（推奨の手順 ai_finish を出す条件に数えない）
 # （heading_level・heading_guess は、どちらの階層・見出しかを出版版 PDF を見て決められるので、heading_body と同じく AI の提案を待つ種類。
-#  C038・C077。直し方が機械的に決まる ref_symbol・back_heading・ref_cont だけが待たない）
-STYLE_NO_AI_KINDS = ("ref_symbol", "back_heading", "ref_cont")
+#  C038・C077。直し方が機械的に決まる ref_symbol・back_heading・ref_cont・caption_kind だけが待たない。caption_kind は番号の頭の文字で
+#  図か表かが決まり〈docx の文字は変えない〉、PDF を見ても直し方は変わらない。C034）
+STYLE_NO_AI_KINDS = ("ref_symbol", "back_heading", "ref_cont", "caption_kind")
 STYLE_CHECK_SHOWN = 10      # 要確認 style_check に並べる段落の数（残りは「ほか N か所（2 章）」）
 # AI の回答は段落の役割（謝辞・引用・見出しの階層など）を XML に反映しない（所有者の決定 5）ので、Word での直し方を具体的に書く（点検 review13 回帰 1）
 STYLE_CHECK_HOW = ("見出しや引用・謝辞のスタイルが違うと、J-STAGE の全文で章立てや引用・謝辞の形が変わります。違っていれば、Word でその段落を選び、［ホーム］の"

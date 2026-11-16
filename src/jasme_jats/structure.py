@@ -3946,7 +3946,26 @@ class Classifier:
         for i, a in enumerate(plan.affs, 1):
             a.aid = f"aff{i}"
         plan.figures, plan.tables, plan.formulas = figs, tabs, forms
+        self.caption_kind_suspects()
         self.assign_slots()
+
+    def caption_kind_suspects(self):
+        """図キャプションの段落が「表」「Table」で始まる／表キャプションの段落が「図」「Figure」「Fig.」で始まるもの（スタイルの取り違え）を、
+        本体の有無に関係なくすべて style_suspects の caption_kind にする（C034。構造は変えない。直すのは Word のスタイル）。
+        番号の頭は RE_FIGCAP・RE_TABCAP（NFKC 後。全角・半角・空白の揺れも同じ読み方）で見るので、「図表1」「表現」は当たらない。"""
+        plan = self.plan
+        for nodes, own, other, own_ja, other_ja in ((plan.figures, RE_FIGCAP, RE_TABCAP, "図", "表"),
+                                                    (plan.tables, RE_TABCAP, RE_FIGCAP, "表", "図")):
+            for node in nodes:
+                cap = node.caption
+                if cap is None:
+                    continue
+                t = nfkc(_para_text(cap)).strip()
+                if other.match(t) and not own.match(t):
+                    plan.style_suspects.append(StyleSuspect(
+                        "caption_kind", cap.src,
+                        f"{own_ja}キャプションのスタイル「{cap.style_name or 'スタイルなし'}」ですが、キャプションの番号の頭が「{other_ja}」です",
+                        f"{other_ja}のキャプションなら、Word でこの段落を{other_ja}キャプションのスタイルにする"))
 
     def cell_captions_in(self, node, t):
         """出力する表 node（本体 t。入れ子の表も）のセルの中の、番号で始まる表キャプション・図キャプション（cell_caption）を

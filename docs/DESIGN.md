@@ -1048,10 +1048,10 @@ W2〜W5（違いの区分を引き直し、内容の違いを書き込まなく�
   （C014）・付記・謝辞の見出しと本文が 1 つの段落と、比べ方を直すと後付けの見出しに合うが受け入れなかった段落の `back_heading`（C032。
   `structure.back_heading_inline`・`Classifier.loose_back_headings`）・記号だけの引用文献〈`ref_symbol`。「.」だけの段落など。`structure.symbol_only`。
   文字は変えず除外もせず引用文献の 1 件として出し、Word で消してもらう〉・前の文献の続きの疑いの `ref_cont`（C026。`refparse.ref_continuations`。
-  文献はつながない）・同じ番号の系列（「3.1」「3.2」、「（1）」「（2）」、「①」「②」。直前の章・節の下ごと）の見出しのスタイルの階層が食い違う見出しの `heading_level`（C038。
+  文献はつながない）・図・表のキャプションのスタイルと番号の頭（図・Figure・Fig. か表・Table）の食い違いの `caption_kind`（C034。`Classifier.caption_kind_suspects`。`assign_ids` が `plan.figures`・`plan.tables` のキャプションを見る。本体の有無に関係なく、構造は変えない。番号の頭で図か表かが決まり、PDF を見ても直し方は変わらないので AI を待たない）・同じ番号の系列（「3.1」「3.2」、「（1）」「（2）」、「①」「②」。直前の章・節の下ごと）の見出しのスタイルの階層が食い違う見出しの `heading_level`（C038。
   `structure.sibling_level_mismatches`。番号は NFKC の前の文字で読み、「.」「．」の後ろの数字が前と全角・半角が違えば題名の始まりとみなす〈`structure._heading_number`〉。多数の階層と違うものだけを挙げ、誌の慣習は決め打たない。行には多数の階層の兄弟の番号と、そのスタイルの名前 1 つの直し方〈`StyleSuspect.how`〉を書く。実際の 28 論文で 1 件）・太字だけの短い 1 項目の順序つきリストの `heading_guess`（C077。
   `Classifier.bold_single_lists`。リストは変えない。直し方は行の `StyleSuspect.how` で言い切る〈中の節の 1 つ下の見出しのスタイルにする。Word の段落番号は見出しの番号として出る。番号の形を PDF に合わせたいときだけ段落番号を外して打つ。箇条ならそのまま〉）。`quote_like` はまだ検出しない。`heading_level`・`heading_guess` は、どちらの階層・見出しかを出版版 PDF を見て決められるので
-  AI の提案を待つ種類にする。`ref_symbol`・`back_heading`・`ref_cont` は直し方が決まっているので、推奨の手順 `ai_finish` を
+  AI の提案を待つ種類にする。`ref_symbol`・`back_heading`・`ref_cont`・`caption_kind` は直し方が決まっているので、推奨の手順 `ai_finish` を
   出す条件には数えない（`report.STYLE_NO_AI_KINDS`）。これらと合わせて、要確認 `style_check`（`report._style_check_action`。段落ごとに 1 行、先頭 10 行まで。
   AI の提案は機械が挙げた段落の同じ行に添え、「このまま」でも行は消さない。AI だけの提案は確度 高・中だけを載せ、低は 2 章の表
   「スタイルの提案（XML には反映していない）」だけ。英文要旨が見つからない要対応 `abstract_missing` の段落は載せず、そちらに AI の見立ての
