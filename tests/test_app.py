@@ -608,7 +608,7 @@ def test_inputs_changed_after_convert_are_refused(tmp_path):
     st = filled(tmp_path, docx=a)
     st.set_inputs(ai_mode="manual")
     res = st.convert()
-    st.set_inputs(docx=str(b), fpage="77")
+    st.set_inputs(docx=str(b), fpage="7")
     assert st.changed_inputs() == ["docx", "最初のページ"]
     with pytest.raises(InputError) as ei:
         st.apply_answer(EMPTY_ANSWER)
@@ -711,7 +711,7 @@ def test_failed_convert_keeps_previous_run(tmp_path, monkeypatch):
     st = filled(tmp_path)
     res = st.convert()
     run = st.run
-    st.set_inputs(fpage="77", ai_mode="api")
+    st.set_inputs(fpage="7", ai_mode="api")
     monkeypatch.delenv(app.API_KEY_NAMES["claude"][0], raising=False)
     for name in app.API_KEY_NAMES["claude"]:
         monkeypatch.delenv(name, raising=False)
@@ -792,7 +792,7 @@ def test_stopped_convert_leaves_no_stale_text(tmp_path):
     with pytest.raises(InputError):
         st.convert()                                   # 原稿の構造の衝突で中止（位置を決められない図表では中止しない。W8 の決定 4）
     assert st.res is None and st.run is not None
-    st.set_inputs(fpage="77")
+    st.set_inputs(fpage="7")
     assert st.changed_inputs() == [] and "今の結果は" not in st.ready_text() and not st.answer_box_open
 
 

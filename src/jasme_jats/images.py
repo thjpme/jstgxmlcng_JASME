@@ -101,7 +101,7 @@ def image_format(data: bytes) -> str:
 
 
 def check_user_image(data: bytes, name: str = "") -> tuple:
-    """作業する人が入れる画像の確かめ。戻り値: (形式〈png・jpg・gif〉, (幅, 高さ)〉。
+    """作業する人が入れる画像の確かめ。戻り値: (形式〈png・jpg・gif〉, (幅, 高さ))。
 
     形式は中身の先頭のバイトで決める（拡張子が違っていてもよい）。PNG・JPEG・GIF でないもの・0 バイトは、理由を言って ValueError
     （文は修正計画 W1 の 4.2。name は文に出すファイル名）。先頭のバイトが PNG・JPEG・GIF でも、Pillow で最後まで読めなければ
