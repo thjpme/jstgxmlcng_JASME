@@ -2213,6 +2213,32 @@ def _refs_missing_action(r):
              "文献のスタイルを付けて変換し直すこと"))
 
 
+def _refs_unlinked_action(r):
+    """要確認 refs_unlinked（C087）: 引用文献の一覧が「[1]」の番号つきで、本文は「山田（2020）」の著者・年の書き方で引用していて、本文から
+    文献へのリンクが 1 件もないとき。なければ None。
+
+    番号つきの一覧では、リンクするのは本文の「[1]」の形の引用だけ（refparse.link_numeric。リンクの規則は変えない）。著者・年の引用の
+    数は plan.numeric_author_year_cites（refparse.refs_missing_cites と同じ数え方。引用がない短い原稿・文献のない原稿には出さない）。
+    リンクが 1 件でもある原稿には出さない（一部の引用がリンクされない場合は、3 章の未解決の表と「どこからもリンクされていない文献」で見る）。
+    XML は変えない（リンクを推定で足さない）。"""
+    plan = r.plan
+    n = plan.numeric_author_year_cites
+    if plan.citation_mode != "numeric" or not plan.refs or not n or linked_ids(plan, "bibr"):
+        return None
+    refs = len(plan.refs)
+    why = (f"引用文献の一覧が「[1]」のような番号つきですが、本文は「著者（年）」の形の引用（少なくとも {n} か所）で、本文から引用文献"
+           f"（{refs} 件）へのリンクが 1 件もありません")
+    how = ("Word で、引用文献の一覧の番号を外して「著者（年）」の形にそろえるか、本文の引用を番号の形（「[1]」）にそろえて、変換し直してください。"
+           "このまま登載すると、J-STAGE の本文から引用文献へのリンクがありません")
+    return Action(
+        TO_CHECK, "refs_unlinked",
+        top=f"> **要確認: 本文から引用文献へのリンクがありません（3 章）。** {why}。{how}。",
+        checklist=f"- [ ] **本文から引用文献へのリンクがない**（引用文献 {refs} 件。3 章）: 文献の一覧と本文の引用の書き方（番号か著者・年）をそろえて変換し直す",
+        box_title="本文から引用文献へのリンクがありません（要確認）",
+        box_detail=f"{why}。{how}（直した docx を{step('docx')}でアップロードし直し、そこから順にやり直す）。",
+        cli=f"要確認: 本文から引用文献へのリンクがない（{why}。レポートの冒頭と 3 章）。{how}")
+
+
 def _first_style(journal, role, default):
     return next((name for name, v in journal.styles.items() if v == role), default)
 
@@ -3943,7 +3969,7 @@ def actions(r) -> list:
                            _table_parts_action, _image_names_action,
                            _upload_action, _meta_dates_action, _meta_corresp_action, _textbox_undecided_action,
                            _textbox_place_action, _textbox_figure_text_action, _authors_missing_action, _unplaced_action, _front_check_action, images_action,
-                           lost_action, _image_same_action, _image_changed_action, lost_autonum_action, _pua_left_action, _abstract_missing_action, _refs_missing_action, _style_hidden_action, _emphasis_action, _resultless_field_action, _symbol_action, _abstract_ja_action, _app_after_refs_action, _float_end_action, _style_check_action, _ai_boundary_action, _ai_carried_action, _note_overlap_action, _note_unlinked_action, _float_ref_action, _link_iri_action,
+                           lost_action, _image_same_action, _image_changed_action, lost_autonum_action, _pua_left_action, _abstract_missing_action, _refs_missing_action, _refs_unlinked_action, _style_hidden_action, _emphasis_action, _resultless_field_action, _symbol_action, _abstract_ja_action, _app_after_refs_action, _float_end_action, _style_check_action, _ai_boundary_action, _ai_carried_action, _note_overlap_action, _note_unlinked_action, _float_ref_action, _link_iri_action,
                            _fn_guess_action, _name_split_action, _newline_action)]
     acts = [a for a in head if a is not None] + pdf_actions(r)
     fin = _with_reused(_ai_finish_action(r), r)

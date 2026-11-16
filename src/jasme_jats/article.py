@@ -383,6 +383,9 @@ class ArticlePlan:
     ref_conts: list = field(default_factory=list)
     # 引用文献の一覧が 1 件もないときの、本文の「著者（年）」の引用の数（refparse.refs_missing_cites。要対応 refs_missing。C032 の守り）
     refs_missing_cites: int = 0
+    # 文献の一覧が「[1]」の番号つき（numeric）なのに、本文に「著者（年）」の形の引用があるときの、その引用の数
+    # （refparse.link_citations。番号の形式では著者・年の引用をリンクしないので、要確認 refs_unlinked の根拠にする。C087）
+    numeric_author_year_cites: int = 0
     # 比べ方を直して初めて後付けの見出しと合い、後付けの見出しにした段落: 段落 ID -> 役割（structure.Classifier.loose_back_headings。C032。
     # 要確認 style_check の AI だけの提案の行に、XML ではもう後付けの見出しとして出していることを添える）
     loose_back: dict = field(default_factory=dict)

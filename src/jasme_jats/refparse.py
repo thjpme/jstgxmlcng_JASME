@@ -373,6 +373,9 @@ def link_citations(plan, linker, paras):
     ref_continuations(plan, numeric)
     if numeric:
         link_numeric(plan, linker, paras)
+        # 番号の形式の一覧では、本文の「著者（年）」の引用はリンクしない（規則は変えない）。数だけ数えて、リンクが 1 件もないときに
+        # 知らせる（report._refs_unlinked_action。C087）
+        plan.numeric_author_year_cites = refs_missing_cites(paras)
         return
     from .linker import Unresolved
     cited = defaultdict(list)

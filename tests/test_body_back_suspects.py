@@ -270,6 +270,33 @@ def test_refs_missing_not_without_citations(meta, journal, tmp_path):
     assert res.plan.refs == [] and _act(res, "refs_missing") is None
 
 
+def _numbered_refs(b):
+    return [para(S["ref_head"], "引用文献"), para(S["ref"], "[1] 山田一郎（2020）．「架空の調査」．『架空誌』，第3巻，pp.1-2．"),
+            para(S["ref"], "[2] 試験六郎（2021）．「別の調査」．『架空誌』，第4巻，pp.3-4．")]
+
+
+def test_refs_unlinked_numbered_list_with_author_year_cites(meta, journal, tmp_path):
+    """C087: 文献リストが「[1]」の番号つきで、本文が「山田（2020）」の著者・年方式の原稿は、引用のリンクが 1 件も張られない。リンクの規則は
+    変えず、要確認 refs_unlinked で知らせる（件数と、Word で文献リストか本文の引用をそろえる直し方）。XML は変えない。"""
+    res = _convert(tmp_path, "c087", lambda b: [para(S["sec1"], "１．はじめに"), para(S["body"], "山田（2020）は調べ、試験（2021）も見た。")],
+                   _numbered_refs, meta, journal)
+    assert res.plan.citation_mode == "numeric" and not any(x.get("ref-type") == "bibr" for x in _xml(res).iter("xref"))
+    act = _act(res, "refs_unlinked")
+    assert act is not None and act.level == TO_CHECK and "2 件" in act.box_detail and "2 か所" in act.box_detail
+    assert not res.needs_action and res.fidelity.ok
+    assert "refs_unlinked" in "".join(a.key for a in actions(res)) and "引用文献" in act.top
+
+
+def test_refs_unlinked_not_when_linked_or_no_cites(meta, journal, tmp_path):
+    """番号の引用「[1]」がリンクされる原稿、本文に引用のない原稿、著者・年方式の文献リストの原稿には出さない。"""
+    cases = [("c087a", lambda b: [para(S["sec1"], "１．はじめに"), para(S["body"], "先行研究［1］による。")], _numbered_refs),
+             ("c087b", lambda b: [para(S["sec1"], "１．はじめに"), para(S["body"], "引用のない架空の本文である。")], _numbered_refs),
+             ("c087c", _intro, _refs())]
+    for name, body, back in cases:
+        res = _convert(tmp_path, name, body, back, meta, journal)
+        assert _act(res, "refs_unlinked") is None, name
+
+
 # ----------------------------------------------------------------------------- D7 C032 後付けの見出しの比べ方
 def _back(res):
     back = _xml(res).find(".//back")
