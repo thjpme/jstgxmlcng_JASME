@@ -69,7 +69,7 @@ from .pdfbiblio import PdfBiblio, read_biblio
 from .pdfdocx import DocxFix, make_fixed_docx, same_file
 from .pdfmatch import PdfCheck, check_pdf, pdf_opens
 from .report import (actions, blocking, decoration_where, pdf_unseen, render, render_ai_only, shorten_shown, shown_text, slot_where,
-                     step, structure_conflict_text, table_body_why, table_part_rows, wrong_paper_text)
+                     structure_conflict_text, table_body_why, table_part_rows, wrong_paper_text)
 from .report import pdf_fallback as report_pdf_fallback
 from .structure import (FN_IMAGE_EXCLUDED, RE_FIGCAP, RE_TABCAP, REF_IMAGE_EXCLUDED, classify, conflict_overrides, float_caption,
                         nfkc)

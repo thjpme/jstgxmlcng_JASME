@@ -5,6 +5,16 @@
 ## いまの状態
 
 - `main` と開発ブランチ `claude/focused-wozniak-tkoi6o` は同じ（0.36.0）。
+  - 0.37.0（開発ブランチ `claude/stoic-einstein-1igvp3`。`main` にはまだ反映していない）: 外部のレビュー 2 件（別の AI による点検）の指摘のうち、採用したもの。
+    C161（数式のランの削除の変更履歴。`ooxml.math_run_deleted` を読み取りと検証で共有）、C074（傍点は要確認 `emphasis_mark` で知らせるだけ。所有者の決定）、
+    C034（要確認 `style_check` の `caption_kind`。下の review19 の 2 回目の行は済み）、C083（本文の途中の英文の部分のスタイルの段落は、後ろに引用文献の節があれば
+    領域を切り替えず本文で出し、`style_check` の `en_in_body` で知らせる）、C044（題目・見出しの中の別行数式は `<inline-formula>`。引用文献の中は C001 の守りとして
+    DTD 不合格のまま）、C098（PDF として開けないファイルを ZIP に入れない）、C099（レポートの画像・リンクの記法を無効にする。原稿の `*`・`_` が強調として働く形は残る）、
+    C087（要確認 `refs_unlinked`）、壊れた画像を断る、`linker._trim` の「]」（下の review20 の 2 回目の行は済み）、最初のページ > 最後のページの確かめ、
+    ダウンロード用の書庫の名前に号（`package.download_stem`。J-STAGE にアップロードする ZIP の名前は変えない。所有者の決定）。
+    見送ったもの: C001（保留のまま）、C052・C100（前提が古い・対応済み）、C114、C058・C061・C063・C088、C145・C146、C144、モジュールの分割。
+    確かめていないこと: 実際の原稿（`tests/private/`）での回帰（この作業環境になかった。fixture とテストだけ）、Word が実際に作る削除済みの数式の docx、1 画面版の「図の画像」の欄（`gr.HTML` に変えた）の見た目。
+    作業のときに見つけたこと: このクローンの `main`・`origin/main` は 0.31.1 を指していた（0.36.0 は開発ブランチにあった）。`main` に反映する前に確かめる。
   - 0.36.0: 中・低のうち正式版の前に直す 9 件（`units/midlow_A.md`: C067 の知らせ `note_unlinked`・C038 `heading_level`・C077・C095 `meta_corresp` と入力の確かめ・C057・C105。`units/midlow_B.md`: C089・C090 `link_iri`・C111）。点検 review20 は 3 回目で合格（minor だけ）。残りの中・低は 1.0.0 の後。
   - 0.35.0: 残りの修正必須・高の 4 単位（`units/rest_B.md` 表・`rest_C.md` 冒頭部・`rest_D.md` 本文と後付け・`rest_PQ.md` PDF 照合）。点検 review19 は 3 回の修正と再点検で合格（minor だけ）。
   - 0.34.0: W2〜W5（出版版 PDF との照合の見直し。表記だけを PDF に合わせ、内容の違いは要確認 `pdf_mismatch`、別の論文の PDF は中止、書誌を PDF から読む）、

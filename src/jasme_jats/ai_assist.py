@@ -31,7 +31,7 @@ from .article import ArticlePlan, FigNode, TableNode, _para_text
 from .floats import column_cm, describe, estimate_top_left
 from .model import OBJ, LinkSpec, Para, Table, note_label
 from .omml import OmmlConverter, math_display_text
-from .structure import AFTER_BODY_REGIONS, abstract_missing_srcs, figure_rows, float_caption, plan_figures
+from .structure import AFTER_BODY_REGIONS, abstract_missing_srcs, figure_rows, plan_figures
 
 # 既定の AI モデル（Claude。動作を確かめたもの）。ここ 1 か所で決める（pipeline.Options・cli の既定、ノートブックの手順 4 と説明。
 # tools/make_notebook.py はこのファイルを読んで、DEFAULT_MODEL と DEFAULT_MODEL_INFO の値を使う）。
@@ -1319,7 +1319,6 @@ PDF_PROVIDERS = ("claude", "openai", "gemini", "sakana")    # PDF を渡す AI�
 PDF_SAKANA_BYTES = 4 * 1024 * 1024  # Sakana Namazu に PDF のまま渡す大きさの上限（公式。超えるとページの画像にする）
 PDF_SAKANA_PAGES = 40               # Sakana AI にページの画像で渡すときの最大ページ数（先頭から）
 PDF_PAGE_SCALE = 1.4                # ページの画像の拡大率（72 dpi の 1.4 倍。文字が読める大きさ）
-PDF_NOT_SENT_MSG = "この AI には出版版 PDF を渡していません"
 PDF_TO_PAGES_MSG = "PDF を付けた呼び出しが断られたので、ページの画像でやり直した"
 PDF_OFF_MSG = "出版版 PDF を渡さない設定のため、PDF なしで呼び出した"
 PDF_NONE_MSG = "出版版 PDF が指定されていないため、PDF なしで呼び出した"
@@ -2876,7 +2875,6 @@ def missing_answers(data, plan: ArticlePlan, outcome: AIOutcome):
 
 # PDF を見て答えたかのツールの確かめの結果（AIOutcome.pdf_seen。修正計画 W8 の 4.4）。ai_assist.PDF_SEEN_OK の 2 つは「見た」として扱う
 PDF_SEEN_OK = ("見た", "見た（確かめられない）")
-PDF_SEEN_BAD = ("合わない（PDF を渡していない）", "合わない（ページ数）", "合わない（図のページ）")
 
 
 def _squeeze(text) -> str:

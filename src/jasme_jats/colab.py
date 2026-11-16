@@ -211,7 +211,7 @@ def markdown_text_only(markdown_text: str) -> str:
     `&amp;` に戻す（markdown ライブラリは `&amp;` のような実体の形をそのまま通すため）。コードの書式（バッククォート・``` で囲んだ
     範囲）の中は、もともと文字として出る。画像・リンク（インライン・参照）の記法も無効にし、`![x](http://…)`・`[x](http://…)`・
     `[x][r]` が画像の取得やリンクにならず、`[r]: http://…` の行が消えずに、書かれた文字のまま出る（レポートは未公開の原稿の文字を
-    引用するので、外部の URL への取得を起こさない。C099）。レポート自身は画像・リンクの記法も使わない。レポート自身は生の HTML・実体を使わない（`report.md_tag` はタグをコードで囲む。
+    引用するので、外部の URL への取得を起こさない。C099）。レポート自身は、画像・リンクの記法も生の HTML・実体も使わない（`report.md_tag` はタグをコードで囲む。
     tests/test_colab.py の test_report_details_shows_angle_brackets が全 fixture のレポートで確かめる）。
     """
     import markdown

@@ -13,7 +13,7 @@ import io
 from pathlib import Path
 
 from .package import article_dir
-from .report import (DECORATION_JA, OBJECT_MARK, OBJECT_SHOWN, OPTIONAL_CAPTION, IMAGE_STATUS_JA, LOST_IMAGES_HOW, LOST_IMAGES_WHY, image_rows,
+from .report import (DECORATION_JA, OPTIONAL_CAPTION, IMAGE_STATUS_JA, LOST_IMAGES_HOW, LOST_IMAGES_WHY, image_rows,
                      images_changed, images_dropped, images_progress, lost_image_label, shown_text)
 THUMB_PX = 240                  # embed=True の縮小の幅（px）。表示用だけで、ZIP の画像は変えない
 

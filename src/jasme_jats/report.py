@@ -513,11 +513,6 @@ def article_folder(r) -> str:
     return article_dir(Path(""), r.journal, r.meta).as_posix() + "/"
 
 
-def graphics_dir(r) -> str:
-    """ZIP の中の Graphics フォルダ（例: jasme/25/1/25_77/Graphics/）。"""
-    return article_folder(r) + "Graphics/"
-
-
 def upload_issues(r) -> list:
     """J-STAGE のアップロード時チェックの結果: XML で判定したもの（jstage_issues）と、ZIP を読み直して見つけたもの（zip_issues）。
 
@@ -3066,8 +3061,8 @@ def _emphasis_action(r):
         return None
     n = len(paras)
     samples = _para_samples(paras, EMPHASIS_SAMPLES)
-    how = ("XML には傍点を出せないので、文字だけが出力されています（傍点は消えます）。傍点が必要なら、"
-           "J-STAGE に出す前に、表し方を学会で決めてください（docx の文字は変えないでください）")
+    how = ("XML には傍点を出せないので、文字だけが出力されています（傍点は消えます）。出版版 PDF と見比べて、"
+           "傍点がなくても意味が通るかを確かめてください（docx の文字は変えないでください）")
     head = f"傍点（圏点）のかかった文字が {n} 段落にあります"
     return Action(
         TO_CHECK, "emphasis_mark",
