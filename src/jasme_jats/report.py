@@ -23,7 +23,7 @@ from .linker import body_paragraphs, linked_ids
 from .model import note_key, note_label
 from .ooxml import FIELD_DRAWN
 from .package import article_dir
-from .pdfbiblio import mismatches
+from .pdfbiblio import mismatches, unread_dates
 from .pdfmatch import (CONTENT, DISPLACED_WHY, EDGE_WHY, FORMULA_MARK, HEAD_WHY, LINE_MARK, LONG_WHY, MATH_WHY,
                        TYPESET_KINDS, UNSURE_WHY, WHOLE_WHY, diff_parts, level_of, typeset_pair)
 from .structure import BACK_KIND_JA, RE_FIGCAP, RE_TABCAP, nfkc
@@ -2395,6 +2395,7 @@ FRONT_KIND_SHORT = {
     frontcheck.TEMPLATE: "テンプレートの見本の行", frontcheck.TITLE_MISSING: "題目の段落がない", frontcheck.SUB_ORPHAN: "題目のない副題", frontcheck.TITLE_MULTI: "題目の段落が 2 つ以上",
     frontcheck.SWAP: "所属と氏名の入れ替わり", frontcheck.JA_MISSING: "和文の著者名の欠け", frontcheck.AFF_MISSING: "和文の所属の欠け",
     frontcheck.EN_MISSING: "英文の著者名がない", frontcheck.EN_COUNT: "和文と英文の著者数の違い",
+    frontcheck.AFF_SHARED: "共有する和文の所属と違う英文の所属",
     frontcheck.PDF_MISSING: "PDF に見つからない項目", frontcheck.PDF_NEAR: "PDF と少し違う項目", frontcheck.PDF_EN_MISSING: "PDF に見つからない英文の項目",
 }
 # 題目の段落が 2 つ以上のとき、2 つ目以降を直す「副題」のスタイルの役割
@@ -2456,6 +2457,10 @@ def _front_item_text(r, f) -> str:
     if k == frontcheck.EN_COUNT:
         return (f"和文の著者名のうち、対応する英文の著者名がない人がいます（{ex}）。英文の著者表の行が足りないか、スタイルが付いていないか"
                 "確かめてください。")
+    if k == frontcheck.AFF_SHARED:
+        return (f"著者 {f.note} の和文の所属の段落が前の著者と共有されていて（著者表の所属の欄が空など）、英文の所属が違うので、"
+                f"和文と英文の所属の対応を決められません（{ex}）。XML では、この著者は共有の所属と、英文だけの所属の両方を指しています。"
+                "Word で所属の段落を著者ごとに書いて（所属の欄を空にしないで）変換し直してください。")
     # PDF と比べる項目は、段落の文字をまるごと（FRONT_PDF_WIDTH 文字まで）出す（違う所が後ろにあっても PDF と見比べられるように。
     # 冒頭部の段落は短い。点検 review19 の 3 回目の利用者向け 1）
     labelled = "、".join(f"{frontcheck.label_of(plan, s) or '段落'} "
@@ -3939,12 +3944,15 @@ META_ID_LABELS = tuple(PAGE_FIELDS.values())      # 巻・号・ページ（違�
 
 def _meta_pdf_action(r):
     """入力した書誌情報が出版版 PDF の 1 ページ目と違う（設計 W5 の 3.7）。巻・号・ページが違えば要対応、日付・年・ページ数だけなら要確認。
-    PDF から読めなかった項目と、入力が空の項目は比べない。XML に出すのはいつも入力の値で、この知らせは値を変えない。"""
+    PDF から読めなかった項目と、入力が空の項目は比べない。PDF に違う日付が複数あって読めなかった受付日・受理日（`unread_dates`）は、
+    違いではないので「違います」とは言わず、「読めなかったので比べていません」と知らせる（読めなかっただけなら要確認。重さは変えない）。
+    XML に出すのはいつも入力の値で、この知らせは値を変えない。"""
     b, meta = getattr(r, "pdf_biblio", None), getattr(r, "meta", None)
     if b is None or meta is None:
         return None
     mm = mismatches(meta, b)
-    if not mm:
+    un = unread_dates(meta, b)
+    if not mm and not un:
         return None
     heavy = any(label in META_ID_LABELS for label, _, _ in mm)
     pages = [x for x in mm if x[0] == "ページ数"]
@@ -3954,20 +3962,35 @@ def _meta_pdf_action(r):
     if pages:
         _, mine, pdf = pages[0]
         page_note = (f"PDF のページ数（{pdf}）が、ページの範囲 {mine}と合いません。号全体の PDF や、別の論文の PDF ではないか確かめてください。")
+    un_names = "・".join(un)
+    # 読めなかった日付（app.pdf_selected の注記と言い回しをそろえる）
+    un_note = (f"{un_names}は、PDF の 1 ページ目に違う日付が複数あったので、読めず比べていません。PDF を見て確かめてください。" if un else "")
     what = "、".join(parts)
     shown = "、".join(parts[:3]) + ("…" if len(parts) > 3 else "")
     look = "PDF の 1 ページ目（誌名の行と、投稿受付・採用決定の日付）と見比べ、入力が誤っていれば直して変換し直してください。"
     level = NEEDS_ACTION if heavy else TO_CHECK
     lead = "要対応" if heavy else "要確認"
     label_list = "、".join(dict.fromkeys(x[0] for x in mm))
+    if not mm:
+        # 読めなかった項目だけ（違いはない）
+        title = f"PDF から{un_names}を読めなかったので、入力と比べていません"
+        return Action(
+            level, "meta_pdf",
+            top=f"> **{lead}: {title}（11 章）。** {un_note}",
+            checklist=f"- [ ] **{un_names}を PDF から読めなかった**（比べていません。11 章）: PDF の 1 ページ目と見比べて確かめる",
+            box_title=f"{title}（{lead}）",
+            box_detail=(f"{un_note}{step('meta')}の{un_names}が PDF と合っているか確かめてください（レポートの 11 章）。"),
+            cli=f"{lead}: {title}（レポートの 11 章）。PDF の 1 ページ目と見比べて確かめること")
     return Action(
         level, "meta_pdf",
-        top=f"> **{lead}: 入力した書誌情報が、出版版 PDF と違います（11 章）。** " + (what + "。" if what else "") + page_note + look,
-        checklist=(f"- [ ] **書誌情報が出版版 PDF と違う**（{label_list}。11 章）: PDF の 1 ページ目と見比べ、入力が誤っていれば直して変換し直す"),
+        top=f"> **{lead}: 入力した書誌情報が、出版版 PDF と違います（11 章）。** " + (what + "。" if what else "") + page_note + un_note + look,
+        checklist=(f"- [ ] **書誌情報が出版版 PDF と違う**（{label_list}。11 章）: PDF の 1 ページ目と見比べ、入力が誤っていれば直して変換し直す"
+                   + (f"（{un_names}は読めず比べていません）" if un else "")),
         box_title=f"入力した書誌情報が、出版版 PDF と違います（{lead}）",
-        box_detail=((what + "。" if what else "") + page_note + "PDF の 1 ページ目（誌名の行と、投稿受付・採用決定の日付）と見比べ、"
+        box_detail=((what + "。" if what else "") + page_note + un_note + "PDF の 1 ページ目（誌名の行と、投稿受付・採用決定の日付）と見比べ、"
                     + step("meta") + "の入力が誤っていれば直して、やり直してください（レポートの 11 章）。"),
-        cli=f"{lead}: 書誌情報が出版版 PDF と違う（{shown or label_list}。レポートの 11 章）。--meta の値を確かめること")
+        cli=(f"{lead}: 書誌情報が出版版 PDF と違う（{shown or label_list}。レポートの 11 章）。--meta の値を確かめること"
+             + (f"（{un_names}は PDF から読めず比べていない）" if un else "")))
 
 
 def pdf_actions(r) -> list:

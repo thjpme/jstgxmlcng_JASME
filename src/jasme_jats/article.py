@@ -412,6 +412,10 @@ class ArticlePlan:
     # そのまま組み立てると段落の文字が出力にも除外にも入らなくなる構造（StructureConflict。同じ種類の後付けの見出し・英文要旨の見出しが
     # 2 つ、著者名の付かない所属。K1・K2）。あれば pipeline.convert が StructureConflictError で変換を中止する
     structure_conflicts: list = field(default_factory=list)
+    # 和文の所属の段落をほかの著者と共有していて（著者表の所属の欄が空など）、英文の所属が違うので対応を決められなかった所属:
+    # (著者の番号〈1 から〉, 和文の著者名の段落 ID, 共有する和文の所属の段落 ID, 英文の所属の段落 ID)。分けずに、共有の所属と英文だけの
+    # 所属の両方を指す（structure.Classifier.add_aff_en。S3）。要確認 front_check（frontcheck.AFF_SHARED）で知らせる
+    aff_shared: list = field(default_factory=list)
     # 画像の置き場所（ImageSlot。Classifier.assign_slots が、要素の木を XML とおおむね同じ順にたどって作る）と、画像の ID -> 置き場所
     slots: list = field(default_factory=list)
     slot_of: dict = field(default_factory=dict)
@@ -566,7 +570,7 @@ class ArticlePlan:
         """exclude で記録した para の除外（空白だけの段落の除外は除く）を取り消す。
 
         除外した段落を、組み立ての途中で出力に戻すときだけ使う（和文で 1 つにまとめた所属を、英文の所属が違うので解くとき。
-        structure.Structurer.split_aff。R4）。出力した段落を除外にも記録すると、不変性チェックは不合格になる。
+        structure.Classifier.split_aff。R4）。出力した段落を除外にも記録すると、不変性チェックは不合格になる。
         """
         self.exclusions[:] = [x for x in self.exclusions if x.blank or x.src != para.src]
 

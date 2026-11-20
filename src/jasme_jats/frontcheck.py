@@ -5,7 +5,8 @@ plan（ArticlePlan）を読むだけで、docx の文字も XML の構造も変�
 
 - 和文の著者名が 1 人もない（`authors_missing`。`authors_missing_applies`・`author_candidates`）。
 - 冒頭部の項目（`FrontFinding`。`plan_findings`）: テンプレートの見本の行（template）・題目の段落が 2 つ以上（title_multi）・題目の段落がない
-  （title_missing）・翻訳の題目がなく副題だけがある（subtitle_orphan）・所属と氏名の入れ替わり（swap）・和文の著者の欠け（ja_missing・aff_missing）・英文の著者の欠け（en_missing・en_count）。
+  （title_missing）・翻訳の題目がなく副題だけがある（subtitle_orphan）・所属と氏名の入れ替わり（swap）・和文の著者の欠け（ja_missing・aff_missing）・英文の著者の欠け（en_missing・en_count）・
+  前の著者と共有する和文の所属の段落に違う英文の所属（aff_shared。plan.aff_shared。S3）。
 - 出版版 PDF との確かめ（pdf_missing・pdf_near・pdf_en_missing。`pdf_findings`）。ページの文字を受け取って判定するだけで、
   PDF の文字を docx に足さない・直さない。docx → XML の処理は PDF の有無で変わらない（結果は知らせにだけ使う）。
 
@@ -35,16 +36,17 @@ JA_MISSING = "ja_missing"
 AFF_MISSING = "aff_missing"
 EN_MISSING = "en_missing"
 EN_COUNT = "en_count"
+AFF_SHARED = "aff_shared"
 PDF_MISSING = "pdf_missing"
 PDF_NEAR = "pdf_near"
 PDF_EN_MISSING = "pdf_en_missing"
 
 # 項目の並び（知らせの文の順）と重さ。PDF の項目は、出版版 PDF との違いなので要確認にとどめる（CLAUDE.md の PDF の区分: 内容の違いは
 # 要確認。要対応にするのは、形から確かな template・swap の一部・著者名の欠けだけ）
-KIND_ORDER = (TEMPLATE, TITLE_MISSING, SUB_ORPHAN, JA_MISSING, AFF_MISSING, SWAP, TITLE_MULTI, EN_MISSING, EN_COUNT,
+KIND_ORDER = (TEMPLATE, TITLE_MISSING, SUB_ORPHAN, JA_MISSING, AFF_MISSING, SWAP, TITLE_MULTI, EN_MISSING, EN_COUNT, AFF_SHARED,
               PDF_MISSING, PDF_NEAR, PDF_EN_MISSING)
 KIND_LEVEL = {TEMPLATE: MUST, TITLE_MISSING: MUST, SUB_ORPHAN: MUST, JA_MISSING: MUST, AFF_MISSING: MUST, SWAP: CHECK, TITLE_MULTI: CHECK,
-              EN_MISSING: CHECK, EN_COUNT: CHECK, PDF_MISSING: CHECK, PDF_NEAR: CHECK, PDF_EN_MISSING: CHECK}
+              EN_MISSING: CHECK, EN_COUNT: CHECK, AFF_SHARED: CHECK, PDF_MISSING: CHECK, PDF_NEAR: CHECK, PDF_EN_MISSING: CHECK}
 
 CANDIDATE_REASONS = (FRONT_OTHER_EXCLUDED, FRONT_TABLE_EXCLUDED, AUTHOR_TABLE_OTHER_EXCLUDED)
 EN_CANDIDATE_REASONS = (EN_AUTHOR_TABLE_OTHER_EXCLUDED, EN_OTHER_EXCLUDED)
@@ -114,7 +116,8 @@ def label_of(plan, src) -> str:
 
 
 def _paras(items) -> list:
-    return [p for p in items if p is not None and p.text_only().strip()]
+    """items のうち、中身のある段落（数式・図形を数え、空白だけ・飾りの図形だけの段落は数えない。builder.title_group の orphan と同じ見方。S8）。"""
+    return [p for p in items if p is not None and not p.is_blank]
 
 
 # ---------------------------------------------------------------------------- 和文の著者名が 1 人もない（C009）
@@ -280,6 +283,9 @@ def plan_findings(plan, lang) -> list:
         covered = set(tmpl) | {s for f in out if f.kind == SWAP for s in f.srcs}
         if has_en and only_ja and not set(only_ja) <= covered:
             out.append(finding(EN_COUNT, only_ja))
+    # 和文の所属の段落を前の著者と共有していて、英文の所属が違う（structure.Classifier.add_aff_en が記録。著者ごとに 1 項目。S3）
+    for n, name_src, ja_src, en_src in plan.aff_shared:
+        out.append(finding(AFF_SHARED, _srcs_in_order(plan, [s for s in (name_src, ja_src, en_src) if s]), str(n)))
     rank = {k: i for i, k in enumerate(KIND_ORDER)}
     out.sort(key=lambda f: rank[f.kind])
     return out

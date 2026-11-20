@@ -615,8 +615,9 @@ class Builder:
         if main_sub:
             st = _lang(_sub(tg, "subtitle"), lang)
             self.multi(st, main_sub, E.TITLE, "副題")
-        # 翻訳の題目に文字がなく（段落がない・空白だけ）、翻訳の副題だけがある場合は、題目を補えないので副題を出力しない（orphan）
-        orphan = bool(other_sub) and not any(p.text_only().strip() for p in other)
+        # 翻訳の題目に中身がなく（段落がない・空白だけ・飾りの図形だけ。数式・図形のある段落は中身とみなす。Para.is_blank）、
+        # 翻訳の副題だけがある場合は、題目を補えないので副題を出力しない（orphan）
+        orphan = bool(other_sub) and all(p.is_blank for p in other)
         if other and not orphan:
             ttg = _lang(_sub(tg, "trans-title-group"), other_lang)
             tt = _sub(ttg, "trans-title")
@@ -627,11 +628,12 @@ class Builder:
                 self.multi(ts, other_sub, E.TITLE, "翻訳副題")
         elif orphan:
             # JATS では trans-title-group に trans-title が要るので出せない。構造は推定で補わず、副題（と空白だけの題目）の段落を
-            # 理由付きで除外に記録する（不変性チェックを合格させる）。知らせは要対応 front_check（frontcheck.SUB_ORPHAN）が行う
+            # 理由付きで除外に記録する（不変性チェックを合格させる）。知らせは要対応 front_check（frontcheck.SUB_ORPHAN）が行う。
+            # 数式・図形のある副題は、空白だけの除外にしない（blank にすると、不変性チェックが空白だけと確かめて不合格になる）
             for p in other_sub + other:
                 text = _para_text(p)
-                if text.strip() or p.plain():           # 文字のまったくない段落は記録しない（plan.exclude_blank と同じ）
-                    self.info.exclusions.append(Exclusion(p.src, SUBTITLE_NO_TITLE_EXCLUDED, text, blank=not text.strip()))
+                if not p.is_blank or p.plain():         # 文字のまったくない段落は記録しない（plan.exclude_blank と同じ）
+                    self.info.exclusions.append(Exclusion(p.src, SUBTITLE_NO_TITLE_EXCLUDED, text, blank=p.is_blank))
 
     def check_length(self, el, limit, what):
         n = len("".join(el.itertext()))
@@ -953,6 +955,7 @@ class Builder:
         別のセル（新しい結合元）にする（10 章の警告）。HTML の表では rowspan を行グループ（thead/tbody）の外に延ばせないので、
         本文の 1 行目で結合を止める（10 章の警告）。結合元のない継続（表・本文の 1 行目、削除された結合元の下）は新しい結合元に
         する。すべてのセルが結合した継続の行は出力せず（セルの文字は結合元のセルに続けて出す）、rowspan は出力する行だけで数える。
+        ただし飛ばしたグリッド（gridBefore・gridAfter）のある行は、継続のセルだけでも出す（rowspan が行数と合わなくなるため。R9）。
         行の前後で飛ばしたグリッド（gridBefore・gridAfter）は空のセルで埋める。
         """
         rows = t.rows

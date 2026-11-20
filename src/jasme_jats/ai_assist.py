@@ -84,7 +84,8 @@ NO_REQUEST_ID_MSG = ("回答に依頼の番号（request_id）がありません
                      "頼んでください。")
 # 本文の印だけが違う回答（Word で誤字やスタイルを直した後の原稿に、直す前の回答を入れた）を使ったときの説明（AIOutcome.carried。2 章）
 CARRIED_MSG = ("原稿を直す前の依頼文への回答を使いました（図・表・文献・注の数と並びは同じで、段落の文字が違う原稿）。回答の指定 {n} 件の"
-               "うち、段落の先頭の文字で確かめられた {m} 件を検証に回しました（先頭の文字のない指定は、確かめられないので使っていません）。")
+               "うち、段落の先頭の文字で確かめられた {m} 件と、先頭の文字の確かめの要らない指定（段落を指さない指定など）{k} 件を検証に回しました"
+               "（段落を指すのに先頭の文字のない指定は、確かめられないので使っていません）。")
 # 先頭の文字で段落を確かめられなかった指定の不採用の理由（check_answer。2 章）
 CARRIED_NO_HEAD_WHY = ("原稿を直す前の依頼文への回答で、段落の先頭の文字（head）がないので、段落の ID がずれていないか確かめられず、"
                        "使わなかった")
@@ -2371,10 +2372,18 @@ def role_style(journal, role: str) -> str:
     return next((name for name, r in styles.items() if r == role and not name.isascii()), "")
 
 
+def _sv(it, key, default=""):
+    """回答の項目 it の key の値を、文字列として読む（文字列でない値〈配列・辞書・数値・null など〉は default。不採用の記録で
+    型の誤った値を辞書の引数に渡して TypeError にならないように。型の誤りそのものの不採用は _items が記録する）。"""
+    v = it.get(key, default) if isinstance(it, dict) else default
+    return v if isinstance(v, str) else default
+
+
 def _rec(op, it, **kw) -> dict:
-    """回答の要素 it を、レポートの 2 章の「操作」の一覧に載せる形（op・src・text・target・role・reason・confidence）にする。"""
-    out = {"op": op, "src": "", "text": "", "occurrence": 1, "target": "", "role": "", "reason": it.get("reason", ""),
-           "confidence": it.get("confidence", "")}
+    """回答の要素 it を、レポートの 2 章の「操作」の一覧に載せる形（op・src・text・target・role・reason・confidence）にする。
+    it の値が文字列でなくても例外を出さない（文字列でない値は "" にする）。"""
+    out = {"op": op, "src": "", "text": "", "occurrence": 1, "target": "", "role": "", "reason": _sv(it, "reason"),
+           "confidence": _sv(it, "confidence")}
     out.update(kw)
     return out
 
@@ -2386,7 +2395,7 @@ BOUNDARY_KIND_WHY = "kind「{kind}」は区切りの語（" + "・".join(BOUNDAR
 
 
 def _boundary_rec(it) -> dict:
-    return _rec("boundary", it, src=it.get("src", ""), text=it.get("kind", ""), role=BOUNDARY_KINDS.get(it.get("kind"), ""))
+    return _rec("boundary", it, src=_sv(it, "src"), text=_sv(it, "kind"), role=BOUNDARY_KINDS.get(_sv(it, "kind"), ""))
 
 
 def boundary_overrides(data, plan: ArticlePlan, outcome: AIOutcome):
@@ -2444,7 +2453,7 @@ def record_boundaries(ops, plan: ArticlePlan, outcome: AIOutcome):
 
 
 def _style_rec(it) -> dict:
-    return _rec("style_fix", it, src=it.get("src", ""), text=it.get("style") or it.get("how", ""))
+    return _rec("style_fix", it, src=_sv(it, "src"), text=_sv(it, "style") or _sv(it, "how"))
 
 
 STYLE_VERDICT_WHY = "verdict「{v}」は「直す」か「このまま」でない"
@@ -2488,8 +2497,9 @@ def style_fixes(data, plan: ArticlePlan, outcome: AIOutcome, journal=None):
 
 
 def _link_rec(it) -> dict:
-    return _rec(LINK_KINDS.get(it.get("kind"), "link"), it, src=it.get("src", ""), text=it.get("text", ""),
-                occurrence=it.get("occurrence", 1), target=it.get("target", ""))
+    occ = it.get("occurrence", 1) if isinstance(it, dict) else 1
+    return _rec(LINK_KINDS.get(_sv(it, "kind"), "link"), it, src=_sv(it, "src"), text=_sv(it, "text"),
+                occurrence=occ if isinstance(occ, int) and not isinstance(occ, bool) else 1, target=_sv(it, "target"))
 
 
 def link_ops(data, plan: ArticlePlan, outcome: AIOutcome) -> list:
@@ -2594,6 +2604,9 @@ HEAD_CHECKED = (("placements", "after", "after_head", "after"), ("boxes", "after
                 ("boundaries", "src", "head", "all"), ("links", "src", "head", "all"), ("style_fixes", "src", "head", "all"))
 
 
+HEAD_KEYS = tuple(k[0] for k in HEAD_CHECKED)
+
+
 def _check_rec(key, it) -> dict:
     return {"placements": _place_rec, "boxes": _box_rec, "boundaries": _boundary_rec, "links": _link_rec,
             "style_fixes": _style_rec}[key](it)
@@ -2608,7 +2621,8 @@ def check_answer(data, request, plan: ArticlePlan, outcome: AIOutcome) -> str:
       項目（HEAD_CHECKED）の head が段落の先頭の文字と合わなければ、同じ先頭の文字の段落がその項目の書ける範囲に 1 つだけあるときに
       その段落に読み替え（AIOutcome.reread）、決まらなければ不採用（2 章）。AI の head が HEAD_MIN 字に満たなければ読み替えない。
       head が空の項目（head がない・null も同じ）は、(a) では確かめずに使い、(b) では確かめられないので不採用。(b) では
-      AIOutcome.carried に、指定の数と、先頭の文字で確かめて使った数を書く。
+      AIOutcome.carried に、指定の数と、先頭の文字で確かめて使った数と、確かめの要らない指定（段落を指さない項目・
+      HEAD_CHECKED にない一覧〈names〉の項目。確かめずに使う）の数を別に書く。
     data（parse_response の戻り値）の一覧から、不採用にした項目を除き、読み替えた ID を書き換える。型の誤りなど、ほかの検証は
     種類ごとの関数（link_ops など）が行う。
     """
@@ -2623,12 +2637,15 @@ def check_answer(data, request, plan: ArticlePlan, outcome: AIOutcome) -> str:
               "all": [s for s, p in plan.paras.items() if head_of(p)]}
     total = sum(len(data.get(k) or []) for k in ANSWER_LISTS)
     checked = 0                         # 先頭の文字の確かめを通った項目の数（確かめなかった項目は数えない）
+    unneeded = sum(1 for k in ANSWER_LISTS if k not in HEAD_KEYS
+                   for it in (data.get(k) if isinstance(data.get(k), list) else []) if isinstance(it, dict))   # names など
     for key, ptr, hkey, where in HEAD_CHECKED:
         kept = []
         for it in data.get(key) or []:
             src, head = (it.get(ptr), it.get(hkey)) if isinstance(it, dict) else (None, None)
             if not isinstance(src, str) or not src or (key == "boxes" and it.get("kind") != "囲み"):
                 kept.append(it)         # 段落を指さない項目・型の誤り（種類ごとの検証が記録する）
+                unneeded += isinstance(it, dict) and isinstance(src, str)      # 確かめの要らない指定（型の誤りは数えない）
                 continue
             if not isinstance(head, str):
                 head = ""               # head がない・null は、空と同じに扱う（(b) では不採用。R5）
@@ -2642,7 +2659,7 @@ def check_answer(data, request, plan: ArticlePlan, outcome: AIOutcome) -> str:
         if key in data:
             data[key] = kept
     if carried:
-        outcome.carried = CARRIED_MSG.format(n=total, m=checked)
+        outcome.carried = CARRIED_MSG.format(n=total, m=checked, k=unneeded)
     return ""
 
 
@@ -2682,7 +2699,7 @@ def _head_check(it, key, ptr, head, src, rng, plan: ArticlePlan, carried: bool, 
 
 
 def _place_rec(it) -> dict:
-    return _rec("place_float", it, src=it.get("float", ""), target=it.get("after", ""))
+    return _rec("place_float", it, src=_sv(it, "float"), target=_sv(it, "after"))
 
 
 PLACE_FIELDS = ("float", "after", "after_head", "page", "column", "basis", "reason", "confidence")
@@ -2802,7 +2819,7 @@ def _placement_problem(fid, after, plan: ArticlePlan, body: set, done: dict, end
 
 
 def _box_rec(it) -> dict:
-    return _rec("place_float", it, src=it.get("box", ""), text=it.get("kind", ""), target=it.get("after", ""))
+    return _rec("place_float", it, src=_sv(it, "box"), text=_sv(it, "kind"), target=_sv(it, "after"))
 
 
 def box_kinds(data, plan: ArticlePlan, outcome: AIOutcome) -> dict:

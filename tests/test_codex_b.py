@@ -15,7 +15,7 @@ from jasme_jats import ai_assist
 from jasme_jats.ai_assist import CARRIED_NO_HEAD_WHY
 from jasme_jats.config import ArticleMeta, JournalConfig
 from jasme_jats.model import Atom, Para
-from jasme_jats.pdfbiblio import biblio_from_pages, biblio_inputs, fill_missing, mismatches
+from jasme_jats.pdfbiblio import biblio_from_pages, biblio_inputs, fill_missing, mismatches, unread_dates
 from jasme_jats.pipeline import _mechanical
 from jasme_jats.refparse import DUP_NUMBER_DETAIL, link_numeric
 from jasme_jats.report import _bibr_dup_action
@@ -42,7 +42,7 @@ def test_r5_b_answer_without_head_is_rejected(how, journal, meta, tmp_path):
     res = _manual(new, json.dumps(resp, ensure_ascii=False), meta, journal, tmp_path / "o")
     assert res.ai.accepted == []
     assert [why for _, why in res.ai.rejected] == [CARRIED_NO_HEAD_WHY]
-    assert res.ai.carried == ai_assist.CARRIED_MSG.format(n=1, m=0)        # 確かめていない項目を「確かめられた」に数えない
+    assert res.ai.carried == ai_assist.CARRIED_MSG.format(n=1, m=0, k=0)        # 確かめていない項目を「確かめられた」に数えない
 
 
 # ---------------------------------------------------------------------------- R7
@@ -51,16 +51,15 @@ def page1(body="", footer="2025年6月1日投稿受付\n2025年11月20日採用�
 
 
 def test_r7_two_different_received_dates_are_not_taken():
-    b = biblio_from_pages([page1("先行研究Ａには2020年1月1日投稿受付と記されている。")], J)
+    b = biblio_from_pages([page1("先行研究Ａには2020年1月1日投稿受付，2025年11月20日採用決定と記されている。")], J)
     assert b.received == "" and b.accepted == "2025-11-20" and b.ambiguous == ("received",)
     assert "received" not in biblio_inputs(b)
     # 入力欄の空きも埋めない
     out, filled = fill_missing({}, b)
     assert "received" not in out and "受付日" not in filled
-    # 入力があれば、比べられなかったことを meta_pdf の経路（mismatches）で知らせる。受理日は今までどおり比べる
+    # 入力があれば、比べられなかったことを meta_pdf の経路（unread_dates。違いではないので mismatches には入れない。S9）で知らせる。受理日は今までどおり比べる
     meta = ArticleMeta.from_dict({"received": "2025-06-01", "accepted": "2025-11-20"})
-    ms = mismatches(meta, b)
-    assert [m[0] for m in ms] == ["受付日"] and ms[0][1] == "2025-06-01" and "複数" in ms[0][2]
+    assert mismatches(meta, b) == [] and unread_dates(meta, b) == ["受付日"]
     # 入力が空なら何も言わない（日付の未入力は meta_dates が知らせる）
     assert mismatches(ArticleMeta.from_dict({}), b) == []
 
@@ -71,7 +70,7 @@ def test_r7_app_note_says_ambiguous_dates_were_not_filled(tmp_path, monkeypatch)
     from jasme_jats.app import AppState
     from test_app import pdf_biblio_pages
     pages = pdf_biblio_pages(dates="2029年6月1日投稿受付\n2029年11月20日採用決定")
-    pages[0] += "\n先行研究には2020年1月1日投稿受付と記されている。"
+    pages[0] += "\n先行研究には2020年1月1日投稿受付，2029年11月20日採用決定と記されている。"
     monkeypatch.setattr(pdfmatch, "extract_pages", lambda path: pages)
     st = AppState(tmp_path / "work")
     st.inputs["received"] = "2020-02-02"

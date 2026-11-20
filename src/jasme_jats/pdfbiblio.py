@@ -33,7 +33,7 @@ class PdfBiblio:
     accepted: str = ""
     pages: int = 0           # PDF のページ数（0 は不明）
     line: str = ""           # 読んだ誌名の行（空白をそろえたもの）
-    ambiguous: tuple = ()    # 違う日付が 2 つ以上あって採らなかった日付のラベル（received・revised・accepted。mismatches が知らせる）
+    ambiguous: tuple = ()    # 違う日付が 2 つ以上あって採らなかった日付のラベル（received・revised・accepted。入力があれば unread_dates が受付日・受理日を知らせる）
 
     def any(self) -> bool:
         return any((self.volume, self.issue, self.fpage, self.lpage, self.received, self.accepted))
@@ -60,28 +60,28 @@ def _issue_line(first: str, journal) -> tuple:
 
 def _date_hits(first: str, journal) -> dict:
     """1 ページ目の日付の一致をラベルごとにすべて集める（{ラベルの種類: 出てきた順の ISO 形式の一覧〈同じ値も重ねる〉}）。
-    「2029年６月１日投稿受付」の形（日付とラベルの間・数字の間の空白や改行は許す）。"""
+    読むのは組版の形の日付だけ: 「日付＋ラベル」が区切り（「，」など）でつながった 2 つ以上の並び
+    （「2029年６月１日投稿受付，2029年11月20日採用決定」。照合の `pdfmatch.RE_RECEIVED` と同じ形で、日付とラベルの間・数字の間の
+    空白や改行、本文の行の前後へのつながりは許す）。本文の文の中の日付（「…2020年1月1日採用決定と記されている」）は、
+    1 つだけで並びにならないので読まない。読めなかった日付は、利用者が入力する。"""
     labels = {k: v for k, v in (getattr(journal, "pdf_date_labels", None) or {}).items() if v}
     if not labels:
         return {}
-    text = re.sub(r"\s", "", first)
+    from .pdfmatch import _RECEIVED, _RECEIVED_SEP      # 照合と同じ日付＋ラベルの形（RE_RECEIVED の部品）
+    run = re.compile(rf"{_RECEIVED}(?:{_RECEIVED_SEP}{_RECEIVED})+")
     # 「投稿受付」は「再投稿受付」の一部なので、長いラベルから当てる
     alt = "|".join(re.escape(v) for v in sorted(labels.values(), key=len, reverse=True))
     out: dict = {}
     by_label = {v: k for k, v in labels.items()}
-    for y, mo, d, lab in re.findall(r"(\d{4})年(\d{1,2})月(\d{1,2})日(" + alt + ")", text):
-        try:
-            iso = _dt.date(int(y), int(mo), int(d)).isoformat()
-        except ValueError:
-            continue
-        out.setdefault(by_label[lab], []).append(iso)
+    for m in run.finditer(first):
+        text = re.sub(r"\s", "", m.group(0))
+        for y, mo, d, lab in re.findall(r"(\d{4})年(\d{1,2})月(\d{1,2})日(" + alt + ")", text):
+            try:
+                iso = _dt.date(int(y), int(mo), int(d)).isoformat()
+            except ValueError:
+                continue
+            out.setdefault(by_label[lab], []).append(iso)
     return out
-
-
-def _dates(first: str, journal) -> dict:
-    """1 ページ目の日付（ラベルごとの ISO 形式）。同じラベルの日付が違う値で 2 つ以上あるとき（本文中の日付を拾った疑い）は採らない
-    （入力欄に入れない・比べない。採らなかったラベルは PdfBiblio.ambiguous に残す）。同じ値が何回出ても採る。"""
-    return {k: v[0] for k, v in _date_hits(first, journal).items() if len(set(v)) == 1}
 
 
 def biblio_from_pages(pages: list, journal) -> PdfBiblio:
@@ -157,10 +157,16 @@ def page_count_ok(fpage, lpage, pages: int) -> bool:
     return pages in (n, n + 1)
 
 
+def unread_dates(meta, b: PdfBiblio) -> list:
+    """入力があるのに、PDF に違う日付が複数あって読めなかった（採らなかった）受付日・受理日の欄の名前の一覧。
+    違いではないので `mismatches` には入れない（比べていないだけ。PDF を見て確かめてもらう）。入力が空なら言わない。"""
+    return [LABELS[k] for k in ("received", "accepted") if getattr(meta, k, None) and k in b.ambiguous]
+
+
 def mismatches(meta, b: PdfBiblio) -> list:
     """入力（ArticleMeta）が PDF から読んだ値と違う項目の一覧 [(欄の名前, 入力, PDF)]。
 
-    PDF から読めなかった項目と、入力が空の項目は比べない（違う日付が複数あって採らなかった受付日・受理日は、入力があれば「読めません」と知らせる）。比べるのは、巻・号・最初と最後のページ・受付日・受理日、
+    PDF から読めなかった項目（違う日付が複数あって採らなかった受付日・受理日を含む。それは `unread_dates`）と、入力が空の項目は比べない。比べるのは、巻・号・最初と最後のページ・受付日・受理日、
     発行日を入れていればその年、PDF のページ数（ページの範囲から数えた数と合うか）。再受付日は比べない。
     """
     out = []
@@ -172,10 +178,6 @@ def mismatches(meta, b: PdfBiblio) -> list:
         mine, pdf = getattr(meta, k, None), getattr(b, k)
         if mine and pdf and mine.isoformat() != pdf:
             out.append((LABELS[k], mine.isoformat(), pdf))
-    for k in ("received", "accepted"):      # PDF に違う日付が複数あって読めなかった項目（本文中の日付と区別できない）
-        mine = getattr(meta, k, None)
-        if mine and k in b.ambiguous:
-            out.append((LABELS[k], mine.isoformat(), "複数の日付があり読めません（本文中の日付と区別できません。ページ下部の日付と見比べてください）"))
     pub = getattr(meta, "pub_date", None)
     if pub and b.year and str(pub.year) != b.year:
         out.append(("発行日の年", str(pub.year), b.year))

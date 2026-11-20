@@ -128,7 +128,7 @@ def test_b_answer_to_previous_draft_is_reread(journal, meta, tmp_path):
     assert res.ai.request_id[:7] == resp["request_id"][:7] and res.ai.request_id != resp["request_id"]
     assert {(op["src"], op["target"]) for op, _ in res.ai.accepted} == {("s1", "d18"), ("s2", "d27"), ("s3", "d24")}
     assert [why for _, why in res.ai.rejected] == [CARRIED_NO_HEAD_WHY]
-    assert res.ai.carried == ai_assist.CARRIED_MSG.format(n=4, m=3) and ai_state(res) != "失敗"
+    assert res.ai.carried == ai_assist.CARRIED_MSG.format(n=4, m=3, k=0) and ai_state(res) != "失敗"
     assert "原稿を直す前の回答です。" in _sec2(res)
     # 冒頭・枠・コマンドラインにも、要確認 ai_carried で知らせる（点検 review13 原則 6。終了コードは変えない）
     act = next(a for a in actions(res) if a.key == "ai_carried")

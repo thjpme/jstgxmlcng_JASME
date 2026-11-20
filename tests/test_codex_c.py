@@ -106,3 +106,15 @@ def test_all_continued_rows_without_grid_skips_are_still_dropped(journal, meta, 
     raw = [R([c("A", v="r"), c("B", v="r")]), R([c("", v="c"), c("", v="c")]), R(["C", "D"])]
     _, tbl = _convert(tmp_path, journal, meta, raw_rows=raw, ncol=2)
     assert _grid(tbl) == {"tbody": [["A", "B"], ["C", "D"]]}
+
+
+def test_blank_title_ja_in_english_article_is_excluded_as_blank(tmp_path, journal):
+    """S11: 英文の論文で題目（日）が全角空白だけ・副題（日）が文字。題目（日）の段落は builder が空白だけの除外に記録する
+    （builder.title_group の `for p in other_sub + other:` から other を外すと、不変性チェックが不合格になる）。空白だけの除外はちょうど 1 件。"""
+    meta_en = ArticleMeta.from_dict({"volume": "31", "issue": "1", "fpage": "1", "lpage": "12", "pub_date": "2026-03-31",
+                                     "received": "2025-06-01", "accepted": "2025-11-20", "lang": "en"})
+    res = _front(tmp_path, journal, meta_en, "enblank", title="\u3000", subtitle="―和文の副題だけ―")
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid, (res.fidelity.missing, res.fidelity.bad_excluded)
+    ex = _exclusions(res, meta_en, journal)
+    assert sorted((e.blank, e.text) for e in ex) == [(False, "―和文の副題だけ―"), (True, "\u3000")]
+    assert len([e for e in ex if e.blank]) == 1

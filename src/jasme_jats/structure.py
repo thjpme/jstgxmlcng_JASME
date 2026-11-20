@@ -1407,6 +1407,9 @@ class Classifier:
         # 和文の文字が同じなので別の著者の所属にまとめた和文の段落 {(著者, 所属の位置): 段落}（英文の所属が違えば解く。add_aff_en）と、
         # 英文の所属を対応付けた所属の位置 {(著者, 所属の位置)}
         self._merged_ja, self._en_filled = {}, set()
+        # 著者の所属の位置ごとの和文の所属の段落 {(著者, 所属の位置): 段落} と、和文の所属の段落を使う所属の位置 {id(段落): [(著者, 所属の位置)…]}
+        # （著者表の所属の欄が空の行は、前の行の段落を使う。1 つの段落を複数の著者が共有する。S3）
+        self._ja_of, self._ja_users = {}, {}
         for b, role in items:
             if isinstance(b, Table):
                 if self.table_roles(b) & {"aff_ja", "author_ja"}:
@@ -1494,13 +1497,17 @@ class Classifier:
         plan.locations[name_para.src] = f"著者{len(plan.authors) + 1}（和文）"
         for ap in aff_paras:
             aff = self.aff_for(ja=ap)
+            pos = (a, len(a.affs))
             if aff.ja is not ap:
-                self._merged_ja[(a, len(a.affs))] = ap      # 英文の所属が違えば、add_aff_en で解く（R4）
+                self._merged_ja[pos] = ap      # 英文の所属が違えば、add_aff_en で解く（R4）
+            self._ja_of[pos] = ap
+            self._ja_users.setdefault(id(ap), []).append(pos)
             a.affs.append(aff)
         plan.authors.append(a)
 
     def aff_for(self, ja=None, en=None) -> Aff:
-        """和文の所属の段落 ja の所属（Aff）。和文の文字が同じ所属がすでにあれば、それを返し、ja を「重複する所属」で除外する。
+        """和文の所属の段落 ja の所属（Aff）。和文の文字が同じ所属がすでにあれば、それを返し、ja を「重複する所属」で除外する
+        （ほかの著者と共有する段落で、もう除外に記録してあれば、記録を重ねない。S3）。
 
         英文の所属を見る前の、和文の文字だけでのまとめ方。英文の所属が違えば、add_aff_en が split_aff で解く（除外も取り消す。R4）。
         """
@@ -1508,7 +1515,7 @@ class Classifier:
         key_ja = _para_text(ja).strip() if ja else None
         for aff in plan.affs:
             if ja is not None and aff.ja is not None and _para_text(aff.ja).strip() == key_ja:
-                if aff.ja is not ja:
+                if aff.ja is not ja and not any(x.src == ja.src and not x.blank for x in plan.exclusions):
                     plan.exclude(ja, f"重複する所属（{aff.ja.src} と同一の文字列のため 1 つにまとめた）")
                 return aff
         aff = Aff(ja=ja, en=en)
@@ -3798,6 +3805,12 @@ class Classifier:
         同じ著者の和文所属のうち、この著者の英文所属をまだ対応付けていないものに、順に対応付ける（英文が未設定ならその英文にし、
         英文が同じ文字なら p を「重複する所属」で除外する）。和文の文字が同じなので別の著者の所属にまとめた所属（aff_for）に、
         違う英文が来たら、まとめを解く（split_aff。R4。docx の和文・英文の対応のとおり）。
+
+        和文の所属の段落 1 つを複数の著者が共有しているとき（著者表の所属の欄が空の行は前の行の段落を使う。S3）は、同じ段落を
+        2 回出せないので、段落ごとに所属を 1 つにする: 共有する著者のうち、英文の所属を先に対応付けた著者の所属（split_aff で分けたもの、
+        または和文の文字でまとめたまま英文を対応付けたもの）を、その段落の所属とし、後の著者もその所属を指す。後の著者の英文の所属が
+        その所属の英文と同じなら p を「重複する所属」で除外し、違えば（docx の矛盾。推定で直さない）0.37.0 と同じ形で、その所属と
+        英文だけの所属の両方を指し、plan.aff_shared に記録する（要確認 front_check。frontcheck.plan_findings）。
         """
         plan = self.plan
         plan.locations[p.src] = "所属（英文）"
@@ -3812,6 +3825,10 @@ class Classifier:
                             plan.exclude(p, f"重複する所属（{aff.en.src} と同一の文字列のため 1 つにまとめた）")
                         return
                     continue
+                ja = getattr(self, "_ja_of", {}).get((author, k))
+                owner = self.shared_aff(author, k, ja)
+                if owner is not None and owner is not aff:
+                    author.affs[k] = aff = owner        # 共有する段落の所属は、先に英文を対応付けた著者の所属（S3）
                 if aff.en is None:
                     aff.en = p
                     filled.add((author, k))
@@ -3821,9 +3838,15 @@ class Classifier:
                         plan.exclude(p, f"重複する所属（{aff.en.src} と同一の文字列のため 1 つにまとめた）")
                     filled.add((author, k))
                     return
-                ja = getattr(self, "_merged_ja", {}).get((author, k))
-                if ja is not None:
-                    self.split_aff(author, k, ja, p)
+                if owner is not None:
+                    # 共有する段落に、先の著者と違う英文の所属が来た（分けると同じ段落を 2 回出す）。分けずに、英文だけの所属を足す
+                    plan.aff_shared.append((plan.authors.index(author) + 1, author.name_ja.src if author.name_ja else "",
+                                            ja.src, p.src))
+                    filled.add((author, k))
+                    break
+                merged = getattr(self, "_merged_ja", {}).get((author, k))
+                if merged is not None:
+                    self.split_aff(author, k, merged, p)
                     filled.add((author, k))
                     return
         for aff in plan.affs:
@@ -3837,12 +3860,25 @@ class Classifier:
         if author is not None:
             author.affs.append(aff)
 
+    def shared_aff(self, author: Author, k: int, ja) -> Optional[Aff]:
+        """著者 author の k 番目の所属の和文の段落 ja を共有するほかの著者（の所属の位置）のうち、英文の所属を先に対応付けたものの
+        所属（S3）。ja を共有する著者がいない・まだ誰も英文を対応付けていなければ None。"""
+        if ja is None:
+            return None
+        filled = getattr(self, "_en_filled", set())
+        for other in getattr(self, "_ja_users", {}).get(id(ja), []):
+            if other != (author, k) and other in filled:
+                return other[0].affs[other[1]]
+        return None
+
     def split_aff(self, author: Author, k: int, ja, en):
         """著者 author の k 番目の所属（和文の文字が同じなので、別の著者の所属にまとめたもの）を、和文の段落 ja（aff_for で
         「重複する所属」で除外した段落）と英文の段落 en の所属にする（R4。docx の対応のとおり。推定で直すのではない）。
 
         和文・英文とも同じ文字の所属がすでにあれば（和文が同じ 3 人で英文が A・B・B の 3 人目）、そこにまとめる（ja・en を、
         まとめた先の段落と同じ文字の「重複する所属」で除外する）。なければ新しい所属にし、ja の除外を取り消して出力に戻す。
+        まとめた先の和文が ja そのもの（出力する段落）なら、ja は除外しない（出力と除外の二重にしない。S3）。ja をほかの著者と共有して
+        いるとき（S3）は、add_aff_en が、共有する著者のうち英文の所属を最初に対応付ける著者のときだけ呼ぶ（後の著者は shared_aff の所属を指す）。
         """
         plan = self.plan
         key_ja, key_en = _para_text(ja).strip(), _para_text(en).strip()
@@ -3850,7 +3886,8 @@ class Classifier:
         for aff in plan.affs:
             if (aff.ja is not None and aff.en is not None and _para_text(aff.ja).strip() == key_ja
                     and _para_text(aff.en).strip() == key_en):
-                plan.exclude(ja, f"重複する所属（{aff.ja.src} と同一の文字列のため 1 つにまとめた）")
+                if aff.ja is not ja:
+                    plan.exclude(ja, f"重複する所属（{aff.ja.src} と同一の文字列のため 1 つにまとめた）")
                 plan.exclude(en, f"重複する所属（{aff.en.src} と同一の文字列のため 1 つにまとめた）")
                 author.affs[k] = aff
                 return
