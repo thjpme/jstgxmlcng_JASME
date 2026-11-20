@@ -532,9 +532,21 @@ def tag_reference(r):
         _apply(p, (g0["start"] + 1, g0["end"]), LinkSpec(kind="source"))
 
 
+# 同じ番号の文献が 2 つ以上あって、番号の引用を結ばなかったときの理由（Unresolved.detail の頭。report._bibr_dup_action がこれで見分ける）
+DUP_NUMBER_DETAIL = "同じ番号の文献が複数あり、どれか特定できない"
+
+
 def link_numeric(plan, linker, paras):
+    """本文の「[1]」「[1-3]」「[1,3]」を、その番号の文献にリンクする。番号の文献がなければ missing、同じ番号の文献が 2 つ以上あれば
+    （図・表の番号の重複〈K4〉と同じく）誤ったリンクを出さないよう結ばず、ref_kind "ambiguous" の Unresolved に記録する（要確認 bibr_dup）。"""
     from .linker import Unresolved
-    nums = {r.parsed.get("number"): r.rid for r in plan.refs if r.parsed.get("number") is not None}
+    nums = {}
+    dup = defaultdict(list)             # 番号 → その番号の文献の rid（2 件以上の番号を結ばないため）
+    for r in plan.refs:
+        n = r.parsed.get("number")
+        if n is not None:
+            nums[n] = r.rid
+            dup[n].append(r.rid)
     for p, where in paras:
         if where in ("ref", "formula"):
             continue
@@ -543,6 +555,11 @@ def link_numeric(plan, linker, paras):
             base = m.start(1)
             for t in re.finditer(r"\d{1,3}", m.group(1)):
                 rid = nums.get(int(t.group(0)))
+                if rid is not None and len(dup[int(t.group(0))]) > 1:
+                    same = "・".join(dup[int(t.group(0))])
+                    linker.unresolved.append(Unresolved("bibr", p.src, m.group(0), f"{DUP_NUMBER_DETAIL}（番号 {t.group(0)}: {same}）", "ambiguous",
+                                                        t.group(0), base + t.start(), base + t.end(), context=m.group(0)))
+                    continue
                 if rid is None:
                     linker.unresolved.append(Unresolved("bibr", p.src, m.group(0), f"番号 {t.group(0)} の文献がない", "missing",
                                                         t.group(0), base + t.start(), base + t.end(), context=m.group(0)))

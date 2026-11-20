@@ -5,7 +5,7 @@ plan（ArticlePlan）を読むだけで、docx の文字も XML の構造も変�
 
 - 和文の著者名が 1 人もない（`authors_missing`。`authors_missing_applies`・`author_candidates`）。
 - 冒頭部の項目（`FrontFinding`。`plan_findings`）: テンプレートの見本の行（template）・題目の段落が 2 つ以上（title_multi）・題目の段落がない
-  （title_missing）・所属と氏名の入れ替わり（swap）・和文の著者の欠け（ja_missing・aff_missing）・英文の著者の欠け（en_missing・en_count）。
+  （title_missing）・翻訳の題目がなく副題だけがある（subtitle_orphan）・所属と氏名の入れ替わり（swap）・和文の著者の欠け（ja_missing・aff_missing）・英文の著者の欠け（en_missing・en_count）。
 - 出版版 PDF との確かめ（pdf_missing・pdf_near・pdf_en_missing。`pdf_findings`）。ページの文字を受け取って判定するだけで、
   PDF の文字を docx に足さない・直さない。docx → XML の処理は PDF の有無で変わらない（結果は知らせにだけ使う）。
 
@@ -29,6 +29,7 @@ CHECK = "check"
 TEMPLATE = "template"
 TITLE_MULTI = "title_multi"
 TITLE_MISSING = "title_missing"
+SUB_ORPHAN = "subtitle_orphan"
 SWAP = "swap"
 JA_MISSING = "ja_missing"
 AFF_MISSING = "aff_missing"
@@ -40,9 +41,9 @@ PDF_EN_MISSING = "pdf_en_missing"
 
 # 項目の並び（知らせの文の順）と重さ。PDF の項目は、出版版 PDF との違いなので要確認にとどめる（CLAUDE.md の PDF の区分: 内容の違いは
 # 要確認。要対応にするのは、形から確かな template・swap の一部・著者名の欠けだけ）
-KIND_ORDER = (TEMPLATE, TITLE_MISSING, JA_MISSING, AFF_MISSING, SWAP, TITLE_MULTI, EN_MISSING, EN_COUNT,
+KIND_ORDER = (TEMPLATE, TITLE_MISSING, SUB_ORPHAN, JA_MISSING, AFF_MISSING, SWAP, TITLE_MULTI, EN_MISSING, EN_COUNT,
               PDF_MISSING, PDF_NEAR, PDF_EN_MISSING)
-KIND_LEVEL = {TEMPLATE: MUST, TITLE_MISSING: MUST, JA_MISSING: MUST, AFF_MISSING: MUST, SWAP: CHECK, TITLE_MULTI: CHECK,
+KIND_LEVEL = {TEMPLATE: MUST, TITLE_MISSING: MUST, SUB_ORPHAN: MUST, JA_MISSING: MUST, AFF_MISSING: MUST, SWAP: CHECK, TITLE_MULTI: CHECK,
               EN_MISSING: CHECK, EN_COUNT: CHECK, PDF_MISSING: CHECK, PDF_NEAR: CHECK, PDF_EN_MISSING: CHECK}
 
 CANDIDATE_REASONS = (FRONT_OTHER_EXCLUDED, FRONT_TABLE_EXCLUDED, AUTHOR_TABLE_OTHER_EXCLUDED)
@@ -210,6 +211,18 @@ def name_shaped(text) -> bool:
     return bool(NAME_SHAPE.match(t)) and not aff_word(t)
 
 
+def orphan_subtitle(plan, lang) -> tuple:
+    """翻訳の題目（builder.title_group の other）がなく、翻訳の副題（other_sub）だけがあるときの (副題の名前, 副題の段落の列)。なければ ("", [])。
+    本文の言語の選び方は builder.title_group と同じ（英文の記事で題目（英）があれば翻訳は和文、それ以外は翻訳が英文）。"""
+    if lang == "en" and plan.title_en:
+        title, sub, label = plan.title, plan.subtitle, "副題（日）"
+    else:
+        title, sub, label = plan.title_en, plan.subtitle_en, "副題（英）"
+    if _paras(title) or not sub:
+        return "", []
+    return label, list(sub)
+
+
 def _swap(plan) -> FrontFinding | None:
     srcs, words = [], []
     for a in plan.authors:
@@ -238,6 +251,9 @@ def plan_findings(plan, lang) -> list:
     ja = lang != "en"
     if ja and not _paras(plan.title):
         out.append(finding(TITLE_MISSING, title_candidates(plan)))
+    label, sub = orphan_subtitle(plan, lang)
+    if _paras(sub):
+        out.append(finding(SUB_ORPHAN, [p.src for p in _paras(sub)], label))
     for kind, label, paras in (("ja", "題目（日）", plan.title), ("ja", "副題（日）", plan.subtitle),
                                ("en", "題目（英）", plan.title_en), ("en", "副題（英）", plan.subtitle_en)):
         ps = _paras(paras)

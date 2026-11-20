@@ -2392,7 +2392,7 @@ AUTHORS_TITLE_NOTE = ("著者表のスタイルは付いていますが、題目
 
 
 FRONT_KIND_SHORT = {
-    frontcheck.TEMPLATE: "テンプレートの見本の行", frontcheck.TITLE_MISSING: "題目の段落がない", frontcheck.TITLE_MULTI: "題目の段落が 2 つ以上",
+    frontcheck.TEMPLATE: "テンプレートの見本の行", frontcheck.TITLE_MISSING: "題目の段落がない", frontcheck.SUB_ORPHAN: "題目のない副題", frontcheck.TITLE_MULTI: "題目の段落が 2 つ以上",
     frontcheck.SWAP: "所属と氏名の入れ替わり", frontcheck.JA_MISSING: "和文の著者名の欠け", frontcheck.AFF_MISSING: "和文の所属の欠け",
     frontcheck.EN_MISSING: "英文の著者名がない", frontcheck.EN_COUNT: "和文と英文の著者数の違い",
     frontcheck.PDF_MISSING: "PDF に見つからない項目", frontcheck.PDF_NEAR: "PDF と少し違う項目", frontcheck.PDF_EN_MISSING: "PDF に見つからない英文の項目",
@@ -2418,6 +2418,11 @@ def _front_item_text(r, f) -> str:
         cand = f"題目らしい段落: {ex}。" if f.srcs else ""
         return (f"「{style}」のスタイルの段落がありません（XML に和文の題目がありません）。Word で題目の段落にそのスタイルを付けて"
                 f"変換し直してください。{cand}")
+    if k == frontcheck.SUB_ORPHAN:
+        title_label = f.note.replace("副題", "題目")
+        style = _first_style(r.journal, "title_en" if "英" in f.note else "title", title_label)
+        return (f"{f.note}の段落がありますが、{title_label}がありません（{ex}）。副題だけでは XML に出せないので、この段落は出力していません。"
+                f"Word で{title_label}の段落（「{style}」のスタイル）を書いて変換し直してください。")
     if k == frontcheck.TITLE_MULTI:
         role, sub = FRONT_SUBTITLE_ROLE.get(f.note, ("", "副題"))
         sub = _first_style(r.journal, role, sub) if role else sub
@@ -2558,7 +2563,7 @@ def images_dropped(r) -> list:
 
 
 def images_other_article(r) -> list:
-    """記事識別子が変わった（別の論文に替えて変換した）ので入れなかった前の画像（Result.images_dropped の DroppedImage）。"""
+    """記事識別子か号が変わった（別の論文に替えて変換した）ので入れなかった前の画像（Result.images_dropped の DroppedImage）。"""
     return [d for d in getattr(r, "images_dropped", []) if d.other_article]
 
 
@@ -2590,14 +2595,14 @@ def images_carry_text(r) -> str:
     """変換し直しで持ち越せなかった画像についての知らせ（修正計画 W1 の 4.1）。なければ ""。
 
     同じ論文で入れ直さなかった画像は 1 枚ずつ並べる。別の論文に替えて変換したときの前の画像は並べず、画像がまだ残っているうちだけ 1 行で
-    知らせる（同じ論文で巻・ページを直したときのため）。キャプションが少し変わった図に入れた画像は、要確認 image_changed で知らせる。
+    知らせる（同じ論文で巻・号・ページを直したときのため）。キャプションが少し変わった図に入れた画像は、要確認 image_changed で知らせる。
     """
     dropped, other = images_dropped(r), images_other_article(r)
     parts = []
     if other and images_progress(r)[0]:
         ids = "・".join(dict.fromkeys(d.other_article for d in other))
-        parts.append(f"前の論文（{ids}）で入れた画像 {len(other)} 枚は、記事の巻・ページが違うので入れていません。"
-                     "同じ論文で巻・ページを直したのなら、入れ直してください。")
+        parts.append(f"前の論文（{ids}）で入れた画像 {len(other)} 枚は、記事の巻・号・ページが違うので入れていません。"
+                     "同じ論文で巻・号・ページを直したのなら、入れ直してください。")
     if dropped:
         parts.append(f"前に入れた画像のうち {len(dropped)} 枚は、変換し直した原稿で図の番号かキャプション（キャプションのない画像は場所）が変わっていたので、"
                      "入れていません（別の図の画像を入れないためです）。入れ直してください。\n" + "\n".join(_dropped_lines(r, dropped)))
@@ -3332,6 +3337,27 @@ def float_ref_how(r, screen: str = "report") -> str:
 FLOAT_REF_SHOWN = 6     # 図・表の参照の要確認に並べる参照の数（全件は 4 章の判断の一覧）
 
 
+def _bibr_dup_action(r):
+    """同じ番号の文献が 2 つ以上あるため、本文の「[1]」をリンクしなかった引用（refparse.link_numeric が ref_kind "ambiguous" で記録。
+    r.unresolved_after のうち AI が解決しなかったもの）。なければ None。誤ったリンクを出さず、結ばないで知らせる（図・表の番号の重複と同じ扱い）。"""
+    from .refparse import DUP_NUMBER_DETAIL
+    dups = [u for u in (getattr(r, "unresolved_after", None) or []) if u[0] == "bibr" and u[3].startswith(DUP_NUMBER_DETAIL)]
+    if not dups:
+        return None
+    nums = list(dict.fromkeys(u.year for u in dups))
+    shown = "、".join(f"[{esc(n)}]" for n in nums[:FLOAT_REF_SHOWN]) + ("ほか" if len(nums) > FLOAT_REF_SHOWN else "")
+    n = len(dups)
+    how = "引用文献の一覧の番号が重なっていないかを確かめ、Word で直して変換し直してください（リンクがなくても登載はできます）"
+    return Action(
+        TO_CHECK, "bibr_dup",
+        top=(f"> **要確認: 同じ番号の文献が 2 つ以上あるため、本文の引用をリンクしなかった箇所があります（{n} か所。3 章）。** "
+             f"番号: {shown}。どの文献への引用か決められないので、誤ったリンクを出していません。{how}。"),
+        checklist=f"- [ ] **引用文献の番号が重なっている**（{shown}。{n} か所。3 章）: 一覧の番号を直して変換し直す",
+        box_title="引用文献の番号が重なっていて、リンクしなかった引用があります（要確認）",
+        box_detail=f"同じ番号の文献が 2 つ以上あるため、本文の引用（{n} か所）にはリンクを付けていません（番号: {shown}）。{how}（レポートの 3 章）。",
+        cli=f"要確認: 引用文献の番号が重なっているため、リンクしなかった引用が {n} か所あります（{shown}。レポートの冒頭と 3 章）。一覧の番号を確かめること")
+
+
 def _float_ref_action(r):
     """番号から図・表を決められず、リンクしなかった図・表の参照（plan.float_unlinked。linker.Linker.float_refs）。なければ None。
 
@@ -3964,7 +3990,7 @@ def actions(r) -> list:
                            _table_parts_action, _image_names_action,
                            _upload_action, _meta_dates_action, _meta_corresp_action, _textbox_undecided_action,
                            _textbox_place_action, _textbox_figure_text_action, _authors_missing_action, _unplaced_action, _front_check_action, images_action,
-                           lost_action, _image_same_action, _image_changed_action, lost_autonum_action, _pua_left_action, _abstract_missing_action, _refs_missing_action, _refs_unlinked_action, _style_hidden_action, _emphasis_action, _resultless_field_action, _symbol_action, _abstract_ja_action, _app_after_refs_action, _float_end_action, _style_check_action, _ai_boundary_action, _ai_carried_action, _note_overlap_action, _note_unlinked_action, _float_ref_action, _link_iri_action,
+                           lost_action, _image_same_action, _image_changed_action, lost_autonum_action, _pua_left_action, _abstract_missing_action, _refs_missing_action, _refs_unlinked_action, _style_hidden_action, _emphasis_action, _resultless_field_action, _symbol_action, _abstract_ja_action, _app_after_refs_action, _float_end_action, _style_check_action, _ai_boundary_action, _ai_carried_action, _note_overlap_action, _note_unlinked_action, _float_ref_action, _bibr_dup_action, _link_iri_action,
                            _fn_guess_action, _name_split_action, _newline_action)]
     acts = [a for a in head if a is not None] + pdf_actions(r)
     fin = _with_reused(_ai_finish_action(r), r)

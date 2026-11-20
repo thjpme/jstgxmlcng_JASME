@@ -34,6 +34,8 @@ RE_JA_CHARS = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff々]")
 RE_LABEL_SPLIT = re.compile(rf"^([\s\u3000]*)((?:図|表|Figure|Fig\.?|Table)[\s\u3000]*[0-9０-９]+(?:[{CAP_BRANCH_SEP}]{CAP_BRANCH_NUM})?)"
                             r"([\s\u3000:：.．]*)")
 RE_HEAD_SPLIT = re.compile(r"^([\s\u3000]*)([0-9０-９]{1,2}[．.]|[(（][0-9０-９]{1,2}[)）]|[①-⑳])([\s\u3000]*)(?=\S)")
+# 翻訳の題目がなく副題だけがあるとき、その副題の段落を除外に記録する理由（title_group。知らせは要対応 front_check の subtitle_orphan）
+SUBTITLE_NO_TITLE_EXCLUDED = "翻訳の題目がなく副題だけがある（JATS では trans-title が要るため出力しない。Word で題目を書く）"
 NEWLINE_SHOWN = 10      # レポートの 10 章の改行の一覧に並べる段落の数（それより多ければ「ほか N 段落」）
 # 変更履歴ですべての行が削除された表（docx_reader が行をすべて読み飛ばした表。修正計画の N8）の 10 章の警告
 ALL_ROWS_DELETED_MSG = ("{where}: 変更履歴で表のすべての行が削除されています（Word で変更をすべて承諾すると、表が消えます）。XML には"
@@ -613,7 +615,9 @@ class Builder:
         if main_sub:
             st = _lang(_sub(tg, "subtitle"), lang)
             self.multi(st, main_sub, E.TITLE, "副題")
-        if other:
+        # 翻訳の題目に文字がなく（段落がない・空白だけ）、翻訳の副題だけがある場合は、題目を補えないので副題を出力しない（orphan）
+        orphan = bool(other_sub) and not any(p.text_only().strip() for p in other)
+        if other and not orphan:
             ttg = _lang(_sub(tg, "trans-title-group"), other_lang)
             tt = _sub(ttg, "trans-title")
             self.multi(tt, other, E.TITLE, "翻訳題目")
@@ -621,8 +625,13 @@ class Builder:
             if other_sub:
                 ts = _sub(ttg, "trans-subtitle")
                 self.multi(ts, other_sub, E.TITLE, "翻訳副題")
-        elif other_sub:
-            self.info.warnings.append("副題（翻訳）があるが題目（翻訳）がない（J-STAGE ではエラーになる）")
+        elif orphan:
+            # JATS では trans-title-group に trans-title が要るので出せない。構造は推定で補わず、副題（と空白だけの題目）の段落を
+            # 理由付きで除外に記録する（不変性チェックを合格させる）。知らせは要対応 front_check（frontcheck.SUB_ORPHAN）が行う
+            for p in other_sub + other:
+                text = _para_text(p)
+                if text.strip() or p.plain():           # 文字のまったくない段落は記録しない（plan.exclude_blank と同じ）
+                    self.info.exclusions.append(Exclusion(p.src, SUBTITLE_NO_TITLE_EXCLUDED, text, blank=not text.strip()))
 
     def check_length(self, el, limit, what):
         n = len("".join(el.itertext()))
@@ -988,8 +997,11 @@ class Builder:
                     new[col] = (c, span)
                 col += span
             owner = new
-        # 出力しない行: すべてのセルが結合した継続の行（セルのない行も。今と同じ）
-        dropped = {r for r, row in enumerate(rows) if all(id(c) in top_of for c in row.cells)}
+        # 出力しない行: セルのない行と、すべてのセルが結合した継続の行（今と同じ）。ただし継続のセルがあり、飛ばしたグリッド
+        # （gridBefore・gridAfter）のある行は、空のセルで埋めて出す（空のセルを置いた docx と同じ出力にする。出さないと、
+        # 結合元の rowspan が行数と合わなくなる）。pipeline.table_problems の列の数の確かめは、セルのある行だけで数える
+        dropped = {r for r, row in enumerate(rows)
+                   if not row.cells or (row.grid_before == 0 and row.grid_after == 0 and all(id(c) in top_of for c in row.cells))}
         rowspan = {k: 1 + sum(1 for r in rs if r not in dropped) for k, rs in conts.items()}
         where = table_where(table_head(t), caption.text_only() if caption is not None else "")
         if crossed:
