@@ -3809,8 +3809,12 @@ class Classifier:
         和文の所属の段落 1 つを複数の著者が共有しているとき（著者表の所属の欄が空の行は前の行の段落を使う。S3）は、同じ段落を
         2 回出せないので、段落ごとに所属を 1 つにする: 共有する著者のうち、英文の所属を先に対応付けた著者の所属（split_aff で分けたもの、
         または和文の文字でまとめたまま英文を対応付けたもの）を、その段落の所属とし、後の著者もその所属を指す。後の著者の英文の所属が
-        その所属の英文と同じなら p を「重複する所属」で除外し、違えば（docx の矛盾。推定で直さない）0.37.0 と同じ形で、その所属と
-        英文だけの所属の両方を指し、plan.aff_shared に記録する（要確認 front_check。frontcheck.plan_findings）。
+        その所属の英文と同じなら p を「重複する所属」で除外する。ただし先に、共有する段落の所属の位置のうち、和文の文字と英文の文字が
+        どちらも p と同じ所属（split_aff の探索と同じ見方）がある位置があれば、その位置をその所属にし、p を「重複する所属」で
+        除外する（矛盾のない対応がある。兼任で英文の順が和文と違うときも、合う位置に付ける。shared_match）。どの位置にも合わず、
+        先の著者の所属と英文が違えば（docx の矛盾。推定で直さない）、分けずにその所属を指したまま、英文の所属を共有のない所属として
+        足し（英文の文字が同じ所属がすでにあればそれを指し、なければ英文だけの所属を作る。0.37.0 と同じ扱い）、plan.aff_shared に
+        記録する（要確認 front_check。frontcheck.plan_findings）。
         """
         plan = self.plan
         plan.locations[p.src] = "所属（英文）"
@@ -3818,6 +3822,14 @@ class Classifier:
         if author is not None:
             # 和文所属と対応付ける（同じ著者の和文所属のうち、英文が未設定のもの）
             filled = getattr(self, "_en_filled", set())
+            hit = self.shared_match(author, text)
+            if hit is not None:
+                k, aff = hit
+                author.affs[k] = aff        # 共有する段落の位置に、和文・英文とも合う所属（S3）
+                if aff.en is not p:
+                    plan.exclude(p, f"重複する所属（{aff.en.src} と同一の文字列のため 1 つにまとめた）")
+                filled.add((author, k))
+                return
             for k, aff in enumerate(author.affs):
                 if (author, k) in filled:
                     if aff.en is not None and _para_text(aff.en).strip() == text:
@@ -3871,14 +3883,32 @@ class Classifier:
                 return other[0].affs[other[1]]
         return None
 
+    def shared_match(self, author: Author, text: str):
+        """著者 author の、英文の所属をまだ対応付けていない所属の位置のうち、和文の段落をほかの著者と共有する位置（S3）で、
+        和文の文字がその段落と同じ・英文の文字が text と同じ所属がすでにあるものの (位置, 所属)（最初に見つかった位置）。なければ None。
+
+        共有のない位置は見ない（R4 までの対応付けの順を変えない）。"""
+        filled = getattr(self, "_en_filled", set())
+        users = getattr(self, "_ja_users", {})
+        for k in range(len(author.affs)):
+            ja = getattr(self, "_ja_of", {}).get((author, k))
+            if ja is None or (author, k) in filled or len(users.get(id(ja), [])) < 2:
+                continue
+            key_ja = _para_text(ja).strip()
+            for aff in self.plan.affs:
+                if (aff.ja is not None and aff.en is not None and _para_text(aff.ja).strip() == key_ja
+                        and _para_text(aff.en).strip() == text):
+                    return k, aff
+        return None
+
     def split_aff(self, author: Author, k: int, ja, en):
         """著者 author の k 番目の所属（和文の文字が同じなので、別の著者の所属にまとめたもの）を、和文の段落 ja（aff_for で
         「重複する所属」で除外した段落）と英文の段落 en の所属にする（R4。docx の対応のとおり。推定で直すのではない）。
 
         和文・英文とも同じ文字の所属がすでにあれば（和文が同じ 3 人で英文が A・B・B の 3 人目）、そこにまとめる（ja・en を、
         まとめた先の段落と同じ文字の「重複する所属」で除外する）。なければ新しい所属にし、ja の除外を取り消して出力に戻す。
-        まとめた先の和文が ja そのもの（出力する段落）なら、ja は除外しない（出力と除外の二重にしない。S3）。ja をほかの著者と共有して
-        いるとき（S3）は、add_aff_en が、共有する著者のうち英文の所属を最初に対応付ける著者のときだけ呼ぶ（後の著者は shared_aff の所属を指す）。
+        ja をほかの著者と共有しているとき（S3）は、add_aff_en が、共有する著者のうち英文の所属を最初に対応付ける著者のときだけ呼ぶ
+        （後の著者は shared_aff の所属を指す）。そのため ja はまだどの所属の和文でもなく、まとめた先の和文が ja そのものになることはない。
         """
         plan = self.plan
         key_ja, key_en = _para_text(ja).strip(), _para_text(en).strip()
@@ -3886,8 +3916,7 @@ class Classifier:
         for aff in plan.affs:
             if (aff.ja is not None and aff.en is not None and _para_text(aff.ja).strip() == key_ja
                     and _para_text(aff.en).strip() == key_en):
-                if aff.ja is not ja:
-                    plan.exclude(ja, f"重複する所属（{aff.ja.src} と同一の文字列のため 1 つにまとめた）")
+                plan.exclude(ja, f"重複する所属（{aff.ja.src} と同一の文字列のため 1 つにまとめた）")
                 plan.exclude(en, f"重複する所属（{aff.en.src} と同一の文字列のため 1 つにまとめた）")
                 author.affs[k] = aff
                 return

@@ -2406,6 +2406,26 @@ FRONT_SUBTITLE_ROLE = {"題目（日）": ("subtitle", "副題（日）"), "副�
 FRONT_PDF_WIDTH = 120     # front_check の PDF と比べる項目（pdf_missing・pdf_near・pdf_en_missing）に出す段落の文字の数
 
 
+def _aff_shared_detail(plan, f) -> str:
+    """front_check の aff_shared の段落の文字（著者名、共有する和文の所属とその所属の英文、この著者の英文の所属）。所属の文字は
+    見比べられるように FRONT_PDF_WIDTH 文字まで出す（英文の所属は前の方が同じことが多い）。"""
+    rec = next((x for x in plan.aff_shared if str(x[0]) == f.note and x[3] in f.srcs), None)
+    if rec is None:
+        return _front_samples(plan, f.srcs)
+    n, name_src, ja_src, en_src = rec
+    whole = lambda s: _para_samples([(s, frontcheck.text_of(plan, s))], 1, FRONT_PDF_WIDTH)
+    parts = [f"著者名 {whole(name_src)}"] if name_src else []
+    parts.append(f"共有する和文の所属 {whole(ja_src)}")
+    key = frontcheck.text_of(plan, ja_src).strip()
+    author = plan.authors[n - 1] if 0 < n <= len(plan.authors) else None
+    shared = next((x for x in (author.affs if author is not None else []) if x.ja is not None and x.en is not None
+                   and x.ja.text_only().strip() == key), None)
+    if shared is not None:
+        parts.append(f"その所属の英文 {whole(shared.en.src)}")
+    parts.append(f"この著者の英文の所属 {whole(en_src)}")
+    return "、".join(parts)
+
+
 def _front_item_text(r, f) -> str:
     """front_check の項目 1 つの文（何が・どの段落か・Word での直し方）。"""
     plan = r.plan
@@ -2459,7 +2479,8 @@ def _front_item_text(r, f) -> str:
                 "確かめてください。")
     if k == frontcheck.AFF_SHARED:
         return (f"著者 {f.note} の和文の所属の段落が前の著者と共有されていて（著者表の所属の欄が空など）、英文の所属が違うので、"
-                f"和文と英文の所属の対応を決められません（{ex}）。XML では、この著者は共有の所属と、英文だけの所属の両方を指しています。"
+                f"和文と英文の所属の対応を決められません（{_aff_shared_detail(plan, f)}）。XML では、この著者は共有の所属と、"
+                "この英文の所属（英文だけの所属か、英文が同じほかの所属）の両方を指しています。"
                 "Word で所属の段落を著者ごとに書いて（所属の欄を空にしないで）変換し直してください。")
     # PDF と比べる項目は、段落の文字をまるごと（FRONT_PDF_WIDTH 文字まで）出す（違う所が後ろにあっても PDF と見比べられるように。
     # 冒頭部の段落は短い。点検 review19 の 3 回目の利用者向け 1）

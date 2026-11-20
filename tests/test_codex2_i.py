@@ -190,3 +190,63 @@ def test_no_en_at_all_shared(tmp_path, journal, meta):
     refs, affs = xml_affs(res)
     assert refs == [["aff1"], ["aff1"], ["aff1"]] and affs == {"aff1": {"ja": "架空大学"}}
     assert shared(res) == []
+
+
+# ---------------------------------------------------------------------------- 点検の 3 点（矛盾のない対応・兼任の順・知らせの文）
+def test_shared_paragraph_matches_existing_aff(tmp_path, journal, meta):
+    """和文 架空大学/A・架空大学/B・空欄/C（C は B の段落を共有）、英文 Education・Science・Education: 和文・英文とも同じ所属 aff1 が
+    あるので、C は aff1 だけを指す（0.37.0・0.38.0 と同じ）。知らせない。B の段落は aff2 の和文として 1 回だけ出す。"""
+    res = run(tmp_path, journal, meta, ("架空大学", "架空大学", ""), (EDU, SCI, EDU))
+    refs, affs = xml_affs(res)
+    assert refs == [["aff1"], ["aff2"], ["aff1"]]
+    assert affs == {"aff1": {"ja": "架空大学", "en": EDU}, "aff2": {"ja": "架空大学", "en": SCI}}
+    d6, d8 = ja_paras(res)
+    assert not [x for x in res.plan.exclusions if x.src == d8.src]
+    edu = [p for p in res.plan.paras.values() if p.plain() == EDU]
+    dup = {x.src: x.reason for x in res.plan.exclusions if x.reason.startswith("重複する所属")}
+    assert list(dup) == [edu[1].src]
+    assert shared(res) == [] and front_action(res) is None
+
+
+def test_shared_concurrent_en_order_swapped(tmp_path, journal, meta):
+    """兼任で英文の順が和文と逆: 和文 架空大学＋架空研究所/A・空欄/B（B は A の 2 つの段落を共有）、英文 A は Education・Institute、
+    B は Institute・Science。B の Institute は A の 2 つ目の所属に合うのでそこに付け、知らせるのは Science の 1 件だけ。XML は 0.38.0 と同じ。"""
+    res = run(tmp_path, journal, meta, ("架空大学\n架空研究所", ""), (EDU + "\n" + INST, INST + "\n" + SCI))
+    refs, affs = xml_affs(res)
+    assert refs == [["aff1", "aff2"], ["aff1", "aff2", "aff3"]]
+    assert affs == {"aff1": {"ja": "架空大学", "en": EDU}, "aff2": {"ja": "架空研究所", "en": INST}, "aff3": {"en": SCI}}
+    f = shared(res)
+    assert len(f) == 1 and f[0].note == "2"
+    sci = next(p for p in res.plan.paras.values() if p.plain() == SCI)
+    assert sci.src in f[0].srcs
+
+
+def test_shared_message_shows_whole_affs(tmp_path, journal, meta):
+    """知らせの文に、共有する所属の英文とこの著者の英文の所属を、見比べられる長さで出す（16 文字で切らない）。"""
+    res = run(tmp_path, journal, meta, ("架空大学", ""), (EDU, SCI))
+    a = front_action(res)
+    assert a is not None
+    assert f"その所属の英文 " in a.top and EDU in a.top and SCI in a.top
+    assert "共有する和文の所属 " in a.top and "この著者の英文の所属 " in a.top
+
+
+def test_shared_conflict_en_matches_other_aff(tmp_path, journal, meta):
+    """和文 架空大学/A・空欄/B・架空研究所/C、英文 Education・Institute・Institute: B の英文は、共有する段落の所属と違い、和文も合う
+    所属がないので知らせる（B は aff1 と英文だけの所属を指す）。C の架空研究所は Institute の英文になる。"""
+    res = run(tmp_path, journal, meta, ("架空大学", "", "架空研究所"), (EDU, INST, INST))
+    refs, affs = xml_affs(res)
+    assert refs[1][0] == "aff1" and len(refs[1]) == 2
+    assert [f.note for f in shared(res)] == ["2"]
+
+
+def test_loose_paragraph_shared_by_two_names(tmp_path, journal, meta):
+    """表でなく段落: 所属の段落 1 つの後ろに著者名が 2 つ（共有）、英文 Education・Science: 分けずに知らせる。"""
+    loose = [mf.para(mf.S["aff_ja"], "架空大学"), mf.para(mf.S["author_ja"], NAMES_JA[0]),
+             mf.para(mf.S["author_ja"], NAMES_JA[1])]
+    en_rows = [("name", NAMES_EN[0]), ("aff", EDU), ("name", NAMES_EN[1]), ("aff", SCI)]
+    path = mf.make_conflict(tmp_path / "loose.docx", ja_rows=(), loose=loose, en_rows=en_rows)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "out_loose", ai_mode="none"))
+    assert res.fidelity.ok and res.fidelity.final_ok and res.dtd_valid and res.jstage_issues == []
+    refs, affs = xml_affs(res)
+    assert refs == [["aff1"], ["aff1", "aff2"]]
+    assert [f.note for f in shared(res)] == ["2"]
