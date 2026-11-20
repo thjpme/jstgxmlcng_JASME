@@ -58,11 +58,12 @@ def test_doi_partial_match_without_slash_is_kept(meta, journal, tmp_path):
 
 
 def test_doi_really_same_still_uses_the_display_text(meta, journal, tmp_path):
-    """DOI が本当に同じ（大文字・小文字だけ違う・dx.doi.org と doi.org・末尾の / だけ違う）なら、今までどおり表示文字から作るリンク。"""
+    """DOI が本当に同じ（大文字・小文字だけ違う・dx.doi.org と doi.org・末尾の / も同じ）なら、今までどおり表示文字から作るリンク。
+    末尾の / だけ違う DOI は別の DOI として区別する（2 回目の点検の修正。test_codex2_n.py）。"""
     cases = [
         ("https://doi.org/10.1000/ABC", "https://doi.org/10.1000/abc", "https://doi.org/10.1000/ABC"),
         ("https://dx.doi.org/10.1000/abc", "https://doi.org/10.1000/abc", "https://dx.doi.org/10.1000/abc"),
-        ("https://doi.org/10.1000/abc/", "https://doi.org/10.1000/abc", "https://doi.org/10.1000/abc/"),
+        ("https://doi.org/10.1000/abc/", "https://doi.org/10.1000/abc/", "https://doi.org/10.1000/abc/"),
     ]
     for i, (shown, target, want) in enumerate(cases):
         res = _convert_ref(meta, journal, tmp_path, f"s7same{i}", shown, target)
@@ -86,13 +87,14 @@ def test_same_as_text_doi_branch_needs_the_whole_doi():
         ("https://doi.org/10.1000/ABC", "10.1000/ABCD", False),
         ("https://doi.org/10.1000/ABC", "10.1000/ABC", True),                         # 裸の DOI
         ("https://doi.org/10.1000/ABC", "doi:10.1000/abc", True),                     # doi: の形
-        ("https://doi.org/10.1000/ABC", "https://doi.org/10.1000/abc/", True),        # 大文字・小文字・末尾の / は除く
+        ("https://doi.org/10.1000/ABC", "https://doi.org/10.1000/abc/", False),       # 末尾の / は区別する（別の DOI。2 回目の点検）
+        ("https://doi.org/10.1000/ABC/", "https://doi.org/10.1000/abc/", True),       # 大文字・小文字は区別しない
         ("https://dx.doi.org/10.1000/abc", "https://doi.org/10.1000/abc", True),      # dx.doi.org と doi.org
-        ("https://doi.org/10.1000/abc/", "https://doi.org/10.1000/abc", True),        # 末尾の / だけ
+        ("https://doi.org/10.1000/abc/", "https://doi.org/10.1000/abc", False),       # 末尾の / だけ違うのも別の DOI
         ("https://doi.org/10.1000/ABC", "https://doi.org/10.1000/ABC。", True),       # 後ろの句点は範囲に入れない（_trim）
         ("https://doi.org/10.1000/ABC", "(https://doi.org/10.1000/ABC)", True),       # 閉じかっこも範囲に入れない
         ("https://doi.org/10.1000/ABC", "10.1000/ABC と 10.1000/ABD", False),        # DOI が 2 つ（1 つでも違えば同じでない）
-        ("https://doi.org/10.1000/ABC", "10.1000/ABC と 10.1000/ABC", True),          # 同じ DOI が 2 つ
+        ("https://doi.org/10.1000/ABC", "10.1000/ABC と 10.1000/ABC", False),         # 同じ DOI でも機械的なリンクが 2 つできる（Word のリンクは 1 つ）
         ("https://doi.org/10.1000/ABC", "10.1000/ABC?x=1", False),                    # クエリ付きは別の DOI の文字
         ("https://doi.org/10.1000/ABC", "Click here", False),                         # DOI のない表示文字
     ]

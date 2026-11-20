@@ -331,8 +331,11 @@ class Linker:
                 while j + 1 < len(atoms) and atoms[j + 1].kind == "text" and atoms[j + 1].href == a.href \
                         and atoms[j + 1].link is None:
                     j += 1
-                if where == "ref" and _same_as_text(a.href, "".join(atoms[k].text for k in range(i, j + 1))):
-                    offs = atom_offsets(p)
+                offs = atom_offsets(p)
+                if where == "ref" and _same_as_text(
+                        a.href, "".join(atoms[k].text for k in range(i, j + 1)), plain=p.plain(), span=(offs[i][0], offs[j][1]),
+                        where=where, ref_doi=self.ref_doi, word_spans=self.word_spans.get(id(p), ()),
+                        blocked=[o for k, (x, o) in enumerate(zip(atoms, offs)) if not i <= k <= j and (x.link is not None or x.href)]):
                     self.word_spans.setdefault(id(p), []).append((offs[i][0], offs[j][1]))
                     for k in range(i, j + 1):
                         atoms[k].href = None
@@ -347,58 +350,20 @@ class Linker:
                 i += 1
 
     def doi_spec(self, doi: str, kind: str, where: str) -> LinkSpec:
-        href = "https://doi.org/" + doi
-        if where == "ref" and self.ref_doi == "pub-id":
-            return LinkSpec(kind="pub-id", attrs={"pub-id-type": "doi", "href": href})
-        return LinkSpec(kind=kind, attrs={"href": href})
+        return _doi_spec(doi, kind, where, self.ref_doi)
 
     def _word_end(self, p: Para, s: int, e: int) -> int:
-        """URL・DOI の範囲 [s, e) の終わりを、s を含む Word のハイパーリンク（word_spans）の終わりまでに縮めた位置。
-
-        縮めるのは、ハイパーリンクの終わりのすぐ後ろ（範囲の中）が非 ASCII の文字のときだけ（URL の直後に空白なしで続いた和文の注記。
-        link_iri の直し方の形）。後ろが ASCII の文字なら縮めない（自動書式で URL の途中〈「…/wiki/Foo_」まで〉にだけ付いたハイパー
-        リンクで、「(bar)」などの URL の残りを外さない。点検 review20 の 2 回目）。"""
-        plain = p.plain()
-        for ws, we in self.word_spans.get(id(p), ()):
-            if ws <= s < we:
-                return we if we < e and not plain[we].isascii() else e
-        return e
+        """URL・DOI の範囲 [s, e) の終わりを、s を含む Word のハイパーリンク（word_spans）の終わりまでに縮めた位置（_shrink_end）。"""
+        return _shrink_end(p.plain(), self.word_spans.get(id(p), ()), s, e)
 
     def urls(self, p: Para, where: str):
-        plain = p.plain()
-        kind = "ext-link" if where in ("fn", "back") else "uri"
-        # DOI（doi: 付き・裸）
-        for m in RE_DOI_PREFIXED.finditer(plain):
-            s, e = m.start(1), m.end(1)
-            doi = _trim(plain[s:self._word_end(p, s, e)])
-            e = s + len(doi)
-            spec = self.doi_spec(doi, kind, where)
-            if apply_span(p, s, e, spec):
-                self.count["doi"] += 1
-        for m in RE_URL.finditer(plain):
-            s = m.start()
-            url = _trim(plain[s:self._word_end(p, s, m.end())])
-            e = s + len(url)
-            href = url if re.match(r"https?://", url, re.I) else "http://" + url
-            dm = re.match(r"https?://(?:dx\.)?doi\.org/(10\.\d{4,9}/\S+)", url, re.I)
-            if dm and where == "ref" and self.ref_doi == "pub-id":
-                ds = s + dm.start(1)
-                spec = LinkSpec(kind="pub-id", attrs={"pub-id-type": "doi", "href": url})
-                if apply_span(p, ds, e, spec):
-                    self.count["doi"] += 1
-                continue
-            if apply_span(p, s, e, LinkSpec(kind=kind, attrs={"href": href})):
-                self.count["doi" if dm else "url"] += 1
-                if not url.lower().startswith("http"):
-                    self.note("url", p.src, f"「{url}」に http:// を補ってリンク先とした")
-        if where == "ref":
-            for m in RE_DOI_BARE.finditer(plain):
-                s = m.start(1)
-                doi = _trim(plain[s:self._word_end(p, s, m.end(1))])
-                e = s + len(doi)
-                spec = self.doi_spec(doi, "uri", where)
-                if apply_span(p, s, e, spec):
-                    self.count["doi"] += 1
+        """文字の中の URL・DOI をリンクにする。何を・どの範囲にリンクにするかは _machine_links が決める（_same_as_text も同じ関数で
+        求めるので、判定とここでの動きは食い違わない）。すでにリンクのある範囲には付けない（apply_span）。"""
+        for c in _machine_links(p.plain(), where, self.ref_doi, self.word_spans.get(id(p), ())):
+            if apply_span(p, c.s, c.e, c.spec):
+                self.count[c.count] += 1
+                if c.note:
+                    self.note("url", p.src, c.note)
 
     def float_numbers(self, nodes, regex, id_attr: str, word: str) -> tuple:
         """図または表の参照のリンク先を、キャプションの番号から決める: (番号 -> ID, リンクしない番号 -> (キャプションの冒頭の一覧,
@@ -780,6 +745,67 @@ def _has_sup(p: Para, s: int, e: int) -> bool:
     return any(a.kind == "text" and "sup" in a.fmt for a, (a0, a1) in zip(p.atoms, atom_offsets(p)) if a0 < e and a1 > s)
 
 
+def _doi_spec(doi: str, kind: str, where: str, ref_doi: str) -> LinkSpec:
+    href = "https://doi.org/" + doi
+    if where == "ref" and ref_doi == "pub-id":
+        return LinkSpec(kind="pub-id", attrs={"pub-id-type": "doi", "href": href})
+    return LinkSpec(kind=kind, attrs={"href": href})
+
+
+def _shrink_end(plain: str, word_spans, s: int, e: int) -> int:
+    """URL・DOI の範囲 [s, e) の終わりを、s を含む Word のハイパーリンク（word_spans）の終わりまでに縮めた位置。
+
+    縮めるのは、ハイパーリンクの終わりのすぐ後ろ（範囲の中）が非 ASCII の文字のときだけ（URL の直後に空白なしで続いた和文の注記。
+    link_iri の直し方の形）。後ろが ASCII の文字なら縮めない（自動書式で URL の途中〈「…/wiki/Foo_」まで〉にだけ付いたハイパー
+    リンクで、「(bar)」などの URL の残りを外さない。点検 review20 の 2 回目）。"""
+    for ws, we in word_spans:
+        if ws <= s < we:
+            return we if we < e and not plain[we].isascii() else e
+    return e
+
+
+class MachineLink(NamedTuple):
+    """urls() が作る機械的なリンク 1 つ: リンクの範囲 [s, e)・リンクの先と種類（spec）・Word のリンクと範囲を比べるときの始まり
+    （outer。「doi:」の接頭辞・doi.org の URL の「https://doi.org/」は、リンクの文字に入らない〈pub-id の文字は DOI の部分だけ〉が、
+    表示される文字の一部なので、そこから比べる）・数える種類（count）・判断の一覧に書く知らせ（note。なければ None）。"""
+    s: int
+    e: int
+    spec: LinkSpec
+    outer: int
+    count: str
+    note: object
+
+
+def _machine_links(plain: str, where: str, ref_doi: str, word_spans=()) -> list:
+    """段落の文字 plain の中の URL・DOI から、urls() が作るリンクの候補を、付ける順に求める（副作用なし）。
+
+    順は DOI（doi: 付き）→ URL → 裸の DOI（引用文献の中だけ）。すでに付いたリンクや、候補どうしの重なりで付かないものは、
+    候補に入っている（付けるときの apply_span が判断する。_same_as_text は同じ重なりの規則で絞る）。"""
+    kind = "ext-link" if where in ("fn", "back") else "uri"
+    out = []
+    for m in RE_DOI_PREFIXED.finditer(plain):
+        s, e = m.start(1), m.end(1)
+        doi = _trim(plain[s:_shrink_end(plain, word_spans, s, e)])
+        out.append(MachineLink(s, s + len(doi), _doi_spec(doi, kind, where, ref_doi), m.start(), "doi", None))
+    for m in RE_URL.finditer(plain):
+        s = m.start()
+        url = _trim(plain[s:_shrink_end(plain, word_spans, s, m.end())])
+        e = s + len(url)
+        href = url if re.match(r"https?://", url, re.I) else "http://" + url
+        dm = re.match(r"https?://(?:dx\.)?doi\.org/(10\.\d{4,9}/\S+)", url, re.I)
+        if dm and where == "ref" and ref_doi == "pub-id":
+            out.append(MachineLink(s + dm.start(1), e, LinkSpec(kind="pub-id", attrs={"pub-id-type": "doi", "href": url}), s, "doi", None))
+            continue
+        note = None if url.lower().startswith("http") else f"「{url}」に http:// を補ってリンク先とした"
+        out.append(MachineLink(s, e, LinkSpec(kind=kind, attrs={"href": href}), s, "doi" if dm else "url", note))
+    if where == "ref":
+        for m in RE_DOI_BARE.finditer(plain):
+            s = m.start(1)
+            doi = _trim(plain[s:_shrink_end(plain, word_spans, s, m.end(1))])
+            out.append(MachineLink(s, s + len(doi), _doi_spec(doi, "uri", where, ref_doi), s, "doi", None))
+    return out
+
+
 RE_URL_PARTS = re.compile(r"([A-Za-z][A-Za-z0-9+.\-]*://)([^/?#]*)(.*)\Z", re.S)
 
 
@@ -795,40 +821,63 @@ def _url_key(u: str):
 
 
 RE_DOI_HREF = re.compile(r"https?://(?:dx\.)?doi\.org/(10\.\d{4,9}/\S+)$", re.I)
+# Word のリンクの範囲と機械的なリンクの範囲の差（前後）に許す文字（DOI のとき）: 空白・かっこ・文の句読点だけ。URL のときは空白だけ
+SAME_EDGE = " \u3000.,;:!?。、，．)]）」』>([（「『［〔〕"
 
 
-def _dois_of_text(text: str) -> list:
-    """表示されている文字から、機械的に作るリンクの DOI を、urls() と同じ規則・同じ正規表現で取り出す（末尾の「/」は除く）。
-
-    範囲は _trim で決める（後ろの句点・閉じかっこは範囲に入れない）。doi.org の URL は RE_URL で見つける。スキームのない
-    「doi.org/10.…」は、urls() が URL にも DOI にもしないので取り出さない（同じとみなすと、Word のリンクを捨てたうえに
-    リンクが 1 つも付かなくなる。_same_as_text が真なのは、機械的に作るリンクが同じ先になるときだけ）。"""
-    found = []
-    for m in RE_URL.finditer(text):
-        dm = re.match(r"https?://(?:dx\.)?doi\.org/(10\.\d{4,9}/\S+)", _trim(m.group()), re.I)
-        if dm:
-            found.append(dm.group(1))
-    found += [m.group(1) for m in RE_DOI_PREFIXED.finditer(text)]
-    found += [m.group(1) for m in RE_DOI_BARE.finditer(text)]
-    return [_trim(d).rstrip("/").lower() for d in found]
-
-
-def _same_as_text(href: str, text: str) -> bool:
-    """ハイパーリンクの href が、表示されている文字から機械的に作るリンクと同じ先を指すか。
-
-    スキームとホストだけ大文字・小文字を区別せずに比べ、パス・クエリ・フラグメントは完全一致で比べる（R8）。末尾の「/」は除く。
-    DOI の href は、表示されている文字から取り出した DOI がすべて href の DOI と完全に一致するとき（大文字・小文字と末尾の「/」は
-    除く）だけ同じとみなす。部分一致では見ない（S7。DOI が違えば、Word のリンク先を残す）。DOI が 1 つもない文字は同じとみなさない。
-    """
-    h, t = href.strip().rstrip("/"), text.strip().rstrip("/")
-    if _url_key(h) == _url_key(t):
-        return True
+def _target_key(href: str):
+    """リンク先を比べる形にする。doi.org の DOI は DOI の大文字・小文字だけ区別せず（末尾の「/」は区別する。別の DOI）、
+    ほかの URL は _url_key（末尾の「/」は除く）。dx.doi.org と doi.org は同じ。"""
+    h = href.strip()
     m = RE_DOI_HREF.match(h)
-    if not m:
+    if m:
+        return ("doi", m.group(1).lower())
+    return _url_key(h.rstrip("/"))
+
+
+def _same_as_text(href: str, text: str, plain: str = None, span: tuple = None, where: str = "ref", ref_doi: str = "pub-id",
+                  word_spans=(), blocked=()) -> bool:
+    """ハイパーリンクの href を捨てて、表示されている文字から機械的に作るリンク（urls）に任せてよいか。
+
+    機械的に作るリンクを _machine_links で実際に求め、Word のリンクと比べる。Word のリンクの範囲（段落の文字 plain の中の
+    span = (始め, 終わり)。省略すると text だけの段落）と重なる機械的なリンクがちょうど 1 つで、その始まりが Word の範囲の内側
+    （前の差が空白だけ。DOI は SAME_EDGE の句読点・かっこも）のとき、次のどちらかなら真（Word のリンク先を捨てる）。
+    (A) 機械的なリンクの終わりも Word の範囲の内側（差は空白だけ。DOI は SAME_EDGE の句読点・かっこも）で、先が href と同じ（_target_key）。
+    (B) 機械的なリンクが Word の範囲の終わりより後ろへ伸び、Word のリンクの文字そのものから作る先が href と同じ。URL・DOI の途中
+        までの文字にそのままリンクが付いただけ（自動書式など。「…/wiki/Foo_」だけがリンクで、後ろに「(bar)」が続く形）なので、URL・DOI
+        全体をリンクにする。リンクのない文字だけの URL でも urls() は後ろの ASCII まで伸ばすので、Word のリンクがあるときだけ短くしない
+        （以前の決定。点検 review20 の 2 回目、0.36.0。0.35.0 までと同じ）。href が Word のリンクの文字と違う先のとき（Word で別の
+        先を設定してある）は (B) にしない。
+    先の比べ方は、DOI は大文字・小文字だけ区別せず（末尾の「/」は区別する。別の DOI）、URL は _url_key（末尾の「/」は除く）。
+    表示文字に URL が 2 つある（機械的なリンクが 2 つ以上できる）・表示文字の中の別の URL が先に付く（「https://example.com/?doi=…」）・
+    スキームのない「doi.org/…」・mailto: など機械的にリンクにならない文字・DOI の末尾の「/」の違いは、偽（Word のリンク先を残す）。
+    すでにリンクの付いた範囲 blocked と、すでに捨てた Word のリンクの範囲 word_spans は、urls() と同じように扱う。"""
+    if plain is None:
+        plain, span = text, (0, len(text))
+    ws, we = span
+    taken, hits = list(blocked), []
+    for c in _machine_links(plain, where, ref_doi, list(word_spans) + [(ws, we)]):
+        if c.e <= c.s or OBJ in plain[c.s:c.e] or any(c.s < y and x < c.e for x, y in taken):
+            continue                                    # apply_span が付けない（重なり・数式・画像）
+        taken.append((c.s, c.e))
+        if c.s < we and c.e > ws:
+            hits.append(c)
+    if len(hits) != 1:
         return False
-    want = m.group(1).rstrip("/").lower()
-    found = _dois_of_text(text.strip())
-    return bool(found) and all(d == want for d in found)
+    c = hits[0]
+    key = _target_key(c.spec.attrs["href"])
+    edge = SAME_EDGE if key[0] == "doi" else " \u3000"      # URL は空白だけ（前後の句読点まで Word のリンクだったときは、Word のリンクを残す）
+    if c.outer < ws or any(ch not in edge for ch in plain[ws:c.outer]):
+        return False
+    if c.e <= we:                                       # (A)
+        return all(ch in edge for ch in plain[c.e:we]) and key == _target_key(href)
+    if c.outer >= we:
+        return False
+    cut = plain[c.outer:we].strip()                     # (B): Word のリンクの文字そのものから作る先
+    key = _target_key(cut)
+    if key[0] != "doi" and _target_key(c.spec.attrs["href"])[0] == "doi" and plain[c.s:c.s + 3] == "10.":
+        key = ("doi", plain[c.s:we].strip().lower())    # 「doi:」付き・裸の DOI の途中まで
+    return key == _target_key(href)
 
 
 def _trim(url: str) -> str:
