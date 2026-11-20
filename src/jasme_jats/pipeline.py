@@ -175,6 +175,44 @@ def _located(plan, src) -> str:
     return src
 
 
+def _ai_link_range(plan, src, did):
+    """AI が採用したリンク（判断 did）が付いた、段落 src の文字の範囲（Para.plain() の中。なければ None）。"""
+    from .linker import atom_offsets
+    p = plan.paras.get(src)
+    if p is None:
+        return None
+    spans = [(a0, a1) for a, (a0, a1) in zip(p.atoms, atom_offsets(p))
+             if a.link is not None and getattr(a.link, "decision_id", None) == did]
+    return (min(s for s, _ in spans), max(e for _, e in spans)) if spans else None
+
+
+def _ai_resolved(plan, outcome, u) -> bool:
+    """機械がリンクできなかった参照 u（linker.Unresolved）を、AI のリンク（outcome.accepted の link_*）がその箇所で解決したか。
+
+    同じ段落で、リンクの種類が合い（文献の未解決には文献へのリンク。注・図・表へのリンクでは除かない）、AI のリンクが付いた文字の範囲が
+    未解決の範囲（start〜end）と重なるものだけを解決とする。同じ段落の別の位置の同じ文字へのリンクでは除かない。
+    範囲を取れないときだけ、AI の指定の文字が未解決の文字（NFKC）か年に当たるかで決める。同じ番号の文献が複数あって結ばなかった
+    番号（ref_kind が ambiguous）は、位置で確かめられないときは解決とみなさない。"""
+    import unicodedata
+    from .ai_assist import REF_TYPE
+    raw = unicodedata.normalize("NFKC", u.text)
+    year = unicodedata.normalize("NFKC", u.year) if u.year is not None else None
+    for op, d in outcome.accepted:
+        if op["op"] not in REF_TYPE or op["src"] != u.src or REF_TYPE[op["op"]] != u.kind:
+            continue
+        rng = _ai_link_range(plan, u.src, getattr(d, "did", None))
+        if rng is not None and 0 <= u.start < u.end:
+            if rng[0] < u.end and u.start < rng[1]:
+                return True
+            continue
+        if u.ref_kind == "ambiguous":
+            continue
+        t = unicodedata.normalize("NFKC", op["text"])
+        if t == year or (t and t in raw):
+            return True
+    return False
+
+
 @dataclass
 class Options:
     out_dir: Path
@@ -1004,16 +1042,7 @@ def convert(docx_path, meta: ArticleMeta, journal: JournalConfig, opts: Options)
     flat_xml.write_bytes(xml_bytes)
 
     # AI が解決した箇所は「未解決」から除く
-    import unicodedata
-    ai_links = [(op["src"], unicodedata.normalize("NFKC", op["text"])) for op, _ in outcome.accepted
-                if op["op"].startswith("link_")]
-    unresolved_after = []
-    for u in linker.unresolved:
-        src, raw = u.src, unicodedata.normalize("NFKC", u.text)
-        year = unicodedata.normalize("NFKC", u.year) if u.year is not None else None
-        if any(s == src and (t == year or (t and t in raw)) for s, t in ai_links):
-            continue
-        unresolved_after.append(u)
+    unresolved_after = [u for u in linker.unresolved if not _ai_resolved(plan, outcome, u)]
     # AI に位置を聞いたが、答えを採用しなかった図表（結び付いた段落のすぐ後ろか、本文の最後に置いている。決定事項 21・修正計画 W8 の 4.3）。
     # 3 章の「理由」には置いた位置と理由だけを書く（AI を勧める文は推奨の手順 ai_finish の 1 か所。手作業で XML の中で移させない）
     pending_ai = opts.ai_mode == "manual" and data is None and not outcome.error   # 手動モードで AI の回答を待っている
