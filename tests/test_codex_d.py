@@ -34,7 +34,8 @@ def test_bracket_partners_braces():
     assert _bracket_partners("{a)") == {}                                      # 種類の違うかっこは組にしない
     assert _bracket_partners("(a}") == {}
     assert _bracket_partners("[a}") == {}
-    assert _bracket_partners("{a(b})") == {2: 5, 5: 2}                        # 交差する「}」は組にならない
+    # 交差する形は、種類ごとに別々に組になる（S1 の直しで変更。片方を直さなければ、もう片方も直さない側に倒れる）
+    assert _bracket_partners("{a(b})") == {0: 4, 4: 0, 2: 5, 5: 2}
     assert _bracket_partners("a{b") == {} and _bracket_partners("a}b") == {}
 
 

@@ -4392,7 +4392,9 @@ def test_hold_rules():
              Fix("d1", text.index("2)") + 1, text.index("2)") + 2, "）", "width", ")")]
     assert held_reasons(fixes, {"d1": text}) == [ADJACENT_REASON, ADJACENT_REASON, CONTENT_REASON, ADJACENT_REASON, "", ""]
     from jasme_jats.pdfdocx import _bracket_partners
-    assert _bracket_partners("a(b［c)d］e)") == {1: 9, 9: 1, 3: 7, 7: 3}     # 組にならないかっこ（5 の「)」）は入れない
+    # 組は種類ごとに別々に作る（丸・角・波。外部レビュー 2 回目の S1。種類をまたいで交差しても、同じ種類の近い組を作る）。
+    # 組にならないかっこ（最後の「)」）は入れない。0.38.0 までは 1 つのスタックで、{1: 9, 9: 1, 3: 7, 7: 3}（5 の「)」を飛ばす）だった
+    assert _bracket_partners("a(b［c)d］e)") == {1: 5, 5: 1, 3: 7, 7: 3}
     assert _bracket_partners("(（1）)") == {0: 4, 4: 0, 1: 3, 3: 1}
     # (g) 止めた全角・半角の直しに、空白の削除が連動して止まる（片方向。spread_reasons）
     width = Fix("d1", 8, 9, "（", "width", "(")

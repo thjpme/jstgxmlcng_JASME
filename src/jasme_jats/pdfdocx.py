@@ -286,6 +286,8 @@ BRACKETS = {"(": "(", "（": "(", ")": ")", "）": ")", "[": "[", "［": "[", "]
             "{": "{", "｛": "{", "}": "}", "｝": "}"}
 # 組の種類 → 閉じるかっこ（種類で表した）。開くかっこの種類はこの表の鍵
 BRACKET_CLOSE = {"(": ")", "[": "]", "{": "}"}
+# 閉じるかっこ（種類で表した）→ 開くかっこの種類
+CLOSE_KIND = {v: k for k, v in BRACKET_CLOSE.items()}
 
 
 def hold(fixes, texts=None, spaced=None) -> None:
@@ -347,25 +349,20 @@ def _nospace(f: Fix, text, spaced) -> bool:
 
 
 def _bracket_partners(text: str) -> dict:
-    """段落の文字のかっこの組（全角・半角を問わない。入れ子は内側から）: 位置 → 組のもう片方の位置。組にならないかっこは入れない。
-    閉じるかっこが来て、一番上の開くかっこと種類が違うとき、その開くかっこの後ろ（この位置より後）に同じ種類の閉じるかっこがなければ、
-    それは閉じていない開くかっこなので捨てて（組にしない）、一つ下の開くかっこで続ける（「(整数 { の組)」の「(」「)」は組になる。S1）。
-    後ろにあれば交差なので、この閉じるかっこを組にしない（「{a(b})」の「}」。「(」「)」だけが組）。開く側のない閉じるかっこも組にならない。"""
-    last = {}
-    for i, c in enumerate(text):
-        k = BRACKETS.get(c)
-        if k and k not in BRACKET_CLOSE:
-            last[k] = i
-    out, stack = {}, []
+    """段落の文字のかっこの組（全角・半角を問わない）: 位置 → 組のもう片方の位置。組は丸・角・波かっこの種類ごとに別々に作る
+    （種類ごとに自分のスタック。ほかの種類のかっこは見ない）: 開くかっこを積み、同じ種類の閉じるかっこが来たら一番上と組にする
+    （入れ子は内側から）。積まれていないときの閉じるかっこ（「1)」など）と、最後まで残った開くかっこは組にならない。
+    種類をまたいで交差する形（「(a{b)c}」）は、両方の種類がそれぞれ組になる（片方を直さなければ、もう片方も直さない側に倒れる。S1）。"""
+    out = {}
+    stacks = {k: [] for k in BRACKET_CLOSE}
     for i, c in enumerate(text):
         k = BRACKETS.get(c)
         if k in BRACKET_CLOSE:
-            stack.append((i, k))
+            stacks[k].append(i)
         elif k:
-            while stack and BRACKET_CLOSE[stack[-1][1]] != k and last.get(BRACKET_CLOSE[stack[-1][1]], -1) < i:
-                stack.pop()
-            if stack and BRACKET_CLOSE[stack[-1][1]] == k:
-                o, _ = stack.pop()
+            st = stacks[CLOSE_KIND[k]]
+            if st:
+                o = st.pop()
                 out[o], out[i] = i, o
     return out
 
