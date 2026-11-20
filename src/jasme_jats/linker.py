@@ -821,8 +821,6 @@ def _url_key(u: str):
 
 
 RE_DOI_HREF = re.compile(r"https?://(?:dx\.)?doi\.org/(10\.\d{4,9}/\S+)$", re.I)
-# Word のリンクの範囲と機械的なリンクの範囲の差（前後）に許す文字（DOI のとき）: 空白・かっこ・文の句読点だけ。URL のときは空白だけ
-SAME_EDGE = " \u3000.,;:!?。、，．)]）」』>([（「『［〔〕"
 
 
 def _target_key(href: str):
@@ -835,23 +833,41 @@ def _target_key(href: str):
     return _url_key(h.rstrip("/"))
 
 
+def _looks_same(href: str, text: str) -> bool:
+    """ハイパーリンクの href が、リンクの文字 text と同じ先に見えるか（0.37.0 までの判定。R8 でパス・クエリの大文字・小文字の区別を足した）。
+    href と文字が同じ URL（スキームとホストは大文字・小文字を区別しない。末尾の「/」は除く）か、href が doi.org の DOI で、その DOI が
+    文字の中にある（大文字・小文字を区別しない）。_same_as_text は、これが真のものの中から、置き換えると先・リンクが変わるものを外す。"""
+    h, t = href.strip(), text.strip()
+    if _url_key(h.rstrip("/")) == _url_key(t.rstrip("/")):
+        return True
+    m = RE_DOI_HREF.match(h)
+    return bool(m) and m.group(1).lower() in t.lower()
+
+
 def _same_as_text(href: str, text: str, plain: str = None, span: tuple = None, where: str = "ref", ref_doi: str = "pub-id",
                   word_spans=(), blocked=()) -> bool:
     """ハイパーリンクの href を捨てて、表示されている文字から機械的に作るリンク（urls）に任せてよいか。
 
-    機械的に作るリンクを _machine_links で実際に求め、Word のリンクと比べる。Word のリンクの範囲（段落の文字 plain の中の
-    span = (始め, 終わり)。省略すると text だけの段落）と重なる機械的なリンクがちょうど 1 つで、その始まりが Word の範囲の内側
-    （前の差が空白だけ。DOI は SAME_EDGE の句読点・かっこも）のとき、次のどちらかなら真（Word のリンク先を捨てる）。
-    (A) 機械的なリンクの終わりも Word の範囲の内側（差は空白だけ。DOI は SAME_EDGE の句読点・かっこも）で、先が href と同じ（_target_key）。
-    (B) 機械的なリンクが Word の範囲の終わりより後ろへ伸び、Word のリンクの文字そのものから作る先が href と同じ。URL・DOI の途中
-        までの文字にそのままリンクが付いただけ（自動書式など。「…/wiki/Foo_」だけがリンクで、後ろに「(bar)」が続く形）なので、URL・DOI
-        全体をリンクにする。リンクのない文字だけの URL でも urls() は後ろの ASCII まで伸ばすので、Word のリンクがあるときだけ短くしない
-        （以前の決定。点検 review20 の 2 回目、0.36.0。0.35.0 までと同じ）。href が Word のリンクの文字と違う先のとき（Word で別の
-        先を設定してある）は (B) にしない。
+    0.37.0 までの判定（_looks_same: href がリンクの文字と同じ先に見える）が真のものを基準にし、その中から、置き換えると
+    リンクの先が変わる・リンクがなくなるものだけを外す（0.37.0 で機械的なリンク〈DOI は pub-id〉になっていた形を、Word のリンクの
+    まま残す形に変えない。偽にするのは、置き換えが誤りになるときだけ）。機械的に作るリンクは _machine_links で実際に求める。
+    Word のリンクの範囲（段落の文字 plain の中の span = (始め, 終わり)。省略すると text だけの段落）と重なる機械的なリンクが
+    ちょうど 1 つで、そのリンクにする文字の始まりが Word の範囲の中にあるとき、次のどちらかなら真（Word のリンク先を捨てる）。
+    (A) 機械的なリンクの終わりが Word の範囲の中で、先が href と同じ（_target_key）。「doi:」「https://doi.org/」が Word のリンクの
+        外にあり、DOI の番号だけにリンクが付いた形・リンクの文字が「DOI: https://doi.org/…」のようにラベルを含む形も、ここに入る
+        （pub-id になるのは DOI の番号の文字。0.37.0 と同じ）。
+    (B) Word のリンクの文字そのものから作る先が href と同じ（文字にそのままリンクが付いただけ。自動書式など）。このときは、機械的な
+        読み方に任せる（0.37.0 までと同じ）: URL・DOI の途中までの文字に付いたリンク（「…/wiki/Foo_」だけがリンクで、後ろに「(bar)」が
+        続く形）は、URL・DOI 全体をリンクにする（リンクのない文字だけの URL でも urls() は後ろの ASCII まで伸ばすので、Word のリンクが
+        あるときだけ短くしない。以前の決定。点検 review20 の 2 回目、0.36.0）。文末の句点までリンクになった形（「…/a.」）は、
+        句点を除いた URL をリンクにする（_trim）。
     先の比べ方は、DOI は大文字・小文字だけ区別せず（末尾の「/」は区別する。別の DOI）、URL は _url_key（末尾の「/」は除く）。
-    表示文字に URL が 2 つある（機械的なリンクが 2 つ以上できる）・表示文字の中の別の URL が先に付く（「https://example.com/?doi=…」）・
-    スキームのない「doi.org/…」・mailto: など機械的にリンクにならない文字・DOI の末尾の「/」の違いは、偽（Word のリンク先を残す）。
+    偽（Word のリンク先を残す）にするのは: 表示文字に URL・DOI が 2 つある（機械的なリンクが 2 つ以上できる）、表示文字の中の別の URL が
+    先に付く（「https://example.com/?doi=…」）、スキームのない「doi.org/…」・mailto: など機械的にリンクにならない文字、DOI の末尾の
+    「/」の違い、表示文字の DOI が href の DOI を含むだけで別の DOI（「…/ABCD」と「…/ABC」）。
     すでにリンクの付いた範囲 blocked と、すでに捨てた Word のリンクの範囲 word_spans は、urls() と同じように扱う。"""
+    if not _looks_same(href, text):
+        return False
     if plain is None:
         plain, span = text, (0, len(text))
     ws, we = span
@@ -865,19 +881,16 @@ def _same_as_text(href: str, text: str, plain: str = None, span: tuple = None, w
     if len(hits) != 1:
         return False
     c = hits[0]
-    key = _target_key(c.spec.attrs["href"])
-    edge = SAME_EDGE if key[0] == "doi" else " \u3000"      # URL は空白だけ（前後の句読点まで Word のリンクだったときは、Word のリンクを残す）
-    if c.outer < ws or any(ch not in edge for ch in plain[ws:c.outer]):
+    if c.s < ws:                                        # リンクにする文字が Word の範囲の前から始まる（Word のリンクより広い）
         return False
-    if c.e <= we:                                       # (A)
-        return all(ch in edge for ch in plain[c.e:we]) and key == _target_key(href)
-    if c.outer >= we:
-        return False
-    cut = plain[c.outer:we].strip()                     # (B): Word のリンクの文字そのものから作る先
-    key = _target_key(cut)
-    if key[0] != "doi" and _target_key(c.spec.attrs["href"])[0] == "doi" and plain[c.s:c.s + 3] == "10.":
-        key = ("doi", plain[c.s:we].strip().lower())    # 「doi:」付き・裸の DOI の途中まで
-    return key == _target_key(href)
+    made, want = _target_key(c.spec.attrs["href"]), _target_key(href)
+    # Word のリンクの文字そのもの（外の接頭辞「doi:」などを含む）から作る先
+    literal = _target_key(plain[c.outer:we].strip())
+    if literal[0] != "doi" and made[0] == "doi" and plain[c.s:c.s + 3] == "10.":
+        literal = ("doi", plain[c.s:we].strip().lower())    # 「doi:」付き・裸の DOI
+    if literal == want:                                 # (B): 文字にそのまま付いただけのリンク。機械的な読み方に任せる
+        return True
+    return c.e <= we and made == want                   # (A)
 
 
 def _trim(url: str) -> str:

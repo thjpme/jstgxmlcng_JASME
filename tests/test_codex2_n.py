@@ -185,3 +185,40 @@ def test_dropped_word_link_is_rebuilt_over_the_same_text_with_the_same_target(me
             else:
                 assert x.strip(EDGE) == core or (suffix and x.startswith(shown.strip())), (shown, suffix, href, links)   # (B) は後ろまで伸びる
         assert all(x in shown + suffix for _, _, x in links), links      # リンクの文字が Word のリンクの外へ広がらない
+
+
+# ----------------------------------------------------------------------------- 再点検: 0.37.0 で pub-id だった形を uri に変えない
+def _doi_ref_article(tmp_path, name, before, shown, target, after):
+    """引用文献の 1 件の中に、普通の文字 before・Word のリンク（表示文字 shown・リンク先 target）・普通の文字 after が並ぶ架空の論文。"""
+    def refs(b):
+        rid = b.add_hyperlink(target)
+        return [mf.para(S["ref"], "架空太郎（2024）．架空の資料．" + before,
+                        f'<w:hyperlink r:id="{rid}">{mf.run(shown, u=True)}</w:hyperlink>', mf.run(after) if after else "")]
+
+    def parts(b):
+        return [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], "架空の本文である。")]
+    path = tmp_path / f"{name}.docx"
+    mf.make_article(path, "リンクの検証用文書", parts, refs=refs)
+    return path
+
+
+@pytest.mark.parametrize("before,shown,target,after", [
+    ("doi:", "10.1000/abc", "https://doi.org/10.1000/abc", ""),              # 「doi:」は普通の文字で、番号だけがリンク
+    ("DOI: ", "10.1000/abc", "https://doi.org/10.1000/abc", "."),
+    ("doi：", "10.1000/abc", "https://dx.doi.org/10.1000/abc", "．"),
+    ("https://doi.org/", "10.1000/abc", "https://doi.org/10.1000/abc", ""),  # 「https://doi.org/」は普通の文字で、番号だけがリンク
+    ("", "DOI: https://doi.org/10.1000/abc", "https://doi.org/10.1000/abc", ""),     # リンクの文字がラベルまで含む
+    ("", "doi: https://doi.org/10.1000/ABC", "https://doi.org/10.1000/abc", "．"),
+    ("", "doi:10.1000/abc", "https://doi.org/10.1000/abc", ""),
+    ("", "(https://doi.org/10.1000/abc)", "https://doi.org/10.1000/abc", ""),
+])
+def test_doi_word_link_on_the_number_still_becomes_pub_id(before, shown, target, after, meta, journal, tmp_path):
+    """再点検で見つかった回帰: DOI の番号の部分だけに Word のリンクが付いた形（「doi:」「https://doi.org/」はリンクの外）と、リンクの
+    文字がラベルまで含む形は、0.37.0・0.38.0 と同じく pub-id（文字は DOI の番号）になる（Word のリンクの uri のまま残さない。
+    word_hyperlinks の「ハイパーリンクの有無で文献ごとに形が変わらないよう、DOI は一律に pub-id」）。"""
+    path = _doi_ref_article(tmp_path, "pid", before, shown, target, after)
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / "pid"))
+    links = _links(res)
+    assert [(t, x.lower()) for t, _h, x in links if t == "pub-id"] == [("pub-id", "10.1000/abc")], links
+    assert not [x for x in links if x[0] in ("uri", "ext-link")], links
+    assert res.fidelity.ok and res.dtd_valid
