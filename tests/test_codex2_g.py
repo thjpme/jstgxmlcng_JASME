@@ -24,10 +24,25 @@ def test_unclosed_with_other_pair_later():
 
 
 def test_crossing_pairs_per_kind():
-    """(b) 種類をまたぐ交差は、それぞれの種類で組になる。"""
+    """(b) 波かっこは、丸・角かっことは別に組にする（丸・角かっこの組を 0.37.0 から変えない）。波かっこと交差しても、それぞれ組になる。
+    丸かっこと角かっこは 1 つのスタック（0.37.0 と同じ）: 後ろで閉じられる角かっこの中の「)」は組にしない。"""
     assert _bracket_partners("(a{b)c}") == {0: 4, 4: 0, 2: 6, 6: 2}
     assert _bracket_partners("{a(b}c)") == {0: 4, 4: 0, 2: 6, 6: 2}
-    assert _bracket_partners("(a［b)c］") == {0: 4, 4: 0, 2: 6, 6: 2}
+    assert _bracket_partners("(a［b)c］") == {2: 6, 6: 2}                         # 0.37.0 と同じ（「(」は組にならない）
+    assert _bracket_partners("a(b［c)d］e)") == {1: 9, 9: 1, 3: 7, 7: 3}          # 0.37.0 と同じ（5 の「)」を飛ばす）
+
+
+def test_list_marks_inside_square_brackets_do_not_take_the_outer_paren():
+    """再点検で見つかった回帰: 角かっこの中の「1)」「2)」（開く側のない閉じるかっこ）は、外側の「(」と組にしない
+    （種類ごとに別々に組を作ると、「(」が「1)」と組になり、最後の「)」が組にならず片方だけ直る。0.37.0 は外側どうしが組）。"""
+    t = "集合(例 [1) a, 2) b])を考える。"
+    assert _bracket_partners(t) == {2: 17, 17: 2, 5: 16, 16: 5}
+    t = "集合(例 ［a) b］)を考える。"
+    assert _bracket_partners(t) == {2: 11, 11: 2, 5: 10, 10: 5}
+    # 閉じていない「[」（後ろの「]」は 2 つ目の「[」のもの）は捨てて、外側の「(」「)」を組にする
+    assert _bracket_partners("(例 [ 1, 2 ) と [ 3 ]") == {0: 10, 10: 0, 14: 18, 18: 14}
+    # 同じ種類の中の開く側のない閉じるかっこは見分けられない（0.37.0 から同じ。「(」は最初の「)」と組）
+    assert _bracket_partners("集合(例 1) a, 2) b)を考える。") == {2: 6, 6: 2}
 
 
 def test_closers_without_opener_do_not_pair():
@@ -120,3 +135,23 @@ def test_route2_crossing_old_hole_held(journal, meta, tmp_path, monkeypatch):
     out = para_text(source_texts(res.docx_fix.path), "集合")
     assert res.fidelity.ok and res.fidelity.final_ok and res.supplement.ok
     assert "{" in out and "}" in out and "｛" not in out and "｝" not in out
+
+
+def test_route2_list_marks_in_square_brackets_both_fixed(journal, meta, tmp_path, monkeypatch):
+    """再点検の回帰: 「(例 [1) a, 2) b])」→ PDF「（例 [1) a, 2) b]）」は、外側の「(」「)」が両方直る（0.37.0 と同じ。
+    「(例 [1) a, 2) b]）」のような、docx にも PDF にもない形にしない）。"""
+    for i, (docx, pdf) in enumerate((("集合(例 [1) a, 2) b])を考える。", "集合（例 [1) a, 2) b]）を考える。"),
+                                     ("集合(例 ［a) b］)を考える。", "集合（例 ［a) b］）を考える。"))):
+        sub = tmp_path / f"m{i}"
+        sub.mkdir()
+        res = _convert(sub, monkeypatch, journal, meta, [docx], pdf)
+        assert res.fidelity.ok and res.fidelity.final_ok and res.supplement.ok
+        assert para_text(source_texts(res.docx_fix.path), "集合") == pdf
+        assert pdf in texts(load(res))
+
+
+def test_route2_list_marks_in_square_brackets_held_together(journal, meta, tmp_path, monkeypatch):
+    """同じ形で外側の「(」が直せないときは、最後の「)」も直さない（列挙の「1)」「2)」は PDF と同じ半角なので直す所がない）。"""
+    res = _convert(tmp_path, monkeypatch, journal, meta, ["集合", _ins("("), "例 [1) a, 2) b])を考える。"],
+                   "集合（例 [1) a, 2) b]）を考える。")
+    _held_ok(res, "集合", "集合(例 [1) a, 2) b])を考える。")

@@ -349,22 +349,43 @@ def _nospace(f: Fix, text, spaced) -> bool:
 
 
 def _bracket_partners(text: str) -> dict:
-    """段落の文字のかっこの組（全角・半角を問わない）: 位置 → 組のもう片方の位置。組は丸・角・波かっこの種類ごとに別々に作る
-    （種類ごとに自分のスタック。ほかの種類のかっこは見ない）: 開くかっこを積み、同じ種類の閉じるかっこが来たら一番上と組にする
-    （入れ子は内側から）。積まれていないときの閉じるかっこ（「1)」など）と、最後まで残った開くかっこは組にならない。
-    種類をまたいで交差する形（「(a{b)c}」）は、両方の種類がそれぞれ組になる（片方を直さなければ、もう片方も直さない側に倒れる。S1）。"""
+    """段落の文字のかっこの組（全角・半角を問わない。入れ子は内側から）: 位置 → 組のもう片方の位置。組にならないかっこは入れない。
+
+    丸かっこと角かっこは 1 つのスタックで組にする（0.37.0 と同じ）: 閉じるかっこが来て、一番上の開くかっこと種類が違うときは、
+    その閉じるかっこを組にしない（「(例 [1) a, 2) b])」の「1)」「2)」のような、開く側のない閉じるかっこ。外側の「(」は最後の「)」と
+    組になる）。ただし、一番上の開くかっこが後ろで閉じられないもの（_closes_later が偽。「(例 [ 1, 2 ) と [ 3 ]」の最初の「[」）なら、
+    閉じていない開くかっことして捨てて、一つ下で続ける（外側の「(」「)」が組になる。外部レビュー 2 回目の S1）。
+    波かっこは、波かっこだけの別のスタックで組にする（丸・角かっこの組には関わらない。0.37.0 は波かっこを組にしなかったので、
+    丸・角かっこの組を 0.37.0 から変えない。「(整数 { の組)」「(a{b)c}」の「(」「)」は組のまま）。
+    同じ種類のかっこの中の、開く側のない閉じるかっこ（「(例 1) a, 2) b)」）は見分けられない（「(」は最初の「)」と組になる。0.37.0 から同じ）。"""
+    kinds = [BRACKETS.get(c) for c in text]
     out = {}
-    stacks = {k: [] for k in BRACKET_CLOSE}
-    for i, c in enumerate(text):
-        k = BRACKETS.get(c)
-        if k in BRACKET_CLOSE:
-            stacks[k].append(i)
-        elif k:
-            st = stacks[CLOSE_KIND[k]]
-            if st:
-                o = st.pop()
-                out[o], out[i] = i, o
+    for group in (("(", "["), ("{",)):
+        stack = []
+        for i, k in enumerate(kinds):
+            if k in group:
+                stack.append((i, k))
+            elif CLOSE_KIND.get(k) in group:
+                while stack and BRACKET_CLOSE[stack[-1][1]] != k and not _closes_later(kinds, i + 1, stack[-1][1]):
+                    stack.pop()
+                if stack and BRACKET_CLOSE[stack[-1][1]] == k:
+                    o, _ = stack.pop()
+                    out[o], out[i] = i, o
     return out
+
+
+def _closes_later(kinds, start: int, kind: str) -> bool:
+    """種類 kind の開くかっこが 1 つ開いているとして、位置 start から後ろに、それを閉じる閉じるかっこがあるか（後ろで開く同じ種類の
+    開くかっこは、それ自身の閉じるかっこを先に使う。「{ 1, 2 ) と { 3 }」の最初の「{」は、後ろの「}」が 2 つ目の「{」のものなので偽）。"""
+    depth = 1
+    for k in kinds[start:]:
+        if k == kind:
+            depth += 1
+        elif k == BRACKET_CLOSE[kind]:
+            depth -= 1
+            if depth == 0:
+                return True
+    return False
 
 
 FULL_BRACKETS = frozenset("（）［］｛｝")
