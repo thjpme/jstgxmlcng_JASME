@@ -65,6 +65,9 @@ LABELS = {"docx": "docx", "pdf": "PDF", "volume": "巻", "issue": "号", "fpage"
 DOCXISH = (LABELS["docx"], LABELS["pdf"], LABELS["split_labels"])
 # 変換の結果を左右する入力（前回の変換と比べる）。AI の方法・モデルは次に変換するときに使う設定なので比べない（O3）
 COMPARED_INPUTS = tuple(n for n in INPUT_NAMES if n not in ("ai_mode", "model"))
+# そのうち NFKC にそろえてから比べる欄（config.ArticleMeta.from_dict が NFKC にして使う。巻・号・最初と最後のページ・日付・責任著者の番号。
+# corresp は builder が番号を整数にして使う）。それ以外は入力のまま XML に出るか選択肢なので、strip だけで比べる（R11）
+NFKC_INPUTS = ("volume", "issue", "fpage", "lpage", "received", "accepted", "approved", "pub_date", "epub_date", "corresp")
 
 
 class InputError(Exception):
@@ -203,9 +206,12 @@ class AppState:
             return ""
         b = read_biblio(path, JournalConfig.load())
         got = biblio_inputs(b)
+        amb = [LABELS[k] for k in ("received", "accepted") if k in b.ambiguous]
+        # 違う日付が複数あって採らなかった日付（R7）。欄は変えないので、PDF を見て入力するよう知らせる
+        amb_note = ("" if not amb else "・".join(amb) + "は、PDF の 1 ページ目に違う日付が複数あったので入れていません。PDF を見て入力してください。")
         if not got:
             return ("PDF から巻・号・ページを読めませんでした（1 ページ目に「数学教育学研究 第 n 巻 第 n 号 … pp.n〜n」のような誌名の行が"
-                    "見つかりません）。入力してください。")
+                    "見つかりません）。入力してください。" + amb_note)
         changed = []                # 入れてあった値と違う値に書き換えた欄（元の値を注記に添える）
         for k, v in got.items():
             old = str(self.inputs.get(k) or "").strip()
@@ -232,7 +238,7 @@ class AppState:
             src.append("投稿受付・採用決定の日付")
         return ("PDF から読んで入れました: " + "・".join(parts) + "（" + "と、".join(src) + "）。"
                 + ("入れてあった値を書き換えました（" + "・".join(changed) + "）。" if changed else "")
-                + "違っていれば欄を書き換えてください。査読の有無・原稿種別・発行日は PDF から読めないので入力してください。")
+                + "違っていれば欄を書き換えてください。査読の有無・原稿種別・発行日は PDF から読めないので入力してください。" + amb_note)
 
     def _article_meta(self) -> ArticleMeta:
         """入力から ArticleMeta を作る。誤りは InputError（ノートブックの手順 3 と同じ確かめ）。"""
@@ -271,7 +277,7 @@ class AppState:
     # 押すたびと「次の論文」で呼ばれ、触っただけで消すと取り返せないため。比べるのはファイルの中身（sha256）で、同じファイルの
     # 選び直しは変わっていない扱いにする。
     def fingerprint(self) -> dict:
-        """COMPARED_INPUTS の名前ごとに、前回の変換と比べる値。"""
+        """COMPARED_INPUTS の名前ごとに、前回の変換と比べる値。NFKC_INPUTS の欄だけ NFKC にそろえ、ほかは strip だけにする（R11）。"""
         out = {}
         f = self.inputs
         for name in COMPARED_INPUTS:
@@ -288,8 +294,10 @@ class AppState:
                 out[name] = bool(v)
             elif name in ("subject_other", "subject_other_en") and f["manuscript_type"] != OTHER_TYPE:
                 out[name] = ""
-            else:
+            elif name in NFKC_INPUTS:
                 out[name] = unicodedata.normalize("NFKC", str(v or "")).strip()
+            else:
+                out[name] = str(v or "").strip()
         return out
 
     def changed_inputs(self) -> list:

@@ -1252,7 +1252,7 @@ WHY_NO_SLOT = "同じキャプションの図が見つかりません（図が�
 WHY_NO_NOCAP = "同じ場所のキャプションのない画像が見つかりません（画像がなくなったのなら、何もしなくてかまいません）"
 WHY_NO_OPT = "同じ位置の、画像で補える文字（囲い文字など）が見つかりません（文字がなくなったのなら、何もしなくてかまいません）"
 WHY_WHERE = "画像のある場所の前の文章が変わっています"
-WHY_ARTICLE = "記事の巻・ページが変わった別の論文なので、前の画像は入れていません"
+WHY_ARTICLE = "記事の巻・号・ページが変わった別の論文なので、前の画像は入れていません"
 WHY_NO_BODY = "キャプションが番号だけなので、同じ図か確かめられません"
 WHY_SAME_CAPTION = "同じキャプションの図が 2 つ以上あり、どの図の画像か決められません"
 WHY_SIMILAR = "キャプションの似た図が 2 つ以上あり、どの図の画像か決められません"
@@ -1277,6 +1277,11 @@ def _where_key(plan, slot) -> str:
     owner = para if para is not None else heading
     text = owner.text_only().strip() if owner is not None else ""
     return _body_key_plain(text)[:CARRY_WHERE]
+
+
+def _issue_key(issue: str) -> str:
+    """持ち越しで別の論文を見分けるときの号の形: NFKC にして空白を除いたもの（ArticleMeta.from_dict を通らない入力の全角・半角も揃える）。"""
+    return _body_key_plain(issue)
 
 
 def _slot_layout(res: Result) -> tuple:
@@ -1327,47 +1332,66 @@ def kept_images(res: Result) -> dict:
             key=im.key, kind=slot.kind, source_name=im.source_name, data=data, caption=im.caption,
             body=caption_body(slot.caption) if slot.caption is not None else "",
             where=_where_key(res.plan, slot) if slot.kind == "nocap" else "", skipped=im.status == "skipped", article_id=aid,
-            layout=layout)
+            layout=layout, issue=_issue_key(res.meta.issue))
     return out
 
 
 def reapply_images(res: Result, kept: dict) -> list:
     """変換し直した結果 res に、前の画像（kept_images）を、同じ図だと確かめられたものだけ入れ直す（修正計画 W1 の 2.6）。戻り値: 入れ直した幹の一覧。
 
-    同じ記事（記事識別子が同じ）で、図・表は同じ幹・同じ種類の置き場所があり、キャプションの本体（番号を除いた文字）が同じとみなせる（割合 0.8 以上）
+    同じ記事（記事識別子〈巻・最初のページ〉と号が同じ。記事識別子に号は入らないので、号も比べる。号が空どうしは同じとみなす）で、図・表は同じ幹・同じ種類の置き場所があり、キャプションの本体（番号を除いた文字）が同じとみなせる（割合 0.8 以上）
     ときだけ入れる。次のときは入れない（別の図の画像を黙って入れないため）。
     - 前の本体が今の別の図の本体と完全に同じ（図が足されて番号がずれた形）。
     - 本体が空（キャプションが番号だけ）で、同じ図か確かめられない。
     - 本体が完全に同じでなく（割合 1 未満）、今の置き場所の本体と完全に同じ本体の、別の前の画像がある（図が消えて番号がずれた形）。
-    - 本体が完全に同じでも、同じ本体の前の画像か今の図が 2 つ以上あり、どれがどれか決められない。
+    - 本体が完全に同じでも、同じ本体の前の図か今の図が 2 つ以上あり、どれがどれか決められない。
     - 本体が完全に同じでなく、互いにいちばん近い組でない: 今の本体に、同じ種類のほかの前の本体（自分の幹に完全一致で入るものを除く）が
       この組の割合以上で近いか、前の本体に、同じ種類のほかの今の本体（同じく除く）がこの組の割合以上で近い（図が消えて次の図のキャプションも
       直した形・図が足されて直した形）。そのとき、ほかの幹の今の図と前の画像が互いにただ 1 つのいちばん近い組（割合 0.8 以上）なら、その幹を
       「今の…の画像と思われます」（DroppedImage.suggest）で示すだけで、入れない（番号のずれた図に黙って入れないため。完全に同じ本体の
       番号のずれと同じ扱い）。似た今の図があるのに、それがどの前の画像の図か決まらないときの理由は WHY_SIMILAR（「図がなくなった」と言わない）。
+    ここで比べる前の図（同じ本体の前の図・互いにいちばん近い組の相手）は、画像を入れた図だけでなく、前の置き場所すべて（KeptImage.layout）の
+    図・表（画像を入れていない図も、削除して番号を詰めた先の図のことがあるため。外部レビュー R2）。
     ただし、置き場所の並び全体（幹・種類・本体・場所。_slot_layout）が前と同じなら、置き場所は変わっていないので、上の 2 つ（本体が空・
     同じ本体が 2 つ以上）でも幹で入れ直す（AI の回答の反映や、図と関係のない所の直しで、同じキャプションの図の画像を毎回入れ直さないため）。
     並びが同じでも、docx の画像の中身（ImageSlot.covers の digest）が前と変わった置き場所は、通常の照合に回す（_same_layout）。
     キャプションのない画像は、同じ幹で、場所（前の文字のある段落の先頭 20 字）も同じときだけ。任意の画像は同じ幹なら入れる。入れなかった画像は
     res.images_dropped に、本体が少し変わった図に入れたものは res.images_changed（要確認 image_changed で確かめてもらう）に記録する。
-    「入れない」も同じ規則で持ち越す。
+    「入れない」も同じ規則で持ち越す。入れ直す画像がなくても、入れなかった画像があれば、図の確かめの一覧とレポートを書き直す。
     """
     import difflib
     import hashlib
     slots = {s.key: s for s in res.plan.slots}
     by_key = {i.key: i for i in res.images}
     aid = res.meta.article_id(res.journal)
+    issue = _issue_key(res.meta.issue)
     from .structure import caption_body
     bodies = {k: _body_key(caption_body(s.caption)) for k, s in slots.items() if s.caption is not None and s.kind in ("fig", "table")}
-    old_bodies = {k.key: _body_key(k.body) for k in kept.values() if k.kind in ("fig", "table") and k.article_id == aid}
+
+    def other_article(k):
+        """k が別の論文の画像なら、知らせに出す前の論文の識別子（同じ論文なら ""）。記事識別子が同じで号だけ違えば号を添える。"""
+        if k.article_id != aid:
+            return k.article_id
+        if _issue_key(k.issue) != issue:
+            return f"{k.article_id}・{k.issue}号" if k.issue else f"{k.article_id}・号なし"
+        return ""
+    # 前の図・表の本体は、前の置き場所すべて（画像を入れていない図も。layout はどの KeptImage も同じ）から作り、画像を入れた図の値で上書きする
+    ours = [k for k in kept.values() if not other_article(k)]
+    old_bodies, old_kinds = {}, {}
+    for t in (ours[0].layout if ours else ()):
+        if t[1] in ("fig", "table"):
+            old_bodies[t[0]], old_kinds[t[0]] = t[2], t[1]
+    for k in ours:
+        if k.kind in ("fig", "table"):
+            old_bodies[k.key], old_kinds[k.key] = _body_key(k.body), k.kind
     prepared, skip, dropped, changed = {}, [], [], []
     layout = _slot_layout(res) if kept else ()
-    # あいまい一致（割合 1 未満）は、互いにいちばん近い組だけにする。比べる相手から、自分の幹に完全一致で入る前の画像と、その今の図を除く
-    # （同じ本体の前の画像か今の図がほかにもあって決められないものは、入らないので除かない）
+    # あいまい一致（割合 1 未満）は、互いにいちばん近い組だけにする。比べる相手から、自分の幹の今の図と完全に同じ本体の前の図（画像を
+    # 入れていない図も）と、その今の図を除く（同じ本体の前の図か今の図がほかにもあって決められないものは、入らないので除かない）
     def _exact_alone(o):
-        b, kind = old_bodies[o], kept[o].kind
+        b, kind = old_bodies[o], old_kinds[o]
         return (bool(b) and o in slots and slots[o].kind == kind and bodies.get(o) == b
-                and not any(x != o and kept[x].kind == kind and v == b for x, v in old_bodies.items())
+                and not any(x != o and old_kinds[x] == kind and v == b for x, v in old_bodies.items())
                 and not any(x != o and slots[x].kind == kind and v == b for x, v in bodies.items()))
     fixed = {o for o in old_bodies if _exact_alone(o)}
     ratios = {}
@@ -1388,12 +1412,12 @@ def reapply_images(res: Result, kept: dict) -> list:
         return [n for n, b in bodies.items() if b and n not in fixed and slots[n].kind == kind]
 
     def olds(kind):
-        return [o for o, b in old_bodies.items() if b and o not in fixed and kept[o].kind == kind]
+        return [o for o, b in old_bodies.items() if b and o not in fixed and old_kinds[o] == kind]
 
     def best_now(o):            # 前の画像 o にいちばん近い今の図
-        return best(nows(kept[o].kind), lambda n: ratio(o, n)) if o not in fixed and old_bodies[o] else None
+        return best(nows(old_kinds[o]), lambda n: ratio(o, n)) if o not in fixed and old_bodies[o] else None
 
-    def best_old(n):            # 今の図 n にいちばん近い前の画像
+    def best_old(n):            # 今の図 n にいちばん近い前の図（画像を入れていない図も）
         return best(olds(slots[n].kind), lambda o: ratio(o, n)) if n not in fixed and bodies.get(n) else None
 
     def why_gone(o):
@@ -1402,7 +1426,7 @@ def reapply_images(res: Result, kept: dict) -> list:
         似た本体なら WHY_SIMILAR）。"""
         if o in fixed or not old_bodies[o]:
             return WHY_NO_SLOT
-        open_ = [n for n in nows(kept[o].kind) if ratio(o, n) >= CARRY_RATIO
+        open_ = [n for n in nows(old_kinds[o]) if ratio(o, n) >= CARRY_RATIO
                  and (best_old(n) is None or (best_old(n) == o and best_now(o) != n))]
         if not open_:
             return WHY_NO_SLOT
@@ -1412,18 +1436,18 @@ def reapply_images(res: Result, kept: dict) -> list:
         if not k.skipped:
             dropped.append(DroppedImage(key=k.key, source_name=k.source_name, caption=k.caption, why=why, suggest=suggest,
                                         sha1=hashlib.sha1(k.data).hexdigest() if k.data else "",
-                                        other_article=k.article_id if k.article_id != aid else ""))
+                                        other_article=other_article(k)))
 
     for key, k in kept.items():
         slot = slots.get(key)
-        if k.article_id != aid:
+        if other_article(k):
             drop(k, WHY_ARTICLE)
             continue
         if k.kind in ("fig", "table"):
             old = old_bodies[key]
             same = [x for x, b in bodies.items() if x != key and slots[x].kind == k.kind and b == old] if old else []
-            twins = [x for x, b in old_bodies.items() if x != key and kept[x].kind == k.kind and b == old]
-            suggest = same[0] if len(same) == 1 and not twins else ""      # 同じ本体の前の画像が 2 つ以上なら、どれか示さない
+            twins = [x for x, b in old_bodies.items() if x != key and old_kinds[x] == k.kind and b == old]
+            suggest = same[0] if len(same) == 1 and not twins else ""      # 同じ本体の前の図が 2 つ以上なら、どれか示さない
             if not same and not twins:
                 near = best_now(key)                                # 本体が少し変わり、番号もずれた図: 互いにいちばん近い組なら示す（入れない）
                 if near is not None and near != key and best_old(near) == key:
@@ -1439,11 +1463,11 @@ def reapply_images(res: Result, kept: dict) -> list:
                 if same and now != old:                             # 別の図の本体と完全に同じ（この図は違う）: 著者が図を足して番号がずれた形
                     drop(k, why_gone(key), suggest)
                     continue
-                rivals = [x for x, b in old_bodies.items() if x != key and kept[x].kind == k.kind and b == now]
-                if now == old and (same or rivals):                 # 同じ本体の図・前の画像が 2 つ以上: どれがどれか決められない
+                rivals = [x for x, b in old_bodies.items() if x != key and old_kinds[x] == k.kind and b == now]
+                if now == old and (same or rivals):                 # 同じ本体の図・前の図が 2 つ以上: どれがどれか決められない
                     drop(k, WHY_SAME_CAPTION)
                     continue
-                if rivals:                                          # 今の本体は別の前の画像のもの: 図が消えて番号がずれた形
+                if rivals:                                          # 今の本体は別の前の図のもの: 図が消えて番号がずれた形
                     drop(k, why_gone(key), suggest)
                     continue
                 if now != old:
@@ -1473,6 +1497,9 @@ def reapply_images(res: Result, kept: dict) -> list:
             prepared[key] = (k.source_name, k.data) + tuple(check_user_image(k.data, k.source_name or key))
     res.images_dropped = dropped
     if not prepared and not skip:
+        if dropped:                     # XML・ZIP は変わらないが、入れなかった画像を図の確かめの一覧とレポートに載せる（外部レビュー R12）
+            write_check(res)
+            res.report_path.write_text(render(res), encoding="utf-8")
         return []
     _store_images(res, prepared, skip)
     res.images_changed = changed                                # _store_images が、入れ直した幹の前の記録を消すので、その後に入れる

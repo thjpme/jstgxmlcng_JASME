@@ -2607,7 +2607,8 @@ def check_answer(data, request, plan: ArticlePlan, outcome: AIOutcome) -> str:
     - (a) 2 つの印とも同じ / (b) 構造の印だけが同じ（本文の印が違う。Word で文字やスタイルを直した後の原稿）: 使う。段落を指す
       項目（HEAD_CHECKED）の head が段落の先頭の文字と合わなければ、同じ先頭の文字の段落がその項目の書ける範囲に 1 つだけあるときに
       その段落に読み替え（AIOutcome.reread）、決まらなければ不採用（2 章）。AI の head が HEAD_MIN 字に満たなければ読み替えない。
-      head が空の項目は、(a) では確かめずに使い、(b) では確かめられないので不採用。(b) では AIOutcome.carried に件数を書く。
+      head が空の項目（head がない・null も同じ）は、(a) では確かめずに使い、(b) では確かめられないので不採用。(b) では
+      AIOutcome.carried に、指定の数と、先頭の文字で確かめて使った数を書く。
     data（parse_response の戻り値）の一覧から、不採用にした項目を除き、読み替えた ID を書き換える。型の誤りなど、ほかの検証は
     種類ごとの関数（link_ops など）が行う。
     """
@@ -2621,24 +2622,27 @@ def check_answer(data, request, plan: ArticlePlan, outcome: AIOutcome) -> str:
     ranges = {"after": [s for s in plan.paras if s in request.asked.get("after", ())],
               "all": [s for s, p in plan.paras.items() if head_of(p)]}
     total = sum(len(data.get(k) or []) for k in ANSWER_LISTS)
-    dropped = 0
+    checked = 0                         # 先頭の文字の確かめを通った項目の数（確かめなかった項目は数えない）
     for key, ptr, hkey, where in HEAD_CHECKED:
         kept = []
         for it in data.get(key) or []:
             src, head = (it.get(ptr), it.get(hkey)) if isinstance(it, dict) else (None, None)
-            if not isinstance(src, str) or not isinstance(head, str) or not src or (key == "boxes" and it.get("kind") != "囲み"):
+            if not isinstance(src, str) or not src or (key == "boxes" and it.get("kind") != "囲み"):
                 kept.append(it)         # 段落を指さない項目・型の誤り（種類ごとの検証が記録する）
                 continue
+            if not isinstance(head, str):
+                head = ""               # head がない・null は、空と同じに扱う（(b) では不採用。R5）
             why = _head_check(it, key, ptr, head, src, ranges[where], plan, carried, outcome, hkey)
             if why:
                 outcome.rejected.append((_check_rec(key, it), why))
-                dropped += 1
                 continue
+            if head.strip():
+                checked += 1
             kept.append(it)
         if key in data:
             data[key] = kept
     if carried:
-        outcome.carried = CARRIED_MSG.format(n=total, m=total - dropped)
+        outcome.carried = CARRIED_MSG.format(n=total, m=checked)
     return ""
 
 

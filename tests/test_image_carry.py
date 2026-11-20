@@ -158,7 +158,7 @@ def test_other_article_gets_no_images(tmp_path, journal):
     fill(res)
     new, kept, put = again(tmp_path, d, journal, res, fpage="13")
     assert put == [] and [x.key for x in new.images_dropped] == ["fig01"]
-    assert "巻・ページが変わった" in new.images_dropped[0].why and [i.status for i in new.images] == ["missing"]
+    assert "巻・号・ページが変わった" in new.images_dropped[0].why and [i.status for i in new.images] == ["missing"]
 
 
 def test_other_article_is_one_line_and_box_goes_away_when_done(tmp_path, journal):
@@ -169,7 +169,7 @@ def test_other_article_is_one_line_and_box_goes_away_when_done(tmp_path, journal
     assert put == [] and len(new.images_dropped) == 3
     action = images_action(new)
     assert not action.done
-    assert "前の論文（31_1）で入れた画像 3 枚は、記事の巻・ページが違うので入れていません。" in action.box_detail
+    assert "前の論文（31_1）で入れた画像 3 枚は、記事の巻・号・ページが違うので入れていません。" in action.box_detail
     assert "前の fig0" not in action.box_detail and "前に入れた画像のうち" not in action.box_detail
     assert "入れ直しが要る前の画像" not in new.report_path.read_text(encoding="utf-8")
     fill(new)

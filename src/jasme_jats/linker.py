@@ -780,10 +780,27 @@ def _has_sup(p: Para, s: int, e: int) -> bool:
     return any(a.kind == "text" and "sup" in a.fmt for a, (a0, a1) in zip(p.atoms, atom_offsets(p)) if a0 < e and a1 > s)
 
 
+RE_URL_PARTS = re.compile(r"([A-Za-z][A-Za-z0-9+.\-]*://)([^/?#]*)(.*)\Z", re.S)
+
+
+def _url_key(u: str):
+    """URL を比べる形にする。スキームとホストだけ小文字にし（大文字・小文字を区別しない）、利用者名・パス・クエリ・フラグメントは
+    そのまま残す（URL のパスは大文字・小文字で別のページ。R8）。URL の形でなければ、そのままの文字列。"""
+    m = RE_URL_PARTS.match(u)
+    if not m:
+        return u
+    scheme, auth, rest = m.groups()
+    userinfo, _, host = auth.rpartition("@")
+    return (scheme.lower(), userinfo, host.lower(), rest)
+
+
 def _same_as_text(href: str, text: str) -> bool:
-    """ハイパーリンクの href が、表示されている文字から機械的に作るリンクと同じ先を指すか。"""
-    h, t = href.strip(), text.strip()
-    if h.rstrip("/").lower() == t.rstrip("/").lower():
+    """ハイパーリンクの href が、表示されている文字から機械的に作るリンクと同じ先を指すか。
+
+    スキームとホストだけ大文字・小文字を区別せずに比べ、パス・クエリ・フラグメントは完全一致で比べる（R8）。末尾の「/」は除く。
+    """
+    h, t = href.strip().rstrip("/"), text.strip().rstrip("/")
+    if _url_key(h) == _url_key(t):
         return True
     m = re.match(r"https?://(?:dx\.)?doi\.org/(10\.\d{4,9}/\S+)$", h, re.I)
     return bool(m) and m.group(1).lower() in t.lower()
