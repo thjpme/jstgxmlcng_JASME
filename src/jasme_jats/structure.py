@@ -1404,6 +1404,9 @@ class Classifier:
     def build_front_ja(self, items):
         plan = self.plan
         self._loose_affs, self._loose_used = [], True
+        # 和文の文字が同じなので別の著者の所属にまとめた和文の段落 {(著者, 所属の位置): 段落}（英文の所属が違えば解く。add_aff_en）と、
+        # 英文の所属を対応付けた所属の位置 {(著者, 所属の位置)}
+        self._merged_ja, self._en_filled = {}, set()
         for b, role in items:
             if isinstance(b, Table):
                 if self.table_roles(b) & {"aff_ja", "author_ja"}:
@@ -1490,10 +1493,17 @@ class Classifier:
         a = Author(name_ja=name_para)
         plan.locations[name_para.src] = f"著者{len(plan.authors) + 1}（和文）"
         for ap in aff_paras:
-            a.affs.append(self.aff_for(ja=ap))
+            aff = self.aff_for(ja=ap)
+            if aff.ja is not ap:
+                self._merged_ja[(a, len(a.affs))] = ap      # 英文の所属が違えば、add_aff_en で解く（R4）
+            a.affs.append(aff)
         plan.authors.append(a)
 
     def aff_for(self, ja=None, en=None) -> Aff:
+        """和文の所属の段落 ja の所属（Aff）。和文の文字が同じ所属がすでにあれば、それを返し、ja を「重複する所属」で除外する。
+
+        英文の所属を見る前の、和文の文字だけでのまとめ方。英文の所属が違えば、add_aff_en が split_aff で解く（除外も取り消す。R4）。
+        """
         plan = self.plan
         key_ja = _para_text(ja).strip() if ja else None
         for aff in plan.affs:
@@ -3783,18 +3793,38 @@ class Classifier:
         return a
 
     def add_aff_en(self, p, author: Optional[Author]):
+        """英文の所属の段落 p を、直前の英文の著者 author の所属に対応付ける（author が None なら、著者に付かない所属）。
+
+        同じ著者の和文所属のうち、この著者の英文所属をまだ対応付けていないものに、順に対応付ける（英文が未設定ならその英文にし、
+        英文が同じ文字なら p を「重複する所属」で除外する）。和文の文字が同じなので別の著者の所属にまとめた所属（aff_for）に、
+        違う英文が来たら、まとめを解く（split_aff。R4。docx の和文・英文の対応のとおり）。
+        """
         plan = self.plan
         plan.locations[p.src] = "所属（英文）"
         text = _para_text(p).strip()
         if author is not None:
             # 和文所属と対応付ける（同じ著者の和文所属のうち、英文が未設定のもの）
-            for aff in author.affs:
+            filled = getattr(self, "_en_filled", set())
+            for k, aff in enumerate(author.affs):
+                if (author, k) in filled:
+                    if aff.en is not None and _para_text(aff.en).strip() == text:
+                        if aff.en is not p:
+                            plan.exclude(p, f"重複する所属（{aff.en.src} と同一の文字列のため 1 つにまとめた）")
+                        return
+                    continue
                 if aff.en is None:
                     aff.en = p
+                    filled.add((author, k))
                     return
                 if _para_text(aff.en).strip() == text:
                     if aff.en is not p:
                         plan.exclude(p, f"重複する所属（{aff.en.src} と同一の文字列のため 1 つにまとめた）")
+                    filled.add((author, k))
+                    return
+                ja = getattr(self, "_merged_ja", {}).get((author, k))
+                if ja is not None:
+                    self.split_aff(author, k, ja, p)
+                    filled.add((author, k))
                     return
         for aff in plan.affs:
             if aff.en is not None and _para_text(aff.en).strip() == text:
@@ -3806,6 +3836,28 @@ class Classifier:
         plan.affs.append(aff)
         if author is not None:
             author.affs.append(aff)
+
+    def split_aff(self, author: Author, k: int, ja, en):
+        """著者 author の k 番目の所属（和文の文字が同じなので、別の著者の所属にまとめたもの）を、和文の段落 ja（aff_for で
+        「重複する所属」で除外した段落）と英文の段落 en の所属にする（R4。docx の対応のとおり。推定で直すのではない）。
+
+        和文・英文とも同じ文字の所属がすでにあれば（和文が同じ 3 人で英文が A・B・B の 3 人目）、そこにまとめる（ja・en を、
+        まとめた先の段落と同じ文字の「重複する所属」で除外する）。なければ新しい所属にし、ja の除外を取り消して出力に戻す。
+        """
+        plan = self.plan
+        key_ja, key_en = _para_text(ja).strip(), _para_text(en).strip()
+        plan.unexclude(ja)
+        for aff in plan.affs:
+            if (aff.ja is not None and aff.en is not None and _para_text(aff.ja).strip() == key_ja
+                    and _para_text(aff.en).strip() == key_en):
+                plan.exclude(ja, f"重複する所属（{aff.ja.src} と同一の文字列のため 1 つにまとめた）")
+                plan.exclude(en, f"重複する所属（{aff.en.src} と同一の文字列のため 1 つにまとめた）")
+                author.affs[k] = aff
+                return
+        aff = Aff(ja=ja, en=en)
+        plan.affs.append(aff)
+        plan.locations[ja.src] = f"所属{len(plan.affs)}（和文）"
+        author.affs[k] = aff
 
     def attach_word_notes(self):
         """Word の脚注・文末脚注を、本文で最初に参照される順の通し番号で、注のリストの後ろに加える（決定事項 7）。

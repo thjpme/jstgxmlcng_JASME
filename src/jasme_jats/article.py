@@ -562,6 +562,14 @@ class ArticlePlan:
         text = _para_text(para)
         self.exclusions.append(Exclusion(src=para.src, reason=reason, text=text))
 
+    def unexclude(self, para: Para):
+        """exclude で記録した para の除外（空白だけの段落の除外は除く）を取り消す。
+
+        除外した段落を、組み立ての途中で出力に戻すときだけ使う（和文で 1 つにまとめた所属を、英文の所属が違うので解くとき。
+        structure.Structurer.split_aff。R4）。出力した段落を除外にも記録すると、不変性チェックは不合格になる。
+        """
+        self.exclusions[:] = [x for x in self.exclusions if x.blank or x.src != para.src]
+
     def exclude_blank(self, para: Para, reason: str = "空白のみの段落"):
         """空白だけの段落を、理由 reason（既定は「空白のみの段落」）で除外に記録する（文字がまったくない段落は記録しない）。
 
