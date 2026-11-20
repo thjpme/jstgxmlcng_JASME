@@ -116,8 +116,9 @@ def label_of(plan, src) -> str:
 
 
 def _paras(items) -> list:
-    """items のうち、中身のある段落（数式・図形を数え、空白だけ・飾りの図形だけの段落は数えない。builder.title_group の orphan と同じ見方。S8）。"""
-    return [p for p in items if p is not None and not p.is_blank]
+    """items のうち、中身のある段落（文字か数式がある段落。図形だけ・空白だけの段落は数えない。builder.title_group の orphan と同じ
+    Para.has_text_or_math。S8）。"""
+    return [p for p in items if p is not None and p.has_text_or_math]
 
 
 # ---------------------------------------------------------------------------- 和文の著者名が 1 人もない（C009）

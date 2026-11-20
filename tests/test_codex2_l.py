@@ -15,12 +15,14 @@ from jasme_jats.config import ArticleMeta
 from jasme_jats.pipeline import Options, convert
 from jasme_jats.report import NEEDS_ACTION, actions
 
-MARK_T, MARK_S = "題目の目印ＴＴＴ", "副題の目印ＳＳＳ"
+MARK_T, MARK_S, MARK_X = "題目の目印ＴＴＴ", "副題の目印ＳＳＳ", "追加の目印ＸＸＸ"
 
 
-def _convert(tmp_path, journal, meta, name, title_runs, sub_runs, *, side="en", **kw):
+def _convert(tmp_path, journal, meta, name, title_runs, sub_runs, *, side="en", x_runs=None, **kw):
     """front_variant の題目（英）・副題（英）〈side が ja なら（日）〉の run を title_runs・sub_runs（run の XML。None なら文字のまま）に取り替えて変換する。"""
     src = tmp_path / f"{name}_src.docx"
+    if x_runs is not None:      # 題目に 2 段落目（スタイルは題目）を足し、その run を x_runs にする
+        kw["en_title_extra" if side == "en" else "extra_title"] = MARK_X
     if side == "en":
         mf.front_variant(src, en_title=MARK_T, en_subtitle=MARK_S, **kw)
     else:
@@ -31,7 +33,7 @@ def _convert(tmp_path, journal, meta, name, title_runs, sub_runs, *, side="en", 
             data = zin.read(it.filename)
             if it.filename == "word/document.xml":
                 text = data.decode("utf-8")
-                for mark, runs in ((MARK_T, title_runs), (MARK_S, sub_runs)):
+                for mark, runs in ((MARK_T, title_runs), (MARK_S, sub_runs), (MARK_X, x_runs)):
                     if runs is None:
                         continue
                     pat = re.compile(r"<w:r(?: [^>/]*)?>(?:(?!</w:r>|</w:p>).)*?<w:t[^>]*>" + mark + r"</w:t></w:r>", re.S)
@@ -41,7 +43,14 @@ def _convert(tmp_path, journal, meta, name, title_runs, sub_runs, *, side="en", 
                     if f"xmlns:{prefix}=" not in text[:6000]:
                         text = text.replace("<w:document ", f'<w:document xmlns:{prefix}="{uri}" ', 1)
                 data = text.encode("utf-8")
+            if it.filename == "word/_rels/document.xml.rels":
+                data = data.decode("utf-8").replace(
+                    "</Relationships>", '<Relationship Id="rIdT1" Type="http://schemas.openxmlformats.org/officeDocument/2006/'
+                    'relationships/image" Target="media/t1.png"/></Relationships>').encode("utf-8")
+            if it.filename == "[Content_Types].xml" and b'Extension="png"' not in data:
+                data = data.decode("utf-8").replace("<Override", '<Default Extension="png" ContentType="image/png"/><Override', 1).encode("utf-8")
             zout.writestr(it, data)
+        zout.writestr("word/media/t1.png", mf.png_bytes("Fig"))
     return convert(path, meta, journal, Options(out_dir=tmp_path / f"out_{name}", ai_mode="none"))
 
 
@@ -72,7 +81,10 @@ def _ok(res):
 
 MATH = mf.omath(mf.mr("x+y"))
 DECO = mf.shape("rect")
-EXTRA_NS = (("a", "http://schemas.openxmlformats.org/drawingml/2006/main"), ("wps", mf.WPS_URI))                                    # 枠だけの図形（飾り）
+ELL = mf.shape("ellipse", pid=802)                          # 飾りでない図形（楕円）
+IMG = mf.drawing("rIdT1", 720000, 360000, 803)             # 本物の画像
+TBOX = mf.textbox_inline(mf.para(mf.S["body"], "テキストボックスの題目"), 804)
+EXTRA_NS = (("pic", "http://schemas.openxmlformats.org/drawingml/2006/picture"), ("a", "http://schemas.openxmlformats.org/drawingml/2006/main"), ("wps", mf.WPS_URI))                                    # 枠だけの図形（飾り）
 
 
 def _tg(res):
@@ -137,3 +149,58 @@ def test_math_only_main_title_is_not_missing(tmp_path, journal):
     _ok(res)
     assert not any(f.kind == frontcheck.TITLE_MISSING for f in frontcheck.plan_findings(res.plan, "ja"))
     assert _tg(res).find("article-title/inline-formula") is not None
+
+
+def _kinds(res, lang):
+    return [f.kind for f in frontcheck.plan_findings(res.plan, lang)]
+
+
+@pytest.mark.parametrize("figure", [ELL, IMG], ids=["ellipse", "image"])
+@pytest.mark.parametrize("side,lang", [("en", "ja"), ("ja", "en")])
+def test_figure_only_translated_title_is_orphan(tmp_path, journal, figure, side, lang):
+    """図形（楕円）・画像だけの翻訳の題目＋文字の副題: 図形は XML の題目に出ないので中身なし。0.38.0 と同じく、副題を除外して
+    要対応 subtitle_orphan で知らせる（空の trans-title を出さない）。fidelity 合格。図形の置き場所は要対応 lost として残る。"""
+    meta = _meta(lang)
+    res = _convert(tmp_path, journal, meta, f"f1{side}", figure, None, side=side)
+    _ok(res)
+    assert _tg(res).find("trans-title-group") is None
+    assert frontcheck.SUB_ORPHAN in _kinds(res, lang) and _fc(res).level == NEEDS_ACTION
+    assert [e.blank for e in _excl(res, meta, journal) if e.text.strip()] == [False]
+    assert len(_blank_excl(res, meta, journal)) == 1
+    assert any(a.key == "lost" for a in actions(res))
+
+
+@pytest.mark.parametrize("figure", [ELL, IMG], ids=["ellipse", "image"])
+def test_figure_only_main_title_is_missing(tmp_path, journal, figure):
+    """和文の記事で題目（日）が図形だけ: 0.38.0 と同じく、要対応 title_missing（題目がない）で知らせる。"""
+    meta = _meta("ja")
+    res = _convert(tmp_path, journal, meta, "f2", figure, None, side="ja")
+    assert frontcheck.TITLE_MISSING in _kinds(res, "ja")
+    assert any(a.key == "front_check" and a.level == NEEDS_ACTION for a in actions(res))
+    assert any(a.key == "lost" for a in actions(res))
+
+
+def test_figure_and_math_title_has_content(tmp_path, journal):
+    """題目に図形と数式の両方がある: 数式があるので中身あり（trans-title に数式。副題も出す。知らせなし）。"""
+    meta = _meta("ja")
+    res = _convert(tmp_path, journal, meta, "f3", ELL + MATH, None)
+    _ok(res)
+    assert _tg(res).find("trans-title-group/trans-title/inline-formula") is not None
+    assert _tg(res).find("trans-title-group/trans-subtitle") is not None
+    assert frontcheck.SUB_ORPHAN not in _kinds(res, "ja")
+
+
+@pytest.mark.parametrize("side,lang", [("en", "ja"), ("ja", "en")])
+def test_textbox_title_unchanged(tmp_path, journal, side, lang):
+    """題目の段落がテキストボックスだけ（文字は箱の中）: 0.38.0 と同じ結果（変換が合格し、subtitle_orphan の判定が変わらない）。"""
+    meta = _meta(lang)
+    res = _convert(tmp_path, journal, meta, f"f4{side}", TBOX, None, side=side)
+    assert res.fidelity.ok and res.dtd_valid, res.fidelity.bad_excluded
+
+
+@pytest.mark.parametrize("runs,expect", [(MATH, True), (ELL, False), (mf.run("追加の題目"), True)], ids=["math", "ellipse", "text"])
+def test_title_multi_second_paragraph(tmp_path, journal, runs, expect):
+    """題目（日）の 2 段落目: 文字・数式なら要確認 title_multi（builder が 2 段落を出す）、図形だけなら出ない（0.38.0 と同じ）。"""
+    meta = _meta("ja")
+    res = _convert(tmp_path, journal, meta, "f5", None, None, side="ja", x_runs=runs)
+    assert (frontcheck.TITLE_MULTI in _kinds(res, "ja")) is expect

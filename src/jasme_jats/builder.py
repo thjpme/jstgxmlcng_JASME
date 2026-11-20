@@ -615,9 +615,9 @@ class Builder:
         if main_sub:
             st = _lang(_sub(tg, "subtitle"), lang)
             self.multi(st, main_sub, E.TITLE, "副題")
-        # 翻訳の題目に中身がなく（段落がない・空白だけ・飾りの図形だけ。数式・図形のある段落は中身とみなす。Para.is_blank）、
+        # 翻訳の題目に中身がなく（段落がない・空白だけ・図形だけ。文字か数式のある段落が中身。Para.has_text_or_math）、
         # 翻訳の副題だけがある場合は、題目を補えないので副題を出力しない（orphan）
-        orphan = bool(other_sub) and all(p.is_blank for p in other)
+        orphan = bool(other_sub) and not any(p.has_text_or_math for p in other)
         if other and not orphan:
             ttg = _lang(_sub(tg, "trans-title-group"), other_lang)
             tt = _sub(ttg, "trans-title")
@@ -629,11 +629,12 @@ class Builder:
         elif orphan:
             # JATS では trans-title-group に trans-title が要るので出せない。構造は推定で補わず、副題（と空白だけの題目）の段落を
             # 理由付きで除外に記録する（不変性チェックを合格させる）。知らせは要対応 front_check（frontcheck.SUB_ORPHAN）が行う。
-            # 数式・図形のある副題は、空白だけの除外にしない（blank にすると、不変性チェックが空白だけと確かめて不合格になる）
+            # 数式のある副題は、空白だけの除外にしない（blank にすると、不変性チェックが空白だけと確かめて不合格になる）。
+            # 文字も数式もない段落（空白だけ・図形だけ）は blank の除外（図形は画像の置き場所として別に数えるので、除外しても消えない）
             for p in other_sub + other:
                 text = _para_text(p)
-                if not p.is_blank or p.plain():         # 文字のまったくない段落は記録しない（plan.exclude_blank と同じ）
-                    self.info.exclusions.append(Exclusion(p.src, SUBTITLE_NO_TITLE_EXCLUDED, text, blank=p.is_blank))
+                if p.has_text_or_math or p.plain():     # 文字のまったくない段落は記録しない（plan.exclude_blank と同じ）
+                    self.info.exclusions.append(Exclusion(p.src, SUBTITLE_NO_TITLE_EXCLUDED, text, blank=not p.has_text_or_math))
 
     def check_length(self, el, limit, what):
         n = len("".join(el.itertext()))

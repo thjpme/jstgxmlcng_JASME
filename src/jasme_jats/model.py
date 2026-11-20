@@ -150,6 +150,12 @@ class Para:
                        for a in self.atoms)
 
     @property
+    def has_text_or_math(self) -> bool:
+        """文字（空白以外）か数式（行内・別行）がある段落か。題目・副題に中身があるかの判定（builder.title_group・frontcheck）。
+        図形・画像は数えない（題目の中の図形は XML の題目に何も出力されないので、図形だけの題目は中身なし）。"""
+        return any(a.kind == "math" or (a.kind == "text" and a.text.strip()) for a in self.atoms)
+
+    @property
     def images(self) -> list:
         """段落の中の画像（飾りの図形〈ImageRef.decoration〉を除く。飾りのアトムは段落のアトムのまま残り、plain() の位置は変わらない）。"""
         return [a.image for a in self.atoms if a.kind == "image" and not a.image.decoration]
