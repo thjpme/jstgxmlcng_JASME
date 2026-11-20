@@ -206,9 +206,12 @@ class AppState:
             return ""
         b = read_biblio(path, JournalConfig.load())
         got = biblio_inputs(b)
+        amb = [LABELS[k] for k in ("received", "accepted") if k in b.ambiguous]
+        # 違う日付が複数あって採らなかった日付（R7）。欄は変えないので、PDF を見て入力するよう知らせる
+        amb_note = ("" if not amb else "・".join(amb) + "は、PDF の 1 ページ目に違う日付が複数あったので入れていません。PDF を見て入力してください。")
         if not got:
             return ("PDF から巻・号・ページを読めませんでした（1 ページ目に「数学教育学研究 第 n 巻 第 n 号 … pp.n〜n」のような誌名の行が"
-                    "見つかりません）。入力してください。")
+                    "見つかりません）。入力してください。" + amb_note)
         changed = []                # 入れてあった値と違う値に書き換えた欄（元の値を注記に添える）
         for k, v in got.items():
             old = str(self.inputs.get(k) or "").strip()
@@ -235,7 +238,7 @@ class AppState:
             src.append("投稿受付・採用決定の日付")
         return ("PDF から読んで入れました: " + "・".join(parts) + "（" + "と、".join(src) + "）。"
                 + ("入れてあった値を書き換えました（" + "・".join(changed) + "）。" if changed else "")
-                + "違っていれば欄を書き換えてください。査読の有無・原稿種別・発行日は PDF から読めないので入力してください。")
+                + "違っていれば欄を書き換えてください。査読の有無・原稿種別・発行日は PDF から読めないので入力してください。" + amb_note)
 
     def _article_meta(self) -> ArticleMeta:
         """入力から ArticleMeta を作る。誤りは InputError（ノートブックの手順 3 と同じ確かめ）。"""

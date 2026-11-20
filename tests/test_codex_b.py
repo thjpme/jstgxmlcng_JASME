@@ -65,6 +65,29 @@ def test_r7_two_different_received_dates_are_not_taken():
     assert mismatches(ArticleMeta.from_dict({}), b) == []
 
 
+def test_r7_app_note_says_ambiguous_dates_were_not_filled(tmp_path, monkeypatch):
+    """違う日付が複数あって採らなかった受付日は、画面の注記で「入れていません」と知らせ、欄は変えない。"""
+    from jasme_jats import pdfmatch
+    from jasme_jats.app import AppState
+    from test_app import pdf_biblio_pages
+    pages = pdf_biblio_pages(dates="2029年6月1日投稿受付\n2029年11月20日採用決定")
+    pages[0] += "\n先行研究には2020年1月1日投稿受付と記されている。"
+    monkeypatch.setattr(pdfmatch, "extract_pages", lambda path: pages)
+    st = AppState(tmp_path / "work")
+    st.inputs["received"] = "2020-02-02"
+    note = st.pdf_selected(str(tmp_path / "a.pdf"))
+    assert "受付日は、PDF の 1 ページ目に違う日付が複数あったので入れていません。PDF を見て入力してください。" in note
+    assert "受理日 2029-11-20" in note and "受理日は、PDF" not in note
+    assert st.inputs["received"] == "2020-02-02" and st.inputs["accepted"] == "2029-11-20"      # 欄は変えない
+    # 巻・号・ページを読めないときも知らせる
+    pages2 = ["（1）\n2029年6月1日投稿受付 2020年1月1日投稿受付"]
+    monkeypatch.setattr(pdfmatch, "extract_pages", lambda path: pages2)
+    assert "受付日は、PDF の 1 ページ目に違う日付が複数" in st.pdf_selected(str(tmp_path / "b.pdf"))
+    # 複数がなければ付けない
+    monkeypatch.setattr(pdfmatch, "extract_pages", lambda path: pdf_biblio_pages())
+    assert "複数" not in st.pdf_selected(str(tmp_path / "c.pdf"))
+
+
 def test_r7_same_value_repeated_or_single_is_taken():
     b = biblio_from_pages([page1("2025年6月1日投稿受付（再掲）")], J)           # 同じ値が複数回
     assert (b.received, b.ambiguous) == ("2025-06-01", ())
