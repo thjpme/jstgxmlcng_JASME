@@ -56,13 +56,58 @@ def test_s4_ai_link_elsewhere_in_paragraph_keeps_ambiguous_citation(journal, met
     assert "bibr_dup" in {a.key for a in actions(res)}
 
 
-def test_s4_ai_link_on_the_citation_itself_resolves_it(journal, meta, tmp_path):
-    # AI の文献のリンクは年の形の文字にしか付けられないので、番号が年の形（2001）の文献で、番号の位置に付ける
-    path = tmp_path / "dup2.docx"
-    _article(path, "2001")
-    base = convert(path, meta, journal, Options(out_dir=tmp_path / "o0"))
-    src = _body_src(base)
-    res = _convert(path, meta, journal, tmp_path / "o1", [("文献", src, "2001", 1, "B2")])
-    assert res.ai.rejected == [] and len(res.ai.accepted) == 1
-    assert _dup(res) == []
-    assert "bibr_dup" not in {a.key for a in actions(res)}
+def _art2(path, body):
+    mf.make_article(path, "未解決の検証用文書",
+                    lambda b: [mf.para(S["sec1"], "１．はじめに"), mf.para(S["body"], body),
+                               mf.para(S["body"], "別の文", mf.footnote_ref(1), "のある文。"),
+                               mf.para(S["fig_cap"], "図1　架空の図")],
+                    footnotes=[mf.footnote(1, " 架空の注。")],
+                    refs=lambda b: [mf.para(S["ref"], "山田一郎（2020）．「甲」．『架空誌』，第1巻，pp.1-2．")])
+
+
+def _target(base, kind):
+    return {"文献": "B1", "図": base.plan.figures[0].fid, "注": base.plan.fns[0].fid}[kind]
+
+
+def _run2(tmp_path, meta, journal, body, kind, text, occ, name):
+    """変換 → 未解決が 1 件あることを確かめ → AI のリンクを入れて変換し直した結果と、元の未解決の種類を返す。"""
+    path = tmp_path / f"{name}.docx"
+    _art2(path, body)
+    base = convert(path, meta, journal, Options(out_dir=tmp_path / f"{name}0"))
+    src = next(s for s, p in base.plan.paras.items() if p.plain().startswith(body[:3]))
+    before = [u for u in base.unresolved_after if u[1] == src]
+    assert len(before) == 1, before
+    resp = json.loads(answers.answer(links=[(kind, src, text, occ, _target(base, kind))], docx=path))
+    res = convert(path, meta, journal, Options(out_dir=tmp_path / f"{name}1", ai_mode="manual",
+                                               ai_response=json.dumps(resp, ensure_ascii=False)))
+    assert res.ai.rejected == [] and len(res.ai.accepted) == 1, res.ai.rejected
+    return before[0], [u for u in res.unresolved_after if u[1] == src]
+
+
+def test_s4_bibr_resolved_by_ai_link_on_that_year(journal, meta, tmp_path):
+    # 山田（2021）は年が合わず結べない。AI が 2021 を山田の文献にリンクすれば、未解決から消える
+    u, after = _run2(tmp_path, meta, journal, "山田（2021）によれば。", "文献", "2021", 1, "bib_same")
+    assert u.kind == "bibr" and after == []
+
+
+def test_s4_bibr_stays_when_ai_links_other_occurrence(journal, meta, tmp_path):
+    # 同じ年が同じ段落にもう 1 回ある。AI が別の出現（2 回目）にリンクしても、1 回目の未解決は残る
+    u, after = _run2(tmp_path, meta, journal, "山田（2021）によれば2021年に。", "文献", "2021", 2, "bib_other")
+    assert u.kind == "bibr" and [x.start for x in after] == [u.start]
+
+
+def test_s4_bibr_stays_when_ai_links_note_on_same_text(journal, meta, tmp_path):
+    # 種類が違うリンク（注）では、文献の未解決は消えない
+    u, after = _run2(tmp_path, meta, journal, "山田（2021）によれば。", "注", "2021", 1, "bib_note")
+    assert [x.start for x in after] == [u.start]
+
+
+def test_s4_figure_resolved_by_ai_link_on_that_reference(journal, meta, tmp_path):
+    u, after = _run2(tmp_path, meta, journal, "図5に示す。", "図", "図5", 1, "fig_same")
+    assert u.kind == "fig" and after == []
+
+
+def test_s4_figure_stays_when_ai_links_other_occurrence(journal, meta, tmp_path):
+    # 図5（未解決）の後ろの別の「5」への図のリンクでは、図5 の未解決は残る
+    u, after = _run2(tmp_path, meta, journal, "図5に示す。また5を見る。", "図", "5", 2, "fig_other")
+    assert u.kind == "fig" and [x.start for x in after] == [u.start]
