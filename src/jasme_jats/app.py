@@ -65,9 +65,10 @@ LABELS = {"docx": "docx", "pdf": "PDF", "volume": "巻", "issue": "号", "fpage"
 DOCXISH = (LABELS["docx"], LABELS["pdf"], LABELS["split_labels"])
 # 変換の結果を左右する入力（前回の変換と比べる）。AI の方法・モデルは次に変換するときに使う設定なので比べない（O3）
 COMPARED_INPUTS = tuple(n for n in INPUT_NAMES if n not in ("ai_mode", "model"))
-# そのうち NFKC にそろえてから比べる欄（config.ArticleMeta.from_dict が NFKC にして使う。巻・号・最初と最後のページ・日付・責任著者の番号。
-# corresp は builder が番号を整数にして使う）。それ以外は入力のまま XML に出るか選択肢なので、strip だけで比べる（R11）
-NFKC_INPUTS = ("volume", "issue", "fpage", "lpage", "received", "accepted", "approved", "pub_date", "epub_date", "corresp")
+# そのうち NFKC にそろえてから比べる欄（config.ArticleMeta.from_dict が NFKC にして使う。巻・号・最初と最後のページ・日付）。
+# 責任著者の欄（corresp）は、区切りを NFKC の前に置き換えるので NFKC では比べず、config._corresp が解析した結果で比べる（S10）。
+# それ以外は入力のまま XML に出るか選択肢なので、strip だけで比べる（R11）
+NFKC_INPUTS = ("volume", "issue", "fpage", "lpage", "received", "accepted", "approved", "pub_date", "epub_date")
 
 
 class InputError(Exception):
@@ -277,7 +278,8 @@ class AppState:
     # 押すたびと「次の論文」で呼ばれ、触っただけで消すと取り返せないため。比べるのはファイルの中身（sha256）で、同じファイルの
     # 選び直しは変わっていない扱いにする。
     def fingerprint(self) -> dict:
-        """COMPARED_INPUTS の名前ごとに、前回の変換と比べる値。NFKC_INPUTS の欄だけ NFKC にそろえ、ほかは strip だけにする（R11）。"""
+        """COMPARED_INPUTS の名前ごとに、前回の変換と比べる値。NFKC_INPUTS の欄だけ NFKC にそろえ、ほかは strip だけにする（R11）。
+        責任著者の欄は config._corresp で解析した番号の組で比べ、解析できないときは「読めない」の印と入力の文字（strip）にする（S10）。"""
         out = {}
         f = self.inputs
         for name in COMPARED_INPUTS:
@@ -294,6 +296,12 @@ class AppState:
                 out[name] = bool(v)
             elif name in ("subject_other", "subject_other_en") and f["manuscript_type"] != OTHER_TYPE:
                 out[name] = ""
+            elif name == "corresp":
+                from .config import _corresp            # 入力の解析と同じ規則（区切りの置き換えを含む）で比べる（S10）
+                try:
+                    out[name] = tuple(_corresp(v))
+                except ValueError:
+                    out[name] = ("読めない", str(v or "").strip())
             elif name in NFKC_INPUTS:
                 out[name] = unicodedata.normalize("NFKC", str(v or "")).strip()
             else:

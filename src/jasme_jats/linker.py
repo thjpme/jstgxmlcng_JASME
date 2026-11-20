@@ -794,16 +794,41 @@ def _url_key(u: str):
     return (scheme.lower(), userinfo, host.lower(), rest)
 
 
+RE_DOI_HREF = re.compile(r"https?://(?:dx\.)?doi\.org/(10\.\d{4,9}/\S+)$", re.I)
+
+
+def _dois_of_text(text: str) -> list:
+    """表示されている文字から、機械的に作るリンクの DOI を、urls() と同じ規則・同じ正規表現で取り出す（末尾の「/」は除く）。
+
+    範囲は _trim で決める（後ろの句点・閉じかっこは範囲に入れない）。doi.org の URL は RE_URL で見つける。スキームのない
+    「doi.org/10.…」は、urls() が URL にも DOI にもしないので取り出さない（同じとみなすと、Word のリンクを捨てたうえに
+    リンクが 1 つも付かなくなる。_same_as_text が真なのは、機械的に作るリンクが同じ先になるときだけ）。"""
+    found = []
+    for m in RE_URL.finditer(text):
+        dm = re.match(r"https?://(?:dx\.)?doi\.org/(10\.\d{4,9}/\S+)", _trim(m.group()), re.I)
+        if dm:
+            found.append(dm.group(1))
+    found += [m.group(1) for m in RE_DOI_PREFIXED.finditer(text)]
+    found += [m.group(1) for m in RE_DOI_BARE.finditer(text)]
+    return [_trim(d).rstrip("/").lower() for d in found]
+
+
 def _same_as_text(href: str, text: str) -> bool:
     """ハイパーリンクの href が、表示されている文字から機械的に作るリンクと同じ先を指すか。
 
     スキームとホストだけ大文字・小文字を区別せずに比べ、パス・クエリ・フラグメントは完全一致で比べる（R8）。末尾の「/」は除く。
+    DOI の href は、表示されている文字から取り出した DOI がすべて href の DOI と完全に一致するとき（大文字・小文字と末尾の「/」は
+    除く）だけ同じとみなす。部分一致では見ない（S7。DOI が違えば、Word のリンク先を残す）。DOI が 1 つもない文字は同じとみなさない。
     """
     h, t = href.strip().rstrip("/"), text.strip().rstrip("/")
     if _url_key(h) == _url_key(t):
         return True
-    m = re.match(r"https?://(?:dx\.)?doi\.org/(10\.\d{4,9}/\S+)$", h, re.I)
-    return bool(m) and m.group(1).lower() in t.lower()
+    m = RE_DOI_HREF.match(h)
+    if not m:
+        return False
+    want = m.group(1).rstrip("/").lower()
+    found = _dois_of_text(text.strip())
+    return bool(found) and all(d == want for d in found)
 
 
 def _trim(url: str) -> str:

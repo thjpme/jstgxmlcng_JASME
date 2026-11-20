@@ -61,7 +61,8 @@ def test_same_as_text_compares_scheme_and_host_only_case_insensitively():
         ("https://example.org/a?Q=1", "https://example.org/a?q=1", False),    # クエリは完全一致
         ("https://example.org/a#Top", "https://example.org/a#top", False),    # フラグメントは完全一致
         ("https://user:Pw@Example.org/x", "https://user:pw@example.org/x", False),   # 利用者名は完全一致（ホストだけ区別しない）
-        ("https://doi.org/10.1000/ABC", "doi.org/10.1000/abc", True),         # DOI の分岐は今のまま
+        ("https://doi.org/10.1000/ABC", "doi.org/10.1000/abc", False),        # スキームのない doi.org は機械的にリンクしないので、Word のリンク先を残す
+        ("https://doi.org/10.1000/ABC", "doi:10.1000/abc", True),             # DOI が同じなら同じ（大文字・小文字は区別しない）
     ]
     for href, text, want in cases:
         assert _same_as_text(href, text) is want, (href, text)
