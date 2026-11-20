@@ -347,13 +347,23 @@ def _nospace(f: Fix, text, spaced) -> bool:
 
 
 def _bracket_partners(text: str) -> dict:
-    """段落の文字のかっこの組（全角・半角を問わない。入れ子は内側から）: 位置 → 組のもう片方の位置。組にならないかっこは入れない。"""
+    """段落の文字のかっこの組（全角・半角を問わない。入れ子は内側から）: 位置 → 組のもう片方の位置。組にならないかっこは入れない。
+    閉じるかっこが来て、一番上の開くかっこと種類が違うとき、その開くかっこの後ろ（この位置より後）に同じ種類の閉じるかっこがなければ、
+    それは閉じていない開くかっこなので捨てて（組にしない）、一つ下の開くかっこで続ける（「(整数 { の組)」の「(」「)」は組になる。S1）。
+    後ろにあれば交差なので、この閉じるかっこを組にしない（「{a(b})」の「}」。「(」「)」だけが組）。開く側のない閉じるかっこも組にならない。"""
+    last = {}
+    for i, c in enumerate(text):
+        k = BRACKETS.get(c)
+        if k and k not in BRACKET_CLOSE:
+            last[k] = i
     out, stack = {}, []
     for i, c in enumerate(text):
         k = BRACKETS.get(c)
         if k in BRACKET_CLOSE:
             stack.append((i, k))
         elif k:
+            while stack and BRACKET_CLOSE[stack[-1][1]] != k and last.get(BRACKET_CLOSE[stack[-1][1]], -1) < i:
+                stack.pop()
             if stack and BRACKET_CLOSE[stack[-1][1]] == k:
                 o, _ = stack.pop()
                 out[o], out[i] = i, o
