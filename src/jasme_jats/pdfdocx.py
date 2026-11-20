@@ -280,8 +280,12 @@ RE_NOSPACE_NEXT = re.compile(r"[A-Za-z0-9]")
 # 一続きの規則: 直さない違いとの間の docx の文字がこれ以下なら、続く表記の直しも直さない
 ADJACENT_GAP = 1
 # 一続きの規則の、かっこの組: 片方を直さないなら、組のもう片方も直さない（「（2020)」のような、docx にも PDF にもない形にしない）。
-# 値は組の種類（全角・半角を問わない）
-BRACKETS = {"(": "(", "（": "(", ")": ")", "）": ")", "[": "[", "［": "[", "]": "]", "］": "]"}
+# 値は組の種類（全角・半角を問わない。開くかっこの半角で表す: 閉じるかっこは BRACKET_CLOSE の値）。丸かっこ・角かっこ・波かっこ。
+# 「＜＞」「<>」は不等号にも使うので組にしない
+BRACKETS = {"(": "(", "（": "(", ")": ")", "）": ")", "[": "[", "［": "[", "]": "]", "］": "]",
+            "{": "{", "｛": "{", "}": "}", "｝": "}"}
+# 組の種類 → 閉じるかっこ（種類で表した）。開くかっこの種類はこの表の鍵
+BRACKET_CLOSE = {"(": ")", "[": "]", "{": "}"}
 
 
 def hold(fixes, texts=None, spaced=None) -> None:
@@ -347,16 +351,16 @@ def _bracket_partners(text: str) -> dict:
     out, stack = {}, []
     for i, c in enumerate(text):
         k = BRACKETS.get(c)
-        if k in ("(", "["):
+        if k in BRACKET_CLOSE:
             stack.append((i, k))
         elif k:
-            if stack and stack[-1][1] == ("(" if k == ")" else "["):
+            if stack and BRACKET_CLOSE[stack[-1][1]] == k:
                 o, _ = stack.pop()
                 out[o], out[i] = i, o
     return out
 
 
-FULL_BRACKETS = frozenset("（）［］")
+FULL_BRACKETS = frozenset("（）［］｛｝")
 
 
 def _bracket_swap(f: Fix) -> bool:
